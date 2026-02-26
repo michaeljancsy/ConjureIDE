@@ -46,7 +46,7 @@ To build/test the Rust crate standalone: `cd rust && PYO3_PYTHON=python-dist/bin
 2. Rust sets `PYTHONHOME`, initializes the free-threaded Python 3.14 interpreter via pyo3, and caches the script's `process()` function
 3. On `allocateRenderResources()`, Rust pre-allocates numpy float32 arrays (one per channel, sized to `maximumFramesToRender`)
 4. Each render callback: Rust copies input audio into numpy arrays, calls `process(inputs, outputs, frame_count, sample_rate)`, copies output back
-5. If Python fails to load or errors at runtime, Rust falls back to built-in gain processing
+5. If Python fails to load or errors at runtime, Rust falls back to passthrough (copies input to output)
 
 ## Project Structure
 
@@ -56,12 +56,11 @@ TestPlugin/                  Host app — loads and tests the AU extension
   Common/Audio/              SimplePlayEngine (AVAudioEngine wrapper)
   Common/MIDI/               MIDIManager
 TestPluginExtension/         The AU plugin itself
-  Parameters/                Parameter addresses (Swift enum) and specs
-  UI/                        SwiftUI views (ParameterSlider, MainView)
+  Parameters/                Parameter addresses (Swift enum)
+  UI/                        SwiftUI views (MainView with Python script editor)
   Resources/process.py       Python DSP script (bundled into .appex)
   Common/Audio Unit/         TestPluginExtensionAudioUnit.swift — AUAudioUnit subclass + render block
-  Common/UI/                 AudioUnitViewController, ObservableAUParameter
-  Common/Parameters/         ParameterSpecBase (result-builder DSL)
+  Common/UI/                 AudioUnitViewController
 rust/                        Rust DSP crate
   test_plugin_dsp/src/       kernel.rs (DSP+Python), lib.rs (FFI), params.rs (addresses)
   include/                   Generated C header (test_plugin_dsp.h)
@@ -74,23 +73,22 @@ TestPluginUITests/           UI tests (XCUITest)
 
 ## Parameter System
 
-Parameters are defined in three layers that must stay in sync:
+No parameters are currently defined. The parameter infrastructure exists in:
 
-1. **Rust constant** (`rust/test_plugin_dsp/src/params.rs`) — `PARAM_GAIN = 0`
-2. **Swift enum** (`Parameters.swift`) — `TestPluginExtensionParameterAddress.gain = 0`
-3. **Swift spec** (`Parameters.swift`) — `ParameterSpec` with range, default, units
-4. **Rust kernel** (`rust/test_plugin_dsp/src/kernel.rs`) — `set_parameter`/`get_parameter` match arms
+1. **Rust** (`rust/test_plugin_dsp/src/params.rs`) — parameter address constants
+2. **Swift enum** (`Parameters.swift`) — `TestPluginExtensionParameterAddress`
+3. **Rust kernel** (`rust/test_plugin_dsp/src/kernel.rs`) — `set_parameter`/`get_parameter`
 
-Currently one parameter: `gain` (address 0, linear 0.0–1.0, default 0.25).
+To add a new parameter, define its address in all three layers and keep them in sync.
 
 ## DSP Conventions
 
 - The Rust kernel embeds free-threaded Python 3.14 (no GIL) via pyo3 and numpy
 - Python `process()` is called each render callback with pre-allocated numpy arrays (no per-callback allocations)
-- When no Python script is loaded or Python errors at runtime, Rust falls back to built-in gain processing
+- When no Python script is loaded or Python errors at runtime, Rust falls back to passthrough (copies input to output)
 - Swift calls Rust via C FFI: `dsp_kernel_create()`, `dsp_kernel_process()`, `dsp_kernel_load_script()`, etc.
 - Bypass copies input to output unchanged
-- Event processing loop (parameter automation) lives in Swift alongside the render block
+- Event processing loop lives in Swift alongside the render block
 - Errors from Rust/Python are passed to Swift via `dsp_kernel_last_error()` and logged with `os_log`
 
 ## Code Signing

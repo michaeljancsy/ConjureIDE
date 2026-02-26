@@ -294,7 +294,7 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
-	/// Walk the event linked list, dispatching all events at the current timestamp.
+	/// Walk the event linked list, skipping all events at the current timestamp.
 	private static func performAllSimultaneousEvents(
 		kernel: DSPKernelRef,
 		now: AUEventSampleTime,
@@ -303,11 +303,6 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		var current: UnsafePointer<AURenderEvent>? = event
 		repeat {
 			guard let evt = current else { break }
-
-			if evt.pointee.head.eventType == .parameter || evt.pointee.head.eventType == .parameterRamp {
-				let paramEvent = UnsafeRawPointer(evt).assumingMemoryBound(to: AUParameterEvent.self)
-				dsp_kernel_set_parameter(kernel, paramEvent.pointee.parameterAddress, paramEvent.pointee.value)
-			}
 
 			// Advance to next event
 			if let next = evt.pointee.head.next {
@@ -319,32 +314,4 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		return current
 	}
 
-	// MARK: - Parameter Tree
-
-	public func setupParameterTree(_ parameterTree: AUParameterTree) {
-		self.parameterTree = parameterTree
-
-		for param in parameterTree.allParameters {
-			dsp_kernel_set_parameter(kernel, param.address, param.value)
-		}
-
-		setupParameterCallbacks()
-	}
-
-	private func setupParameterCallbacks() {
-		parameterTree?.implementorValueObserver = { [weak self] param, value in
-			guard let self else { return }
-			dsp_kernel_set_parameter(self.kernel, param.address, value)
-		}
-
-		parameterTree?.implementorValueProvider = { [weak self] param in
-			guard let self else { return 0 }
-			return dsp_kernel_get_parameter(self.kernel, param.address)
-		}
-
-		parameterTree?.implementorStringFromValueCallback = { param, valuePtr in
-			guard let value = valuePtr?.pointee else { return "-" }
-			return NSString.localizedStringWithFormat("%.f", value) as String
-		}
-	}
 }

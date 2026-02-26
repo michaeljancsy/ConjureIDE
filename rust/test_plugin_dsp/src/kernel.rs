@@ -1,4 +1,3 @@
-use crate::params::PARAM_GAIN;
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -12,7 +11,6 @@ use std::ffi::CString;
 /// Rust gain processing is used as fallback.
 pub struct DSPKernel {
     sample_rate: f64,
-    gain: f64,
     bypassed: bool,
     max_frames_to_render: u32,
 
@@ -30,7 +28,6 @@ impl DSPKernel {
     pub fn new() -> Self {
         Self {
             sample_rate: 44100.0,
-            gain: 1.0,
             bypassed: false,
             max_frames_to_render: 1024,
             py_process_fn: None,
@@ -141,18 +138,12 @@ impl DSPKernel {
         self.bypassed
     }
 
-    pub fn set_parameter(&mut self, address: u64, value: f32) {
-        match address {
-            PARAM_GAIN => self.gain = value as f64,
-            _ => {}
-        }
+    pub fn set_parameter(&mut self, _address: u64, _value: f32) {
+        // No parameters currently defined
     }
 
-    pub fn get_parameter(&self, address: u64) -> f32 {
-        match address {
-            PARAM_GAIN => self.gain as f32,
-            _ => 0.0,
-        }
+    pub fn get_parameter(&self, _address: u64) -> f32 {
+        0.0
     }
 
     pub fn maximum_frames_to_render(&self) -> u32 {
@@ -279,40 +270,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_gain() {
-        let kernel = DSPKernel::new();
-        assert_eq!(kernel.get_parameter(PARAM_GAIN), 1.0);
-    }
-
-    #[test]
-    fn test_set_get_parameter() {
-        let mut kernel = DSPKernel::new();
-        kernel.set_parameter(PARAM_GAIN, 0.5);
-        assert!((kernel.get_parameter(PARAM_GAIN) - 0.5).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_process_applies_gain() {
-        let mut kernel = DSPKernel::new();
-        kernel.set_parameter(PARAM_GAIN, 0.5);
-
-        let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
-        let mut output: [f32; 4] = [0.0; 4];
-
-        let input_ptr: *const f32 = input.as_ptr();
-        let output_ptr: *mut f32 = output.as_mut_ptr();
-
-        unsafe {
-            kernel.process(&input_ptr, &output_ptr, 1, 4);
-        }
-
-        assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
-    }
-
-    #[test]
     fn test_bypass_passes_through() {
         let mut kernel = DSPKernel::new();
-        kernel.set_parameter(PARAM_GAIN, 0.5);
         kernel.set_bypassed(true);
 
         let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];

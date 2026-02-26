@@ -5,11 +5,6 @@
 #include <stdbool.h>
 
 /**
- * Parameter addresses — must match the Swift enum in Parameters.swift.
- */
-#define PARAM_GAIN 0
-
-/**
  * Real-time audio DSP kernel with optional Python processing.
  *
  * When a Python script is loaded, `process()` delegates to the script's
