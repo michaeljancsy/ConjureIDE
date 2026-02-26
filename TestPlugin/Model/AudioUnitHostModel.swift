@@ -72,15 +72,21 @@ class AudioUnitHostModel {
                     self.validationResult = validationResult
                     self.currentValidationData = validationData
                 }
-            }
                 self.viewModel = AudioUnitViewModel(showAudioControls: self.wantsAudio,
                                                     showMIDIContols: self.wantsMIDI,
                                                     title: self.auValString,
                                                     message: "Successfully loaded (\(self.auValString))",
                                                     viewController: viewController)
-                
+
                 if self.isFreeRunning {
                     self.playEngine.startPlaying()
+                }
+            } else {
+                self.viewModel = AudioUnitViewModel(showAudioControls: false,
+                                                    showMIDIContols: false,
+                                                    title: self.auValString,
+                                                    message: "Failed to find Audio Unit component (\(self.auValString)). Try relaunching the app.",
+                                                    viewController: nil)
             }
         }
     }

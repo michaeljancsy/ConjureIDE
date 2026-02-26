@@ -102,11 +102,33 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             host.removeFromParent()
             host.view.removeFromSuperview()
         }
-        
+
         guard let observableParameterTree = audioUnit.observableParameterTree else {
             return
         }
-        let content = TestPluginExtensionMainView(parameterTree: observableParameterTree)
+
+        // Read the default process.py source from the bundle
+        let defaultScript: String
+        if let scriptURL = Bundle(for: type(of: self)).url(forResource: "process", withExtension: "py"),
+           let source = try? String(contentsOf: scriptURL, encoding: .utf8) {
+            defaultScript = source
+        } else {
+            defaultScript = "# process.py not found in bundle\n"
+        }
+
+        let onSaveScript: (String) -> (Bool, String?) = { [weak audioUnit] source in
+            guard let au = audioUnit as? TestPluginExtensionAudioUnit else {
+                return (false, "Audio unit not available")
+            }
+            let result = au.reloadScript(source: source)
+            return (result.success, result.error)
+        }
+
+        let content = TestPluginExtensionMainView(
+            parameterTree: observableParameterTree,
+            defaultScriptSource: defaultScript,
+            onSaveScript: onSaveScript
+        )
         let host = HostingController(rootView: content)
         self.addChild(host)
         host.view.frame = self.view.bounds

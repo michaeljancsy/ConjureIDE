@@ -35,6 +35,7 @@ struct ContentView: View {
                         ValidationView(hostModel: hostModel, isSheetPresented: $isSheetPresented)
                         if let viewController = hostModel.viewModel.viewController {
                             AUViewControllerUI(viewController: viewController)
+                                .frame(minWidth: 400, minHeight: 500)
                                 .padding(margin)
                         } else {
                             Text(hostModel.viewModel.message)

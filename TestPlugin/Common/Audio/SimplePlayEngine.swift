@@ -106,9 +106,20 @@ public class SimplePlayEngine {
     func initComponent(type: String, subType: String, manufacturer: String) async -> ViewController? {
         // Reset the engine to remove any configured audio units.
         reset()
-        
-        guard let component = AVAudioUnit.findComponent(type: type, subType: subType, manufacturer: manufacturer) else {
-            fatalError("Failed to find component with type: \(type), subtype: \(subType), manufacturer: \(manufacturer))" )
+
+        // Try to find the component, retrying a few times since AU discovery can be async
+        var component: AVAudioUnitComponent?
+        for attempt in 0..<5 {
+            component = AVAudioUnit.findComponent(type: type, subType: subType, manufacturer: manufacturer)
+            if component != nil { break }
+            if attempt < 4 {
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+
+        guard let component else {
+            print("Failed to find component with type: \(type), subtype: \(subType), manufacturer: \(manufacturer)")
+            return nil
         }
         
         // Instantiate the audio unit.

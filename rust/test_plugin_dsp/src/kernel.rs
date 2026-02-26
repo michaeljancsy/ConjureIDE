@@ -206,14 +206,11 @@ impl DSPKernel {
             // Python failed — fall through to Rust
         }
 
-        // Fallback: Rust gain processing
-        let gain = self.gain as f32;
+        // Fallback: passthrough (copy input to output unchanged)
         for ch in 0..channel_count {
             let src = std::slice::from_raw_parts(inputs[ch], frame_count);
             let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
-            for i in 0..frame_count {
-                dst[i] = src[i] * gain;
-            }
+            dst.copy_from_slice(src);
         }
     }
 

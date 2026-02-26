@@ -15,6 +15,9 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	// Rust DSP kernel (opaque pointer)
 	private var kernel: DSPKernelRef!
 
+	// Cached path to bundled Python runtime for script reloads
+	private var pythonHome: String?
+
 	// Audio busses
 	private var _inputBus: AUAudioUnitBus!
 	private var _outputBus: AUAudioUnitBus!
@@ -55,6 +58,7 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			pluginLog.error("Bundled Python distribution not found in bundle, using Rust fallback DSP")
 			return
 		}
+		self.pythonHome = pythonHome
 
 		guard let scriptPath = bundle.path(forResource: "process", ofType: "py") else {
 			pluginLog.error("process.py not found in bundle, using Rust fallback DSP")
@@ -72,6 +76,41 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			} else {
 				pluginLog.error("Failed to load Python DSP script (no error details), using Rust fallback DSP")
 			}
+		}
+	}
+
+	/// Hot-reload a Python DSP script from source code.
+	/// Writes the source to a temp file and calls dsp_kernel_load_script.
+	public func reloadScript(source: String) -> (success: Bool, error: String?) {
+		guard let pythonHome = self.pythonHome else {
+			return (false, "Python runtime not available")
+		}
+
+		let tempDir = FileManager.default.temporaryDirectory
+		let tempFile = tempDir.appendingPathComponent("process_\(UUID().uuidString).py")
+
+		do {
+			try source.write(to: tempFile, atomically: true, encoding: .utf8)
+		} catch {
+			return (false, "Failed to write temp file: \(error.localizedDescription)")
+		}
+
+		defer {
+			try? FileManager.default.removeItem(at: tempFile)
+		}
+
+		let success = dsp_kernel_load_script(kernel, pythonHome, tempFile.path)
+
+		if success {
+			pluginLog.info("Python DSP script reloaded successfully")
+			return (true, nil)
+		} else {
+			var errorMsg = "Unknown error"
+			if let errPtr = dsp_kernel_last_error(kernel) {
+				errorMsg = String(cString: errPtr)
+			}
+			pluginLog.error("Failed to reload Python DSP script: \(errorMsg, privacy: .public)")
+			return (false, errorMsg)
 		}
 	}
 
