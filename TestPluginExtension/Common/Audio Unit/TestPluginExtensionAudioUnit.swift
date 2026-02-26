@@ -6,6 +6,9 @@
 //
 
 import AVFoundation
+import os.log
+
+private let pluginLog = Logger(subsystem: "com.MichaelJancsy.TestPlugin", category: "DSP")
 
 public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 {
@@ -38,6 +41,38 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		_inputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .input, busses: [_inputBus])
 		_outputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .output, busses: [_outputBus])
+
+		// Load the bundled Python DSP script
+		loadPythonScript()
+	}
+
+	private func loadPythonScript() {
+		let bundle = Bundle(for: type(of: self))
+
+		// Python home: the bundled Python standard library root
+		// The bundle copies python-dist contents into Resources/python-dist/
+		guard let pythonHome = bundle.path(forResource: "python-dist", ofType: nil) else {
+			pluginLog.error("Bundled Python distribution not found in bundle, using Rust fallback DSP")
+			return
+		}
+
+		guard let scriptPath = bundle.path(forResource: "process", ofType: "py") else {
+			pluginLog.error("process.py not found in bundle, using Rust fallback DSP")
+			return
+		}
+
+		pluginLog.info("Loading Python script. pythonHome=\(pythonHome, privacy: .public) scriptPath=\(scriptPath, privacy: .public)")
+		let success = dsp_kernel_load_script(kernel, pythonHome, scriptPath)
+		if success {
+			pluginLog.info("Python DSP script loaded successfully")
+		} else {
+			if let errPtr = dsp_kernel_last_error(kernel) {
+				let errMsg = String(cString: errPtr)
+				pluginLog.error("Failed to load Python DSP script: \(errMsg, privacy: .public)")
+			} else {
+				pluginLog.error("Failed to load Python DSP script (no error details), using Rust fallback DSP")
+			}
+		}
 	}
 
 	deinit {

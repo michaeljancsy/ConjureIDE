@@ -9,6 +9,16 @@ if [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env"
 fi
 
+# Use the bundled Python distribution for pyo3
+PYTHON_DIST="${RUST_DIR}/python-dist"
+if [ -d "${PYTHON_DIST}" ]; then
+    export PYO3_PYTHON="${PYTHON_DIST}/bin/python3"
+else
+    echo "warning: Bundled Python not found at ${PYTHON_DIST}. Run rust/setup-python.sh first." >&2
+    echo "warning: Falling back to system python3." >&2
+    export PYO3_PYTHON="python3"
+fi
+
 # Map a single Xcode arch to a Rust target triple
 arch_to_rust_target() {
     local arch="$1"

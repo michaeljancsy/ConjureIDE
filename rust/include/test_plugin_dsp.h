@@ -10,10 +10,12 @@
 #define PARAM_GAIN 0
 
 /**
- * Real-time audio DSP kernel.
+ * Real-time audio DSP kernel with optional Python processing.
  *
- * All methods are safe for the audio render thread:
- * no allocations, no locks, no syscalls.
+ * When a Python script is loaded, `process()` delegates to the script's
+ * `process(inputs, outputs, frame_count, sample_rate)` function with
+ * pre-allocated numpy arrays. When no script is loaded, the original
+ * Rust gain processing is used as fallback.
  */
 typedef struct DSPKernel DSPKernel;
 
@@ -95,5 +97,28 @@ void dsp_kernel_process(DSPKernelRef kernel,
                         float *const *output_buffers,
                         uint32_t channel_count,
                         uint32_t frame_count);
+
+/**
+ * Load a Python script for DSP processing.
+ *
+ * `python_home` is the path to the bundled Python distribution root (containing lib/python3.14/).
+ * `script_path` is the path to the .py file containing a `process()` function.
+ *
+ * Returns true on success, false on error (errors are printed to stderr).
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * - `python_home` and `script_path` must be valid null-terminated C strings.
+ */
+bool dsp_kernel_load_script(DSPKernelRef kernel, const char *python_home, const char *script_path);
+
+/**
+ * Returns the last error message as a null-terminated C string.
+ * Returns null if no error. The pointer is valid until the next call to this function or destroy.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+const char *dsp_kernel_last_error(DSPKernelRef kernel);
 
 #endif  /* TEST_PLUGIN_DSP_H */
