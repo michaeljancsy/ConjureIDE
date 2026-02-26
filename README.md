@@ -1,0 +1,70 @@
+# TestPlugin
+
+An AUv3 audio effect plugin for macOS that runs a Python script on every audio render callback. The plugin bundles a free-threaded (no-GIL) Python 3.14 runtime with numpy, allowing you to write DSP in Python with pre-allocated numpy arrays.
+
+When no Python script is loaded or if Python errors at runtime, the plugin falls back to a built-in Rust gain processor.
+
+## How it works
+
+1. A Rust DSP kernel embeds Python 3.14 via [pyo3](https://pyo3.rs/) and [numpy](https://github.com/PyO3/rust-numpy)
+2. On plugin init, the kernel loads `process.py` from the app bundle and caches the `process()` function
+3. On each audio render callback, input samples are copied into pre-allocated numpy arrays, `process()` is called, and output samples are copied back
+4. The Python runtime is free-threaded (PEP 703) — no GIL contention
+
+## Quick start
+
+```bash
+# 1. Download bundled Python 3.14 + numpy (one-time, ~100MB)
+cd rust && ./setup-python.sh
+
+# 2. Open in Xcode and build
+open TestPlugin.xcodeproj
+```
+
+Or build from the command line:
+
+```bash
+xcodebuild -project TestPlugin.xcodeproj -scheme TestPlugin build
+```
+
+### Prerequisites
+
+- macOS 26.2+
+- Xcode with Swift 5.0+
+- Rust toolchain (`rustup`, `cargo`) with target `aarch64-apple-darwin`
+- `cbindgen` (`cargo install cbindgen`)
+
+## Writing a DSP script
+
+Edit `TestPluginExtension/Resources/process.py`. The `process()` function is called on every audio render callback:
+
+```python
+import numpy as np
+
+def process(inputs, outputs, frame_count, sample_rate):
+    for ch in range(len(inputs)):
+        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5
+```
+
+**Parameters:**
+- `inputs` — list of numpy float32 arrays (one per channel, pre-allocated to `max_frames`)
+- `outputs` — list of numpy float32 arrays (one per channel, pre-allocated to `max_frames`)
+- `frame_count` — number of valid samples this callback (may be less than array length)
+- `sample_rate` — current sample rate (e.g. 44100.0)
+
+## Project structure
+
+```
+TestPlugin/                  Host app
+TestPluginExtension/         AUv3 plugin
+  Resources/process.py       Python DSP script
+  Common/Audio Unit/         AUAudioUnit subclass + render block
+rust/
+  test_plugin_dsp/src/       Rust DSP kernel with embedded Python
+  setup-python.sh            Downloads Python 3.14 + numpy
+  build-rust.sh              Xcode build phase script
+```
+
+## Architecture
+
+**Swift** handles the UI, host app, audio buffer management, and AU render block. **Rust** implements the DSP kernel and embeds Python via pyo3. **Python** runs the user-editable `process.py` script with numpy arrays on each render callback. Swift and Rust communicate through a C FFI bridging header.

@@ -1,6 +1,6 @@
 # TestPlugin
 
-AUv3 audio effect plugin (volume control) for macOS, iOS, and visionOS. Built with Apple's Audio Unit Extension framework.
+AUv3 audio effect plugin for macOS with embedded Python DSP scripting. Built with Apple's Audio Unit Extension framework.
 
 ## Build
 
@@ -13,23 +13,40 @@ xcodebuild -project TestPlugin.xcodeproj -scheme TestPlugin test   # runs unit +
 
 ### Prerequisites
 - Xcode with Swift 5.0+
-- Rust toolchain (`rustup`, `cargo`) with targets: `aarch64-apple-darwin`, `aarch64-apple-ios`, `aarch64-apple-ios-sim`
+- Rust toolchain (`rustup`, `cargo`) with target: `aarch64-apple-darwin`
 - `cbindgen` (`cargo install cbindgen`)
+- Bundled Python runtime (one-time setup): `cd rust && ./setup-python.sh`
 
-Deployment targets: macOS 26.2+, iOS 26.2+, visionOS 26.2+.
+Deployment targets: macOS 26.2+.
+
+### Python setup
+Run `rust/setup-python.sh` once before the first build. This downloads a free-threaded Python 3.14 build from python-build-standalone (~100MB) and installs numpy into it. The result lives in `rust/python-dist/` (gitignored).
 
 ### Rust build
 The `TestPluginExtension` target has a Run Script build phase that calls `rust/build-rust.sh`. This:
-1. Builds the Rust static library (`libtest_plugin_dsp.a`) via `cargo build`
-2. Generates the C header (`rust/include/test_plugin_dsp.h`) via `cbindgen`
+1. Sets `PYO3_PYTHON` to the bundled `rust/python-dist/bin/python3`
+2. Builds the Rust static library (`libtest_plugin_dsp.a`) via `cargo build`
+3. Generates the C header (`rust/include/test_plugin_dsp.h`) via `cbindgen`
 
-To build/test the Rust crate standalone: `cd rust && cargo test`
+To build/test the Rust crate standalone: `cd rust && PYO3_PYTHON=python-dist/bin/python3 cargo test`
+
+### Xcode build phases (TestPluginExtension target)
+1. **Run Script — Build Rust**: calls `rust/build-rust.sh`
+2. **Run Script — Copy Python Runtime**: copies `libpython3.14t.dylib` into Frameworks, copies `python3.14t/` stdlib+numpy into Resources/python-dist, and code-signs the dylib and all `.so` files with `EXPANDED_CODE_SIGN_IDENTITY`
 
 ## Architecture
 
 - **Swift + SwiftUI** for all UI, host app logic, buffer management, and render block
-- **Rust** for the real-time DSP kernel (pure math, no allocations — render-thread safe)
+- **Rust** for the DSP kernel, embedding Python via pyo3/numpy for scriptable processing
+- **Python** for the user-editable DSP script (`process.py`), called each render callback with pre-allocated numpy arrays
 - **C FFI** via bridging header (`TestPluginExtension-Bridging-Header.h`) imports `test_plugin_dsp.h`
+
+### Python DSP pipeline
+1. On AU init, Swift calls `dsp_kernel_load_script()` with the bundled `process.py` path and Python home
+2. Rust sets `PYTHONHOME`, initializes the free-threaded Python 3.14 interpreter via pyo3, and caches the script's `process()` function
+3. On `allocateRenderResources()`, Rust pre-allocates numpy float32 arrays (one per channel, sized to `maximumFramesToRender`)
+4. Each render callback: Rust copies input audio into numpy arrays, calls `process(inputs, outputs, frame_count, sample_rate)`, copies output back
+5. If Python fails to load or errors at runtime, Rust falls back to built-in gain processing
 
 ## Project Structure
 
@@ -41,13 +58,16 @@ TestPlugin/                  Host app — loads and tests the AU extension
 TestPluginExtension/         The AU plugin itself
   Parameters/                Parameter addresses (Swift enum) and specs
   UI/                        SwiftUI views (ParameterSlider, MainView)
+  Resources/process.py       Python DSP script (bundled into .appex)
   Common/Audio Unit/         TestPluginExtensionAudioUnit.swift — AUAudioUnit subclass + render block
   Common/UI/                 AudioUnitViewController, ObservableAUParameter
   Common/Parameters/         ParameterSpecBase (result-builder DSL)
 rust/                        Rust DSP crate
-  test_plugin_dsp/src/       kernel.rs (DSP), lib.rs (FFI), params.rs (addresses)
+  test_plugin_dsp/src/       kernel.rs (DSP+Python), lib.rs (FFI), params.rs (addresses)
   include/                   Generated C header (test_plugin_dsp.h)
   build-rust.sh              Xcode build phase script
+  setup-python.sh            Downloads free-threaded Python 3.14 + numpy
+  python-dist/               Bundled Python runtime (gitignored)
 TestPluginTests/             Unit tests (Swift Testing)
 TestPluginUITests/           UI tests (XCUITest)
 ```
@@ -65,16 +85,26 @@ Currently one parameter: `gain` (address 0, linear 0.0–1.0, default 0.25).
 
 ## DSP Conventions
 
-- The DSP kernel (`DSPKernel` in Rust) is pure computation — no allocations, no locks, no syscalls on the audio thread
-- Swift calls Rust via C FFI: `dsp_kernel_create()`, `dsp_kernel_process()`, `dsp_kernel_set_parameter()`, etc.
-- Processing is sample-by-sample per channel
+- The Rust kernel embeds free-threaded Python 3.14 (no GIL) via pyo3 and numpy
+- Python `process()` is called each render callback with pre-allocated numpy arrays (no per-callback allocations)
+- When no Python script is loaded or Python errors at runtime, Rust falls back to built-in gain processing
+- Swift calls Rust via C FFI: `dsp_kernel_create()`, `dsp_kernel_process()`, `dsp_kernel_load_script()`, etc.
 - Bypass copies input to output unchanged
 - Event processing loop (parameter automation) lives in Swift alongside the render block
+- Errors from Rust/Python are passed to Swift via `dsp_kernel_last_error()` and logged with `os_log`
+
+## Code Signing
+
+The bundled Python runtime requires proper code signing for the hardened runtime:
+- `libpython3.14t.dylib` must be signed with the build identity
+- All `.so` files (numpy C extensions, stdlib extensions) must also be signed
+- This is handled by the "Copy Python Runtime" build phase in Xcode
 
 ## Dependencies
 
 - **Apple frameworks**: AudioToolbox, AVFoundation, CoreAudioKit, CoreMIDI, SwiftUI, Combine
-- **Rust**: no external crates (pure `std` only)
+- **Rust crates**: pyo3 0.27 (Python embedding), numpy 0.27 (numpy array interop)
+- **Bundled runtime**: Free-threaded Python 3.14.3 + numpy (downloaded via `setup-python.sh`)
 
 ## Plugin Identity
 
