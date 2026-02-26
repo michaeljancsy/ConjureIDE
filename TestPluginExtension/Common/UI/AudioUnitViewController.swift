@@ -14,25 +14,44 @@ private let log = Logger(subsystem: "com.MichaelJancsy.TestPluginExtension", cat
 
 @MainActor
 public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
-    var audioUnit: AUAudioUnit?
+    var audioUnit: AUAudioUnit? {
+        didSet {
+            log.info("audioUnit didSet, isViewLoaded=\(self.isViewLoaded, privacy: .public)")
+            guard let audioUnit, isViewLoaded else { return }
+            if hostingView == nil {
+                configureSwiftUIView(audioUnit: audioUnit)
+            }
+        }
+    }
 
-    var hostingController: HostingController<TestPluginExtensionMainView>?
+    /// NSHostingView instead of NSHostingController: avoids child-VC lifecycle
+    /// issues where NSHostingController stops rendering after viewDidDisappear
+    /// and never resumes if the host doesn't call viewWillAppear on reopen.
+    private var hostingView: NSHostingView<TestPluginExtensionMainView>?
 
 	deinit {
+        log.info("deinit called")
 	}
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-
-        // Accessing the `audioUnit` parameter prompts the AU to be created via createAudioUnit(with:)
-        guard let audioUnit = self.audioUnit else {
-            return
-        }
+        log.info("viewDidLoad called, audioUnit=\(self.audioUnit == nil ? "nil" : "set", privacy: .public)")
+        guard let audioUnit = self.audioUnit else { return }
         configureSwiftUIView(audioUnit: audioUnit)
+    }
+
+    public override func viewWillAppear() {
+        super.viewWillAppear()
+        log.info("viewWillAppear called, hostingView=\(self.hostingView == nil ? "nil" : "set", privacy: .public)")
+        guard let audioUnit = self.audioUnit else { return }
+        if hostingView == nil || hostingView?.superview == nil {
+            configureSwiftUIView(audioUnit: audioUnit)
+        }
     }
 
 	nonisolated public func createAudioUnit(with componentDescription: AudioComponentDescription) throws -> AUAudioUnit {
 		return try DispatchQueue.main.sync {
+			log.info("createAudioUnit called")
 
 			audioUnit = try TestPluginExtensionAudioUnit(componentDescription: componentDescription, options: [])
 
@@ -42,8 +61,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 			}
 
 			defer {
-				// Configure the SwiftUI view after creating the AU
 				DispatchQueue.main.async {
+					log.info("createAudioUnit defer: configuring SwiftUI view")
 					self.configureSwiftUIView(audioUnit: audioUnit)
 				}
 			}
@@ -53,12 +72,10 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 	}
 
     private func configureSwiftUIView(audioUnit: AUAudioUnit) {
-        if let host = hostingController {
-            host.removeFromParent()
-            host.view.removeFromSuperview()
-        }
+        log.info("configureSwiftUIView called")
 
-        // Read the default process.py source from the bundle
+        hostingView?.removeFromSuperview()
+
         let defaultScript: String
         if let scriptURL = Bundle(for: type(of: self)).url(forResource: "process", withExtension: "py"),
            let source = try? String(contentsOf: scriptURL, encoding: .utf8) {
@@ -79,19 +96,17 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             defaultScriptSource: defaultScript,
             onSaveScript: onSaveScript
         )
-        let host = HostingController(rootView: content)
-        self.addChild(host)
-        host.view.frame = self.view.bounds
-        self.view.addSubview(host.view)
-        hostingController = host
+        let hv = NSHostingView(rootView: content)
+        hv.translatesAutoresizingMaskIntoConstraints = false
+        self.view.addSubview(hv)
+        NSLayoutConstraint.activate([
+            hv.topAnchor.constraint(equalTo: self.view.topAnchor),
+            hv.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
+            hv.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
+            hv.bottomAnchor.constraint(equalTo: self.view.bottomAnchor)
+        ])
+        hostingView = hv
 
-        // Make sure the SwiftUI view fills the full area provided by the view controller
-        host.view.translatesAutoresizingMaskIntoConstraints = false
-        host.view.topAnchor.constraint(equalTo: self.view.topAnchor).isActive = true
-        host.view.leadingAnchor.constraint(equalTo: self.view.leadingAnchor).isActive = true
-        host.view.trailingAnchor.constraint(equalTo: self.view.trailingAnchor).isActive = true
-        host.view.bottomAnchor.constraint(equalTo: self.view.bottomAnchor).isActive = true
-        self.view.bringSubviewToFront(host.view)
+        log.info("configureSwiftUIView done")
     }
-
 }
