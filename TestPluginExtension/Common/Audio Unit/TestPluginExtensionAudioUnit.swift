@@ -1,0 +1,276 @@
+//
+//  TestPluginExtensionAudioUnit.swift
+//  TestPluginExtension
+//
+//  Created by Michael Jancsy on 2/25/26.
+//
+
+import AVFoundation
+
+public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
+{
+	// Rust DSP kernel (opaque pointer)
+	private var kernel: DSPKernelRef!
+
+	// Audio busses
+	private var _inputBus: AUAudioUnitBus!
+	private var _outputBus: AUAudioUnitBus!
+	private var _inputBusses: AUAudioUnitBusArray!
+	private var _outputBusses: AUAudioUnitBusArray!
+
+	// Input buffer management (replaces C++ BufferedInputBus)
+	private var inputPCMBuffer: AVAudioPCMBuffer?
+	private var originalAudioBufferList: UnsafePointer<AudioBufferList>?
+	private var mutableAudioBufferList: UnsafeMutablePointer<AudioBufferList>?
+	private var _maxFrames: AUAudioFrameCount = 0
+
+	@objc override init(componentDescription: AudioComponentDescription, options: AudioComponentInstantiationOptions) throws {
+		kernel = dsp_kernel_create()
+
+		let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
+		try super.init(componentDescription: componentDescription, options: options)
+
+		_inputBus = try AUAudioUnitBus(format: format)
+		_inputBus.maximumChannelCount = 8
+
+		_outputBus = try AUAudioUnitBus(format: format)
+		_outputBus.maximumChannelCount = 2
+
+		_inputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .input, busses: [_inputBus])
+		_outputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .output, busses: [_outputBus])
+	}
+
+	deinit {
+		if let kernel = kernel {
+			dsp_kernel_destroy(kernel)
+		}
+	}
+
+	public override var inputBusses: AUAudioUnitBusArray {
+		return _inputBusses
+	}
+
+	public override var outputBusses: AUAudioUnitBusArray {
+		return _outputBusses
+	}
+
+	public override var channelCapabilities: [NSNumber] {
+		return [NSNumber(value: 2), NSNumber(value: 2)]
+	}
+
+	public override var maximumFramesToRender: AUAudioFrameCount {
+		get { dsp_kernel_get_max_frames(kernel) }
+		set { dsp_kernel_set_max_frames(kernel, newValue) }
+	}
+
+	public override var shouldBypassEffect: Bool {
+		get { dsp_kernel_is_bypassed(kernel) }
+		set { dsp_kernel_set_bypassed(kernel, newValue) }
+	}
+
+	// MARK: - Render Resources
+
+	public override func allocateRenderResources() throws {
+		let inputChannelCount = inputBusses[0].format.channelCount
+		let outputChannelCount = outputBusses[0].format.channelCount
+
+		if outputChannelCount != inputChannelCount {
+			setRenderResourcesAllocated(false)
+			throw NSError(domain: NSOSStatusErrorDomain, code: Int(kAudioUnitErr_FailedInitialization), userInfo: nil)
+		}
+
+		// Allocate input buffer (replaces BufferedInputBus.allocateRenderResources)
+		_maxFrames = self.maximumFramesToRender
+		inputPCMBuffer = AVAudioPCMBuffer(pcmFormat: _inputBus.format, frameCapacity: _maxFrames)
+		originalAudioBufferList = inputPCMBuffer?.audioBufferList
+		mutableAudioBufferList = inputPCMBuffer?.mutableAudioBufferList
+
+		dsp_kernel_initialize(kernel, Int32(inputChannelCount), Int32(outputChannelCount), _outputBus.format.sampleRate)
+
+		try super.allocateRenderResources()
+	}
+
+	public override func deallocateRenderResources() {
+		dsp_kernel_deinitialize(kernel)
+		inputPCMBuffer = nil
+		originalAudioBufferList = nil
+		mutableAudioBufferList = nil
+		super.deallocateRenderResources()
+	}
+
+	// MARK: - Rendering
+
+	public override var internalRenderBlock: AUInternalRenderBlock {
+		let kernel = self.kernel!
+
+		// Capture self via Unmanaged to avoid ARC on the audio thread.
+		// Buffer list pointers are nil until allocateRenderResources() is called,
+		// but the framework may read this property before that.
+		let unmanagedSelf = Unmanaged.passUnretained(self)
+
+		return { actionFlags, timestamp, frameCount, outputBusNumber,
+				 outputData, realtimeEventListHead, pullInputBlock in
+
+			let au = unmanagedSelf.takeUnretainedValue()
+			guard let originalABL = au.originalAudioBufferList,
+				  let mutableABL = au.mutableAudioBufferList else {
+				return kAudioUnitErr_Uninitialized
+			}
+			let maxFrames = au._maxFrames
+
+			guard frameCount <= dsp_kernel_get_max_frames(kernel) else {
+				return kAudioUnitErr_TooManyFramesToProcess
+			}
+
+			// Pull input (replaces BufferedInputBus.pullInput)
+			guard let pullInputBlock = pullInputBlock else {
+				return kAudioUnitErr_NoConnection
+			}
+
+			// Prepare input buffer list (replaces BufferedInputBus.prepareInputBufferList)
+			let byteSize = min(frameCount, maxFrames) * UInt32(MemoryLayout<Float>.size)
+			let mutableBufList = UnsafeMutableAudioBufferListPointer(mutableABL)
+			let origBufList = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: originalABL))
+			mutableABL.pointee.mNumberBuffers = originalABL.pointee.mNumberBuffers
+			for i in 0..<origBufList.count {
+				mutableBufList[i].mNumberChannels = origBufList[i].mNumberChannels
+				mutableBufList[i].mData = origBufList[i].mData
+				mutableBufList[i].mDataByteSize = byteSize
+			}
+
+			var pullFlags = AudioUnitRenderActionFlags(rawValue: 0)
+			let err = pullInputBlock(&pullFlags, timestamp, frameCount, 0, mutableABL)
+			guard err == noErr else { return err }
+
+			let inABL = UnsafeMutableAudioBufferListPointer(mutableABL)
+			let outABL = UnsafeMutableAudioBufferListPointer(outputData)
+
+			// If passed null output buffer pointers, process in-place in the input buffer.
+			for i in 0..<outABL.count {
+				if outABL[i].mData == nil {
+					outABL[i].mData = inABL[i].mData
+				}
+			}
+
+			// Process with events (replaces AUProcessHelper.processWithEvents)
+			let channelCount = UInt32(inABL.count)
+			var now = AUEventSampleTime(timestamp.pointee.mSampleTime)
+			var framesRemaining = frameCount
+			var nextEvent = realtimeEventListHead
+
+			while framesRemaining > 0 {
+				if nextEvent == nil {
+					// Process remaining frames
+					let frameOffset = frameCount - framesRemaining
+					Self.callKernelProcess(kernel: kernel, inABL: inABL, outABL: outABL,
+										   channelCount: channelCount, frameOffset: frameOffset,
+										   frameCount: framesRemaining)
+					return noErr
+				}
+
+				let headEventTime = nextEvent!.pointee.head.eventSampleTime
+				let framesThisSegment = UInt32(max(0, headEventTime - now))
+
+				if framesThisSegment > 0 {
+					let frameOffset = frameCount - framesRemaining
+					Self.callKernelProcess(kernel: kernel, inABL: inABL, outABL: outABL,
+										   channelCount: channelCount, frameOffset: frameOffset,
+										   frameCount: framesThisSegment)
+					framesRemaining -= framesThisSegment
+					now += AUEventSampleTime(framesThisSegment)
+				}
+
+				// Handle all simultaneous events
+				nextEvent = Self.performAllSimultaneousEvents(kernel: kernel, now: now, event: nextEvent!)
+			}
+
+			return noErr
+		}
+	}
+
+	/// Call the Rust kernel to process a segment of audio.
+	private static func callKernelProcess(
+		kernel: DSPKernelRef,
+		inABL: UnsafeMutableAudioBufferListPointer,
+		outABL: UnsafeMutableAudioBufferListPointer,
+		channelCount: UInt32,
+		frameOffset: UInt32,
+		frameCount: UInt32
+	) {
+		let count = Int(channelCount)
+
+		// Build contiguous arrays of channel buffer pointers (optional to match C import)
+		var inputPtrs = [UnsafePointer<Float>?]()
+		inputPtrs.reserveCapacity(count)
+		var outputPtrs = [UnsafeMutablePointer<Float>?]()
+		outputPtrs.reserveCapacity(count)
+
+		for ch in 0..<count {
+			let baseIn = inABL[ch].mData!.assumingMemoryBound(to: Float.self)
+			inputPtrs.append(UnsafePointer(baseIn.advanced(by: Int(frameOffset))))
+
+			let baseOut = outABL[ch].mData!.assumingMemoryBound(to: Float.self)
+			outputPtrs.append(baseOut.advanced(by: Int(frameOffset)))
+		}
+
+		inputPtrs.withUnsafeBufferPointer { inBuf in
+			outputPtrs.withUnsafeBufferPointer { outBuf in
+				dsp_kernel_process(kernel, inBuf.baseAddress!, outBuf.baseAddress!, channelCount, frameCount)
+			}
+		}
+	}
+
+	/// Walk the event linked list, dispatching all events at the current timestamp.
+	private static func performAllSimultaneousEvents(
+		kernel: DSPKernelRef,
+		now: AUEventSampleTime,
+		event: UnsafePointer<AURenderEvent>
+	) -> UnsafePointer<AURenderEvent>? {
+		var current: UnsafePointer<AURenderEvent>? = event
+		repeat {
+			guard let evt = current else { break }
+
+			if evt.pointee.head.eventType == .parameter || evt.pointee.head.eventType == .parameterRamp {
+				let paramEvent = UnsafeRawPointer(evt).assumingMemoryBound(to: AUParameterEvent.self)
+				dsp_kernel_set_parameter(kernel, paramEvent.pointee.parameterAddress, paramEvent.pointee.value)
+			}
+
+			// Advance to next event
+			if let next = evt.pointee.head.next {
+				current = UnsafeRawPointer(next).assumingMemoryBound(to: AURenderEvent.self)
+			} else {
+				current = nil
+			}
+		} while current != nil && current!.pointee.head.eventSampleTime <= now
+		return current
+	}
+
+	// MARK: - Parameter Tree
+
+	public func setupParameterTree(_ parameterTree: AUParameterTree) {
+		self.parameterTree = parameterTree
+
+		for param in parameterTree.allParameters {
+			dsp_kernel_set_parameter(kernel, param.address, param.value)
+		}
+
+		setupParameterCallbacks()
+	}
+
+	private func setupParameterCallbacks() {
+		parameterTree?.implementorValueObserver = { [weak self] param, value in
+			guard let self else { return }
+			dsp_kernel_set_parameter(self.kernel, param.address, value)
+		}
+
+		parameterTree?.implementorValueProvider = { [weak self] param in
+			guard let self else { return 0 }
+			return dsp_kernel_get_parameter(self.kernel, param.address)
+		}
+
+		parameterTree?.implementorStringFromValueCallback = { param, valuePtr in
+			guard let value = valuePtr?.pointee else { return "-" }
+			return NSString.localizedStringWithFormat("%.f", value) as String
+		}
+	}
+}

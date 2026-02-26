@@ -1,0 +1,10 @@
+# Rust build artifacts
+rust/target/
+
+# Xcode build artifacts
+build/
+DerivedData/
+
+# Xcode user-specific files
+*.xcuserstate
+xcuserdata/

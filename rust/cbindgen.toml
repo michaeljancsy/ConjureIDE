@@ -1,0 +1,10 @@
+language = "C"
+include_guard = "TEST_PLUGIN_DSP_H"
+no_includes = true
+sys_includes = ["stdint.h", "stdbool.h"]
+
+[export]
+prefix = ""
+
+[enum]
+rename_variants = "None"
