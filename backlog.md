@@ -4,8 +4,11 @@
 - 
 
 ## To Do
-- Feature idea 1
-- Feature idea 2
+- Resizable plugin window
+- Save/load scripts from previous sessions (persistent script storage)
+- Syntax highlighting in the script editor
+- Mono and stereo track compatibility
+- Automated test suite
 
 ## Done
 -

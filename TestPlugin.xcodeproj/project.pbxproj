@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2510F93B2F5211FC0046A41D /* CLAUDE.md in Resources */ = {isa = PBXBuildFile; fileRef = 2510F9392F5211FC0046A41D /* CLAUDE.md */; };
+		2510F93C2F5211FC0046A41D /* backlog.md in Resources */ = {isa = PBXBuildFile; fileRef = 2510F9382F5211FC0046A41D /* backlog.md */; };
+		2510F93D2F5211FC0046A41D /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 2510F93A2F5211FC0046A41D /* README.md */; };
 		2579117F2F5013850036AAB6 /* TestPluginExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2579117E2F5013850036AAB6 /* TestPluginExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -49,6 +52,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		2510F9382F5211FC0046A41D /* backlog.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = backlog.md; sourceTree = "<group>"; };
+		2510F9392F5211FC0046A41D /* CLAUDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = CLAUDE.md; sourceTree = "<group>"; };
+		2510F93A2F5211FC0046A41D /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		257911402F5013840036AAB6 /* TestPlugin.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TestPlugin.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		257911682F5013850036AAB6 /* TestPluginTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TestPluginTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		257911722F5013850036AAB6 /* TestPluginUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TestPluginUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -127,6 +133,9 @@
 		257911372F5013840036AAB6 = {
 			isa = PBXGroup;
 			children = (
+				2510F9382F5211FC0046A41D /* backlog.md */,
+				2510F9392F5211FC0046A41D /* CLAUDE.md */,
+				2510F93A2F5211FC0046A41D /* README.md */,
 				257911422F5013840036AAB6 /* TestPlugin */,
 				2579116B2F5013850036AAB6 /* TestPluginTests */,
 				257911752F5013850036AAB6 /* TestPluginUITests */,
@@ -297,6 +306,9 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2510F93B2F5211FC0046A41D /* CLAUDE.md in Resources */,
+				2510F93C2F5211FC0046A41D /* backlog.md in Resources */,
+				2510F93D2F5211FC0046A41D /* README.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

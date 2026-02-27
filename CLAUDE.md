@@ -109,3 +109,12 @@ The bundled Python runtime requires proper code signing for the hardened runtime
 - Type: `aufx` (effect)
 - Manufacturer: `A000`
 - Subtype: `0000`
+
+## Backlog Management
+
+At the start of every session, read `backlog.md` in the repo root. Always begin a session by reading backlog.md and briefly summarizing current status. At the end of every session (or when completing/starting features), update `backlog.md` to reflect:
+- Newly completed features (move from "To Do" or "In Progress" to "Done" with the date)
+- Any new feature requests or ideas that came up during the session
+- Any items that moved to "In Progress"
+
+Always keep `backlog.md` as the source of truth for project status.
