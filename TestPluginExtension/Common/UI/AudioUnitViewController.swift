@@ -48,6 +48,14 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     /// This forces the ViewBridge to work with a new view hierarchy, working
     /// around the NSViewServiceMarshal bug in macOS 14+ where a second VC
     /// in the same extension process fails to render.
+    public override var preferredMinimumSize: NSSize {
+        NSSize(width: 400, height: 300)
+    }
+
+    public override var preferredMaximumSize: NSSize {
+        NSSize(width: 1400, height: 800)
+    }
+
     public override func loadView() {
         let defaultSize = NSSize(width: 600, height: 500)
         self.view = NSView(frame: NSRect(origin: .zero, size: defaultSize))

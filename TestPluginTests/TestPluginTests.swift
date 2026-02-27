@@ -8,6 +8,7 @@
 import Testing
 import AVFoundation
 import AudioToolbox
+import CoreAudioKit
 
 struct TestPluginTests {
 
@@ -142,6 +143,41 @@ struct TestPluginTests {
         try au.allocateRenderResources()
         #expect(au.outputBusses[0].format.sampleRate == 48000)
         au.deallocateRenderResources()
+    }
+
+    // MARK: - View Controller Resize Properties
+
+    @MainActor
+    private static func requestVC(_ au: AUAudioUnit) async throws -> NSViewController {
+        guard let vc = await au.requestViewController() else {
+            throw NSError(domain: "TestPlugin", code: 1, userInfo: [NSLocalizedDescriptionKey: "No view controller returned"])
+        }
+        return vc
+    }
+
+    // Note: requestViewController() returns an AUAudioUnitRemoteViewController proxy,
+    // not our AudioUnitViewController directly. The proxy forwards preferredContentSize
+    // but uses its own defaults for preferredMinimumSize/preferredMaximumSize.
+    // We can only verify preferredContentSize through the test API.
+
+    @Test @MainActor func viewControllerPreferredContentSize() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let vc = try await Self.requestVC(au)
+        #expect(vc.preferredContentSize.width == 600)
+        #expect(vc.preferredContentSize.height == 500)
+    }
+
+    @Test @MainActor func viewControllerIsResizable() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let vc = try await Self.requestVC(au)
+        // The proxy reports min < preferred < max, confirming the plugin supports resizing
+        let pref = vc.preferredContentSize
+        let min = vc.preferredMinimumSize
+        let max = vc.preferredMaximumSize
+        #expect(min.width < pref.width, "Min width should be less than preferred width")
+        #expect(min.height < pref.height, "Min height should be less than preferred height")
+        #expect(max.width > pref.width, "Max width should be greater than preferred width")
+        #expect(max.height > pref.height, "Max height should be greater than preferred height")
     }
 
     // MARK: - Render Block
