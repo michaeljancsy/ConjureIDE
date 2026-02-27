@@ -30,6 +30,7 @@ struct TestPluginExtensionMainView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .border(Color.secondary.opacity(0.3), width: 1)
                 .padding(.horizontal)
+                .accessibilityIdentifier("scriptEditor")
 
             if let errorMessage = errorMessage {
                 Text(errorMessage)
@@ -58,6 +59,7 @@ struct TestPluginExtensionMainView: View {
                     errorMessage = result.1 ?? "Unknown error"
                 }
             }
+            .accessibilityIdentifier("saveChangesButton")
             .padding(.bottom)
         }
         .onAppear {
