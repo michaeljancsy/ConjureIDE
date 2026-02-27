@@ -52,5 +52,9 @@ struct AUViewControllerUI: NSViewControllerRepresentable {
     func updateNSViewController(_ nsViewController: NSViewController, context: Context) {
         // No opp
     }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsViewController: NSViewController, context: Context) -> CGSize? {
+        return nil
+    }
 }
 #endif

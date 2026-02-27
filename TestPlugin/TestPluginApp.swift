@@ -15,5 +15,6 @@ struct TestPluginApp: App {
         WindowGroup {
             ContentView(hostModel: hostModel)
         }
+        .defaultSize(width: 700, height: 650)
     }
 }

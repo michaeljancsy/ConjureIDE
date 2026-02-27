@@ -49,7 +49,9 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     /// around the NSViewServiceMarshal bug in macOS 14+ where a second VC
     /// in the same extension process fails to render.
     public override func loadView() {
-        self.view = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        let defaultSize = NSSize(width: 600, height: 500)
+        self.view = NSView(frame: NSRect(origin: .zero, size: defaultSize))
+        self.preferredContentSize = defaultSize
         log.info("loadView called")
     }
 
