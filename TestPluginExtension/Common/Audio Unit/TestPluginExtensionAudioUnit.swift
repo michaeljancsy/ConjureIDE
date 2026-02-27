@@ -38,10 +38,10 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		try super.init(componentDescription: componentDescription, options: options)
 
 		_inputBus = try AUAudioUnitBus(format: format)
-		_inputBus.maximumChannelCount = 8
+		_inputBus.maximumChannelCount = 2
 
 		_outputBus = try AUAudioUnitBus(format: format)
-		_outputBus.maximumChannelCount = 8
+		_outputBus.maximumChannelCount = 2
 
 		_inputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .input, busses: [_inputBus])
 		_outputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .output, busses: [_outputBus])
