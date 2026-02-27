@@ -269,6 +269,26 @@ impl DSPKernel {
 mod tests {
     use super::*;
 
+    // --- Helper ---
+
+    /// Returns (python_home, script_path) for integration tests.
+    /// Returns None if the bundled Python runtime hasn't been set up.
+    fn test_python_paths() -> Option<(String, String)> {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let python_home = manifest_dir.join("../python-dist");
+        let script_path = manifest_dir.join("../../TestPluginExtension/Resources/process.py");
+        if python_home.exists() && script_path.exists() {
+            Some((
+                python_home.to_string_lossy().into_owned(),
+                script_path.to_string_lossy().into_owned(),
+            ))
+        } else {
+            None
+        }
+    }
+
+    // --- Group A: No Python required ---
+
     #[test]
     fn test_bypass_passes_through() {
         let mut kernel = DSPKernel::new();
@@ -291,5 +311,226 @@ mod tests {
     fn test_unknown_parameter_returns_zero() {
         let kernel = DSPKernel::new();
         assert_eq!(kernel.get_parameter(999), 0.0);
+    }
+
+    #[test]
+    fn test_new_kernel_defaults() {
+        let kernel = DSPKernel::new();
+        assert_eq!(kernel.sample_rate, 44100.0);
+        assert!(!kernel.is_bypassed());
+        assert_eq!(kernel.maximum_frames_to_render(), 1024);
+        assert!(kernel.last_error().is_none());
+    }
+
+    #[test]
+    fn test_bypass_toggle() {
+        let mut kernel = DSPKernel::new();
+        assert!(!kernel.is_bypassed());
+        kernel.set_bypassed(true);
+        assert!(kernel.is_bypassed());
+        kernel.set_bypassed(false);
+        assert!(!kernel.is_bypassed());
+    }
+
+    #[test]
+    fn test_set_max_frames() {
+        let mut kernel = DSPKernel::new();
+        assert_eq!(kernel.maximum_frames_to_render(), 1024);
+        kernel.set_maximum_frames_to_render(512);
+        assert_eq!(kernel.maximum_frames_to_render(), 512);
+        kernel.set_maximum_frames_to_render(4096);
+        assert_eq!(kernel.maximum_frames_to_render(), 4096);
+    }
+
+    #[test]
+    fn test_passthrough_when_no_script() {
+        let kernel = DSPKernel::new(); // not bypassed, no script loaded
+
+        let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+        let mut output: [f32; 4] = [0.0; 4];
+
+        let input_ptr: *const f32 = input.as_ptr();
+        let output_ptr: *mut f32 = output.as_mut_ptr();
+
+        unsafe {
+            kernel.process(&input_ptr, &output_ptr, 1, 4);
+        }
+
+        assert_eq!(output, [0.1, 0.2, 0.3, 0.4]);
+    }
+
+    #[test]
+    fn test_passthrough_stereo() {
+        let kernel = DSPKernel::new();
+
+        let input_l: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let input_r: [f32; 4] = [0.0, -0.5, 1.0, 0.25];
+        let mut output_l: [f32; 4] = [0.0; 4];
+        let mut output_r: [f32; 4] = [0.0; 4];
+
+        let input_ptrs: [*const f32; 2] = [input_l.as_ptr(), input_r.as_ptr()];
+        let output_ptrs: [*mut f32; 2] = [output_l.as_mut_ptr(), output_r.as_mut_ptr()];
+
+        unsafe {
+            kernel.process(input_ptrs.as_ptr(), output_ptrs.as_ptr(), 2, 4);
+        }
+
+        assert_eq!(output_l, [1.0, 0.5, -1.0, 0.0]);
+        assert_eq!(output_r, [0.0, -0.5, 1.0, 0.25]);
+    }
+
+    #[test]
+    fn test_bypass_stereo() {
+        let mut kernel = DSPKernel::new();
+        kernel.set_bypassed(true);
+
+        let input_l: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let input_r: [f32; 4] = [0.0, -0.5, 1.0, 0.25];
+        let mut output_l: [f32; 4] = [0.0; 4];
+        let mut output_r: [f32; 4] = [0.0; 4];
+
+        let input_ptrs: [*const f32; 2] = [input_l.as_ptr(), input_r.as_ptr()];
+        let output_ptrs: [*mut f32; 2] = [output_l.as_mut_ptr(), output_r.as_mut_ptr()];
+
+        unsafe {
+            kernel.process(input_ptrs.as_ptr(), output_ptrs.as_ptr(), 2, 4);
+        }
+
+        assert_eq!(output_l, [1.0, 0.5, -1.0, 0.0]);
+        assert_eq!(output_r, [0.0, -0.5, 1.0, 0.25]);
+    }
+
+    #[test]
+    fn test_initialize_sets_sample_rate() {
+        let mut kernel = DSPKernel::new();
+        assert_eq!(kernel.sample_rate, 44100.0);
+        kernel.initialize(2, 2, 48000.0);
+        assert_eq!(kernel.sample_rate, 48000.0);
+    }
+
+    #[test]
+    fn test_last_error_initially_none() {
+        let kernel = DSPKernel::new();
+        assert!(kernel.last_error().is_none());
+    }
+
+    // --- Group B: Requires bundled Python runtime ---
+
+    #[test]
+    fn test_load_script_success() {
+        let (python_home, script_path) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+
+        let mut kernel = DSPKernel::new();
+        let result = kernel.load_script(&python_home, &script_path);
+        assert!(result, "load_script should succeed with valid paths");
+        assert!(kernel.last_error().is_none());
+    }
+
+    #[test]
+    fn test_load_script_bad_path() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+
+        let mut kernel = DSPKernel::new();
+        let result = kernel.load_script(&python_home, "/nonexistent/script.py");
+        assert!(!result, "load_script should fail with bad path");
+        assert!(kernel.last_error().is_some());
+    }
+
+    #[test]
+    fn test_process_with_python_applies_gain() {
+        let (python_home, script_path) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, &script_path));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let mut output: [f32; 4] = [0.0; 4];
+
+        let input_ptr: *const f32 = input.as_ptr();
+        let output_ptr: *mut f32 = output.as_mut_ptr();
+
+        unsafe {
+            kernel.process(&input_ptr, &output_ptr, 1, 4);
+        }
+
+        assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
+    }
+
+    #[test]
+    fn test_process_with_python_stereo() {
+        let (python_home, script_path) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, &script_path));
+        kernel.initialize(2, 2, 44100.0);
+
+        let input_l: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let input_r: [f32; 4] = [0.2, 0.4, 0.6, 0.8];
+        let mut output_l: [f32; 4] = [0.0; 4];
+        let mut output_r: [f32; 4] = [0.0; 4];
+
+        let input_ptrs: [*const f32; 2] = [input_l.as_ptr(), input_r.as_ptr()];
+        let output_ptrs: [*mut f32; 2] = [output_l.as_mut_ptr(), output_r.as_mut_ptr()];
+
+        unsafe {
+            kernel.process(input_ptrs.as_ptr(), output_ptrs.as_ptr(), 2, 4);
+        }
+
+        assert_eq!(output_l, [0.5, 0.25, -0.5, 0.0]);
+        assert_eq!(output_r, [0.1, 0.2, 0.3, 0.4]);
+    }
+
+    #[test]
+    fn test_bypass_overrides_python() {
+        let (python_home, script_path) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, &script_path));
+        kernel.initialize(1, 1, 44100.0);
+        kernel.set_bypassed(true);
+
+        let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let mut output: [f32; 4] = [0.0; 4];
+
+        let input_ptr: *const f32 = input.as_ptr();
+        let output_ptr: *mut f32 = output.as_mut_ptr();
+
+        unsafe {
+            kernel.process(&input_ptr, &output_ptr, 1, 4);
+        }
+
+        // Bypass should copy input unchanged, not apply 0.5x gain
+        assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
     }
 }
