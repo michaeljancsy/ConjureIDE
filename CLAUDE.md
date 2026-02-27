@@ -93,6 +93,10 @@ To add a new parameter, define its address in all three layers and keep them in 
 - Event processing loop lives in Swift alongside the render block
 - Errors from Rust/Python are passed to Swift via `dsp_kernel_last_error()` and logged with `os_log`
 
+## Worktrees
+
+Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/` since it's gitignored. The `build-rust.sh` script auto-detects this and symlinks it from the main worktree, so `xcodebuild build` and `xcodebuild test` work automatically. For standalone `cargo test`, run the Xcode build first (to create the symlink) or manually: `ln -s /path/to/main/repo/rust/python-dist rust/python-dist`.
+
 ## Code Signing
 
 The bundled Python runtime requires proper code signing for the hardened runtime:
