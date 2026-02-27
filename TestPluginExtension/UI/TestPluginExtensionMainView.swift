@@ -18,7 +18,7 @@ struct TestPluginExtensionMainView: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack {
-                Text("Python DSP Script [build 0226d]")
+                Text("Python DSP Script [build 0226g]")
                     .font(.headline)
                 Spacer()
             }

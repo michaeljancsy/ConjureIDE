@@ -33,14 +33,15 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	@objc override init(componentDescription: AudioComponentDescription, options: AudioComponentInstantiationOptions) throws {
 		kernel = dsp_kernel_create()
 
-		let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
+		// Default to mono; host will negotiate the actual channel count.
+		let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
 		try super.init(componentDescription: componentDescription, options: options)
 
 		_inputBus = try AUAudioUnitBus(format: format)
 		_inputBus.maximumChannelCount = 8
 
 		_outputBus = try AUAudioUnitBus(format: format)
-		_outputBus.maximumChannelCount = 2
+		_outputBus.maximumChannelCount = 8
 
 		_inputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .input, busses: [_inputBus])
 		_outputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .output, busses: [_outputBus])
@@ -129,7 +130,8 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	}
 
 	public override var channelCapabilities: [NSNumber] {
-		return [NSNumber(value: 2), NSNumber(value: 2)]
+		return [NSNumber(value: 1), NSNumber(value: 1),
+				NSNumber(value: 2), NSNumber(value: 2)]
 	}
 
 	public override var maximumFramesToRender: AUAudioFrameCount {
