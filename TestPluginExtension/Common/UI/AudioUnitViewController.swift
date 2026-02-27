@@ -12,32 +12,50 @@ import SwiftUI
 
 private let log = Logger(subsystem: "com.MichaelJancsy.TestPluginExtension", category: "AudioUnitViewController")
 
+// MARK: - SafeHostingView
+
+/// NSHostingView subclass that guards against the macOS 14+ ViewBridge bug
+/// where `NSViewServiceMarshal` fails to render a second AUv3 ViewController
+/// in the same extension process. When the old VC's hosting view is removed
+/// from its window, `viewDidMoveToWindow()` with `window == nil` would tear
+/// down SwiftUI's rendering pipeline. Skipping `super` in that case prevents
+/// interference with the new VC's view.
+private class SafeHostingView<Content: View>: NSHostingView<Content> {
+    override func viewDidMoveToWindow() {
+        if self.window != nil {
+            super.viewDidMoveToWindow()
+        }
+        // When window is nil (VC being torn down), skip super to avoid
+        // SwiftUI rendering teardown that interferes with the new VC.
+    }
+}
+
 @MainActor
 public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     var audioUnit: AUAudioUnit? {
         didSet {
             log.info("audioUnit didSet, isViewLoaded=\(self.isViewLoaded, privacy: .public)")
-            guard let audioUnit, isViewLoaded else { return }
-            if hostingView == nil {
-                configureSwiftUIView(audioUnit: audioUnit)
-            }
         }
     }
 
-    /// NSHostingView instead of NSHostingController: avoids child-VC lifecycle
-    /// issues where NSHostingController stops rendering after viewDidDisappear
-    /// and never resumes if the host doesn't call viewWillAppear on reopen.
-    private var hostingView: NSHostingView<TestPluginExtensionMainView>?
+    private var hostingView: SafeHostingView<TestPluginExtensionMainView>?
 
 	deinit {
         log.info("deinit called")
 	}
 
+    /// Provide a fresh NSView container each time the system creates this VC.
+    /// This forces the ViewBridge to work with a new view hierarchy, working
+    /// around the NSViewServiceMarshal bug in macOS 14+ where a second VC
+    /// in the same extension process fails to render.
+    public override func loadView() {
+        self.view = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        log.info("loadView called")
+    }
+
     public override func viewDidLoad() {
         super.viewDidLoad()
         log.info("viewDidLoad called, audioUnit=\(self.audioUnit == nil ? "nil" : "set", privacy: .public)")
-        guard let audioUnit = self.audioUnit else { return }
-        configureSwiftUIView(audioUnit: audioUnit)
     }
 
     public override func viewWillAppear() {
@@ -45,7 +63,13 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         log.info("viewWillAppear called, hostingView=\(self.hostingView == nil ? "nil" : "set", privacy: .public)")
         guard let audioUnit = self.audioUnit else { return }
         if hostingView == nil || hostingView?.superview == nil {
-            configureSwiftUIView(audioUnit: audioUnit)
+            // Dispatch async to let the ViewBridge finish connecting the
+            // view service before we add the NSHostingView.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                log.info("configureSwiftUIView (async from viewWillAppear)")
+                self.configureSwiftUIView(audioUnit: audioUnit)
+            }
         }
     }
 
@@ -58,13 +82,6 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 			guard let audioUnit = self.audioUnit as? TestPluginExtensionAudioUnit else {
 				log.error("Unable to create TestPluginExtensionAudioUnit")
 				return audioUnit!
-			}
-
-			defer {
-				DispatchQueue.main.async {
-					log.info("createAudioUnit defer: configuring SwiftUI view")
-					self.configureSwiftUIView(audioUnit: audioUnit)
-				}
 			}
 
 			return audioUnit
@@ -96,7 +113,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             defaultScriptSource: defaultScript,
             onSaveScript: onSaveScript
         )
-        let hv = NSHostingView(rootView: content)
+        let hv = SafeHostingView(rootView: content)
         hv.translatesAutoresizingMaskIntoConstraints = false
         self.view.addSubview(hv)
         NSLayoutConstraint.activate([
