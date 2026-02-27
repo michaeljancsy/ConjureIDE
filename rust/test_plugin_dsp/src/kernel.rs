@@ -414,7 +414,93 @@ mod tests {
         assert!(kernel.last_error().is_none());
     }
 
+    // --- Group A2: Edge cases (no Python) ---
+
+    #[test]
+    fn test_initialize_deinitialize_cycle() {
+        let mut kernel = DSPKernel::new();
+        for _ in 0..3 {
+            kernel.initialize(2, 2, 48000.0);
+            let input: [f32; 4] = [1.0; 4];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+            unsafe { kernel.process(&ip, &op, 1, 4); }
+            assert_eq!(output, [1.0; 4]);
+            kernel.deinitialize();
+        }
+    }
+
+    #[test]
+    fn test_deinitialize_without_initialize() {
+        let mut kernel = DSPKernel::new();
+        kernel.deinitialize(); // should not panic
+    }
+
+    #[test]
+    fn test_process_single_frame() {
+        let kernel = DSPKernel::new();
+        let input: [f32; 1] = [0.75];
+        let mut output: [f32; 1] = [0.0];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, 1); }
+        assert_eq!(output, [0.75]);
+    }
+
+    #[test]
+    fn test_process_large_buffer() {
+        let mut kernel = DSPKernel::new();
+        kernel.set_maximum_frames_to_render(4096);
+        let input = vec![0.5f32; 4096];
+        let mut output = vec![0.0f32; 4096];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, 4096); }
+        assert!(output.iter().all(|&s| s == 0.5));
+    }
+
+    #[test]
+    fn test_initialize_changes_channel_count() {
+        let mut kernel = DSPKernel::new();
+        kernel.initialize(1, 1, 44100.0);
+        assert_eq!(kernel.py_channel_count, 1);
+        kernel.deinitialize();
+        kernel.initialize(2, 2, 48000.0);
+        assert_eq!(kernel.py_channel_count, 2);
+    }
+
+    #[test]
+    fn test_bypass_toggle_mid_stream() {
+        let mut kernel = DSPKernel::new();
+        let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        // Process with bypass on
+        kernel.set_bypassed(true);
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
+
+        // Process with bypass off (still passthrough, no script)
+        kernel.set_bypassed(false);
+        output = [0.0; 4];
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
+    }
+
     // --- Group B: Requires bundled Python runtime ---
+
+    /// Write a Python script to a temp file and return the path.
+    fn write_temp_script(source: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("test_dsp_{}_{}.py", std::process::id(), id));
+        std::fs::write(&path, source).expect("failed to write temp script");
+        path
+    }
 
     #[test]
     fn test_load_script_success() {
@@ -532,5 +618,132 @@ mod tests {
 
         // Bypass should copy input unchanged, not apply 0.5x gain
         assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
+    }
+
+    // --- Group B2: Python error handling & hot-reload ---
+
+    #[test]
+    fn test_python_error_recovery_falls_back_to_passthrough() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+        };
+        let script = write_temp_script(
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sample_rate):\n    raise RuntimeError('intentional error')\n"
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
+        std::fs::remove_file(script).ok();
+    }
+
+    #[test]
+    fn test_process_after_python_error_continues_working() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+        };
+        let script = write_temp_script(
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    raise ValueError('boom')\n"
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [0.7, 0.7, 0.7, 0.7];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        for _ in 0..5 {
+            output = [0.0; 4];
+            unsafe { kernel.process(&ip, &op, 1, 4); }
+            assert_eq!(output, [0.7, 0.7, 0.7, 0.7]);
+        }
+        std::fs::remove_file(script).ok();
+    }
+
+    #[test]
+    fn test_script_hot_reload() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+        };
+        let script_half = write_temp_script(
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5\n"
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script_half.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert_eq!(output, [0.5, 0.5, 0.5, 0.5]);
+
+        // Hot-reload with a different gain
+        let script_quarter = write_temp_script(
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25\n"
+        );
+        assert!(kernel.load_script(&python_home, script_quarter.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+
+        output = [0.0; 4];
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert_eq!(output, [0.25, 0.25, 0.25, 0.25]);
+
+        std::fs::remove_file(script_half).ok();
+        std::fs::remove_file(script_quarter).ok();
+    }
+
+    #[test]
+    fn test_load_script_missing_process_function() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+        };
+        let script = write_temp_script("import numpy as np\ndef not_process(): pass\n");
+        let mut kernel = DSPKernel::new();
+        let result = kernel.load_script(&python_home, script.to_str().unwrap());
+        assert!(!result, "Should fail when process() function is missing");
+        assert!(kernel.last_error().is_some());
+        std::fs::remove_file(script).ok();
+    }
+
+    #[test]
+    fn test_load_script_syntax_error() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+        };
+        let script = write_temp_script("def process(\n");
+        let mut kernel = DSPKernel::new();
+        let result = kernel.load_script(&python_home, script.to_str().unwrap());
+        assert!(!result);
+        assert!(kernel.last_error().is_some());
+        std::fs::remove_file(script).ok();
+    }
+
+    #[test]
+    fn test_load_script_import_error() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+        };
+        let script = write_temp_script("import nonexistent_module_xyz\ndef process(i,o,f,s): pass\n");
+        let mut kernel = DSPKernel::new();
+        let result = kernel.load_script(&python_home, script.to_str().unwrap());
+        assert!(!result);
+        assert!(kernel.last_error().is_some());
+        std::fs::remove_file(script).ok();
     }
 }

@@ -28,7 +28,9 @@ The `TestPluginExtension` target has a Run Script build phase that calls `rust/b
 2. Builds the Rust static library (`libtest_plugin_dsp.a`) via `cargo build`
 3. Generates the C header (`rust/include/test_plugin_dsp.h`) via `cbindgen`
 
-To build/test the Rust crate standalone: `cd rust && PYO3_PYTHON=python-dist/bin/python3 cargo test`
+To build/test the Rust crate standalone: `cd rust && DYLD_LIBRARY_PATH="$(pwd)/python-dist/lib" PYO3_PYTHON="$(pwd)/python-dist/bin/python3" cargo test -- --test-threads=1`
+
+Note: `--test-threads=1` is required because Python tests share a single interpreter and the module name `dsp_script` in `sys.modules`. `DYLD_LIBRARY_PATH` is needed because python-build-standalone reports its LIBDIR as `/install/lib` (build-time path); the `build.rs` handles link-time search paths but the dylib must be findable at runtime too.
 
 ### Xcode build phases (TestPluginExtension target)
 1. **Run Script — Build Rust**: calls `rust/build-rust.sh`
