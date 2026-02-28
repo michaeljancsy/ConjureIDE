@@ -14,8 +14,20 @@ struct TestPluginTests {
 
     // MARK: - Helpers
 
+    /// Discovers our AU component dynamically via the component manager.
+    /// Uses a wildcard subtype search so tests work for both main (0001) and worktree (WT01) builds.
     private static var componentDescription: AudioComponentDescription {
-        AudioComponentDescription(
+        let searchDesc = AudioComponentDescription(
+            componentType: kAudioUnitType_Effect,
+            componentSubType: 0,
+            componentManufacturer: fourCharCode("A000"),
+            componentFlags: 0,
+            componentFlagsMask: 0
+        )
+        if let found = AVAudioUnitComponentManager.shared().components(matching: searchDesc).first {
+            return found.audioComponentDescription
+        }
+        return AudioComponentDescription(
             componentType: kAudioUnitType_Effect,
             componentSubType: fourCharCode("0001"),
             componentManufacturer: fourCharCode("A000"),
