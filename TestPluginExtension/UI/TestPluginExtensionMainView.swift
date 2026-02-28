@@ -5,6 +5,7 @@
 //  Created by Michael Jancsy on 2/25/26.
 //
 
+import Combine
 import SwiftUI
 
 struct ScriptSaveResult {
@@ -16,6 +17,7 @@ struct ScriptSaveResult {
 
 struct TestPluginExtensionMainView: View {
     var defaultScriptSource: String
+    var scriptSourcePublisher: AnyPublisher<String, Never>?
     var onSave: (String) -> ScriptSaveResult
 
     @State private var scriptSource: String = ""
@@ -87,6 +89,9 @@ struct TestPluginExtensionMainView: View {
         }
         .onAppear {
             scriptSource = defaultScriptSource
+        }
+        .onReceive(scriptSourcePublisher ?? Empty().eraseToAnyPublisher()) { newSource in
+            scriptSource = newSource
         }
     }
 }

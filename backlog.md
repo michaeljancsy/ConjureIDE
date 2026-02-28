@@ -4,14 +4,13 @@
 -
 
 ## To Do
-- Bugfix: Presets don't load script
-- Bugfix: Presets not visible in Ableton
 - Host app DAW controls: Add preset selection and a bypass button to the TestPlugin host app, like a DAW would provide
 - Support other scripting languages beyond Python
 - Visualization and diagnostics in the Mac host app (not just the AU extension)
 - Support AI coding (AI-assisted script generation/editing)
 
 ## Done
+- Fix preset bugs (2026-02-28): Fixed "presets don't load script" — when a DAW selects a factory preset, the script editor now updates via a Combine publisher (`scriptSourceDidChange`) wired from the AU through the VC to the SwiftUI view. Previously the kernel loaded the new script but the editor still showed the old one, and hitting Save would overwrite the preset. Also fixed "presets not visible in Ableton" — bumped AU component version (67073→67074) to force DAWs with stale caches to rescan and discover factory presets. After merge, clear AU cache (`rm ~/Library/Caches/AudioUnitCache/com.apple.audiounits.cache`) and relaunch DAWs. 28 Swift unit tests (+1 new: preset script switching), 4 UI tests, all pass.
 - Worktree AU identity (2026-02-28): Added `scripts/patch-worktree-au-identity.sh` build phase that auto-detects worktree builds and patches the extension's built Info.plist to use subtype `WT01` and name `TestPluginExtension (Dev)`. Host app and tests read AU identity dynamically from the embedded extension's Info.plist at runtime, so they work automatically with both main and worktree builds. No source files are modified during build — only the built product's plist is patched.
 - Persistent script storage (2026-02-28): Overrode `fullState` getter/setter to serialize Python script source as UTF-8 Data — scripts now survive DAW project save/load in Logic Pro and Ableton Live. Added `scriptSource` public accessor so UI shows restored script on project reopen. Added 3 factory presets (Passthrough, Tremolo, Bitcrush) as bundled .py resources visible in DAW preset browsers via `factoryPresets`/`currentPreset` overrides. Save button reloads kernel + benchmarks. File save/open via NSSavePanel was attempted but removed — NSSavePanel cannot present from an out-of-process AUv3 extension (ViewBridge limitation). 27 Swift unit tests (+7 new: fullState roundtrip, base state preservation, factory preset existence/loading/modify-then-restore, file roundtrip, script reload rendering verification). All tests pass.
 - Syntax highlighting in the script editor (2026-02-27): Replaced SwiftUI `TextEditor` with `NSTextView` wrapped in `NSViewRepresentable`. Regex-based `PythonSyntaxHighlighter` colors keywords, builtins, strings (single/double/triple-quoted), comments, numbers, decorators, and def/class names. Xcode-inspired dark/light themes auto-switch with system appearance. No third-party dependencies. All 15 Swift unit + 5 UI tests pass.
