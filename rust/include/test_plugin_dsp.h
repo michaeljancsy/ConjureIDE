@@ -108,6 +108,15 @@ void dsp_kernel_process(DSPKernelRef kernel,
 bool dsp_kernel_load_script(DSPKernelRef kernel, const char *python_home, const char *script_path);
 
 /**
+ * Benchmark the Python process function.
+ * Returns the max execution time in seconds over 5 runs, or -1.0 if no script is loaded.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+double dsp_kernel_benchmark_process(DSPKernelRef kernel);
+
+/**
  * Returns the last error message as a null-terminated C string.
  * Returns null if no error. The pointer is valid until the next call to this function or destroy.
  *

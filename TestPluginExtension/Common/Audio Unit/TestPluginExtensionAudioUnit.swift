@@ -82,9 +82,10 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	/// Hot-reload a Python DSP script from source code.
 	/// Writes the source to a temp file and calls dsp_kernel_load_script.
-	public func reloadScript(source: String) -> (success: Bool, error: String?) {
+	/// On success, benchmarks the process function and returns timing info.
+	public func reloadScript(source: String) -> (success: Bool, error: String?, processTimeMs: Double?, budgetMs: Double?) {
 		guard let pythonHome = self.pythonHome else {
-			return (false, "Python runtime not available")
+			return (false, "Python runtime not available", nil, nil)
 		}
 
 		let tempDir = FileManager.default.temporaryDirectory
@@ -93,7 +94,7 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		do {
 			try source.write(to: tempFile, atomically: true, encoding: .utf8)
 		} catch {
-			return (false, "Failed to write temp file: \(error.localizedDescription)")
+			return (false, "Failed to write temp file: \(error.localizedDescription)", nil, nil)
 		}
 
 		defer {
@@ -104,14 +105,28 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		if success {
 			pluginLog.info("Python DSP script reloaded successfully")
-			return (true, nil)
+
+			// Benchmark the process function
+			let benchmarkSecs = dsp_kernel_benchmark_process(kernel)
+			var processTimeMs: Double? = nil
+			var budgetMs: Double? = nil
+
+			if benchmarkSecs >= 0 {
+				processTimeMs = benchmarkSecs * 1000.0
+				let sampleRate = _outputBus.format.sampleRate
+				let maxFrames = Double(dsp_kernel_get_max_frames(kernel))
+				budgetMs = maxFrames / sampleRate * 1000.0
+				pluginLog.info("Benchmark: \(processTimeMs!, privacy: .public)ms / \(budgetMs!, privacy: .public)ms budget")
+			}
+
+			return (true, nil, processTimeMs, budgetMs)
 		} else {
 			var errorMsg = "Unknown error"
 			if let errPtr = dsp_kernel_last_error(kernel) {
 				errorMsg = String(cString: errPtr)
 			}
 			pluginLog.error("Failed to reload Python DSP script: \(errorMsg, privacy: .public)")
-			return (false, errorMsg)
+			return (false, errorMsg, nil, nil)
 		}
 	}
 

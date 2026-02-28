@@ -159,6 +159,86 @@ impl DSPKernel {
         self.last_error.as_deref()
     }
 
+    /// Benchmark the Python process function with a 440 Hz sine wave.
+    /// Returns the max execution time in seconds over 5 runs (after 1 warm-up),
+    /// or None if no script is loaded.
+    pub fn benchmark_process(&mut self) -> Option<f64> {
+        if self.py_process_fn.is_none() {
+            return None;
+        }
+
+        let channel_count = if self.py_channel_count > 0 {
+            self.py_channel_count
+        } else {
+            2
+        };
+        let frame_count = self.max_frames_to_render as usize;
+
+        // Temporarily allocate numpy arrays if needed
+        let needs_temp_arrays = self.py_input_arrays.is_empty();
+        if needs_temp_arrays {
+            self.allocate_py_arrays(channel_count);
+        }
+
+        // Generate 440 Hz sine wave input
+        let sample_rate = if self.sample_rate > 0.0 {
+            self.sample_rate
+        } else {
+            44100.0
+        };
+        let input_data: Vec<Vec<f32>> = (0..channel_count)
+            .map(|_| {
+                (0..frame_count)
+                    .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sample_rate as f32).sin())
+                    .collect()
+            })
+            .collect();
+        let mut output_data: Vec<Vec<f32>> =
+            (0..channel_count).map(|_| vec![0.0f32; frame_count]).collect();
+
+        let input_ptrs: Vec<*const f32> = input_data.iter().map(|v| v.as_ptr()).collect();
+        let output_ptrs: Vec<*mut f32> = output_data.iter_mut().map(|v| v.as_mut_ptr()).collect();
+
+        // Warm-up
+        unsafe {
+            self.process(
+                input_ptrs.as_ptr(),
+                output_ptrs.as_ptr(),
+                channel_count as u32,
+                self.max_frames_to_render,
+            );
+        }
+
+        // Timed runs
+        let n = 5;
+        let mut max_time = 0.0f64;
+        for _ in 0..n {
+            let start = std::time::Instant::now();
+            unsafe {
+                self.process(
+                    input_ptrs.as_ptr(),
+                    output_ptrs.as_ptr(),
+                    channel_count as u32,
+                    self.max_frames_to_render,
+                );
+            }
+            let elapsed = start.elapsed().as_secs_f64();
+            if elapsed > max_time {
+                max_time = elapsed;
+            }
+        }
+
+        // Clean up temp arrays
+        if needs_temp_arrays {
+            Python::with_gil(|_py| {
+                self.py_input_arrays.clear();
+                self.py_output_arrays.clear();
+            });
+        }
+
+        Some(max_time)
+    }
+
     /// Process audio buffers. Called from the real-time audio thread.
     ///
     /// If a Python script is loaded, delegates to Python with pre-allocated
@@ -745,5 +825,29 @@ mod tests {
         assert!(!result);
         assert!(kernel.last_error().is_some());
         std::fs::remove_file(script).ok();
+    }
+
+    // --- Group B3: Benchmarking ---
+
+    #[test]
+    fn test_benchmark_no_script() {
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.benchmark_process().is_none());
+    }
+
+    #[test]
+    fn test_benchmark_with_script() {
+        let (python_home, script_path) = match test_python_paths() {
+            Some(paths) => paths,
+            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+        };
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, &script_path));
+        kernel.initialize(2, 2, 44100.0);
+
+        let result = kernel.benchmark_process();
+        assert!(result.is_some());
+        let time = result.unwrap();
+        assert!(time > 0.0, "Benchmark time should be positive, got {}", time);
     }
 }
