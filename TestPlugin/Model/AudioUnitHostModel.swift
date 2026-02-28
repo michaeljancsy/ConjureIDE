@@ -39,10 +39,42 @@ class AudioUnitHostModel {
     var validationResult: AudioComponentValidationResult?
     var currentValidationData: String?
     
-    init(type: String = "aufx", subType: String = "0001", manufacturer: String = "A000") {
-        self.type = type
-        self.subType = subType
-        self.manufacturer = manufacturer
+    /// Discovers our AU component dynamically via the component manager.
+    /// Uses a wildcard subtype search so the host works for both main (0001) and worktree (WT01) builds.
+    private static func discoverExtensionIdentity() -> (type: String, subType: String, manufacturer: String) {
+        let searchDesc = AudioComponentDescription(
+            componentType: kAudioUnitType_Effect,
+            componentSubType: 0,
+            componentManufacturer: "A000".fourCharCode!,
+            componentFlags: 0,
+            componentFlagsMask: 0
+        )
+        if let found = AVAudioUnitComponentManager.shared().components(matching: searchDesc).first {
+            let desc = found.audioComponentDescription
+            return (
+                type: Self.stringFromCode(desc.componentType),
+                subType: Self.stringFromCode(desc.componentSubType),
+                manufacturer: Self.stringFromCode(desc.componentManufacturer)
+            )
+        }
+        return ("aufx", "0001", "A000")
+    }
+
+    private static func stringFromCode(_ code: FourCharCode) -> String {
+        let bytes: [UInt8] = [
+            UInt8((code >> 24) & 0xFF),
+            UInt8((code >> 16) & 0xFF),
+            UInt8((code >> 8) & 0xFF),
+            UInt8(code & 0xFF)
+        ]
+        return String(bytes.map { Character(UnicodeScalar($0)) })
+    }
+
+    init() {
+        let identity = Self.discoverExtensionIdentity()
+        self.type = identity.type
+        self.subType = identity.subType
+        self.manufacturer = identity.manufacturer
         let wantsAudio = type.fourCharCode == kAudioUnitType_MusicEffect || type.fourCharCode == kAudioUnitType_Effect
         self.wantsAudio = wantsAudio
 

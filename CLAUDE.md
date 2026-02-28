@@ -97,6 +97,8 @@ To add a new parameter, define its address in all three layers and keep them in 
 
 Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/` since it's gitignored. The `build-rust.sh` script auto-detects this and symlinks it from the main worktree, so `xcodebuild build` and `xcodebuild test` work automatically. For standalone `cargo test`, run the Xcode build first (to create the symlink) or manually: `ln -s /path/to/main/repo/rust/python-dist rust/python-dist`.
 
+Worktree builds automatically register a different AU identity so they can coexist with the main build in DAWs. The "Patch AU Identity for Worktree" build phase (`scripts/patch-worktree-au-identity.sh`) detects worktree builds and patches the extension's built Info.plist to use subtype `WT01` and name `TestPluginExtension (Dev)`. The host app and tests read AU identity from the embedded extension's Info.plist at runtime, so they automatically use the correct codes for both main and worktree builds.
+
 ## Code Signing
 
 The bundled Python runtime requires proper code signing for the hardened runtime:
@@ -114,7 +116,7 @@ The bundled Python runtime requires proper code signing for the hardened runtime
 
 - Type: `aufx` (effect)
 - Manufacturer: `A000`
-- Subtype: `0000`
+- Subtype: `0001` (main repo), `WT01` (worktree builds)
 
 ## Backlog Management
 
