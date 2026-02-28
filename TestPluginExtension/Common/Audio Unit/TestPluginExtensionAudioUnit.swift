@@ -18,6 +18,14 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	// Cached path to bundled Python runtime for script reloads
 	private var pythonHome: String?
 
+	// Current script source (cached on successful reload, persisted in fullState)
+	private var currentScriptSource: String?
+
+	/// The current Python script source, if one has been loaded via reloadScript or fullState.
+	public var scriptSource: String? {
+		return currentScriptSource
+	}
+
 	// Audio busses
 	private var _inputBus: AUAudioUnitBus!
 	private var _outputBus: AUAudioUnitBus!
@@ -104,6 +112,7 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		let success = dsp_kernel_load_script(kernel, pythonHome, tempFile.path)
 
 		if success {
+			currentScriptSource = source
 			pluginLog.info("Python DSP script reloaded successfully")
 
 			// Benchmark the process function
@@ -157,6 +166,78 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	public override var shouldBypassEffect: Bool {
 		get { dsp_kernel_is_bypassed(kernel) }
 		set { dsp_kernel_set_bypassed(kernel, newValue) }
+	}
+
+	// MARK: - State Persistence
+
+	private static let scriptSourceKey = "pythonScriptSource"
+
+	public override var fullState: [String : Any]? {
+		get {
+			var state = super.fullState ?? [:]
+			if let source = currentScriptSource,
+			   let data = source.data(using: .utf8) {
+				state[Self.scriptSourceKey] = data
+			}
+			return state
+		}
+		set {
+			super.fullState = newValue
+			guard let state = newValue,
+				  let data = state[Self.scriptSourceKey] as? Data,
+				  let source = String(data: data, encoding: .utf8) else {
+				return
+			}
+			let _ = reloadScript(source: source)
+			pluginLog.info("Restored script from fullState (\(source.count) chars)")
+		}
+	}
+
+	// MARK: - Factory Presets
+
+	private struct FactoryPresetInfo {
+		let name: String
+		let number: Int
+		let resourceName: String
+	}
+
+	private static let factoryPresetInfos: [FactoryPresetInfo] = [
+		FactoryPresetInfo(name: "Passthrough", number: 0, resourceName: "preset_passthrough"),
+		FactoryPresetInfo(name: "Tremolo", number: 1, resourceName: "preset_tremolo"),
+		FactoryPresetInfo(name: "Bitcrush", number: 2, resourceName: "preset_bitcrush"),
+	]
+
+	public override var factoryPresets: [AUAudioUnitPreset]? {
+		return Self.factoryPresetInfos.map { info in
+			let preset = AUAudioUnitPreset()
+			preset.number = info.number
+			preset.name = info.name
+			return preset
+		}
+	}
+
+	private var _currentPreset: AUAudioUnitPreset?
+
+	public override var currentPreset: AUAudioUnitPreset? {
+		get { return _currentPreset }
+		set {
+			_currentPreset = newValue
+			guard let preset = newValue, preset.number >= 0 else { return }
+
+			guard let info = Self.factoryPresetInfos.first(where: { $0.number == preset.number }) else { return }
+
+			let bundle = Bundle(for: type(of: self))
+			guard let url = bundle.url(forResource: info.resourceName, withExtension: "py"),
+				  let source = try? String(contentsOf: url, encoding: .utf8) else {
+				pluginLog.error("Factory preset script not found: \(info.resourceName, privacy: .public)")
+				return
+			}
+
+			let result = reloadScript(source: source)
+			if result.success {
+				pluginLog.info("Loaded factory preset: \(info.name, privacy: .public)")
+			}
+		}
 	}
 
 	// MARK: - Render Resources

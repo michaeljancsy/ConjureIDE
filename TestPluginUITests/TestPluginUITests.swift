@@ -26,9 +26,29 @@ final class TestPluginUITests: XCTestCase {
     func testSaveButtonExists() throws {
         let app = XCUIApplication()
         app.launch()
-        let saveButton = app.buttons["saveChangesButton"]
+        let saveButton = app.buttons["saveButton"]
         XCTAssertTrue(saveButton.waitForExistence(timeout: 10),
-                      "Save Changes button should be visible")
+                      "Save button should be visible")
+    }
+
+    @MainActor
+    func testOpenButtonExists() throws {
+        let app = XCUIApplication()
+        app.launch()
+        let openButton = app.buttons["openScriptButton"]
+        XCTAssertTrue(openButton.waitForExistence(timeout: 10),
+                      "Open button should be visible")
+    }
+
+    @MainActor
+    func testTitleExists() throws {
+        let app = XCUIApplication()
+        app.launch()
+        // The title element's text content isn't accessible through the AUv3 ViewBridge,
+        // so we just verify the element exists via its accessibility identifier
+        let title = app.staticTexts["scriptTitle"]
+        XCTAssertTrue(title.waitForExistence(timeout: 10),
+                      "Script title should be visible after launch")
     }
 
     @MainActor

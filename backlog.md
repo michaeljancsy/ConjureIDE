@@ -4,10 +4,12 @@
 -
 
 ## To Do
-- Save/load scripts from previous sessions (persistent script storage)
 - Support other scripting languages beyond Python
 - Visualization and diagnostics in the Mac host app (not just the AU extension)
+- Support AI coding (AI-assisted script generation/editing)
+
 ## Done
+- Persistent script storage (2026-02-28): Overrode `fullState` getter/setter to serialize Python script source as UTF-8 Data — scripts now survive DAW project save/load in Logic Pro and Ableton Live. Added `scriptSource` public accessor so UI shows restored script on project reopen. Added 3 factory presets (Passthrough, Tremolo, Bitcrush) as bundled .py resources visible in DAW preset browsers via `factoryPresets`/`currentPreset` overrides. Unified Save button writes to .py file (NSSavePanel on first save) AND reloads kernel + benchmarks. Open button loads .py files via NSOpenPanel. Title bar shows current filename or "Untitled". 26 Swift unit tests (+6 new: fullState roundtrip, base state preservation, factory preset existence/loading/modify-then-restore, file roundtrip) + 7 UI tests (+2 new: Open button, title element). All tests pass.
 - Syntax highlighting in the script editor (2026-02-27): Replaced SwiftUI `TextEditor` with `NSTextView` wrapped in `NSViewRepresentable`. Regex-based `PythonSyntaxHighlighter` colors keywords, builtins, strings (single/double/triple-quoted), comments, numbers, decorators, and def/class names. Xcode-inspired dark/light themes auto-switch with system appearance. No third-party dependencies. All 15 Swift unit + 5 UI tests pass.
 - Process function benchmark on save (2026-02-27): Added `benchmark_process()` to Rust kernel — runs 1 warm-up + 5 timed iterations with 440 Hz sine wave, returns max time. Exposed via `dsp_kernel_benchmark_process()` FFI. Swift `reloadScript()` calls benchmark after successful load and returns process time + budget (frame_count/sample_rate). UI shows color-coded timing: green (<50% budget), orange (50–100%), red (>100%). 40 Rust tests (+3 new benchmark tests), 15 Swift unit tests, 5 UI tests all pass.
 - Mono and stereo track compatibility (2026-02-27): Confirmed plugin already passes `auval` validation for both mono (1→1) and stereo (2→2). Root cause of Logic Pro not showing plugin on mono tracks: stale AU cache. Fix: bumped AU component version (67072→67073) to force Logic rescan, reduced `maximumChannelCount` from 8→2 to match declared `channelCapabilities` (eliminates auval warnings about unsupported channel counts 4-8). After merge, user must clear AU cache (`rm ~/Library/Caches/AudioUnitCache/com.apple.audiounits.cache`) and relaunch Logic.

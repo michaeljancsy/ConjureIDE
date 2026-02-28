@@ -291,6 +291,163 @@ struct TestPluginTests {
         au.deallocateRenderResources()
     }
 
+    // MARK: - State Persistence (fullState)
+
+    private static let scriptSourceKey = "pythonScriptSource"
+
+    private static let testScript = """
+        import numpy as np
+
+        def process(inputs, outputs, frame_count, sample_rate):
+            for ch in range(len(inputs)):
+                outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25
+        """
+
+    @Test func fullStateRoundtrip() async throws {
+        // Simulate DAW project save/load: set script via fullState, read it back, restore on new AU
+        let (_, au1) = try await Self.instantiateAU()
+
+        // Set a custom script via fullState (simulates what happens when reloadScript caches source)
+        var state1: [String: Any] = au1.fullState ?? [:]
+        state1[Self.scriptSourceKey] = Self.testScript.data(using: .utf8)!
+        au1.fullState = state1
+
+        // Read back fullState (simulates DAW saving the project)
+        let savedState = au1.fullState
+        #expect(savedState != nil)
+        let savedData = savedState?[Self.scriptSourceKey] as? Data
+        #expect(savedData != nil, "fullState should contain script source")
+        let savedSource = String(data: savedData!, encoding: .utf8)
+        #expect(savedSource == Self.testScript, "Script source should roundtrip through fullState")
+
+        // Restore on a new AU (simulates DAW loading the project)
+        let (_, au2) = try await Self.instantiateAU()
+        au2.fullState = savedState
+        let restoredState = au2.fullState
+        let restoredData = restoredState?[Self.scriptSourceKey] as? Data
+        #expect(restoredData != nil, "Restored AU should have script in fullState")
+        let restoredSource = String(data: restoredData!, encoding: .utf8)
+        #expect(restoredSource == Self.testScript, "Script should survive full save/restore cycle")
+    }
+
+    @Test func fullStateWithoutCustomScript() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        // Fresh AU with no custom script — fullState should still work
+        let state = au.fullState
+        #expect(state != nil, "fullState should return a dictionary even without a custom script")
+        // No custom script key should be present
+        let scriptData = state?[Self.scriptSourceKey] as? Data
+        #expect(scriptData == nil, "Fresh AU should not have a custom script in fullState")
+    }
+
+    @Test func fullStatePreservesBaseState() async throws {
+        let (_, au1) = try await Self.instantiateAU()
+
+        // Set bypass + custom script
+        au1.shouldBypassEffect = true
+        var state: [String: Any] = au1.fullState ?? [:]
+        state[Self.scriptSourceKey] = Self.testScript.data(using: .utf8)!
+        au1.fullState = state
+
+        // Save and restore
+        let savedState = au1.fullState
+        let (_, au2) = try await Self.instantiateAU()
+        au2.fullState = savedState
+
+        // Verify both bypass and script survived
+        let restoredData = au2.fullState?[Self.scriptSourceKey] as? Data
+        let restoredSource = String(data: restoredData ?? Data(), encoding: .utf8)
+        #expect(restoredSource == Self.testScript)
+    }
+
+    // MARK: - Factory Presets
+
+    @Test func factoryPresetsExist() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let presets = au.factoryPresets ?? []
+        #expect(presets.count >= 3, "Should have at least 3 factory presets")
+        let names = presets.map { $0.name }
+        #expect(names.contains("Passthrough"), "Should have Passthrough preset")
+        #expect(names.contains("Tremolo"), "Should have Tremolo preset")
+        #expect(names.contains("Bitcrush"), "Should have Bitcrush preset")
+    }
+
+    @Test func factoryPresetLoading() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let presets = au.factoryPresets ?? []
+        #expect(!presets.isEmpty)
+
+        for preset in presets {
+            au.currentPreset = preset
+            // After loading a factory preset, fullState should contain a script
+            let state = au.fullState
+            let data = state?[Self.scriptSourceKey] as? Data
+            #expect(data != nil, "Factory preset '\(preset.name)' should set a script in fullState")
+            let source = String(data: data!, encoding: .utf8) ?? ""
+            #expect(source.contains("def process"), "Factory preset '\(preset.name)' should contain process function")
+        }
+    }
+
+    @Test func factoryPresetThenModify() async throws {
+        // Simulate: user selects preset, modifies script, DAW saves/restores
+        let (_, au1) = try await Self.instantiateAU()
+        let presets = au1.factoryPresets ?? []
+        #expect(!presets.isEmpty)
+
+        // Load a factory preset
+        au1.currentPreset = presets[0]
+
+        // Modify the script via fullState (simulating user editing + saving)
+        var state: [String: Any] = au1.fullState ?? [:]
+        state[Self.scriptSourceKey] = Self.testScript.data(using: .utf8)!
+        au1.fullState = state
+
+        // Save and restore on new AU
+        let savedState = au1.fullState
+        let (_, au2) = try await Self.instantiateAU()
+        au2.fullState = savedState
+
+        // Should have the modified script, not the original preset
+        let restoredData = au2.fullState?[Self.scriptSourceKey] as? Data
+        let restoredSource = String(data: restoredData ?? Data(), encoding: .utf8)
+        #expect(restoredSource == Self.testScript, "Modified script should take priority over factory preset")
+    }
+
+    @Test func fileRoundtrip() async throws {
+        // Simulate file save/load cycle
+        let (_, au) = try await Self.instantiateAU()
+
+        // Set a script via fullState
+        var state: [String: Any] = au.fullState ?? [:]
+        state[Self.scriptSourceKey] = Self.testScript.data(using: .utf8)!
+        au.fullState = state
+
+        // Extract script from fullState (simulates reading scriptSource for file save)
+        let data = au.fullState?[Self.scriptSourceKey] as? Data
+        let source = String(data: data!, encoding: .utf8)!
+
+        // Write to temp file
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_\(UUID().uuidString).py")
+        try source.write(to: tempURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        // Read back from file
+        let loaded = try String(contentsOf: tempURL, encoding: .utf8)
+        #expect(loaded == Self.testScript, "Script should roundtrip through file save/load")
+
+        // Load into a new AU via fullState
+        let (_, au2) = try await Self.instantiateAU()
+        var state2: [String: Any] = [:]
+        state2[Self.scriptSourceKey] = loaded.data(using: .utf8)!
+        au2.fullState = state2
+
+        let restoredData = au2.fullState?[Self.scriptSourceKey] as? Data
+        let restoredSource = String(data: restoredData ?? Data(), encoding: .utf8)
+        #expect(restoredSource == Self.testScript)
+    }
+
+    // MARK: - Render Block
+
     @Test func renderBlockWithBypass() async throws {
         let (_, au) = try await Self.instantiateAU()
         let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!

@@ -16,9 +16,11 @@ struct ScriptSaveResult {
 
 struct TestPluginExtensionMainView: View {
     var defaultScriptSource: String
-    var onSaveScript: (String) -> ScriptSaveResult
+    var onSave: (String) -> ScriptSaveResult
+    var onOpen: (() -> (source: String, filename: String)?)?
 
     @State private var scriptSource: String = ""
+    @State private var currentFilename: String?
     @State private var errorMessage: String?
     @State private var showSuccess: Bool = false
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
@@ -33,12 +35,31 @@ struct TestPluginExtensionMainView: View {
         return .green
     }
 
+    private var titleText: String {
+        if let filename = currentFilename {
+            return "Python DSP Script — \(filename)"
+        }
+        return "Python DSP Script — Untitled"
+    }
+
     var body: some View {
         VStack(spacing: 8) {
             HStack {
-                Text("Python DSP Script [build 0227d]")
+                Text(titleText)
                     .font(.headline)
+                    .accessibilityIdentifier("scriptTitle")
                 Spacer()
+                if onOpen != nil {
+                    Button("Open...") {
+                        guard let result = onOpen?() else { return }
+                        scriptSource = result.source
+                        currentFilename = result.filename
+                        errorMessage = nil
+                        showSuccess = false
+                        lastBenchmark = nil
+                    }
+                    .accessibilityIdentifier("openScriptButton")
+                }
             }
             .padding(.horizontal)
             .padding(.top, 8)
@@ -70,8 +91,8 @@ struct TestPluginExtensionMainView: View {
                 }
             }
 
-            Button("Save Changes") {
-                let result = onSaveScript(scriptSource)
+            Button("Save") {
+                let result = onSave(scriptSource)
                 if result.success {
                     errorMessage = nil
                     showSuccess = true
@@ -89,7 +110,7 @@ struct TestPluginExtensionMainView: View {
                     errorMessage = result.error ?? "Unknown error"
                 }
             }
-            .accessibilityIdentifier("saveChangesButton")
+            .accessibilityIdentifier("saveButton")
             .padding(.bottom)
         }
         .onAppear {
