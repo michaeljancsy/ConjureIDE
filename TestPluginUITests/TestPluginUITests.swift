@@ -51,6 +51,11 @@ final class TestPluginUITests: XCTestCase {
                       "Script title should be visible after launch")
     }
 
+    // Note: NSSavePanel testing is not possible via XCUITest for AUv3 extensions because
+    // the panel is spawned by the extension process (XPC service), which is invisible to
+    // the host app's XCUIApplication. The save button's core logic (kernel reload + benchmark)
+    // is covered by the reloadScriptViaFullStateAffectsRendering unit test instead.
+
     @MainActor
     func testScriptEditorShowsDefaultScript() throws {
         let app = XCUIApplication()

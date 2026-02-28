@@ -446,6 +446,76 @@ struct TestPluginTests {
         #expect(restoredSource == Self.testScript)
     }
 
+    // MARK: - Script Reload via fullState
+
+    @Test func reloadScriptViaFullStateAffectsRendering() async throws {
+        // Tests the core save-button logic: reloadScript loads a new script into the kernel.
+        // We invoke it indirectly via fullState (which calls reloadScript internally),
+        // then verify the kernel uses the new script by rendering audio.
+        let (_, au) = try await Self.instantiateAU()
+
+        // Load a script that multiplies all samples by 0.25
+        let quarterGainScript = """
+            import numpy as np
+            def process(inputs, outputs, frame_count, sample_rate):
+                for ch in range(len(inputs)):
+                    outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25
+            """
+        var state: [String: Any] = au.fullState ?? [:]
+        state[Self.scriptSourceKey] = quarterGainScript.data(using: .utf8)!
+        au.fullState = state
+
+        // Verify the script is stored in fullState
+        let storedData = au.fullState?[Self.scriptSourceKey] as? Data
+        #expect(storedData != nil, "Script should be stored in fullState after reload")
+        let storedSource = String(data: storedData!, encoding: .utf8)
+        #expect(storedSource == quarterGainScript, "Stored script should match what was set")
+
+        // Set up render resources and render audio to verify the kernel uses the new script
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        try au.inputBusses[0].setFormat(format)
+        try au.outputBusses[0].setFormat(format)
+        au.maximumFramesToRender = 512
+        try au.allocateRenderResources()
+
+        let renderBlock = au.renderBlock
+        let frameCount: UInt32 = 64
+
+        let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+        outputBuffer.frameLength = frameCount
+
+        let inputData: [Float] = (0..<Int(frameCount)).map { Float($0 + 1) / Float(frameCount) }
+
+        let pullInput: AURenderPullInputBlock = { _, _, inFrameCount, _, inputBuf in
+            let buf = UnsafeMutableAudioBufferListPointer(inputBuf)
+            guard let data = buf[0].mData?.assumingMemoryBound(to: Float.self) else {
+                return kAudioUnitErr_NoConnection
+            }
+            for i in 0..<Int(inFrameCount) { data[i] = inputData[i] }
+            buf[0].mDataByteSize = inFrameCount * UInt32(MemoryLayout<Float>.size)
+            return noErr
+        }
+
+        var flags = AudioUnitRenderActionFlags()
+        var timestamp = AudioTimeStamp()
+        timestamp.mSampleTime = 0
+        timestamp.mFlags = .sampleTimeValid
+
+        let status = renderBlock(&flags, &timestamp, frameCount, 0,
+                                outputBuffer.mutableAudioBufferList, pullInput)
+        #expect(status == noErr)
+
+        // Output should be input * 0.25 (the script we loaded)
+        let outputPtr = outputBuffer.floatChannelData![0]
+        for i in 0..<Int(frameCount) {
+            let expected = inputData[i] * 0.25
+            #expect(abs(outputPtr[i] - expected) < 1e-5,
+                   "Sample \(i): expected \(expected), got \(outputPtr[i])")
+        }
+
+        au.deallocateRenderResources()
+    }
+
     // MARK: - Render Block
 
     @Test func renderBlockWithBypass() async throws {
