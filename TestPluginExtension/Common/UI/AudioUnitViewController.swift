@@ -9,7 +9,6 @@ import Combine
 import CoreAudioKit
 import os
 import SwiftUI
-import UniformTypeIdentifiers
 
 private let log = Logger(subsystem: "com.MichaelJancsy.TestPluginExtension", category: "AudioUnitViewController")
 
@@ -40,9 +39,6 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     }
 
     private var hostingView: SafeHostingView<TestPluginExtensionMainView>?
-
-    /// Current file URL for save operations (session-local, not persisted in fullState)
-    private var currentFileURL: URL?
 
 	deinit {
         log.info("deinit called")
@@ -119,59 +115,17 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             initialScript = "# process.py not found in bundle\n"
         }
 
-        let onSave: (String) -> ScriptSaveResult = { [weak self, weak audioUnit] source in
+        let onReloadScript: (String) -> ScriptSaveResult = { [weak audioUnit] source in
             guard let au = audioUnit as? TestPluginExtensionAudioUnit else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
-
-            // Save to file
-            if let self {
-                if self.currentFileURL == nil {
-                    let panel = NSSavePanel()
-                    panel.allowedContentTypes = [.pythonScript]
-                    panel.nameFieldStringValue = "process.py"
-                    panel.canCreateDirectories = true
-                    guard panel.runModal() == .OK, let url = panel.url else {
-                        return ScriptSaveResult(success: false, error: "Save cancelled", processTimeMs: nil, budgetMs: nil)
-                    }
-                    self.currentFileURL = url
-                }
-
-                if let fileURL = self.currentFileURL {
-                    do {
-                        try source.write(to: fileURL, atomically: true, encoding: .utf8)
-                    } catch {
-                        return ScriptSaveResult(success: false, error: "Failed to write file: \(error.localizedDescription)", processTimeMs: nil, budgetMs: nil)
-                    }
-                }
-            }
-
-            // Reload into kernel + benchmark
             let result = au.reloadScript(source: source)
             return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
         }
 
-        let onOpen: () -> (source: String, filename: String)? = { [weak self, weak audioUnit] in
-            let panel = NSOpenPanel()
-            panel.allowedContentTypes = [.pythonScript, .plainText]
-            panel.allowsMultipleSelection = false
-            guard panel.runModal() == .OK, let url = panel.url else { return nil }
-
-            guard let source = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-
-            // Reload into kernel
-            if let au = audioUnit as? TestPluginExtensionAudioUnit {
-                let _ = au.reloadScript(source: source)
-            }
-
-            self?.currentFileURL = url
-            return (source: source, filename: url.lastPathComponent)
-        }
-
         let content = TestPluginExtensionMainView(
             defaultScriptSource: initialScript,
-            onSave: onSave,
-            onOpen: onOpen
+            onReloadScript: onReloadScript
         )
         let hv = SafeHostingView(rootView: content)
         hv.translatesAutoresizingMaskIntoConstraints = false
