@@ -14,26 +14,41 @@ struct TestPluginTests {
 
     // MARK: - Helpers
 
-    /// Discovers our AU component dynamically via the component manager.
-    /// Uses a wildcard subtype search so tests work for both main (0001) and worktree (WT01) builds.
+    /// Reads the AU identity from the embedded extension's Info.plist.
+    /// This is reliable regardless of what's registered system-wide (avoids stale pluginkit registrations).
     private static var componentDescription: AudioComponentDescription {
-        let searchDesc = AudioComponentDescription(
-            componentType: kAudioUnitType_Effect,
-            componentSubType: 0,
-            componentManufacturer: fourCharCode("A000"),
-            componentFlags: 0,
-            componentFlagsMask: 0
-        )
-        if let found = AVAudioUnitComponentManager.shared().components(matching: searchDesc).first {
-            return found.audioComponentDescription
+        get throws {
+            guard let plugInsURL = Bundle.main.builtInPlugInsURL else {
+                throw TestError("Bundle.main.builtInPlugInsURL is nil — test host has no PlugIns directory")
+            }
+            let plistURL = plugInsURL
+                .appendingPathComponent("TestPluginExtension.appex")
+                .appendingPathComponent("Contents/Info.plist")
+            let data = try Data(contentsOf: plistURL)
+            guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                  let nsExt = plist["NSExtension"] as? [String: Any],
+                  let attrs = nsExt["NSExtensionAttributes"] as? [String: Any],
+                  let components = attrs["AudioComponents"] as? [[String: Any]],
+                  let component = components.first,
+                  let type = component["type"] as? String,
+                  let subtype = component["subtype"] as? String,
+                  let manufacturer = component["manufacturer"] as? String
+            else {
+                throw TestError("Failed to parse AU identity from embedded extension Info.plist")
+            }
+            return AudioComponentDescription(
+                componentType: fourCharCode(type),
+                componentSubType: fourCharCode(subtype),
+                componentManufacturer: fourCharCode(manufacturer),
+                componentFlags: 0,
+                componentFlagsMask: 0
+            )
         }
-        return AudioComponentDescription(
-            componentType: kAudioUnitType_Effect,
-            componentSubType: fourCharCode("0001"),
-            componentManufacturer: fourCharCode("A000"),
-            componentFlags: 0,
-            componentFlagsMask: 0
-        )
+    }
+
+    private struct TestError: Error, CustomStringConvertible {
+        let description: String
+        init(_ description: String) { self.description = description }
     }
 
     private static func fourCharCode(_ string: String) -> FourCharCode {
@@ -45,8 +60,9 @@ struct TestPluginTests {
     }
 
     private static func instantiateAU() async throws -> (AVAudioUnit, AUAudioUnit) {
+        let desc = try componentDescription
         let avAudioUnit = try await AVAudioUnit.instantiate(
-            with: componentDescription,
+            with: desc,
             options: .loadInProcess
         )
         return (avAudioUnit, avAudioUnit.auAudioUnit)
@@ -55,16 +71,18 @@ struct TestPluginTests {
     // MARK: - Component Discovery
 
     @Test func audioUnitComponentIsRegistered() async throws {
+        let desc = try Self.componentDescription
         let components = AVAudioUnitComponentManager.shared()
-            .components(matching: Self.componentDescription)
+            .components(matching: desc)
         #expect(!components.isEmpty, "AU component should be registered with the system")
     }
 
     // MARK: - AU Instantiation
 
     @Test func audioUnitCanBeInstantiated() async throws {
+        let desc = try Self.componentDescription
         let avAudioUnit = try await AVAudioUnit.instantiate(
-            with: Self.componentDescription,
+            with: desc,
             options: .loadInProcess
         )
         let au = avAudioUnit.auAudioUnit
