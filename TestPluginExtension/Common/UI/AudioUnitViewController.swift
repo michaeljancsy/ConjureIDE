@@ -115,7 +115,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             initialScript = "# process.py not found in bundle\n"
         }
 
-        let onReloadScript: (String) -> ScriptSaveResult = { [weak audioUnit] source in
+        let onSave: (String) -> ScriptSaveResult = { [weak audioUnit] source in
             guard let au = audioUnit as? TestPluginExtensionAudioUnit else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
@@ -125,7 +125,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 
         let content = TestPluginExtensionMainView(
             defaultScriptSource: initialScript,
-            onReloadScript: onReloadScript
+            onSave: onSave
         )
         let hv = SafeHostingView(rootView: content)
         hv.translatesAutoresizingMaskIntoConstraints = false

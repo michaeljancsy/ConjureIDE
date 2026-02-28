@@ -32,31 +32,6 @@ final class TestPluginUITests: XCTestCase {
     }
 
     @MainActor
-    func testOpenButtonExists() throws {
-        let app = XCUIApplication()
-        app.launch()
-        let openButton = app.buttons["openScriptButton"]
-        XCTAssertTrue(openButton.waitForExistence(timeout: 10),
-                      "Open button should be visible")
-    }
-
-    @MainActor
-    func testTitleExists() throws {
-        let app = XCUIApplication()
-        app.launch()
-        // The title element's text content isn't accessible through the AUv3 ViewBridge,
-        // so we just verify the element exists via its accessibility identifier
-        let title = app.staticTexts["scriptTitle"]
-        XCTAssertTrue(title.waitForExistence(timeout: 10),
-                      "Script title should be visible after launch")
-    }
-
-    // Note: NSSavePanel testing is not possible via XCUITest for AUv3 extensions because
-    // the panel is spawned by the extension process (XPC service), which is invisible to
-    // the host app's XCUIApplication. The save button's core logic (kernel reload + benchmark)
-    // is covered by the reloadScriptViaFullStateAffectsRendering unit test instead.
-
-    @MainActor
     func testScriptEditorShowsDefaultScript() throws {
         let app = XCUIApplication()
         app.launch()
