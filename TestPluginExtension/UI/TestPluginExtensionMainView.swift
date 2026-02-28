@@ -22,6 +22,7 @@ struct TestPluginExtensionMainView: View {
     @State private var errorMessage: String?
     @State private var showSuccess: Bool = false
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Color for the benchmark timing based on how close to budget.
     private var benchmarkColor: Color {
@@ -42,12 +43,10 @@ struct TestPluginExtensionMainView: View {
             .padding(.horizontal)
             .padding(.top, 8)
 
-            TextEditor(text: $scriptSource)
-                .font(.system(.body, design: .monospaced))
+            HighlightedTextEditor(text: $scriptSource, colorScheme: colorScheme)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .border(Color.secondary.opacity(0.3), width: 1)
                 .padding(.horizontal)
-                .accessibilityIdentifier("scriptEditor")
 
             if let errorMessage = errorMessage {
                 Text(errorMessage)
