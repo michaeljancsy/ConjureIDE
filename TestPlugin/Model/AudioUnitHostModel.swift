@@ -39,25 +39,23 @@ class AudioUnitHostModel {
     var validationResult: AudioComponentValidationResult?
     var currentValidationData: String?
     
-    /// Discovers our AU component dynamically via the component manager.
-    /// Uses a wildcard subtype search so the host works for both main (0001) and worktree (WT01) builds.
-    private static func discoverExtensionIdentity() -> (type: String, subType: String, manufacturer: String) {
-        let searchDesc = AudioComponentDescription(
-            componentType: kAudioUnitType_Effect,
-            componentSubType: 0,
-            componentManufacturer: "A000".fourCharCode!,
-            componentFlags: 0,
-            componentFlagsMask: 0
-        )
-        if let found = AVAudioUnitComponentManager.shared().components(matching: searchDesc).first {
-            let desc = found.audioComponentDescription
-            return (
-                type: Self.stringFromCode(desc.componentType),
-                subType: Self.stringFromCode(desc.componentSubType),
-                manufacturer: Self.stringFromCode(desc.componentManufacturer)
-            )
-        }
-        return ("aufx", "0001", "A000")
+    /// Reads the AU identity from the embedded extension's Info.plist.
+    /// This is reliable regardless of what's registered system-wide (avoids stale pluginkit registrations).
+    private static func discoverExtensionIdentity() -> (type: String, subType: String, manufacturer: String)? {
+        guard let plugInsURL = Bundle.main.builtInPlugInsURL else { return nil }
+        let appexURL = plugInsURL.appendingPathComponent("TestPluginExtension.appex")
+        let plistURL = appexURL.appendingPathComponent("Contents/Info.plist")
+        guard let plistData = try? Data(contentsOf: plistURL),
+              let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any],
+              let nsExtension = plist["NSExtension"] as? [String: Any],
+              let attrs = nsExtension["NSExtensionAttributes"] as? [String: Any],
+              let components = attrs["AudioComponents"] as? [[String: Any]],
+              let component = components.first,
+              let type = component["type"] as? String,
+              let subtype = component["subtype"] as? String,
+              let manufacturer = component["manufacturer"] as? String
+        else { return nil }
+        return (type: type, subType: subtype, manufacturer: manufacturer)
     }
 
     private static func stringFromCode(_ code: FourCharCode) -> String {
@@ -71,10 +69,16 @@ class AudioUnitHostModel {
     }
 
     init() {
-        let identity = Self.discoverExtensionIdentity()
-        self.type = identity.type
-        self.subType = identity.subType
-        self.manufacturer = identity.manufacturer
+        if let identity = Self.discoverExtensionIdentity() {
+            self.type = identity.type
+            self.subType = identity.subType
+            self.manufacturer = identity.manufacturer
+        } else {
+            self.type = "aufx"
+            self.subType = "????"
+            self.manufacturer = "A000"
+        }
+
         let wantsAudio = type.fourCharCode == kAudioUnitType_MusicEffect || type.fourCharCode == kAudioUnitType_Effect
         self.wantsAudio = wantsAudio
 
@@ -91,7 +95,16 @@ class AudioUnitHostModel {
         auValString = "\(type) \(subType) \(manufacturer)"
 
         setupNotifications()
-        loadAudioUnit()
+
+        if subType == "????" {
+            self.viewModel = AudioUnitViewModel(showAudioControls: false,
+                                                showMIDIContols: false,
+                                                title: "Error",
+                                                message: "Failed to read AU identity from embedded extension. The build may be broken.",
+                                                viewController: nil)
+        } else {
+            loadAudioUnit()
+        }
     }
 
     private func loadAudioUnit() {
