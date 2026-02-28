@@ -132,6 +132,16 @@ pub unsafe extern "C" fn dsp_kernel_load_script(
     (*kernel).load_script(python_home, script_path)
 }
 
+/// Benchmark the Python process function.
+/// Returns the max execution time in seconds over 5 runs, or -1.0 if no script is loaded.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_benchmark_process(kernel: DSPKernelRef) -> f64 {
+    (*kernel).benchmark_process().unwrap_or(-1.0)
+}
+
 /// Returns the last error message as a null-terminated C string.
 /// Returns null if no error. The pointer is valid until the next call to this function or destroy.
 ///
@@ -281,6 +291,16 @@ mod tests {
             assert_eq!(output_r, [0.0, -0.5, 1.0, 0.25]);
 
             dsp_kernel_deinitialize(kernel);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_benchmark_no_script() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            let result = dsp_kernel_benchmark_process(kernel);
+            assert_eq!(result, -1.0);
             dsp_kernel_destroy(kernel);
         }
     }

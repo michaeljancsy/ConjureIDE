@@ -7,13 +7,30 @@
 
 import SwiftUI
 
+struct ScriptSaveResult {
+    let success: Bool
+    let error: String?
+    let processTimeMs: Double?
+    let budgetMs: Double?
+}
+
 struct TestPluginExtensionMainView: View {
     var defaultScriptSource: String
-    var onSaveScript: (String) -> (Bool, String?)
+    var onSaveScript: (String) -> ScriptSaveResult
 
     @State private var scriptSource: String = ""
     @State private var errorMessage: String?
     @State private var showSuccess: Bool = false
+    @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
+
+    /// Color for the benchmark timing based on how close to budget.
+    private var benchmarkColor: Color {
+        guard let benchmark = lastBenchmark else { return .green }
+        let ratio = benchmark.processTimeMs / benchmark.budgetMs
+        if ratio > 1.0 { return .red }
+        if ratio > 0.5 { return .orange }
+        return .green
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -39,24 +56,38 @@ struct TestPluginExtensionMainView: View {
                     .padding(.horizontal)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if showSuccess {
-                Text("Script reloaded successfully")
-                    .foregroundColor(.green)
-                    .font(.caption)
-                    .padding(.horizontal)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let benchmark = lastBenchmark {
+                    Text(String(format: "Script reloaded — %.1fms / %.1fms budget", benchmark.processTimeMs, benchmark.budgetMs))
+                        .foregroundColor(benchmarkColor)
+                        .font(.caption)
+                        .padding(.horizontal)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text("Script reloaded successfully")
+                        .foregroundColor(.green)
+                        .font(.caption)
+                        .padding(.horizontal)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
 
             Button("Save Changes") {
                 let result = onSaveScript(scriptSource)
-                if result.0 {
+                if result.success {
                     errorMessage = nil
                     showSuccess = true
+                    if let processTimeMs = result.processTimeMs, let budgetMs = result.budgetMs {
+                        lastBenchmark = (processTimeMs, budgetMs)
+                    } else {
+                        lastBenchmark = nil
+                    }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                         showSuccess = false
                     }
                 } else {
                     showSuccess = false
-                    errorMessage = result.1 ?? "Unknown error"
+                    lastBenchmark = nil
+                    errorMessage = result.error ?? "Unknown error"
                 }
             }
             .accessibilityIdentifier("saveChangesButton")

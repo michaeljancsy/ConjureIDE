@@ -111,12 +111,12 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             defaultScript = "# process.py not found in bundle\n"
         }
 
-        let onSaveScript: (String) -> (Bool, String?) = { [weak audioUnit] source in
+        let onSaveScript: (String) -> ScriptSaveResult = { [weak audioUnit] source in
             guard let au = audioUnit as? TestPluginExtensionAudioUnit else {
-                return (false, "Audio unit not available")
+                return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
             let result = au.reloadScript(source: source)
-            return (result.success, result.error)
+            return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
         }
 
         let content = TestPluginExtensionMainView(
