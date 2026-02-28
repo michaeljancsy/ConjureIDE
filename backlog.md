@@ -4,6 +4,10 @@
 -
 
 ## To Do
+- Bugfix: Presets don't load script
+- Bugfix: Presets not visible in Ableton
+- Host app DAW controls: Add preset selection and a bypass button to the TestPlugin host app, like a DAW would provide
+- Worktree AU identity: Have worktree builds register a different Audio Unit (different subtype/manufacturer) than main, so the worktree version can be tested in DAWs without conflicting with or requiring changes to main
 - Support other scripting languages beyond Python
 - Visualization and diagnostics in the Mac host app (not just the AU extension)
 - Support AI coding (AI-assisted script generation/editing)
