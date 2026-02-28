@@ -26,9 +26,9 @@ final class TestPluginUITests: XCTestCase {
     func testSaveButtonExists() throws {
         let app = XCUIApplication()
         app.launch()
-        let saveButton = app.buttons["saveChangesButton"]
+        let saveButton = app.buttons["saveButton"]
         XCTAssertTrue(saveButton.waitForExistence(timeout: 10),
-                      "Save Changes button should be visible")
+                      "Save button should be visible")
     }
 
     @MainActor

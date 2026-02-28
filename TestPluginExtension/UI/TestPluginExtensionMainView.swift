@@ -16,7 +16,7 @@ struct ScriptSaveResult {
 
 struct TestPluginExtensionMainView: View {
     var defaultScriptSource: String
-    var onSaveScript: (String) -> ScriptSaveResult
+    var onSave: (String) -> ScriptSaveResult
 
     @State private var scriptSource: String = ""
     @State private var errorMessage: String?
@@ -35,18 +35,11 @@ struct TestPluginExtensionMainView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            HStack {
-                Text("Python DSP Script [build 0227d]")
-                    .font(.headline)
-                Spacer()
-            }
-            .padding(.horizontal)
-            .padding(.top, 8)
-
             HighlightedTextEditor(text: $scriptSource, colorScheme: colorScheme)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .border(Color.secondary.opacity(0.3), width: 1)
                 .padding(.horizontal)
+                .padding(.top, 8)
 
             if let errorMessage = errorMessage {
                 Text(errorMessage)
@@ -70,8 +63,8 @@ struct TestPluginExtensionMainView: View {
                 }
             }
 
-            Button("Save Changes") {
-                let result = onSaveScript(scriptSource)
+            Button("Save") {
+                let result = onSave(scriptSource)
                 if result.success {
                     errorMessage = nil
                     showSuccess = true
@@ -89,7 +82,7 @@ struct TestPluginExtensionMainView: View {
                     errorMessage = result.error ?? "Unknown error"
                 }
             }
-            .accessibilityIdentifier("saveChangesButton")
+            .accessibilityIdentifier("saveButton")
             .padding(.bottom)
         }
         .onAppear {

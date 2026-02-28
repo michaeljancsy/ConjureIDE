@@ -103,15 +103,19 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 
         hostingView?.removeFromSuperview()
 
-        let defaultScript: String
-        if let scriptURL = Bundle(for: type(of: self)).url(forResource: "process", withExtension: "py"),
-           let source = try? String(contentsOf: scriptURL, encoding: .utf8) {
-            defaultScript = source
+        // Use restored script from fullState if available, otherwise fall back to bundled default
+        let initialScript: String
+        if let au = audioUnit as? TestPluginExtensionAudioUnit,
+           let restored = au.scriptSource {
+            initialScript = restored
+        } else if let scriptURL = Bundle(for: type(of: self)).url(forResource: "process", withExtension: "py"),
+                  let source = try? String(contentsOf: scriptURL, encoding: .utf8) {
+            initialScript = source
         } else {
-            defaultScript = "# process.py not found in bundle\n"
+            initialScript = "# process.py not found in bundle\n"
         }
 
-        let onSaveScript: (String) -> ScriptSaveResult = { [weak audioUnit] source in
+        let onSave: (String) -> ScriptSaveResult = { [weak audioUnit] source in
             guard let au = audioUnit as? TestPluginExtensionAudioUnit else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
@@ -120,8 +124,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         }
 
         let content = TestPluginExtensionMainView(
-            defaultScriptSource: defaultScript,
-            onSaveScript: onSaveScript
+            defaultScriptSource: initialScript,
+            onSave: onSave
         )
         let hv = SafeHostingView(rootView: content)
         hv.translatesAutoresizingMaskIntoConstraints = false
