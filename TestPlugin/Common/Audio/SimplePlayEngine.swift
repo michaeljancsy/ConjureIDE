@@ -24,16 +24,6 @@ extension AVAudioUnit {
         return componentType == kAudioUnitType_MusicEffect || componentType == kAudioUnitType_Effect
     }
     
-    static fileprivate func findComponent(type: String, subType: String, manufacturer: String) -> AVAudioUnitComponent? {
-        // Make a component description matching any Audio Unit of the selected component type.
-        let description = AudioComponentDescription(componentType: type.fourCharCode!,
-                                                    componentSubType: subType.fourCharCode!,
-                                                    componentManufacturer: manufacturer.fourCharCode!,
-                                                    componentFlags: 0,
-                                                    componentFlagsMask: 0)
-        return AVAudioUnitComponentManager.shared().components(matching: description).first
-    }
-    
 	fileprivate func loadAudioUnitViewController() async -> ViewController? {
 		let viewController = await auAudioUnit.requestViewController()
 
@@ -107,32 +97,22 @@ public class SimplePlayEngine {
         // Reset the engine to remove any configured audio units.
         reset()
 
-        // Try to find the component, retrying a few times since AU discovery can be async
-        var component: AVAudioUnitComponent?
-        for attempt in 0..<5 {
-            component = AVAudioUnit.findComponent(type: type, subType: subType, manufacturer: manufacturer)
-            if component != nil { break }
-            if attempt < 4 {
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
+        let description = AudioComponentDescription(
+            componentType: type.fourCharCode!,
+            componentSubType: subType.fourCharCode!,
+            componentManufacturer: manufacturer.fourCharCode!,
+            componentFlags: 0,
+            componentFlagsMask: 0
+        )
 
-        guard let component else {
-            print("Failed to find component with type: \(type), subtype: \(subType), manufacturer: \(manufacturer)")
-            return nil
-        }
-        
-        // Instantiate the audio unit.
+        // Instantiate in-process — bypasses PluginKit registration which can be unreliable.
         do {
-            let audioUnit = try await AVAudioUnit.instantiate(
-                with: component.audioComponentDescription, options: AudioComponentInstantiationOptions.loadOutOfProcess)
-            
+            let audioUnit = try await AVAudioUnit.instantiate(with: description, options: .loadInProcess)
             self.avAudioUnit = audioUnit
-            
             self.connect(avAudioUnit: audioUnit)
-            
             return await audioUnit.loadAudioUnitViewController()
         } catch {
+            print("Failed to instantiate AU (\(type) \(subType) \(manufacturer)): \(error)")
             return nil
         }
     }
