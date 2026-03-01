@@ -16,6 +16,7 @@ struct ScriptSaveResult {
 }
 
 struct TestPluginExtensionMainView: View {
+    var buildID: Int
     var defaultScriptSource: String
     var scriptSourcePublisher: AnyPublisher<String, Never>?
     var onSave: (String) -> ScriptSaveResult
@@ -37,11 +38,21 @@ struct TestPluginExtensionMainView: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            if buildID != 0 {
+                Text(verbatim: "Build \(buildID)")
+                    .font(.caption2.monospaced())
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.horizontal)
+                    .padding(.top, 4)
+                    .accessibilityIdentifier("buildIDLabel")
+            }
+
             HighlightedTextEditor(text: $scriptSource, colorScheme: colorScheme)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .border(Color.secondary.opacity(0.3), width: 1)
                 .padding(.horizontal)
-                .padding(.top, 8)
+                .padding(.top, buildID != 0 ? 0 : 8)
 
             if let errorMessage = errorMessage {
                 Text(errorMessage)

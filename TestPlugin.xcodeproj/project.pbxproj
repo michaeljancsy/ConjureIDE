@@ -239,6 +239,7 @@
 				2579117C2F5013850036AAB6 /* Resources */,
 				AABB00032F5013850036AAB6 /* Copy Python Runtime */,
 				AABB00052F5013850036AAB6 /* Patch AU Identity for Worktree */,
+				AABB00072F5013850036AAB6 /* Stamp Build ID */,
 			);
 			buildRules = (
 			);
@@ -399,6 +400,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "\"${SRCROOT}/scripts/patch-worktree-au-identity.sh\"\n";
+		};
+		AABB00072F5013850036AAB6 /* Stamp Build ID */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/stamp-build-id.sh",
+			);
+			name = "Stamp Build ID";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/scripts/stamp-build-id.sh\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
