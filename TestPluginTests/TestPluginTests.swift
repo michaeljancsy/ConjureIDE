@@ -567,6 +567,26 @@ struct TestPluginTests {
         au.deallocateRenderResources()
     }
 
+    // MARK: - Build ID
+
+    @Test func extensionPlistContainsBuildID() throws {
+        guard let plugInsURL = Bundle.main.builtInPlugInsURL else {
+            throw TestError("Bundle.main.builtInPlugInsURL is nil")
+        }
+        let plistURL = plugInsURL
+            .appendingPathComponent("TestPluginExtension.appex")
+            .appendingPathComponent("Contents/Info.plist")
+        let data = try Data(contentsOf: plistURL)
+        guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            throw TestError("Failed to parse extension Info.plist")
+        }
+        let buildID = plist["BuildID"]
+        #expect(buildID != nil, "Extension Info.plist should contain a BuildID key")
+        #expect(buildID is Int, "BuildID should be an integer, got \(type(of: buildID!))")
+        let value = buildID as! Int
+        #expect(value > 0, "BuildID should be a positive integer (Unix timestamp), got \(value)")
+    }
+
     // MARK: - Render Block
 
     @Test func renderBlockWithBypass() async throws {

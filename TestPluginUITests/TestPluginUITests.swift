@@ -46,6 +46,23 @@ final class TestPluginUITests: XCTestCase {
     }
 
     @MainActor
+    func testBuildIDLabelIsVisible() throws {
+        let app = XCUIApplication()
+        app.launch()
+        let buildIDLabel = app.staticTexts["buildIDLabel"]
+        XCTAssertTrue(buildIDLabel.waitForExistence(timeout: 10),
+                      "Build ID label should be visible after launch")
+        // Through the AU ViewBridge, SwiftUI Text content is in .value (not .label)
+        let text = buildIDLabel.value as? String ?? ""
+        XCTAssertTrue(text.hasPrefix("Build "),
+                      "Build ID label should start with 'Build ', got '\(text)'")
+        let numberStr = text.replacingOccurrences(of: "Build ", with: "")
+        let number = Int(numberStr)
+        XCTAssertNotNil(number, "Build ID should contain an integer, got '\(numberStr)'")
+        XCTAssertGreaterThan(number!, 0, "Build ID should be positive")
+    }
+
+    @MainActor
     func testScriptEditorAcceptsTyping() throws {
         let app = XCUIApplication()
         app.launch()

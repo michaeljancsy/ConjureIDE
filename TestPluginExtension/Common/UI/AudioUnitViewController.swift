@@ -128,7 +128,11 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             .receive(on: DispatchQueue.main)
             .eraseToAnyPublisher()
 
+        let extensionBundle = Bundle(for: type(of: self))
+        let buildID = extensionBundle.infoDictionary?["BuildID"] as? Int ?? 0
+
         let content = TestPluginExtensionMainView(
+            buildID: buildID,
             defaultScriptSource: initialScript,
             scriptSourcePublisher: scriptPublisher,
             onSave: onSave
