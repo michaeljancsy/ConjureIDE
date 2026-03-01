@@ -101,14 +101,16 @@ Worktree builds automatically register a different AU identity so they can coexi
 
 ## AU Registration Troubleshooting
 
-**NEVER use `pluginkit -r`** to remove an AU extension registration. It permanently blacklists the bundle ID — the extension won't re-register even after rebooting, rebuilding, or running `pluginkit -a` / `pluginkit -e use`. The blacklist is stored in the PluginKit Annotations file at `/private/var/folders/.../0/com.apple.pluginkit/Annotations` but removing that file alone doesn't fix it.
+**Avoid using `pluginkit -r`** to remove an AU extension registration during development. Although Apple's documentation says `pluginkit` options "cannot make permanent alterations of the automatic registry state" and the `pkd` daemon should re-discover extensions automatically, PluginKit re-registration can be unreliable in practice — extensions sometimes fail to re-register after removal, requiring manual recovery steps. Prefer `pluginkit -e ignore -i <bundle-id>` (and later `pluginkit -e default -i <bundle-id>` to restore) if you need to temporarily hide an extension.
 
 **Recovery procedure** if an AU disappears from hosts:
-1. Delete ALL DerivedData folders for the project: `rm -rf ~/Library/Developer/Xcode/DerivedData/TestPlugin-*`
-2. Clear the AU cache: `rm -f ~/Library/Caches/AudioUnitCache/com.apple.audiounits.cache`
-3. Clean build from Xcode CLI: `xcodebuild -project TestPlugin.xcodeproj -scheme TestPlugin clean build`
+1. Try re-launching the host app (PluginKit re-registers extensions when the parent app launches)
+2. Kill the audio component registrar: `killall -9 AudioComponentRegistrar`
+3. If still missing, delete DerivedData: `rm -rf ~/Library/Developer/Xcode/DerivedData/TestPlugin-*`
+4. Clear the AU cache: `rm -f ~/Library/Caches/AudioUnitCache/com.apple.audiounits.cache`
+5. Clean build: `xcodebuild -project TestPlugin.xcodeproj -scheme TestPlugin clean build`
 
-The clean build into a fresh DerivedData directory gets a new UUID and re-registers with LaunchServices, bypassing the blacklist.
+The clean build into a fresh DerivedData directory gets a new UUID and re-registers with LaunchServices.
 
 **Useful diagnostic commands:**
 - `pluginkit -mv -p com.apple.AudioUnit-UI` — list registered AU extensions with paths
