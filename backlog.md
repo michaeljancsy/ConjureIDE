@@ -7,6 +7,7 @@
 - Host app DAW controls: Add preset selection and a bypass button to the TestPlugin host app, like a DAW would provide
 - Support other scripting languages beyond Python
 - Visualization and diagnostics in the Mac host app (not just the AU extension)
+- Preset browser + management
 - Support AI coding (AI-assisted script generation/editing)
 
 ## Done

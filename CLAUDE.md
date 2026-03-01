@@ -99,6 +99,22 @@ Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/` sinc
 
 Worktree builds automatically register a different AU identity so they can coexist with the main build in DAWs. The "Patch AU Identity for Worktree" build phase (`scripts/patch-worktree-au-identity.sh`) detects worktree builds and patches the extension's built Info.plist to use subtype `WT01` and name `TestPluginExtension (Dev)`. The host app and tests read AU identity from the embedded extension's Info.plist at runtime, so they automatically use the correct codes for both main and worktree builds.
 
+## AU Registration Troubleshooting
+
+**NEVER use `pluginkit -r`** to remove an AU extension registration. It permanently blacklists the bundle ID — the extension won't re-register even after rebooting, rebuilding, or running `pluginkit -a` / `pluginkit -e use`. The blacklist is stored in the PluginKit Annotations file at `/private/var/folders/.../0/com.apple.pluginkit/Annotations` but removing that file alone doesn't fix it.
+
+**Recovery procedure** if an AU disappears from hosts:
+1. Delete ALL DerivedData folders for the project: `rm -rf ~/Library/Developer/Xcode/DerivedData/TestPlugin-*`
+2. Clear the AU cache: `rm -f ~/Library/Caches/AudioUnitCache/com.apple.audiounits.cache`
+3. Clean build from Xcode CLI: `xcodebuild -project TestPlugin.xcodeproj -scheme TestPlugin clean build`
+
+The clean build into a fresh DerivedData directory gets a new UUID and re-registers with LaunchServices, bypassing the blacklist.
+
+**Useful diagnostic commands:**
+- `pluginkit -mv -p com.apple.AudioUnit-UI` — list registered AU extensions with paths
+- `auval -v aufx 0001 A000` — validate the main AU component
+- `auval -v aufx WT01 A000` — validate the worktree AU component
+
 ## Code Signing
 
 The bundled Python runtime requires proper code signing for the hardened runtime:
