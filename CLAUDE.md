@@ -99,6 +99,24 @@ Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/` sinc
 
 Worktree builds automatically register a different AU identity so they can coexist with the main build in DAWs. The "Patch AU Identity for Worktree" build phase (`scripts/patch-worktree-au-identity.sh`) detects worktree builds and patches the extension's built Info.plist to use subtype `WT01` and name `TestPluginExtension (Dev)`. The host app and tests read AU identity from the embedded extension's Info.plist at runtime, so they automatically use the correct codes for both main and worktree builds.
 
+## AU Registration Troubleshooting
+
+**Avoid using `pluginkit -r`** to remove an AU extension registration during development. Although Apple's documentation says `pluginkit` options "cannot make permanent alterations of the automatic registry state" and the `pkd` daemon should re-discover extensions automatically, PluginKit re-registration can be unreliable in practice — extensions sometimes fail to re-register after removal, requiring manual recovery steps. Prefer `pluginkit -e ignore -i <bundle-id>` (and later `pluginkit -e default -i <bundle-id>` to restore) if you need to temporarily hide an extension.
+
+**Recovery procedure** if an AU disappears from hosts:
+1. Try re-launching the host app (PluginKit re-registers extensions when the parent app launches)
+2. Kill the audio component registrar: `killall -9 AudioComponentRegistrar`
+3. If still missing, delete DerivedData: `rm -rf ~/Library/Developer/Xcode/DerivedData/TestPlugin-*`
+4. Clear the AU cache: `rm -f ~/Library/Caches/AudioUnitCache/com.apple.audiounits.cache`
+5. Clean build: `xcodebuild -project TestPlugin.xcodeproj -scheme TestPlugin clean build`
+
+The clean build into a fresh DerivedData directory gets a new UUID and re-registers with LaunchServices.
+
+**Useful diagnostic commands:**
+- `pluginkit -mv -p com.apple.AudioUnit-UI` — list registered AU extensions with paths
+- `auval -v aufx 0001 A000` — validate the main AU component
+- `auval -v aufx WT01 A000` — validate the worktree AU component
+
 ## Code Signing
 
 The bundled Python runtime requires proper code signing for the hardened runtime:
