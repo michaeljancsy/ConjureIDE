@@ -6,6 +6,7 @@
 //
 
 import AVFoundation
+import Combine
 import os.log
 
 private let pluginLog = Logger(subsystem: "com.MichaelJancsy.TestPlugin", category: "DSP")
@@ -25,6 +26,9 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	public var scriptSource: String? {
 		return currentScriptSource
 	}
+
+	/// Publishes script source when it changes externally (preset selection, fullState restore).
+	public let scriptSourceDidChange = PassthroughSubject<String, Never>()
 
 	// Audio busses
 	private var _inputBus: AUAudioUnitBus!
@@ -188,7 +192,10 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				  let source = String(data: data, encoding: .utf8) else {
 				return
 			}
-			let _ = reloadScript(source: source)
+			let result = reloadScript(source: source)
+			if result.success {
+				scriptSourceDidChange.send(source)
+			}
 			pluginLog.info("Restored script from fullState (\(source.count) chars)")
 		}
 	}
@@ -235,6 +242,7 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 			let result = reloadScript(source: source)
 			if result.success {
+				scriptSourceDidChange.send(source)
 				pluginLog.info("Loaded factory preset: \(info.name, privacy: .public)")
 			}
 		}

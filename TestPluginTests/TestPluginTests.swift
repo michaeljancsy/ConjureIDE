@@ -443,6 +443,27 @@ struct TestPluginTests {
         #expect(restoredSource == Self.testScript, "Modified script should take priority over factory preset")
     }
 
+    @Test func presetsSwitchScriptInFullState() async throws {
+        // Verify that switching between presets changes the script in fullState
+        let (_, au) = try await Self.instantiateAU()
+        let presets = au.factoryPresets ?? []
+        #expect(presets.count >= 2)
+
+        au.currentPreset = presets[1] // Tremolo
+        let state1 = au.fullState
+        let data1 = state1?[Self.scriptSourceKey] as? Data
+        let source1 = String(data: data1!, encoding: .utf8)!
+
+        au.currentPreset = presets[2] // Bitcrush
+        let state2 = au.fullState
+        let data2 = state2?[Self.scriptSourceKey] as? Data
+        let source2 = String(data: data2!, encoding: .utf8)!
+
+        #expect(source1 != source2, "Different presets should produce different scripts in fullState")
+        #expect(source1.contains("def process"))
+        #expect(source2.contains("def process"))
+    }
+
     @Test func fileRoundtrip() async throws {
         // Simulate file save/load cycle
         let (_, au) = try await Self.instantiateAU()

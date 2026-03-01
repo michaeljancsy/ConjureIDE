@@ -123,8 +123,14 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
         }
 
+        let scriptPublisher = (audioUnit as? TestPluginExtensionAudioUnit)?
+            .scriptSourceDidChange
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
+
         let content = TestPluginExtensionMainView(
             defaultScriptSource: initialScript,
+            scriptSourcePublisher: scriptPublisher,
             onSave: onSave
         )
         let hv = SafeHostingView(rootView: content)
