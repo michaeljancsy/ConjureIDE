@@ -48,6 +48,12 @@ final class AnthropicProvider: AIProvider {
         - Cache attribute lookups as local variables outside process() or as globals
         - No import statements inside process()
         - No closures or lambdas created inside process()
+
+        WARM START — the host calls process() several times before real audio arrives, so \
+        one-time initialization using a first-call guard is safe:
+        - Pattern: global _buf; if '_buf' not in dir(): _buf = np.zeros(...)
+        - This runs during warm-up, NOT on the first real audio callback
+        - All subsequent calls must be allocation-free
         """
 
     private static let systemPrompt = """
