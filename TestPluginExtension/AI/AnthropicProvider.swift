@@ -13,10 +13,7 @@ final class AnthropicProvider: AIProvider {
         self.session = session
     }
 
-    private static let systemPrompt = """
-        You are a DSP script generator for a real-time audio plugin. Generate Python scripts \
-        that define a `process()` function.
-
+    private static let apiContract = """
         API contract:
         - Function signature: def process(inputs, outputs, frame_count, sample_rate)
         - inputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
@@ -26,26 +23,52 @@ final class AnthropicProvider: AIProvider {
         - Write processed audio into outputs[ch][:frame_count]
         - Only numpy is available (imported as np)
         - Global variables persist across callbacks (useful for phase accumulators, delay buffers, etc.)
-        - Must be real-time safe: no file I/O, no network, no print(), no dynamic imports
         - Must handle both mono (1 channel) and stereo (2 channels)
+        """
 
-        Output ONLY the Python script. No explanations, no markdown fences, no comments about what the \
-        script does. The script must be complete and immediately executable.
+    private static let realTimeRules = """
+        Real-time safety rules — process() runs in the audio callback, so every allocation, \
+        deallocation, or hidden Python overhead causes glitches:
+
+        ALLOCATIONS — never allocate inside process():
+        - No new lists, dicts, sets, tuples, or strings
+        - No list comprehensions, generator expressions, or range() calls
+        - No NumPy operations that return new arrays — use slice assignment and the out= parameter \
+          (e.g. np.multiply(a, b, out=output) instead of output = a * b)
+        - Pre-allocate ALL buffers as globals on first call using a guard like: \
+          global _buf; if '_buf' not in dir(): _buf = np.zeros(max_len, dtype=np.float32)
+
+        DEALLOCATIONS — never drop the last reference to an object:
+        - Don't create temporary objects that go out of scope (this triggers deallocation)
+        - Don't use del statements
+
+        HIDDEN OVERHEAD — avoid Python features with non-obvious cost:
+        - No try/except blocks (frame setup cost; exceptions allocate tracebacks)
+        - No function calls that internally allocate (prefer numpy ufuncs with out=)
+        - Cache attribute lookups as local variables outside process() or as globals
+        - No import statements inside process()
+        - No closures or lambdas created inside process()
+        """
+
+    private static let systemPrompt = """
+        You are a DSP script generator for a real-time audio plugin. Generate Python scripts \
+        that define a `process()` function.
+
+        \(apiContract)
+
+        \(realTimeRules)
+
+        Output ONLY the Python script. No explanations, no markdown fences, no comments about what \
+        the script does. The script must be complete and immediately executable.
         """
 
     private static let fixSystemPrompt = """
         You are a DSP script debugger for a real-time audio plugin. The user's Python DSP script has \
         an error. Fix the script to resolve the error while preserving the intended behavior.
 
-        API contract:
-        - Function signature: def process(inputs, outputs, frame_count, sample_rate)
-        - inputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
-        - outputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
-        - frame_count: number of valid samples this callback (may be less than array length)
-        - sample_rate: current sample rate (e.g. 44100.0)
-        - Write processed audio into outputs[ch][:frame_count]
-        - Only numpy is available (imported as np)
-        - Global variables persist across callbacks
+        \(apiContract)
+
+        \(realTimeRules)
 
         Output ONLY the corrected Python script. No explanations, no markdown fences.
         """
