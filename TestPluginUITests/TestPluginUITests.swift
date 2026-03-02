@@ -23,12 +23,34 @@ final class TestPluginUITests: XCTestCase {
     }
 
     @MainActor
-    func testSaveButtonExists() throws {
+    func testRunButtonExists() throws {
         let app = XCUIApplication()
         app.launch()
-        let saveButton = app.buttons["saveButton"]
-        XCTAssertTrue(saveButton.waitForExistence(timeout: 10),
-                      "Save button should be visible")
+        let runButton = app.buttons["runButton"]
+        XCTAssertTrue(runButton.waitForExistence(timeout: 10),
+                      "Run button should be visible")
+    }
+
+    @MainActor
+    func testPresetToolbarExists() throws {
+        let app = XCUIApplication()
+        app.launch()
+        // Verify prev/next preset buttons exist (toolbar is present)
+        let prevButton = app.buttons["prevPresetButton"]
+        XCTAssertTrue(prevButton.waitForExistence(timeout: 10),
+                      "Previous preset button should be visible")
+        let nextButton = app.buttons["nextPresetButton"]
+        XCTAssertTrue(nextButton.waitForExistence(timeout: 10),
+                      "Next preset button should be visible")
+    }
+
+    @MainActor
+    func testSaveAsButtonExists() throws {
+        let app = XCUIApplication()
+        app.launch()
+        let saveAsButton = app.buttons["saveAsButton"]
+        XCTAssertTrue(saveAsButton.waitForExistence(timeout: 10),
+                      "Save As button should be visible")
     }
 
     @MainActor

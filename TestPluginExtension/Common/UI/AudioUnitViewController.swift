@@ -103,10 +103,14 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 
         hostingView?.removeFromSuperview()
 
+        guard let au = audioUnit as? TestPluginExtensionAudioUnit else {
+            log.error("audioUnit is not TestPluginExtensionAudioUnit")
+            return
+        }
+
         // Use restored script from fullState if available, otherwise fall back to bundled default
         let initialScript: String
-        if let au = audioUnit as? TestPluginExtensionAudioUnit,
-           let restored = au.scriptSource {
+        if let restored = au.scriptSource {
             initialScript = restored
         } else if let scriptURL = Bundle(for: type(of: self)).url(forResource: "process", withExtension: "py"),
                   let source = try? String(contentsOf: scriptURL, encoding: .utf8) {
@@ -115,27 +119,95 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             initialScript = "# process.py not found in bundle\n"
         }
 
-        let onSave: (String) -> ScriptSaveResult = { [weak audioUnit] source in
-            guard let au = audioUnit as? TestPluginExtensionAudioUnit else {
+        let pm = au.presetManager
+
+        // Run: hot-reload script into kernel + benchmark
+        let onRun: (String) -> ScriptSaveResult = { [weak au] source in
+            guard let au else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
             let result = au.reloadScript(source: source)
             return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
         }
 
-        let scriptPublisher = (audioUnit as? TestPluginExtensionAudioUnit)?
-            .scriptSourceDidChange
+        // Select preset: load into kernel + update preset manager
+        let onSelectPreset: (Preset) -> Void = { [weak au] preset in
+            au?.selectPreset(preset)
+        }
+
+        // Save: overwrite current user preset + hot-reload
+        let onSavePreset: (String) -> ScriptSaveResult = { [weak au, weak pm] source in
+            guard let au, let pm else {
+                return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
+            }
+            guard let current = pm.currentPreset, !current.isFactory else {
+                return ScriptSaveResult(success: false, error: "No user preset selected", processTimeMs: nil, budgetMs: nil)
+            }
+            do {
+                let saved = try pm.saveUserPreset(name: current.name, source: source)
+                let result = au.reloadScript(source: source)
+                pm.setCurrentPreset(saved, source: source)
+                return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+            } catch {
+                return ScriptSaveResult(success: false, error: error.localizedDescription, processTimeMs: nil, budgetMs: nil)
+            }
+        }
+
+        // Save As: create new user preset + hot-reload
+        let onSaveAsPreset: (String, String) -> ScriptSaveResult = { [weak au, weak pm] name, source in
+            guard let au, let pm else {
+                return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
+            }
+            do {
+                let saved = try pm.saveUserPreset(name: name, source: source)
+                let result = au.reloadScript(source: source)
+                pm.setCurrentPreset(saved, source: source)
+                return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+            } catch {
+                return ScriptSaveResult(success: false, error: error.localizedDescription, processTimeMs: nil, budgetMs: nil)
+            }
+        }
+
+        // Delete: remove current user preset
+        let onDeletePreset: () -> Void = { [weak pm] in
+            guard let pm, let current = pm.currentPreset, !current.isFactory else { return }
+            try? pm.deleteUserPreset(current)
+        }
+
+        // New: reset to default passthrough script
+        let extensionBundle = Bundle(for: type(of: self))
+        let onNew: () -> ScriptSaveResult = { [weak au, weak pm] in
+            guard let au, let pm else {
+                return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
+            }
+            guard let entry = FactoryPresetRegistry.entries.first,
+                  let url = extensionBundle.url(forResource: entry.resourceName, withExtension: "py"),
+                  let source = try? String(contentsOf: url, encoding: .utf8) else {
+                return ScriptSaveResult(success: false, error: "Default script not found", processTimeMs: nil, budgetMs: nil)
+            }
+            let result = au.reloadScript(source: source)
+            pm.setCurrentPreset(nil, source: source)
+            au.scriptSourceDidChange.send(source)
+            return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+        }
+
+        let scriptPublisher = au.scriptSourceDidChange
             .receive(on: DispatchQueue.main)
             .eraseToAnyPublisher()
 
-        let extensionBundle = Bundle(for: type(of: self))
         let buildID = extensionBundle.infoDictionary?["BuildID"] as? Int ?? 0
 
         let content = TestPluginExtensionMainView(
             buildID: buildID,
             defaultScriptSource: initialScript,
             scriptSourcePublisher: scriptPublisher,
-            onSave: onSave
+            presetManager: pm,
+            onRun: onRun,
+            onSelectPreset: onSelectPreset,
+            onSavePreset: onSavePreset,
+            onSaveAsPreset: onSaveAsPreset,
+            onDeletePreset: onDeletePreset,
+            onNew: onNew
         )
         let hv = SafeHostingView(rootView: content)
         hv.translatesAutoresizingMaskIntoConstraints = false
