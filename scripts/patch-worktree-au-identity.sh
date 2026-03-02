@@ -5,7 +5,7 @@ set -euo pipefail
 # This gives worktree builds a different AU identity (subtype WT01) and bundle ID
 # so they can coexist with the main build in DAWs without conflicting.
 #
-# Called from the TestPluginExtension target's "Patch AU Identity for Worktree"
+# Called from the BearBoneExtension target's "Patch AU Identity for Worktree"
 # build phase. No-op for main repo builds.
 
 SRCROOT="${SRCROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -33,8 +33,8 @@ PLISTBUDDY=/usr/libexec/PlistBuddy
 AU_PATH=":NSExtension:NSExtensionAttributes:AudioComponents:0"
 
 ${PLISTBUDDY} -c "Set ${AU_PATH}:subtype WT01" "${PLIST}"
-${PLISTBUDDY} -c "Set ${AU_PATH}:name Michael Jancsy: TestPluginExtension (Dev)" "${PLIST}"
-${PLISTBUDDY} -c "Set ${AU_PATH}:description TestPluginExtension (Dev)" "${PLIST}"
+${PLISTBUDDY} -c "Set ${AU_PATH}:name Michael Jancsy: BearBoneExtension (Dev)" "${PLIST}"
+${PLISTBUDDY} -c "Set ${AU_PATH}:description BearBoneExtension (Dev)" "${PLIST}"
 
 # Use a different bundle ID so the worktree extension registers separately from the main build
 CURRENT_BUNDLE_ID=$($PLISTBUDDY -c "Print :CFBundleIdentifier" "${PLIST}")

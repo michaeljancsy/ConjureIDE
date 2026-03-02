@@ -1,1 +1,0 @@
-../TestPluginExtension/UI/PythonSyntaxHighlighter.swift

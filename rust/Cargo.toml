@@ -1,5 +1,5 @@
 [workspace]
-members = ["test_plugin_dsp"]
+members = ["bearbone_dsp"]
 resolver = "2"
 
 [profile.release]
