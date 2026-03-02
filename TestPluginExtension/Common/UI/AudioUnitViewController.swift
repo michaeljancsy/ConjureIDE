@@ -131,8 +131,11 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         }
 
         // Select preset: load into kernel + update preset manager
-        let onSelectPreset: (Preset) -> Void = { [weak au] preset in
-            au?.selectPreset(preset)
+        let onSelectPreset: (Preset) -> ScriptSaveResult = { [weak au] preset in
+            guard let au else {
+                return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
+            }
+            return au.selectPreset(preset)
         }
 
         // Save: overwrite current user preset + hot-reload

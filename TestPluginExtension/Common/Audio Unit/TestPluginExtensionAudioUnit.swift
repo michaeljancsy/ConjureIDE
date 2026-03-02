@@ -216,19 +216,22 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	/// Load a preset into the DSP kernel and update preset manager state.
 	/// Called from the UI when the user selects a preset from the browser.
+	/// Always updates the editor and preset manager, even if the script has errors.
 	@MainActor
-	func selectPreset(_ preset: Preset) {
+	func selectPreset(_ preset: Preset) -> ScriptSaveResult {
 		let pm = presetManager
 		guard let source = pm.loadSource(for: preset) else {
 			pluginLog.error("Failed to load preset source: \(preset.name, privacy: .public)")
-			return
+			return ScriptSaveResult(success: false, error: "Failed to load preset source", processTimeMs: nil, budgetMs: nil)
 		}
 
 		let result = reloadScript(source: source)
-		if result.success {
-			pm.setCurrentPreset(preset, source: source)
-			scriptSourceDidChange.send(source)
 
+		// Always update preset manager and editor so the user can see/fix the script
+		pm.setCurrentPreset(preset, source: source)
+		scriptSourceDidChange.send(source)
+
+		if result.success {
 			// Sync DAW-facing currentPreset for factory presets
 			if let factoryNumber = preset.factoryPresetNumber {
 				let auPreset = AUAudioUnitPreset()
@@ -240,6 +243,8 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			}
 			pluginLog.info("Selected preset: \(preset.name, privacy: .public)")
 		}
+
+		return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
 	}
 
 	// MARK: - Factory Presets
