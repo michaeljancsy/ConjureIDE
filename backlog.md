@@ -8,6 +8,7 @@
 - Support other scripting languages beyond Python
 - Visualization and diagnostics in the Mac host app (not just the AU extension)
 - Support AI coding (AI-assisted script generation/editing)
+- Think through Run button label: is "Run" the right name? Does it need to be separate from Save?
 
 ## Done
 - Preset browser + management (2026-03-01): Built-in preset browser in the AU extension UI. Factory presets (Passthrough, Tremolo, Bitcrush) are read-only from the extension bundle; user presets are .py files in `~/Library/Application Support/TestPlugin/Presets/`. Toolbar with prev/next arrows, preset dropdown menu (Factory/User sections), Run (hot-reload), Save (overwrite user preset), Save As (SwiftUI popover with name field), and Delete (with confirmation). Modification tracking via `*` indicator. Stock presets cannot be overwritten — saving a modified factory preset prompts Save As instead. Refactored factory preset metadata into shared `FactoryPresetRegistry`, added `PresetManager` class, `selectPreset()` on AU for syncing DAW currentPreset. 22 new PresetManager unit tests + 3 new UI tests (toolbar, run button, save-as button). 72 total tests (unit + UI) all pass.

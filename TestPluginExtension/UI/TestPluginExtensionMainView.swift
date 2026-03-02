@@ -21,7 +21,7 @@ struct TestPluginExtensionMainView: View {
     var scriptSourcePublisher: AnyPublisher<String, Never>?
     @ObservedObject var presetManager: PresetManager
     var onRun: (String) -> ScriptSaveResult
-    var onSelectPreset: (Preset) -> Void
+    var onSelectPreset: (Preset) -> ScriptSaveResult
     var onSavePreset: (String) -> ScriptSaveResult
     var onSaveAsPreset: (String, String) -> ScriptSaveResult
     var onDeletePreset: () -> Void
@@ -50,7 +50,8 @@ struct TestPluginExtensionMainView: View {
             PresetToolbar(
                 presetManager: presetManager,
                 onSelectPreset: { preset in
-                    onSelectPreset(preset)
+                    let result = onSelectPreset(preset)
+                    handleResult(result)
                 },
                 onRun: {
                     let result = onRun(scriptSource)
