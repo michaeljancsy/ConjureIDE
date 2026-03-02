@@ -39,6 +39,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     }
 
     private var hostingView: SafeHostingView<TestPluginExtensionMainView>?
+    private var aiService: AIService?
 
 	deinit {
         log.info("deinit called")
@@ -120,6 +121,11 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         }
 
         let pm = au.presetManager
+
+        if aiService == nil {
+            aiService = AIService()
+        }
+        let ai = aiService!
 
         // Run: hot-reload script into kernel + benchmark
         let onRun: (String) -> ScriptSaveResult = { [weak au] source in
@@ -205,6 +211,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             defaultScriptSource: initialScript,
             scriptSourcePublisher: scriptPublisher,
             presetManager: pm,
+            aiService: ai,
             onRun: onRun,
             onSelectPreset: onSelectPreset,
             onSavePreset: onSavePreset,

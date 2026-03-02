@@ -4,6 +4,7 @@ import AppKit
 struct HighlightedTextEditor: NSViewRepresentable {
     @Binding var text: String
     var colorScheme: ColorScheme
+    var isEditable: Bool = true
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
@@ -42,6 +43,8 @@ struct HighlightedTextEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
+        textView.isEditable = isEditable
+
         // Update highlighter theme if color scheme changed
         let newHighlighter = Self.makeHighlighter(colorScheme: colorScheme)
         context.coordinator.highlighter = newHighlighter
@@ -49,13 +52,23 @@ struct HighlightedTextEditor: NSViewRepresentable {
         // Only update text if it changed externally (not from user typing)
         if textView.string != text {
             textView.string = text
+
+            // Scroll to bottom during streaming (read-only external updates)
+            if !isEditable {
+                textView.scrollToEndOfDocument(nil)
+            }
         }
 
-        // Re-highlight (handles theme change or external text change)
-        if let ts = textView.textStorage {
-            context.coordinator.isHighlighting = true
-            newHighlighter.highlight(ts)
-            context.coordinator.isHighlighting = false
+        // Debounce highlighting during rapid external updates (e.g. streaming)
+        if !isEditable {
+            context.coordinator.scheduleHighlight(textStorage: textView.textStorage)
+        } else {
+            // Immediate highlighting for theme changes or single external updates
+            if let ts = textView.textStorage {
+                context.coordinator.isHighlighting = true
+                newHighlighter.highlight(ts)
+                context.coordinator.isHighlighting = false
+            }
         }
     }
 
@@ -72,10 +85,23 @@ struct HighlightedTextEditor: NSViewRepresentable {
         var text: Binding<String>
         var highlighter: PythonSyntaxHighlighter
         var isHighlighting = false
+        private var highlightTimer: Timer?
 
         init(text: Binding<String>, highlighter: PythonSyntaxHighlighter) {
             self.text = text
             self.highlighter = highlighter
+        }
+
+        /// Debounced highlighting for streaming updates.
+        func scheduleHighlight(textStorage: NSTextStorage?) {
+            highlightTimer?.invalidate()
+            highlightTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) {
+                [weak self] _ in
+                guard let self, let ts = textStorage else { return }
+                self.isHighlighting = true
+                self.highlighter.highlight(ts)
+                self.isHighlighting = false
+            }
         }
 
         // MARK: - NSTextViewDelegate

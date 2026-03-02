@@ -20,6 +20,7 @@ struct TestPluginExtensionMainView: View {
     var defaultScriptSource: String
     var scriptSourcePublisher: AnyPublisher<String, Never>?
     @ObservedObject var presetManager: PresetManager
+    @ObservedObject var aiService: AIService
     var onRun: (String) -> ScriptSaveResult
     var onSelectPreset: (Preset) -> ScriptSaveResult
     var onSavePreset: (String) -> ScriptSaveResult
@@ -49,6 +50,7 @@ struct TestPluginExtensionMainView: View {
             // Preset toolbar
             PresetToolbar(
                 presetManager: presetManager,
+                aiService: aiService,
                 onSelectPreset: { preset in
                     let result = onSelectPreset(preset)
                     handleResult(result)
@@ -72,6 +74,11 @@ struct TestPluginExtensionMainView: View {
                     let result = onNew()
                     handleResult(result)
                 },
+                onGenerate: { prompt in
+                    aiService.generate(prompt: prompt, existingScript: scriptSource) { accumulated in
+                        scriptSource = accumulated
+                    }
+                },
                 showingSaveAs: $showingSaveAs,
                 saveAsName: $saveAsName
             )
@@ -89,18 +96,39 @@ struct TestPluginExtensionMainView: View {
                         .accessibilityIdentifier("buildIDLabel")
                 }
 
-                HighlightedTextEditor(text: $scriptSource, colorScheme: colorScheme)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .border(Color.secondary.opacity(0.3), width: 1)
-                    .padding(.horizontal)
-                    .padding(.top, buildID != 0 ? 0 : 8)
+                HighlightedTextEditor(
+                    text: $scriptSource,
+                    colorScheme: colorScheme,
+                    isEditable: !aiService.isGenerating
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .border(
+                    aiService.isGenerating ? Color.accentColor : Color.secondary.opacity(0.3),
+                    width: aiService.isGenerating ? 2 : 1
+                )
+                .padding(.horizontal)
+                .padding(.top, buildID != 0 ? 0 : 8)
 
                 if let errorMessage = errorMessage {
-                    Text(errorMessage)
-                        .foregroundColor(.red)
+                    HStack(spacing: 8) {
+                        Text(errorMessage)
+                            .foregroundColor(.red)
+                            .font(.caption)
+                            .lineLimit(3)
+
+                        Spacer()
+
+                        Button("Fix with AI") {
+                            aiService.fix(script: scriptSource, error: errorMessage) { accumulated in
+                                scriptSource = accumulated
+                            }
+                        }
                         .font(.caption)
-                        .padding(.horizontal)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .disabled(!aiService.hasAPIKey || aiService.isGenerating)
+                        .accessibilityIdentifier("fixWithAIButton")
+                    }
+                    .padding(.horizontal)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 } else if showSuccess {
                     if let benchmark = lastBenchmark {
                         Text(String(format: "Script reloaded — %.1fms / %.1fms budget", benchmark.processTimeMs, benchmark.budgetMs))
@@ -115,6 +143,14 @@ struct TestPluginExtensionMainView: View {
                             .padding(.horizontal)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                }
+
+                if case .error(let aiError) = aiService.state {
+                    Text(aiError)
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                        .padding(.horizontal)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .padding(.bottom, 8)
