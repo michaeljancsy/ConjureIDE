@@ -1,0 +1,1 @@
+../BearBoneExtension/UI/PythonSyntaxHighlighter.swift

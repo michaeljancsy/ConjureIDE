@@ -1,0 +1,635 @@
+//
+//  BearBoneTests.swift
+//  BearBoneTests
+//
+//  Created by Michael Jancsy on 2/25/26.
+//
+
+import Testing
+import AVFoundation
+import AudioToolbox
+import CoreAudioKit
+
+struct BearBoneTests {
+
+    // MARK: - Helpers
+
+    /// Reads the AU identity from the embedded extension's Info.plist.
+    /// This is reliable regardless of what's registered system-wide (avoids stale pluginkit registrations).
+    private static var componentDescription: AudioComponentDescription {
+        get throws {
+            guard let plugInsURL = Bundle.main.builtInPlugInsURL else {
+                throw TestError("Bundle.main.builtInPlugInsURL is nil — test host has no PlugIns directory")
+            }
+            let plistURL = plugInsURL
+                .appendingPathComponent("BearBoneExtension.appex")
+                .appendingPathComponent("Contents/Info.plist")
+            let data = try Data(contentsOf: plistURL)
+            guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                  let nsExt = plist["NSExtension"] as? [String: Any],
+                  let attrs = nsExt["NSExtensionAttributes"] as? [String: Any],
+                  let components = attrs["AudioComponents"] as? [[String: Any]],
+                  let component = components.first,
+                  let type = component["type"] as? String,
+                  let subtype = component["subtype"] as? String,
+                  let manufacturer = component["manufacturer"] as? String
+            else {
+                throw TestError("Failed to parse AU identity from embedded extension Info.plist")
+            }
+            return AudioComponentDescription(
+                componentType: fourCharCode(type),
+                componentSubType: fourCharCode(subtype),
+                componentManufacturer: fourCharCode(manufacturer),
+                componentFlags: 0,
+                componentFlagsMask: 0
+            )
+        }
+    }
+
+    private struct TestError: Error, CustomStringConvertible {
+        let description: String
+        init(_ description: String) { self.description = description }
+    }
+
+    private static func fourCharCode(_ string: String) -> FourCharCode {
+        var code: FourCharCode = 0
+        for byte in string.utf8 {
+            code = code << 8 + FourCharCode(byte)
+        }
+        return code
+    }
+
+    private static func instantiateAU() async throws -> (AVAudioUnit, AUAudioUnit) {
+        let desc = try componentDescription
+        let avAudioUnit = try await AVAudioUnit.instantiate(
+            with: desc,
+            options: .loadInProcess
+        )
+        return (avAudioUnit, avAudioUnit.auAudioUnit)
+    }
+
+    // MARK: - Component Discovery
+
+    @Test func audioUnitComponentIsRegistered() async throws {
+        let desc = try Self.componentDescription
+        let components = AVAudioUnitComponentManager.shared()
+            .components(matching: desc)
+        #expect(!components.isEmpty, "AU component should be registered with the system")
+    }
+
+    // MARK: - AU Instantiation
+
+    @Test func audioUnitCanBeInstantiated() async throws {
+        let desc = try Self.componentDescription
+        let avAudioUnit = try await AVAudioUnit.instantiate(
+            with: desc,
+            options: .loadInProcess
+        )
+        let au = avAudioUnit.auAudioUnit
+        #expect(au.componentDescription.componentType == kAudioUnitType_Effect)
+        #expect(au.componentDescription.componentManufacturer == Self.fourCharCode("A000"))
+    }
+
+    // MARK: - Basic Properties
+
+    @Test func audioUnitHasCorrectBusConfiguration() async throws {
+        let avAudioUnit = try await AVAudioUnit.instantiate(
+            with: Self.componentDescription,
+            options: .loadInProcess
+        )
+        let au = avAudioUnit.auAudioUnit
+        #expect(au.inputBusses.count == 1, "Effect should have 1 input bus")
+        #expect(au.outputBusses.count == 1, "Effect should have 1 output bus")
+    }
+
+    @Test func audioUnitBypassDefaultsToFalse() async throws {
+        let avAudioUnit = try await AVAudioUnit.instantiate(
+            with: Self.componentDescription,
+            options: .loadInProcess
+        )
+        #expect(avAudioUnit.auAudioUnit.shouldBypassEffect == false)
+    }
+
+    @Test func audioUnitBypassCanBeToggled() async throws {
+        let avAudioUnit = try await AVAudioUnit.instantiate(
+            with: Self.componentDescription,
+            options: .loadInProcess
+        )
+        let au = avAudioUnit.auAudioUnit
+        au.shouldBypassEffect = true
+        #expect(au.shouldBypassEffect == true)
+        au.shouldBypassEffect = false
+        #expect(au.shouldBypassEffect == false)
+    }
+
+    @Test func audioUnitReportsChannelCapabilities() async throws {
+        let avAudioUnit = try await AVAudioUnit.instantiate(
+            with: Self.componentDescription,
+            options: .loadInProcess
+        )
+        let capabilities = avAudioUnit.auAudioUnit.channelCapabilities ?? []
+        #expect(capabilities == [1, 1, 2, 2] as [NSNumber])
+    }
+
+    // MARK: - Render Resource Lifecycle
+
+    @Test func allocateAndDeallocateRenderResources() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+        try au.inputBusses[0].setFormat(format)
+        try au.outputBusses[0].setFormat(format)
+        try au.allocateRenderResources()
+        #expect(au.renderResourcesAllocated == true)
+        au.deallocateRenderResources()
+        #expect(au.renderResourcesAllocated == false)
+    }
+
+    @Test func allocateDeallocateMultipleCycles() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        try au.inputBusses[0].setFormat(format)
+        try au.outputBusses[0].setFormat(format)
+        for _ in 0..<3 {
+            try au.allocateRenderResources()
+            #expect(au.renderResourcesAllocated == true)
+            au.deallocateRenderResources()
+            #expect(au.renderResourcesAllocated == false)
+        }
+    }
+
+    @Test func maximumFramesToRenderRoundtrip() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        au.maximumFramesToRender = 512
+        #expect(au.maximumFramesToRender == 512)
+        au.maximumFramesToRender = 2048
+        #expect(au.maximumFramesToRender == 2048)
+    }
+
+    @Test func sampleRateNegotiationViaFormat() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let format48k = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2)!
+        try au.inputBusses[0].setFormat(format48k)
+        try au.outputBusses[0].setFormat(format48k)
+        try au.allocateRenderResources()
+        #expect(au.outputBusses[0].format.sampleRate == 48000)
+        au.deallocateRenderResources()
+    }
+
+    // MARK: - View Controller Resize Properties
+
+    @MainActor
+    private static func requestVC(_ au: AUAudioUnit) async throws -> NSViewController {
+        guard let vc = await au.requestViewController() else {
+            throw NSError(domain: "BearBone", code: 1, userInfo: [NSLocalizedDescriptionKey: "No view controller returned"])
+        }
+        return vc
+    }
+
+    // Note: requestViewController() returns an AUAudioUnitRemoteViewController proxy,
+    // not our AudioUnitViewController directly. The proxy forwards preferredContentSize
+    // but uses its own defaults for preferredMinimumSize/preferredMaximumSize.
+    // We can only verify preferredContentSize through the test API.
+
+    @Test @MainActor func viewControllerPreferredContentSize() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let vc = try await Self.requestVC(au)
+        #expect(vc.preferredContentSize.width == 600)
+        #expect(vc.preferredContentSize.height == 500)
+    }
+
+    @Test @MainActor func viewControllerIsResizable() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let vc = try await Self.requestVC(au)
+        // The proxy reports min < preferred < max, confirming the plugin supports resizing
+        let pref = vc.preferredContentSize
+        let min = vc.preferredMinimumSize
+        let max = vc.preferredMaximumSize
+        #expect(min.width < pref.width, "Min width should be less than preferred width")
+        #expect(min.height < pref.height, "Min height should be less than preferred height")
+        #expect(max.width > pref.width, "Max width should be greater than preferred width")
+        #expect(max.height > pref.height, "Max height should be greater than preferred height")
+    }
+
+    // MARK: - Render Block
+
+    @Test func renderBlockProducesPassthroughAudio() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        try au.inputBusses[0].setFormat(format)
+        try au.outputBusses[0].setFormat(format)
+        au.maximumFramesToRender = 512
+        try au.allocateRenderResources()
+
+        let renderBlock = au.renderBlock
+        let frameCount: UInt32 = 128
+
+        let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+        outputBuffer.frameLength = frameCount
+
+        let inputData: [Float] = (0..<Int(frameCount)).map { Float($0) / Float(frameCount) }
+
+        let pullInput: AURenderPullInputBlock = { _, _, inFrameCount, _, inputBuf in
+            let buf = UnsafeMutableAudioBufferListPointer(inputBuf)
+            guard let data = buf[0].mData?.assumingMemoryBound(to: Float.self) else {
+                return kAudioUnitErr_NoConnection
+            }
+            for i in 0..<Int(inFrameCount) {
+                data[i] = inputData[i]
+            }
+            buf[0].mDataByteSize = inFrameCount * UInt32(MemoryLayout<Float>.size)
+            return noErr
+        }
+
+        var flags = AudioUnitRenderActionFlags()
+        var timestamp = AudioTimeStamp()
+        timestamp.mSampleTime = 0
+        timestamp.mFlags = .sampleTimeValid
+
+        let status = renderBlock(&flags, &timestamp, frameCount, 0,
+                                outputBuffer.mutableAudioBufferList, pullInput)
+
+        #expect(status == noErr)
+
+        // Output should be passthrough or 0.5x gain (if Python loaded)
+        let outputPtr = outputBuffer.floatChannelData![0]
+        let firstInput = inputData[1]  // skip 0 since 0*anything=0
+        let firstOutput = outputPtr[1]
+        let isPassthrough = abs(firstOutput - firstInput) < 1e-6
+        let isHalfGain = abs(firstOutput - firstInput * 0.5) < 1e-6
+        #expect(isPassthrough || isHalfGain,
+               "Output should be passthrough or 0.5x gain, got \(firstOutput) for input \(firstInput)")
+
+        au.deallocateRenderResources()
+    }
+
+    @Test func renderBlockStereoPassthrough() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+        try au.inputBusses[0].setFormat(format)
+        try au.outputBusses[0].setFormat(format)
+        au.maximumFramesToRender = 512
+        try au.allocateRenderResources()
+
+        let renderBlock = au.renderBlock
+        let frameCount: UInt32 = 64
+
+        let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+        outputBuffer.frameLength = frameCount
+
+        let inputL: [Float] = (0..<Int(frameCount)).map { Float($0) / Float(frameCount) }
+        let inputR: [Float] = (0..<Int(frameCount)).map { 1.0 - Float($0) / Float(frameCount) }
+
+        let pullInput: AURenderPullInputBlock = { _, _, inFrameCount, _, inputBuf in
+            let buf = UnsafeMutableAudioBufferListPointer(inputBuf)
+            guard buf.count >= 2 else { return kAudioUnitErr_NoConnection }
+            if let dataL = buf[0].mData?.assumingMemoryBound(to: Float.self) {
+                for i in 0..<Int(inFrameCount) { dataL[i] = inputL[i] }
+                buf[0].mDataByteSize = inFrameCount * UInt32(MemoryLayout<Float>.size)
+            }
+            if let dataR = buf[1].mData?.assumingMemoryBound(to: Float.self) {
+                for i in 0..<Int(inFrameCount) { dataR[i] = inputR[i] }
+                buf[1].mDataByteSize = inFrameCount * UInt32(MemoryLayout<Float>.size)
+            }
+            return noErr
+        }
+
+        var flags = AudioUnitRenderActionFlags()
+        var timestamp = AudioTimeStamp()
+        timestamp.mSampleTime = 0
+        timestamp.mFlags = .sampleTimeValid
+
+        let status = renderBlock(&flags, &timestamp, frameCount, 0,
+                                outputBuffer.mutableAudioBufferList, pullInput)
+
+        #expect(status == noErr)
+
+        // Verify both channels have data (passthrough or processed)
+        let outL = outputBuffer.floatChannelData![0]
+        let outR = outputBuffer.floatChannelData![1]
+        let valL = outL[1]
+        let valR = outR[1]
+        let isPassthroughL = abs(valL - inputL[1]) < 1e-6
+        let isHalfGainL = abs(valL - inputL[1] * 0.5) < 1e-6
+        #expect(isPassthroughL || isHalfGainL,
+               "Left channel should be passthrough or 0.5x gain")
+
+        let isPassthroughR = abs(valR - inputR[1]) < 1e-6
+        let isHalfGainR = abs(valR - inputR[1] * 0.5) < 1e-6
+        #expect(isPassthroughR || isHalfGainR,
+               "Right channel should be passthrough or 0.5x gain")
+
+        au.deallocateRenderResources()
+    }
+
+    // MARK: - State Persistence (fullState)
+
+    private static let scriptSourceKey = "pythonScriptSource"
+
+    private static let testScript = """
+        import numpy as np
+
+        def process(inputs, outputs, frame_count, sample_rate):
+            for ch in range(len(inputs)):
+                outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25
+        """
+
+    @Test func fullStateRoundtrip() async throws {
+        // Simulate DAW project save/load: set script via fullState, read it back, restore on new AU
+        let (_, au1) = try await Self.instantiateAU()
+
+        // Set a custom script via fullState (simulates what happens when reloadScript caches source)
+        var state1: [String: Any] = au1.fullState ?? [:]
+        state1[Self.scriptSourceKey] = Self.testScript.data(using: .utf8)!
+        au1.fullState = state1
+
+        // Read back fullState (simulates DAW saving the project)
+        let savedState = au1.fullState
+        #expect(savedState != nil)
+        let savedData = savedState?[Self.scriptSourceKey] as? Data
+        #expect(savedData != nil, "fullState should contain script source")
+        let savedSource = String(data: savedData!, encoding: .utf8)
+        #expect(savedSource == Self.testScript, "Script source should roundtrip through fullState")
+
+        // Restore on a new AU (simulates DAW loading the project)
+        let (_, au2) = try await Self.instantiateAU()
+        au2.fullState = savedState
+        let restoredState = au2.fullState
+        let restoredData = restoredState?[Self.scriptSourceKey] as? Data
+        #expect(restoredData != nil, "Restored AU should have script in fullState")
+        let restoredSource = String(data: restoredData!, encoding: .utf8)
+        #expect(restoredSource == Self.testScript, "Script should survive full save/restore cycle")
+    }
+
+    @Test func fullStateWithoutCustomScript() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        // Fresh AU with no custom script — fullState should still work
+        let state = au.fullState
+        #expect(state != nil, "fullState should return a dictionary even without a custom script")
+        // No custom script key should be present
+        let scriptData = state?[Self.scriptSourceKey] as? Data
+        #expect(scriptData == nil, "Fresh AU should not have a custom script in fullState")
+    }
+
+    @Test func fullStatePreservesBaseState() async throws {
+        let (_, au1) = try await Self.instantiateAU()
+
+        // Set bypass + custom script
+        au1.shouldBypassEffect = true
+        var state: [String: Any] = au1.fullState ?? [:]
+        state[Self.scriptSourceKey] = Self.testScript.data(using: .utf8)!
+        au1.fullState = state
+
+        // Save and restore
+        let savedState = au1.fullState
+        let (_, au2) = try await Self.instantiateAU()
+        au2.fullState = savedState
+
+        // Verify both bypass and script survived
+        let restoredData = au2.fullState?[Self.scriptSourceKey] as? Data
+        let restoredSource = String(data: restoredData ?? Data(), encoding: .utf8)
+        #expect(restoredSource == Self.testScript)
+    }
+
+    // MARK: - Factory Presets
+
+    @Test func factoryPresetsExist() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let presets = au.factoryPresets ?? []
+        #expect(presets.count >= 3, "Should have at least 3 factory presets")
+        let names = presets.map { $0.name }
+        #expect(names.contains("Passthrough"), "Should have Passthrough preset")
+        #expect(names.contains("Tremolo"), "Should have Tremolo preset")
+        #expect(names.contains("Bitcrush"), "Should have Bitcrush preset")
+    }
+
+    @Test func factoryPresetLoading() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let presets = au.factoryPresets ?? []
+        #expect(!presets.isEmpty)
+
+        for preset in presets {
+            au.currentPreset = preset
+            // After loading a factory preset, fullState should contain a script
+            let state = au.fullState
+            let data = state?[Self.scriptSourceKey] as? Data
+            #expect(data != nil, "Factory preset '\(preset.name)' should set a script in fullState")
+            let source = String(data: data!, encoding: .utf8) ?? ""
+            #expect(source.contains("def process"), "Factory preset '\(preset.name)' should contain process function")
+        }
+    }
+
+    @Test func factoryPresetThenModify() async throws {
+        // Simulate: user selects preset, modifies script, DAW saves/restores
+        let (_, au1) = try await Self.instantiateAU()
+        let presets = au1.factoryPresets ?? []
+        #expect(!presets.isEmpty)
+
+        // Load a factory preset
+        au1.currentPreset = presets[0]
+
+        // Modify the script via fullState (simulating user editing + saving)
+        var state: [String: Any] = au1.fullState ?? [:]
+        state[Self.scriptSourceKey] = Self.testScript.data(using: .utf8)!
+        au1.fullState = state
+
+        // Save and restore on new AU
+        let savedState = au1.fullState
+        let (_, au2) = try await Self.instantiateAU()
+        au2.fullState = savedState
+
+        // Should have the modified script, not the original preset
+        let restoredData = au2.fullState?[Self.scriptSourceKey] as? Data
+        let restoredSource = String(data: restoredData ?? Data(), encoding: .utf8)
+        #expect(restoredSource == Self.testScript, "Modified script should take priority over factory preset")
+    }
+
+    @Test func presetsSwitchScriptInFullState() async throws {
+        // Verify that switching between presets changes the script in fullState
+        let (_, au) = try await Self.instantiateAU()
+        let presets = au.factoryPresets ?? []
+        #expect(presets.count >= 2)
+
+        au.currentPreset = presets[1] // Tremolo
+        let state1 = au.fullState
+        let data1 = state1?[Self.scriptSourceKey] as? Data
+        let source1 = String(data: data1!, encoding: .utf8)!
+
+        au.currentPreset = presets[2] // Bitcrush
+        let state2 = au.fullState
+        let data2 = state2?[Self.scriptSourceKey] as? Data
+        let source2 = String(data: data2!, encoding: .utf8)!
+
+        #expect(source1 != source2, "Different presets should produce different scripts in fullState")
+        #expect(source1.contains("def process"))
+        #expect(source2.contains("def process"))
+    }
+
+    @Test func fileRoundtrip() async throws {
+        // Simulate file save/load cycle
+        let (_, au) = try await Self.instantiateAU()
+
+        // Set a script via fullState
+        var state: [String: Any] = au.fullState ?? [:]
+        state[Self.scriptSourceKey] = Self.testScript.data(using: .utf8)!
+        au.fullState = state
+
+        // Extract script from fullState (simulates reading scriptSource for file save)
+        let data = au.fullState?[Self.scriptSourceKey] as? Data
+        let source = String(data: data!, encoding: .utf8)!
+
+        // Write to temp file
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_\(UUID().uuidString).py")
+        try source.write(to: tempURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        // Read back from file
+        let loaded = try String(contentsOf: tempURL, encoding: .utf8)
+        #expect(loaded == Self.testScript, "Script should roundtrip through file save/load")
+
+        // Load into a new AU via fullState
+        let (_, au2) = try await Self.instantiateAU()
+        var state2: [String: Any] = [:]
+        state2[Self.scriptSourceKey] = loaded.data(using: .utf8)!
+        au2.fullState = state2
+
+        let restoredData = au2.fullState?[Self.scriptSourceKey] as? Data
+        let restoredSource = String(data: restoredData ?? Data(), encoding: .utf8)
+        #expect(restoredSource == Self.testScript)
+    }
+
+    // MARK: - Script Reload via fullState
+
+    @Test func reloadScriptViaFullStateAffectsRendering() async throws {
+        // Tests the core save-button logic: reloadScript loads a new script into the kernel.
+        // We invoke it indirectly via fullState (which calls reloadScript internally),
+        // then verify the kernel uses the new script by rendering audio.
+        let (_, au) = try await Self.instantiateAU()
+
+        // Load a script that multiplies all samples by 0.25
+        let quarterGainScript = """
+            import numpy as np
+            def process(inputs, outputs, frame_count, sample_rate):
+                for ch in range(len(inputs)):
+                    outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25
+            """
+        var state: [String: Any] = au.fullState ?? [:]
+        state[Self.scriptSourceKey] = quarterGainScript.data(using: .utf8)!
+        au.fullState = state
+
+        // Verify the script is stored in fullState
+        let storedData = au.fullState?[Self.scriptSourceKey] as? Data
+        #expect(storedData != nil, "Script should be stored in fullState after reload")
+        let storedSource = String(data: storedData!, encoding: .utf8)
+        #expect(storedSource == quarterGainScript, "Stored script should match what was set")
+
+        // Set up render resources and render audio to verify the kernel uses the new script
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        try au.inputBusses[0].setFormat(format)
+        try au.outputBusses[0].setFormat(format)
+        au.maximumFramesToRender = 512
+        try au.allocateRenderResources()
+
+        let renderBlock = au.renderBlock
+        let frameCount: UInt32 = 64
+
+        let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+        outputBuffer.frameLength = frameCount
+
+        let inputData: [Float] = (0..<Int(frameCount)).map { Float($0 + 1) / Float(frameCount) }
+
+        let pullInput: AURenderPullInputBlock = { _, _, inFrameCount, _, inputBuf in
+            let buf = UnsafeMutableAudioBufferListPointer(inputBuf)
+            guard let data = buf[0].mData?.assumingMemoryBound(to: Float.self) else {
+                return kAudioUnitErr_NoConnection
+            }
+            for i in 0..<Int(inFrameCount) { data[i] = inputData[i] }
+            buf[0].mDataByteSize = inFrameCount * UInt32(MemoryLayout<Float>.size)
+            return noErr
+        }
+
+        var flags = AudioUnitRenderActionFlags()
+        var timestamp = AudioTimeStamp()
+        timestamp.mSampleTime = 0
+        timestamp.mFlags = .sampleTimeValid
+
+        let status = renderBlock(&flags, &timestamp, frameCount, 0,
+                                outputBuffer.mutableAudioBufferList, pullInput)
+        #expect(status == noErr)
+
+        // Output should be input * 0.25 (the script we loaded)
+        let outputPtr = outputBuffer.floatChannelData![0]
+        for i in 0..<Int(frameCount) {
+            let expected = inputData[i] * 0.25
+            #expect(abs(outputPtr[i] - expected) < 1e-5,
+                   "Sample \(i): expected \(expected), got \(outputPtr[i])")
+        }
+
+        au.deallocateRenderResources()
+    }
+
+    // MARK: - Build ID
+
+    @Test func extensionPlistContainsBuildID() throws {
+        guard let plugInsURL = Bundle.main.builtInPlugInsURL else {
+            throw TestError("Bundle.main.builtInPlugInsURL is nil")
+        }
+        let plistURL = plugInsURL
+            .appendingPathComponent("BearBoneExtension.appex")
+            .appendingPathComponent("Contents/Info.plist")
+        let data = try Data(contentsOf: plistURL)
+        guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            throw TestError("Failed to parse extension Info.plist")
+        }
+        let buildID = try #require(plist["BuildID"] as? Int, "Extension Info.plist should contain a BuildID integer key")
+        #expect(buildID > 0, "BuildID should be a positive integer (Unix timestamp), got \(buildID)")
+    }
+
+    // MARK: - Render Block
+
+    @Test func renderBlockWithBypass() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        try au.inputBusses[0].setFormat(format)
+        try au.outputBusses[0].setFormat(format)
+        au.maximumFramesToRender = 512
+        au.shouldBypassEffect = true
+        try au.allocateRenderResources()
+
+        let renderBlock = au.renderBlock
+        let frameCount: UInt32 = 64
+
+        let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+        outputBuffer.frameLength = frameCount
+
+        let inputData: [Float] = (0..<Int(frameCount)).map { Float($0) / Float(frameCount) }
+
+        let pullInput: AURenderPullInputBlock = { _, _, inFrameCount, _, inputBuf in
+            let buf = UnsafeMutableAudioBufferListPointer(inputBuf)
+            guard let data = buf[0].mData?.assumingMemoryBound(to: Float.self) else {
+                return kAudioUnitErr_NoConnection
+            }
+            for i in 0..<Int(inFrameCount) { data[i] = inputData[i] }
+            buf[0].mDataByteSize = inFrameCount * UInt32(MemoryLayout<Float>.size)
+            return noErr
+        }
+
+        var flags = AudioUnitRenderActionFlags()
+        var timestamp = AudioTimeStamp()
+        timestamp.mSampleTime = 0
+        timestamp.mFlags = .sampleTimeValid
+
+        let status = renderBlock(&flags, &timestamp, frameCount, 0,
+                                outputBuffer.mutableAudioBufferList, pullInput)
+
+        #expect(status == noErr)
+
+        // Bypass always copies input unchanged
+        let outputPtr = outputBuffer.floatChannelData![0]
+        for i in 0..<Int(frameCount) {
+            #expect(abs(outputPtr[i] - inputData[i]) < 1e-6,
+                   "Sample \(i): bypass should copy input unchanged")
+        }
+
+        au.deallocateRenderResources()
+    }
+}

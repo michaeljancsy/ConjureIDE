@@ -1,4 +1,4 @@
-# TestPlugin
+# BearBone
 
 An AUv3 audio effect plugin for macOS that runs a Python script on every audio render callback. The plugin bundles a free-threaded (no-GIL) Python 3.14 runtime with numpy, allowing you to write DSP in Python with pre-allocated numpy arrays.
 
@@ -18,13 +18,13 @@ When no Python script is loaded or if Python errors at runtime, the plugin falls
 cd rust && ./setup-python.sh
 
 # 2. Open in Xcode and build
-open TestPlugin.xcodeproj
+open BearBone.xcodeproj
 ```
 
 Or build from the command line:
 
 ```bash
-xcodebuild -project TestPlugin.xcodeproj -scheme TestPlugin build
+xcodebuild -project BearBone.xcodeproj -scheme BearBone build
 ```
 
 ### Prerequisites
@@ -36,7 +36,7 @@ xcodebuild -project TestPlugin.xcodeproj -scheme TestPlugin build
 
 ## Writing a DSP script
 
-Edit `TestPluginExtension/Resources/process.py`. The `process()` function is called on every audio render callback:
+Edit `BearBoneExtension/Resources/process.py`. The `process()` function is called on every audio render callback:
 
 ```python
 import numpy as np
@@ -55,12 +55,12 @@ def process(inputs, outputs, frame_count, sample_rate):
 ## Project structure
 
 ```
-TestPlugin/                  Host app
-TestPluginExtension/         AUv3 plugin
+BearBone/                  Host app
+BearBoneExtension/         AUv3 plugin
   Resources/process.py       Python DSP script
   Common/Audio Unit/         AUAudioUnit subclass + render block
 rust/
-  test_plugin_dsp/src/       Rust DSP kernel with embedded Python
+  bearbone_dsp/src/       Rust DSP kernel with embedded Python
   setup-python.sh            Downloads Python 3.14 + numpy
   build-rust.sh              Xcode build phase script
 ```
