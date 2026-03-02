@@ -5,12 +5,11 @@
 #include <stdbool.h>
 
 /**
- * Real-time audio DSP kernel with optional Python processing.
+ * Real-time audio DSP kernel with pluggable processing backends.
  *
- * When a Python script is loaded, `process()` delegates to the script's
- * `process(inputs, outputs, frame_count, sample_rate)` function with
- * pre-allocated numpy arrays. When no script is loaded, the original
- * Rust gain processing is used as fallback.
+ * Supports Python scripts (via pyo3/numpy) and WASM modules (via wasmtime).
+ * When a backend is loaded, `process()` delegates to it. When no backend
+ * is loaded or the backend errors, the kernel falls back to passthrough.
  */
 typedef struct DSPKernel DSPKernel;
 
@@ -108,7 +107,22 @@ void dsp_kernel_process(DSPKernelRef kernel,
 bool dsp_kernel_load_script(DSPKernelRef kernel, const char *python_home, const char *script_path);
 
 /**
- * Benchmark the Python process function.
+ * Load a WASM module for DSP processing.
+ *
+ * The module must export a `process` function with signature
+ * `(input_ptr: i32, output_ptr: i32, channels: i32, frame_count: i32, sample_rate: f32)`
+ * and a `memory` (linear memory).
+ *
+ * Returns true on success, false on error (check `dsp_kernel_last_error`).
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * - `wasm_bytes` must point to `len` valid bytes of a WASM module.
+ */
+bool dsp_kernel_load_wasm(DSPKernelRef kernel, const uint8_t *wasm_bytes, uint32_t len);
+
+/**
+ * Benchmark the process function.
  * Returns the max execution time in seconds over 5 runs, or -1.0 if no script is loaded.
  *
  * # Safety

@@ -1,5 +1,8 @@
+mod backend;
 mod kernel;
 mod params;
+mod python_backend;
+mod wasm_backend;
 
 use kernel::DSPKernel;
 use std::ffi::CStr;
@@ -132,7 +135,31 @@ pub unsafe extern "C" fn dsp_kernel_load_script(
     (*kernel).load_script(python_home, script_path)
 }
 
-/// Benchmark the Python process function.
+/// Load a WASM module for DSP processing.
+///
+/// The module must export a `process` function with signature
+/// `(input_ptr: i32, output_ptr: i32, channels: i32, frame_count: i32, sample_rate: f32)`
+/// and a `memory` (linear memory).
+///
+/// Returns true on success, false on error (check `dsp_kernel_last_error`).
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+/// - `wasm_bytes` must point to `len` valid bytes of a WASM module.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_load_wasm(
+    kernel: DSPKernelRef,
+    wasm_bytes: *const u8,
+    len: u32,
+) -> bool {
+    if wasm_bytes.is_null() || len == 0 {
+        return false;
+    }
+    let bytes = std::slice::from_raw_parts(wasm_bytes, len as usize);
+    (*kernel).load_wasm(bytes)
+}
+
+/// Benchmark the process function.
 /// Returns the max execution time in seconds over 5 runs, or -1.0 if no script is loaded.
 ///
 /// # Safety
@@ -301,6 +328,101 @@ mod tests {
         unsafe {
             let result = dsp_kernel_benchmark_process(kernel);
             assert_eq!(result, -1.0);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    fn passthrough_wasm_bytes() -> Vec<u8> {
+        wat::parse_str(r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                (local $i i32)
+                (local $total i32)
+                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (block $break
+                  (loop $loop
+                    (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
+                    (f32.store
+                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (f32.load (i32.add (local.get $in) (i32.mul (local.get $i) (i32.const 4))))
+                    )
+                    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                    (br $loop)
+                  )
+                )
+              )
+            )
+        "#).expect("Failed to parse WAT")
+    }
+
+    #[test]
+    fn test_ffi_load_wasm() {
+        let wasm = passthrough_wasm_bytes();
+        let kernel = dsp_kernel_create();
+        unsafe {
+            let result = dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32);
+            assert!(result);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_load_wasm_null_bytes() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            let result = dsp_kernel_load_wasm(kernel, std::ptr::null(), 0);
+            assert!(!result);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_load_wasm_invalid_bytes() {
+        let kernel = dsp_kernel_create();
+        let garbage: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+        unsafe {
+            let result = dsp_kernel_load_wasm(kernel, garbage.as_ptr(), garbage.len() as u32);
+            assert!(!result);
+            let err = dsp_kernel_last_error(kernel);
+            assert!(!err.is_null());
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_wasm_process() {
+        let wasm = passthrough_wasm_bytes();
+        let kernel = dsp_kernel_create();
+        unsafe {
+            assert!(dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32));
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+
+            let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+
+            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+            assert_eq!(output, [0.1, 0.2, 0.3, 0.4]);
+
+            dsp_kernel_deinitialize(kernel);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_wasm_benchmark() {
+        let wasm = passthrough_wasm_bytes();
+        let kernel = dsp_kernel_create();
+        unsafe {
+            assert!(dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32));
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+
+            let result = dsp_kernel_benchmark_process(kernel);
+            assert!(result > 0.0, "benchmark should return positive time, got {}", result);
+
+            dsp_kernel_deinitialize(kernel);
             dsp_kernel_destroy(kernel);
         }
     }
