@@ -200,25 +200,55 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
-	// MARK: - Factory Presets
+	// MARK: - Preset Manager
 
-	private struct FactoryPresetInfo {
-		let name: String
-		let number: Int
-		let resourceName: String
+	private var _presetManager: PresetManager?
+
+	/// Preset manager for browsing, saving, and loading .py script presets.
+	/// Created lazily on first access (requires @MainActor).
+	@MainActor
+	var presetManager: PresetManager {
+		if _presetManager == nil {
+			_presetManager = PresetManager(extensionBundle: Bundle(for: type(of: self)))
+		}
+		return _presetManager!
 	}
 
-	private static let factoryPresetInfos: [FactoryPresetInfo] = [
-		FactoryPresetInfo(name: "Passthrough", number: 0, resourceName: "preset_passthrough"),
-		FactoryPresetInfo(name: "Tremolo", number: 1, resourceName: "preset_tremolo"),
-		FactoryPresetInfo(name: "Bitcrush", number: 2, resourceName: "preset_bitcrush"),
-	]
+	/// Load a preset into the DSP kernel and update preset manager state.
+	/// Called from the UI when the user selects a preset from the browser.
+	@MainActor
+	func selectPreset(_ preset: Preset) {
+		let pm = presetManager
+		guard let source = pm.loadSource(for: preset) else {
+			pluginLog.error("Failed to load preset source: \(preset.name, privacy: .public)")
+			return
+		}
+
+		let result = reloadScript(source: source)
+		if result.success {
+			pm.setCurrentPreset(preset, source: source)
+			scriptSourceDidChange.send(source)
+
+			// Sync DAW-facing currentPreset for factory presets
+			if let factoryNumber = preset.factoryPresetNumber {
+				let auPreset = AUAudioUnitPreset()
+				auPreset.number = factoryNumber
+				auPreset.name = preset.name
+				_currentPreset = auPreset
+			} else {
+				_currentPreset = nil
+			}
+			pluginLog.info("Selected preset: \(preset.name, privacy: .public)")
+		}
+	}
+
+	// MARK: - Factory Presets
 
 	public override var factoryPresets: [AUAudioUnitPreset]? {
-		return Self.factoryPresetInfos.map { info in
+		return FactoryPresetRegistry.entries.map { entry in
 			let preset = AUAudioUnitPreset()
-			preset.number = info.number
-			preset.name = info.name
+			preset.number = entry.number
+			preset.name = entry.name
 			return preset
 		}
 	}
@@ -231,19 +261,28 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			_currentPreset = newValue
 			guard let preset = newValue, preset.number >= 0 else { return }
 
-			guard let info = Self.factoryPresetInfos.first(where: { $0.number == preset.number }) else { return }
+			guard let entry = FactoryPresetRegistry.entries.first(where: { $0.number == preset.number }) else { return }
 
 			let bundle = Bundle(for: type(of: self))
-			guard let url = bundle.url(forResource: info.resourceName, withExtension: "py"),
+			guard let url = bundle.url(forResource: entry.resourceName, withExtension: "py"),
 				  let source = try? String(contentsOf: url, encoding: .utf8) else {
-				pluginLog.error("Factory preset script not found: \(info.resourceName, privacy: .public)")
+				pluginLog.error("Factory preset script not found: \(entry.resourceName, privacy: .public)")
 				return
 			}
 
 			let result = reloadScript(source: source)
 			if result.success {
 				scriptSourceDidChange.send(source)
-				pluginLog.info("Loaded factory preset: \(info.name, privacy: .public)")
+				pluginLog.info("Loaded factory preset: \(entry.name, privacy: .public)")
+
+				// Update preset manager if it exists (dispatch to main actor)
+				if let pm = _presetManager {
+					let presetNumber = preset.number
+					Task { @MainActor in
+						let factoryPreset = pm.presets.first { $0.factoryPresetNumber == presetNumber }
+						pm.setCurrentPreset(factoryPreset, source: source)
+					}
+				}
 			}
 		}
 	}
