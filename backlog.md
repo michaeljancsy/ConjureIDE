@@ -5,10 +5,12 @@
 
 ## To Do
 - Host app DAW controls: Add preset selection and a bypass button to the TestPlugin host app, like a DAW would provide
-- Support other scripting languages beyond Python
+- Support compiled DSP languages (C, C++, Rust) via WASM alongside Python
 - Visualization and diagnostics in the Mac host app (not just the AU extension)
 - Support AI coding (AI-assisted script generation/editing)
 - Think through Run button label: is "Run" the right name? Does it need to be separate from Save?
+- Latency reporting and adjustment: Report latency frames to the host/DAW and allow the user to adjust the latency value
+- Built-in limiter: Safety limiter to prevent dangerously loud output from DSP scripts
 
 ## Done
 - Preset browser + management (2026-03-01): Built-in preset browser in the AU extension UI. Factory presets (Passthrough, Tremolo, Bitcrush) are read-only from the extension bundle; user presets are .py files in `~/Library/Application Support/TestPlugin/Presets/`. Toolbar with prev/next arrows, preset dropdown menu (Factory/User sections), Run (hot-reload), Save (overwrite user preset), Save As (SwiftUI popover with name field), and Delete (with confirmation). Modification tracking via `*` indicator. Stock presets cannot be overwritten — saving a modified factory preset prompts Save As instead. Refactored factory preset metadata into shared `FactoryPresetRegistry`, added `PresetManager` class, `selectPreset()` on AU for syncing DAW currentPreset. 22 new PresetManager unit tests + 3 new UI tests (toolbar, run button, save-as button). 72 total tests (unit + UI) all pass.
