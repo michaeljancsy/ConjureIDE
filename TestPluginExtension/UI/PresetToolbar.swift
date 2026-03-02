@@ -3,16 +3,20 @@ import SwiftUI
 /// Toolbar for browsing, running, saving, and deleting presets.
 struct PresetToolbar: View {
     @ObservedObject var presetManager: PresetManager
+    @ObservedObject var aiService: AIService
     var onSelectPreset: (Preset) -> Void
     var onRun: () -> Void
     var onSave: () -> Void
     var onSaveAs: (String) -> Void
     var onDelete: () -> Void
     var onNew: () -> Void
+    var onGenerate: (String) -> Void
 
     @Binding var showingSaveAs: Bool
     @Binding var saveAsName: String
     @State private var showDeleteConfirm = false
+    @State private var showingGenerate = false
+    @State private var showingSettings = false
 
     private var currentIsUserPreset: Bool {
         guard let current = presetManager.currentPreset else { return false }
@@ -84,10 +88,36 @@ struct PresetToolbar: View {
 
             Spacer()
 
+            // Generate with AI
+            Button(action: { showingGenerate = true }) {
+                Image(systemName: "sparkles")
+            }
+            .buttonStyle(.borderless)
+            .disabled(aiService.isGenerating)
+            .accessibilityIdentifier("generateButton")
+            .popover(isPresented: $showingGenerate) {
+                GeneratePopover(
+                    aiService: aiService,
+                    isPresented: $showingGenerate,
+                    onGenerate: onGenerate
+                )
+            }
+
+            // Cancel generation (visible during streaming)
+            if aiService.isGenerating {
+                Button(action: { aiService.cancel() }) {
+                    Image(systemName: "stop.circle")
+                }
+                .buttonStyle(.borderless)
+                .foregroundColor(.red)
+                .accessibilityIdentifier("cancelGenerateButton")
+            }
+
             // Run (hot-reload into kernel)
             Button("Run") {
                 onRun()
             }
+            .disabled(aiService.isGenerating)
             .accessibilityIdentifier("runButton")
 
             // Save (overwrite current user preset)
@@ -138,6 +168,19 @@ struct PresetToolbar: View {
                 } message: {
                     Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This cannot be undone.")
                 }
+            }
+
+            // AI Settings
+            Button(action: { showingSettings = true }) {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("settingsButton")
+            .popover(isPresented: $showingSettings) {
+                AISettingsPopover(
+                    aiService: aiService,
+                    onDone: { showingSettings = false }
+                )
             }
         }
         .padding(.horizontal)

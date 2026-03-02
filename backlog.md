@@ -1,18 +1,21 @@
 # Project Backlog
 
 ## In Progress
--
 
 ## To Do
 - Host app DAW controls: Add preset selection and a bypass button to the TestPlugin host app, like a DAW would provide
 - Support compiled DSP languages (C, C++, Rust) via WASM alongside Python
 - Visualization and diagnostics in the Mac host app (not just the AU extension)
-- Support AI coding (AI-assisted script generation/editing)
+- AI chat sidebar (Phase 2): Collapsible panel alongside editor with conversation context, code insertion, and quick actions
 - Think through Run button label: is "Run" the right name? Does it need to be separate from Save?
 - Latency reporting and adjustment: Report latency frames to the host/DAW and allow the user to adjust the latency value
 - Built-in limiter: Safety limiter to prevent dangerously loud output from DSP scripts
 
+
 ## Done
+- Script warm-start + real-time safety prompts (2026-03-02): Added `dsp_kernel_benchmark_process()` warm-up call after initial `loadPythonScript()` in AU init, so any first-call Python allocations (global buffer creation) happen before real audio arrives. Updated AI system prompts with detailed real-time safety rules (no allocations, no deallocations, no hidden Python overhead in `process()`) and documented the warm-start guarantee so AI-generated scripts can safely use first-call guards. Fixed `extensionPlistContainsBuildID` test crash — replaced unsafe `as! Int` force cast with `try #require` to prevent test runner process crash when BuildID is missing. All tests pass.
+- AI streaming bug fix (2026-03-02): Root cause: `URLSession.AsyncBytes.lines` silently drops empty lines, which SSE uses as event boundaries. All events merged into one, so `content_block_delta` events were never dispatched individually. Rewrote `SSEParser` to iterate raw bytes instead of using `bytes.lines`. Added `Task.detached` for network I/O to avoid main actor scheduling deadlock. 16 new AI streaming tests (SSE parsing, pipeline integration, URLSession integration). All tests pass. Needs manual verification in the actual plugin.
+- AI-assisted script generation (2026-03-01): Phase 1 — "Generate from Prompt" and "Fix with AI". Toolbar sparkle button opens popover for natural language effect descriptions; AI generates complete Python DSP scripts via Anthropic Claude API with streaming into the editor. "Fix with AI" button appears alongside script errors to auto-fix broken scripts. Settings gear button for API key management (Keychain storage). Provider-agnostic protocol (`AIProvider`) for future OpenAI/local model support. Editor goes read-only during streaming with debounced syntax highlighting and accent-color border indicator. Generated code is never auto-run — user must click Run. BYOK (bring your own key) model. Added network client entitlement for sandboxed extension. 8 new files (`TestPluginExtension/AI/` + UI popovers), 5 modified files. All 63 unit tests pass.
 - Preset browser + management (2026-03-01): Built-in preset browser in the AU extension UI. Factory presets (Passthrough, Tremolo, Bitcrush) are read-only from the extension bundle; user presets are .py files in `~/Library/Application Support/TestPlugin/Presets/`. Toolbar with prev/next arrows, preset dropdown menu (Factory/User sections), Run (hot-reload), Save (overwrite user preset), Save As (SwiftUI popover with name field), and Delete (with confirmation). Modification tracking via `*` indicator. Stock presets cannot be overwritten — saving a modified factory preset prompts Save As instead. Refactored factory preset metadata into shared `FactoryPresetRegistry`, added `PresetManager` class, `selectPreset()` on AU for syncing DAW currentPreset. 22 new PresetManager unit tests + 3 new UI tests (toolbar, run button, save-as button). 72 total tests (unit + UI) all pass.
 - Build ID in AU extension UI (2026-03-01): Added a "Stamp Build ID" build phase (`scripts/stamp-build-id.sh`) that writes a Unix timestamp into the built extension's Info.plist on every build. The ViewController reads it from the bundle and displays it as a small right-aligned label above the script editor. Uses `Text(verbatim:)` to avoid locale number formatting. 30 unit tests (+1 `extensionPlistContainsBuildID`) and 6 UI tests (+1 `testBuildIDLabelIsVisible`) all pass.
 - Fix host app AU loading (2026-03-01): Host app persistently failed to find AU component via `AVAudioUnitComponentManager` (PluginKit registration unreliable). Switched `SimplePlayEngine.initComponent()` to use `.loadInProcess` directly — builds `AudioComponentDescription` from plist identity and calls `AVAudioUnit.instantiate` without the component manager gate. Matches the approach already used by the unit test suite. Removed unused `findComponent()` method. All 28 unit tests + 4 UI tests pass.

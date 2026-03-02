@@ -580,11 +580,8 @@ struct TestPluginTests {
         guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
             throw TestError("Failed to parse extension Info.plist")
         }
-        let buildID = plist["BuildID"]
-        #expect(buildID != nil, "Extension Info.plist should contain a BuildID key")
-        #expect(buildID is Int, "BuildID should be an integer, got \(type(of: buildID!))")
-        let value = buildID as! Int
-        #expect(value > 0, "BuildID should be a positive integer (Unix timestamp), got \(value)")
+        let buildID = try #require(plist["BuildID"] as? Int, "Extension Info.plist should contain a BuildID integer key")
+        #expect(buildID > 0, "BuildID should be a positive integer (Unix timestamp), got \(buildID)")
     }
 
     // MARK: - Render Block

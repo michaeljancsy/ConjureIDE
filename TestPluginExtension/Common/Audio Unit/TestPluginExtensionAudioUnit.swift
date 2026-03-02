@@ -82,6 +82,15 @@ public class TestPluginExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		let success = dsp_kernel_load_script(kernel, pythonHome, scriptPath)
 		if success {
 			pluginLog.info("Python DSP script loaded successfully")
+
+			// Warm-start: run process() a few times so any first-call allocations
+			// (e.g. global buffer creation) happen before real audio arrives.
+			// benchmark_process does 1 warm-up + 5 timed calls; it handles
+			// the pre-allocateRenderResources state by creating temp arrays.
+			let warmupTime = dsp_kernel_benchmark_process(kernel)
+			if warmupTime >= 0 {
+				pluginLog.info("Initial warm-up complete: \(warmupTime * 1000, privacy: .public)ms")
+			}
 		} else {
 			if let errPtr = dsp_kernel_last_error(kernel) {
 				let errMsg = String(cString: errPtr)
