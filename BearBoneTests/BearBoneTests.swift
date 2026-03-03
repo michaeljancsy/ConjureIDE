@@ -395,14 +395,16 @@ struct BearBoneTests {
     @Test func factoryPresetsExist() async throws {
         let (_, au) = try await Self.instantiateAU()
         let presets = au.factoryPresets ?? []
-        #expect(presets.count >= 6, "Should have at least 6 factory presets")
+        #expect(presets.count >= 8, "Should have at least 8 factory presets")
         let names = presets.map { $0.name }
         #expect(names.contains("Passthrough (Python)"), "Should have Passthrough (Python) preset")
         #expect(names.contains("Tremolo (Python)"), "Should have Tremolo (Python) preset")
         #expect(names.contains("Bitcrush (Python)"), "Should have Bitcrush (Python) preset")
+        #expect(names.contains("Compressor (Python)"), "Should have Compressor (Python) preset")
         #expect(names.contains("Passthrough (Rust)"), "Should have Passthrough (Rust) preset")
         #expect(names.contains("Tremolo (Rust)"), "Should have Tremolo (Rust) preset")
         #expect(names.contains("Bitcrush (Rust)"), "Should have Bitcrush (Rust) preset")
+        #expect(names.contains("Compressor (Rust)"), "Should have Compressor (Rust) preset")
     }
 
     @Test func factoryPresetLoading() async throws {
@@ -426,7 +428,7 @@ struct BearBoneTests {
         let (_, au) = try await Self.instantiateAU()
         let presets = au.factoryPresets ?? []
         let rustPresets = presets.filter { $0.name.contains("Rust") }
-        #expect(rustPresets.count == 3, "Should have 3 Rust factory presets")
+        #expect(rustPresets.count == 4, "Should have 4 Rust factory presets")
         for rustPreset in rustPresets {
             au.currentPreset = rustPreset
             let state = au.fullState

@@ -42,5 +42,7 @@ enum FactoryPresetRegistry {
         Entry(name: "Passthrough (Rust)", number: 3, resourceName: "preset_passthrough_rust", language: .rust),
         Entry(name: "Tremolo (Rust)", number: 4, resourceName: "preset_tremolo_rust", language: .rust),
         Entry(name: "Bitcrush (Rust)", number: 5, resourceName: "preset_bitcrush_rust", language: .rust),
+        Entry(name: "Compressor (Python)", number: 6, resourceName: "preset_compressor", language: .python),
+        Entry(name: "Compressor (Rust)", number: 7, resourceName: "preset_compressor_rust", language: .rust),
     ]
 }
