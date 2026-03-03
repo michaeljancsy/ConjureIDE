@@ -1,18 +1,24 @@
 use crate::backend::Backend;
 use crate::python_backend::PythonBackend;
 use crate::wasm_backend::WasmBackend;
+use std::sync::Mutex;
 
 /// Real-time audio DSP kernel with pluggable processing backends.
 ///
 /// Supports Python scripts (via pyo3/numpy) and WASM modules (via wasmtime).
 /// When a backend is loaded, `process()` delegates to it. When no backend
 /// is loaded or the backend errors, the kernel falls back to passthrough.
+///
+/// Thread safety: The `backend` field is wrapped in a `Mutex` to prevent
+/// use-after-free when the main thread swaps backends while the render thread
+/// is processing. The render thread uses `try_lock()` (never blocks — falls
+/// back to passthrough if the lock is held during a swap).
 pub struct DSPKernel {
     sample_rate: f64,
     bypassed: bool,
     max_frames_to_render: u32,
     channel_count: usize,
-    backend: Option<Box<dyn Backend>>,
+    backend: Mutex<Option<Box<dyn Backend>>>,
     last_error: Option<String>,
 }
 
@@ -23,7 +29,7 @@ impl DSPKernel {
             bypassed: false,
             max_frames_to_render: 1024,
             channel_count: 0,
-            backend: None,
+            backend: Mutex::new(None),
             last_error: None,
         }
     }
@@ -32,14 +38,18 @@ impl DSPKernel {
         self.sample_rate = sample_rate;
         self.channel_count = input_channels as usize;
 
-        if let Some(backend) = &mut self.backend {
-            backend.initialize(self.channel_count, sample_rate, self.max_frames_to_render);
+        if let Ok(mut guard) = self.backend.lock() {
+            if let Some(backend) = guard.as_mut() {
+                backend.initialize(self.channel_count, sample_rate, self.max_frames_to_render);
+            }
         }
     }
 
     pub fn deinitialize(&mut self) {
-        if let Some(backend) = &mut self.backend {
-            backend.deinitialize();
+        if let Ok(mut guard) = self.backend.lock() {
+            if let Some(backend) = guard.as_mut() {
+                backend.deinitialize();
+            }
         }
     }
 
@@ -53,7 +63,10 @@ impl DSPKernel {
                 if self.channel_count > 0 {
                     pb.initialize(self.channel_count, self.sample_rate, self.max_frames_to_render);
                 }
-                self.backend = Some(Box::new(pb));
+                // Lock to swap — render thread will passthrough during this brief window
+                if let Ok(mut guard) = self.backend.lock() {
+                    *guard = Some(Box::new(pb));
+                }
                 self.last_error = None;
                 true
             }
@@ -73,7 +86,10 @@ impl DSPKernel {
                 if self.channel_count > 0 {
                     wb.initialize(self.channel_count, self.sample_rate, self.max_frames_to_render);
                 }
-                self.backend = Some(Box::new(wb));
+                // Lock to swap — render thread will passthrough during this brief window
+                if let Ok(mut guard) = self.backend.lock() {
+                    *guard = Some(Box::new(wb));
+                }
                 self.last_error = None;
                 true
             }
@@ -110,22 +126,29 @@ impl DSPKernel {
 
     /// Returns the last error message, if any.
     pub fn last_error(&self) -> Option<&str> {
-        // Check kernel-level error first, then delegate to backend
-        if let Some(ref err) = self.last_error {
-            return Some(err.as_str());
+        self.last_error.as_deref()
+    }
+
+    /// Capture any backend error into `last_error` so it outlives the mutex guard.
+    fn capture_backend_error(&mut self) {
+        if let Ok(guard) = self.backend.lock() {
+            if let Some(ref backend) = *guard {
+                if let Some(err) = backend.last_error() {
+                    self.last_error = Some(err.to_string());
+                }
+            }
         }
-        if let Some(ref backend) = self.backend {
-            return backend.last_error();
-        }
-        None
     }
 
     /// Benchmark the process function with a 440 Hz sine wave.
     /// Returns the max execution time in seconds over 5 runs (after 1 warm-up),
     /// or None if no backend is loaded.
     pub fn benchmark_process(&mut self) -> Option<f64> {
-        if self.backend.is_none() {
-            return None;
+        {
+            let guard = self.backend.lock().ok()?;
+            if guard.is_none() {
+                return None;
+            }
         }
 
         let channel_count = if self.channel_count > 0 {
@@ -138,8 +161,10 @@ impl DSPKernel {
         // Temporarily initialize backend if needed
         let needs_temp_init = self.channel_count == 0;
         if needs_temp_init {
-            if let Some(backend) = &mut self.backend {
-                backend.initialize(channel_count, self.sample_rate, self.max_frames_to_render);
+            if let Ok(mut guard) = self.backend.lock() {
+                if let Some(backend) = guard.as_mut() {
+                    backend.initialize(channel_count, self.sample_rate, self.max_frames_to_render);
+                }
             }
         }
 
@@ -195,8 +220,10 @@ impl DSPKernel {
 
         // Clean up temp init
         if needs_temp_init {
-            if let Some(backend) = &mut self.backend {
-                backend.deinitialize();
+            if let Ok(mut guard) = self.backend.lock() {
+                if let Some(backend) = guard.as_mut() {
+                    backend.deinitialize();
+                }
             }
         }
 
@@ -230,16 +257,34 @@ impl DSPKernel {
             return;
         }
 
-        // Try backend processing
-        if let Some(ref mut backend) = self.backend {
-            if backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate) {
-                return;
+        // Try backend processing — use try_lock to never block the render thread.
+        // If the main thread is swapping backends, we fall through to passthrough.
+        if let Ok(mut guard) = self.backend.try_lock() {
+            if let Some(ref mut backend) = *guard {
+                if backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate) {
+                    Self::safety_clamp(outputs, channel_count, frame_count);
+                    return;
+                }
+                // Backend failed — fall through to passthrough
             }
-            // Backend failed — fall through to passthrough
         }
 
         // Fallback: passthrough (copy input to output unchanged)
         Self::passthrough(inputs, outputs, channel_count, frame_count);
+    }
+
+    /// Clamp all output samples to [-1.0, 1.0] to prevent dangerously loud output.
+    unsafe fn safety_clamp(
+        outputs: &[*mut f32],
+        channel_count: usize,
+        frame_count: usize,
+    ) {
+        for ch in 0..channel_count {
+            let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
+            for sample in dst.iter_mut() {
+                *sample = sample.clamp(-1.0, 1.0);
+            }
+        }
     }
 
     /// Copy input to output unchanged.
@@ -978,6 +1023,135 @@ mod tests {
 
         unsafe { kernel.process(&ip, &op, 1, 4); }
         assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
+    }
+
+    // --- Safety limiter tests ---
+
+    fn gain_10x_wasm() -> Vec<u8> {
+        wat::parse_str(r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                (local $i i32)
+                (local $total i32)
+                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (block $break
+                  (loop $loop
+                    (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
+                    (f32.store
+                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (f32.mul
+                        (f32.load (i32.add (local.get $in) (i32.mul (local.get $i) (i32.const 4))))
+                        (f32.const 10.0)
+                      )
+                    )
+                    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                    (br $loop)
+                  )
+                )
+              )
+            )
+        "#).expect("Failed to parse WAT")
+    }
+
+    #[test]
+    fn test_safety_limiter_clamps_loud_wasm_output() {
+        let wasm = gain_10x_wasm();
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [0.5, -0.5, 0.2, -0.2];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        // 10x gain would produce [5.0, -5.0, 2.0, -2.0], clamped to ±1.0
+        assert_eq!(output, [1.0, -1.0, 1.0, -1.0]);
+    }
+
+    #[test]
+    fn test_safety_limiter_clamps_loud_python_output() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 10.0\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [0.5, -0.5, 0.2, -0.2];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        // 10x gain clamped to ±1.0
+        assert_eq!(output, [1.0, -1.0, 1.0, -1.0]);
+        std::fs::remove_file(script).ok();
+    }
+
+    #[test]
+    fn test_safety_limiter_passes_normal_signal() {
+        let wasm = gain_half_wasm();
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [0.8, -0.6, 0.4, -0.2];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        // 0.5x gain produces values well within ±1.0, unchanged by limiter
+        assert_eq!(output, [0.4, -0.3, 0.2, -0.1]);
+    }
+
+    #[test]
+    fn test_safety_limiter_does_not_apply_during_bypass() {
+        let wasm = gain_10x_wasm();
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm));
+        kernel.initialize(1, 1, 44100.0);
+        kernel.set_bypassed(true);
+
+        // Input with values at ±1.0 — bypass should pass through unchanged
+        let input: [f32; 4] = [1.0, -1.0, 0.5, -0.5];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert_eq!(output, [1.0, -1.0, 0.5, -0.5]);
+    }
+
+    #[test]
+    fn test_safety_limiter_stereo() {
+        let wasm = gain_10x_wasm();
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm));
+        kernel.initialize(2, 2, 44100.0);
+
+        let input_l: [f32; 4] = [0.5, -0.5, 0.1, -0.1];
+        let input_r: [f32; 4] = [0.3, -0.3, 0.8, -0.8];
+        let mut output_l: [f32; 4] = [0.0; 4];
+        let mut output_r: [f32; 4] = [0.0; 4];
+
+        let input_ptrs: [*const f32; 2] = [input_l.as_ptr(), input_r.as_ptr()];
+        let output_ptrs: [*mut f32; 2] = [output_l.as_mut_ptr(), output_r.as_mut_ptr()];
+
+        unsafe { kernel.process(input_ptrs.as_ptr(), output_ptrs.as_ptr(), 2, 4); }
+        // Both channels clamped to ±1.0
+        assert_eq!(output_l, [1.0, -1.0, 1.0, -1.0]);
+        assert_eq!(output_r, [1.0, -1.0, 1.0, -1.0]);
     }
 
     #[test]

@@ -10,6 +10,11 @@
  * Supports Python scripts (via pyo3/numpy) and WASM modules (via wasmtime).
  * When a backend is loaded, `process()` delegates to it. When no backend
  * is loaded or the backend errors, the kernel falls back to passthrough.
+ *
+ * Thread safety: The `backend` field is wrapped in a `Mutex` to prevent
+ * use-after-free when the main thread swaps backends while the render thread
+ * is processing. The render thread uses `try_lock()` (never blocks — falls
+ * back to passthrough if the lock is held during a swap).
  */
 typedef struct DSPKernel DSPKernel;
 
