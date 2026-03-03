@@ -397,9 +397,9 @@ struct BearBoneTests {
         let presets = au.factoryPresets ?? []
         #expect(presets.count >= 4, "Should have at least 4 factory presets")
         let names = presets.map { $0.name }
-        #expect(names.contains("Passthrough"), "Should have Passthrough preset")
-        #expect(names.contains("Tremolo"), "Should have Tremolo preset")
-        #expect(names.contains("Bitcrush"), "Should have Bitcrush preset")
+        #expect(names.contains("Passthrough (Python)"), "Should have Passthrough (Python) preset")
+        #expect(names.contains("Tremolo (Python)"), "Should have Tremolo (Python) preset")
+        #expect(names.contains("Bitcrush (Python)"), "Should have Bitcrush (Python) preset")
         #expect(names.contains("Passthrough (Rust)"), "Should have Passthrough (Rust) preset")
     }
 
@@ -409,7 +409,7 @@ struct BearBoneTests {
         #expect(!presets.isEmpty)
 
         // Test Python factory presets (should load and contain def process)
-        let pythonPresets = presets.filter { $0.name != "Passthrough (Rust)" }
+        let pythonPresets = presets.filter { !$0.name.contains("Rust") }
         for preset in pythonPresets {
             au.currentPreset = preset
             let state = au.fullState
@@ -463,7 +463,7 @@ struct BearBoneTests {
         // Verify that switching between Python presets changes the script in fullState
         let (_, au) = try await Self.instantiateAU()
         let presets = au.factoryPresets ?? []
-        // Preset indices: 0=Passthrough, 1=Tremolo, 2=Bitcrush, 3=Passthrough(Rust)
+        // Preset indices: 0=Passthrough(Python), 1=Tremolo(Python), 2=Bitcrush(Python), 3=Passthrough(Rust)
         #expect(presets.count >= 3)
 
         au.currentPreset = presets[1] // Tremolo

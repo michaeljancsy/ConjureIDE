@@ -36,9 +36,9 @@ enum FactoryPresetRegistry {
     }
 
     static let entries: [Entry] = [
-        Entry(name: "Passthrough", number: 0, resourceName: "preset_passthrough", language: .python),
-        Entry(name: "Tremolo", number: 1, resourceName: "preset_tremolo", language: .python),
-        Entry(name: "Bitcrush", number: 2, resourceName: "preset_bitcrush", language: .python),
+        Entry(name: "Passthrough (Python)", number: 0, resourceName: "preset_passthrough", language: .python),
+        Entry(name: "Tremolo (Python)", number: 1, resourceName: "preset_tremolo", language: .python),
+        Entry(name: "Bitcrush (Python)", number: 2, resourceName: "preset_bitcrush", language: .python),
         Entry(name: "Passthrough (Rust)", number: 3, resourceName: "preset_passthrough_rust", language: .rust),
     ]
 }

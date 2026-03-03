@@ -50,9 +50,9 @@ struct PresetManagerTests {
         let factory = manager.presets.filter(\.isFactory)
         #expect(factory.count == 4)
         let names = factory.map(\.name)
-        #expect(names.contains("Passthrough"))
-        #expect(names.contains("Tremolo"))
-        #expect(names.contains("Bitcrush"))
+        #expect(names.contains("Passthrough (Python)"))
+        #expect(names.contains("Tremolo (Python)"))
+        #expect(names.contains("Bitcrush (Python)"))
         #expect(names.contains("Passthrough (Rust)"))
     }
 
@@ -348,10 +348,10 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         // Save a user preset with the same name as a factory preset
-        try manager.saveUserPreset(name: "Tremolo", source: "# user tremolo\n")
+        try manager.saveUserPreset(name: "Tremolo (Python)", source: "# user tremolo\n")
 
-        let tremolos = manager.presets.filter { $0.name == "Tremolo" }
-        #expect(tremolos.count == 2, "Should have both factory and user 'Tremolo'")
+        let tremolos = manager.presets.filter { $0.name == "Tremolo (Python)" }
+        #expect(tremolos.count == 2, "Should have both factory and user 'Tremolo (Python)'")
 
         let factory = tremolos.first(where: \.isFactory)
         let user = tremolos.first(where: { !$0.isFactory })
