@@ -11,6 +11,10 @@
 		2510F93C2F5211FC0046A41D /* backlog.md in Resources */ = {isa = PBXBuildFile; fileRef = 2510F9382F5211FC0046A41D /* backlog.md */; };
 		2510F93D2F5211FC0046A41D /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 2510F93A2F5211FC0046A41D /* README.md */; };
 		2579117F2F5013850036AAB6 /* BearBoneExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2579117E2F5013850036AAB6 /* BearBoneExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		25BC19422F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
+		25BC19432F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
+		25BC19442F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
+		25BC19452F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +63,7 @@
 		257911682F5013850036AAB6 /* BearBoneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BearBoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		257911722F5013850036AAB6 /* BearBoneUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BearBoneUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2579117E2F5013850036AAB6 /* BearBoneExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BearBoneExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		25BC19412F563DB20009EA0D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = BearBone/Assets.xcassets; sourceTree = "<group>"; };
 		AABB00022F5013850036AAB6 /* rust */ = {isa = PBXFileReference; lastKnownFileType = folder; path = rust; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -142,6 +147,7 @@
 				257911822F5013850036AAB6 /* BearBoneExtension */,
 				AABB00022F5013850036AAB6 /* rust */,
 				257911412F5013840036AAB6 /* Products */,
+				25BC19412F563DB20009EA0D /* Assets.xcassets */,
 			);
 			sourceTree = "<group>";
 		};
@@ -238,6 +244,7 @@
 				2579117B2F5013850036AAB6 /* Frameworks */,
 				2579117C2F5013850036AAB6 /* Resources */,
 				AABB00032F5013850036AAB6 /* Copy Python Runtime */,
+				AABB00092F5013850036AAB6 /* Copy Rust Compiler */,
 				AABB00052F5013850036AAB6 /* Patch AU Identity for Worktree */,
 				AABB00072F5013850036AAB6 /* Stamp Build ID */,
 			);
@@ -311,6 +318,7 @@
 				2510F93B2F5211FC0046A41D /* CLAUDE.md in Resources */,
 				2510F93C2F5211FC0046A41D /* backlog.md in Resources */,
 				2510F93D2F5211FC0046A41D /* README.md in Resources */,
+				25BC19452F563DB20009EA0D /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -318,6 +326,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				25BC19422F563DB20009EA0D /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -325,6 +334,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				25BC19442F563DB20009EA0D /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -332,6 +342,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				25BC19432F563DB20009EA0D /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -381,6 +392,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "# Copy Python dylib into Frameworks\nmkdir -p \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\ncp \"${SRCROOT}/rust/python-dist/lib/libpython3.14t.dylib\" \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/\"\n\n# Code-sign the dylib with the same identity as the build\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libpython3.14t.dylib\"\n\n# Copy Python stdlib + site-packages into Resources/python-dist\nPYDST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/python-dist\"\nmkdir -p \"${PYDST}/lib\"\ncp -R \"${SRCROOT}/rust/python-dist/lib/python3.14t\" \"${PYDST}/lib/\"\n\n# Code-sign all .so files (numpy, stdlib extensions) for hardened runtime\nfind \"${PYDST}\" -name '*.so' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none {} \\;\n";
+		};
+		AABB00092F5013850036AAB6 /* Copy Rust Compiler */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/rustc-dist/bin/rustc",
+			);
+			name = "Copy Rust Compiler";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/rustc-dist/bin/rustc",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# Copy bundled Rust compiler into the extension bundle for sandbox-safe compilation\nRUSTC_SRC=\"${SRCROOT}/rustc-dist\"\n\nif [ ! -d \"${RUSTC_SRC}\" ]; then\n    # Check if we're in a worktree and can symlink from main\n    MAIN_WORKTREE=$(git -C \"${SRCROOT}\" worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //')\n    if [ -n \"${MAIN_WORKTREE}\" ] && [ \"${MAIN_WORKTREE}\" != \"${SRCROOT}\" ] && [ -d \"${MAIN_WORKTREE}/rustc-dist\" ]; then\n        echo \"note: Symlinking rustc-dist from main worktree\" >&2\n        ln -s \"${MAIN_WORKTREE}/rustc-dist\" \"${RUSTC_SRC}\"\n    else\n        echo \"warning: Bundled Rust compiler not found at ${RUSTC_SRC}. Run scripts/setup-rustc.sh first.\" >&2\n        echo \"warning: Rust compilation will only work with user-installed rustc (not in sandboxed DAWs).\" >&2\n        exit 0\n    fi\nfi\n\nRUSTC_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/rustc-dist\"\n\n# Copy the sysroot\nmkdir -p \"${RUSTC_DST}\"\nrsync -a --delete \"${RUSTC_SRC}/\" \"${RUSTC_DST}/\"\n\n# Code-sign all executables and dylibs\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${RUSTC_DST}/bin/rustc\"\nfind \"${RUSTC_DST}/lib\" -name '*.dylib' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none {} \\;\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/rust-lld\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/wasm-ld\"\n";
 		};
 		AABB00052F5013850036AAB6 /* Patch AU Identity for Worktree */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -707,7 +738,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
@@ -760,7 +791,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;

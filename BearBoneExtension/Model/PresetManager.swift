@@ -4,10 +4,10 @@ import os.log
 
 private let log = Logger(subsystem: "com.MichaelJancsy.BearBone", category: "PresetManager")
 
-/// Manages discovery, loading, saving, and deletion of Python DSP script presets.
+/// Manages discovery, loading, saving, and deletion of DSP script presets.
 ///
 /// Factory presets are read from the extension bundle (read-only).
-/// User presets are stored as .py files in ~/Library/Application Support/BearBone/Presets/.
+/// User presets are stored as .py/.rs files in ~/Library/Application Support/BearBone/Presets/.
 @MainActor
 class PresetManager: ObservableObject {
     @Published private(set) var presets: [Preset] = []
@@ -57,6 +57,9 @@ class PresetManager: ObservableObject {
 
     // MARK: - Preset Discovery
 
+    /// Supported user preset file extensions.
+    private static let supportedExtensions: Set<String> = ["py", "rs"]
+
     func refreshPresets() {
         var result: [Preset] = []
 
@@ -66,7 +69,8 @@ class PresetManager: ObservableObject {
                 id: "factory:\(entry.name)",
                 name: entry.name,
                 source: .factory(resourceName: entry.resourceName),
-                factoryPresetNumber: entry.number
+                factoryPresetNumber: entry.number,
+                language: entry.language
             ))
         }
 
@@ -76,17 +80,20 @@ class PresetManager: ObservableObject {
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         ) {
-            let pyFiles = files
-                .filter { $0.pathExtension == "py" }
+            let scriptFiles = files
+                .filter { Self.supportedExtensions.contains($0.pathExtension) }
                 .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
 
-            for url in pyFiles {
+            for url in scriptFiles {
                 let name = url.deletingPathExtension().lastPathComponent
+                let ext = url.pathExtension
+                let language: ScriptLanguage = ext == "rs" ? .rust : .python
                 result.append(Preset(
-                    id: "user:\(name)",
+                    id: "user:\(name).\(ext)",
                     name: name,
                     source: .user(url: url),
-                    factoryPresetNumber: nil
+                    factoryPresetNumber: nil,
+                    language: language
                 ))
             }
         }
@@ -96,12 +103,12 @@ class PresetManager: ObservableObject {
 
     // MARK: - Load
 
-    /// Read the Python source for a preset.
+    /// Read the source code for a preset.
     func loadSource(for preset: Preset) -> String? {
         switch preset.source {
         case .factory(let resourceName):
-            guard let url = extensionBundle.url(forResource: resourceName, withExtension: "py") else {
-                log.error("Factory preset resource not found: \(resourceName, privacy: .public)")
+            guard let url = extensionBundle.url(forResource: resourceName, withExtension: preset.fileExtension) else {
+                log.error("Factory preset resource not found: \(resourceName).\(preset.fileExtension, privacy: .public)")
                 return nil
             }
             return try? String(contentsOf: url, encoding: .utf8)
@@ -130,18 +137,19 @@ class PresetManager: ObservableObject {
 
     /// Save source as a new or overwritten user preset. Returns the resulting Preset.
     @discardableResult
-    func saveUserPreset(name: String, source: String) throws -> Preset {
+    func saveUserPreset(name: String, source: String, language: ScriptLanguage = .python) throws -> Preset {
         let sanitized = sanitizeFilename(name)
         guard !sanitized.isEmpty else {
             throw PresetManagerError.invalidName
         }
-        let url = userPresetsURL.appendingPathComponent("\(sanitized).py")
+        let ext = language == .rust ? "rs" : "py"
+        let url = userPresetsURL.appendingPathComponent("\(sanitized).\(ext)")
         try source.write(to: url, atomically: true, encoding: .utf8)
-        log.info("Saved user preset: \(sanitized, privacy: .public)")
+        log.info("Saved user preset: \(sanitized).\(ext, privacy: .public)")
 
         refreshPresets()
 
-        guard let preset = presets.first(where: { $0.id == "user:\(sanitized)" }) else {
+        guard let preset = presets.first(where: { $0.id == "user:\(sanitized).\(ext)" }) else {
             throw PresetManagerError.saveFailed
         }
         return preset
@@ -180,10 +188,10 @@ class PresetManager: ObservableObject {
         return "\(baseName) \(UUID().uuidString.prefix(4))"
     }
 
-    /// Check whether a user preset with this name already exists.
+    /// Check whether a user preset with this name already exists (any language).
     func userPresetExists(name: String) -> Bool {
         let sanitized = sanitizeFilename(name)
-        return presets.contains { $0.id == "user:\(sanitized)" }
+        return presets.contains { !$0.isFactory && $0.name == sanitized }
     }
 
     /// Replace filesystem-unsafe characters and trim whitespace.

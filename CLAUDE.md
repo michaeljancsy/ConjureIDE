@@ -16,6 +16,7 @@ xcodebuild -project BearBone.xcodeproj -scheme BearBone test   # runs unit + UI 
 - Rust toolchain (`rustup`, `cargo`) with target: `aarch64-apple-darwin`
 - `cbindgen` (`cargo install cbindgen`)
 - Bundled Python runtime (one-time setup): `cd rust && ./setup-python.sh`
+- Bundled Rust compiler (one-time setup): `./scripts/setup-rustc.sh`
 
 Deployment targets: macOS 26.2+.
 
@@ -35,6 +36,7 @@ Note: `--test-threads=1` is required because Python tests share a single interpr
 ### Xcode build phases (BearBoneExtension target)
 1. **Run Script — Build Rust**: calls `rust/build-rust.sh`
 2. **Run Script — Copy Python Runtime**: copies `libpython3.14t.dylib` into Frameworks, copies `python3.14t/` stdlib+numpy into Resources/python-dist, and code-signs the dylib and all `.so` files with `EXPANDED_CODE_SIGN_IDENTITY`
+3. **Run Script — Copy Rust Compiler**: copies bundled `rustc`, `librustc_driver`, `rust-lld`, and wasm32-wasip1 sysroot into Resources/rustc-dist/, code-signs all executables and dylibs
 
 ## Architecture
 
@@ -69,6 +71,11 @@ rust/                        Rust DSP crate
   build-rust.sh              Xcode build phase script
   setup-python.sh            Downloads free-threaded Python 3.14 + numpy
   python-dist/               Bundled Python runtime (gitignored)
+scripts/                     Build and setup scripts
+  setup-rustc.sh             Downloads standalone Rust compiler for WASM compilation
+  stamp-build-id.sh          Stamps build ID into extension Info.plist
+  patch-worktree-au-identity.sh  Patches AU identity for worktree builds
+rustc-dist/                  Bundled Rust compiler + wasm32-wasip1 target (gitignored)
 BearBoneTests/             Unit tests (Swift Testing)
 BearBoneUITests/           UI tests (XCUITest)
 ```
@@ -95,7 +102,7 @@ To add a new parameter, define its address in all three layers and keep them in 
 
 ## Worktrees
 
-Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/` since it's gitignored. The `build-rust.sh` script auto-detects this and symlinks it from the main worktree, so `xcodebuild build` and `xcodebuild test` work automatically. For standalone `cargo test`, run the Xcode build first (to create the symlink) or manually: `ln -s /path/to/main/repo/rust/python-dist rust/python-dist`.
+Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/` and `rustc-dist/` since they're gitignored. The `build-rust.sh` script auto-symlinks `python-dist/` from the main worktree, and the "Copy Rust Compiler" build phase auto-symlinks `rustc-dist/` from the main worktree. So `xcodebuild build` and `xcodebuild test` work automatically. For standalone `cargo test`, run the Xcode build first (to create the symlink) or manually: `ln -s /path/to/main/repo/rust/python-dist rust/python-dist`.
 
 Worktree builds automatically register a different AU identity so they can coexist with the main build in DAWs. The "Patch AU Identity for Worktree" build phase (`scripts/patch-worktree-au-identity.sh`) detects worktree builds and patches the extension's built Info.plist to use subtype `WT01` and name `BearBoneExtension (Dev)`. The host app and tests read AU identity from the embedded extension's Info.plist at runtime, so they automatically use the correct codes for both main and worktree builds.
 
@@ -119,10 +126,9 @@ The clean build into a fresh DerivedData directory gets a new UUID and re-regist
 
 ## Code Signing
 
-The bundled Python runtime requires proper code signing for the hardened runtime:
-- `libpython3.14t.dylib` must be signed with the build identity
-- All `.so` files (numpy C extensions, stdlib extensions) must also be signed
-- This is handled by the "Copy Python Runtime" build phase in Xcode
+Bundled runtimes require proper code signing for the hardened runtime:
+- **Python**: `libpython3.14t.dylib` and all `.so` files (numpy, stdlib extensions) — handled by "Copy Python Runtime" build phase
+- **Rust compiler**: `rustc`, `librustc_driver-*.dylib`, `rust-lld`, `gcc-ld/wasm-ld` — handled by "Copy Rust Compiler" build phase
 
 ## Dependencies
 

@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Popover for entering a natural language prompt to generate a Python DSP script.
+/// Popover for entering a natural language prompt to generate a DSP script.
 struct GeneratePopover: View {
     @ObservedObject var aiService: AIService
+    var language: ScriptLanguage
     @Binding var isPresented: Bool
     let onGenerate: (String) -> Void
 
@@ -17,7 +18,7 @@ struct GeneratePopover: View {
             Text("Generate Script")
                 .font(.headline)
 
-            Text("Describe the audio effect you want:")
+            Text("Describe the \(language == .rust ? "Rust" : "Python") audio effect you want:")
                 .font(.caption)
                 .foregroundColor(.secondary)
 

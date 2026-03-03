@@ -111,13 +111,17 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 
         // Use restored script from fullState if available, otherwise fall back to bundled default
         let initialScript: String
+        let initialLanguage: ScriptLanguage
         if let restored = au.scriptSource {
             initialScript = restored
+            initialLanguage = au.currentScriptLanguage
         } else if let scriptURL = Bundle(for: type(of: self)).url(forResource: "process", withExtension: "py"),
                   let source = try? String(contentsOf: scriptURL, encoding: .utf8) {
             initialScript = source
+            initialLanguage = .python
         } else {
             initialScript = "# process.py not found in bundle\n"
+            initialLanguage = .python
         }
 
         let pm = au.presetManager
@@ -127,12 +131,12 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         }
         let ai = aiService!
 
-        // Run: hot-reload script into kernel + benchmark
-        let onRun: (String) -> ScriptSaveResult = { [weak au] source in
+        // Run: detect language, compile if needed, load into kernel + benchmark
+        let onRun: (String) async -> ScriptSaveResult = { [weak au] source in
             guard let au else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
-            let result = au.reloadScript(source: source)
+            let result = await au.compileAndRun(source: source)
             return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
         }
 
@@ -145,7 +149,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         }
 
         // Save: overwrite current user preset + hot-reload
-        let onSavePreset: (String) -> ScriptSaveResult = { [weak au, weak pm] source in
+        let onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult = { [weak au, weak pm] source, language in
             guard let au, let pm else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
@@ -153,25 +157,40 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                 return ScriptSaveResult(success: false, error: "No user preset selected", processTimeMs: nil, budgetMs: nil)
             }
             do {
-                let saved = try pm.saveUserPreset(name: current.name, source: source)
-                let result = au.reloadScript(source: source)
-                pm.setCurrentPreset(saved, source: source)
-                return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+                let saved = try pm.saveUserPreset(name: current.name, source: source, language: language)
+                switch language {
+                case .python:
+                    let result = au.reloadScript(source: source)
+                    pm.setCurrentPreset(saved, source: source)
+                    return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+                case .rust:
+                    // Rust saves persist source only — user clicks Run to compile
+                    au.currentScriptLanguage = .rust
+                    pm.setCurrentPreset(saved, source: source)
+                    return ScriptSaveResult(success: true, error: nil, processTimeMs: nil, budgetMs: nil)
+                }
             } catch {
                 return ScriptSaveResult(success: false, error: error.localizedDescription, processTimeMs: nil, budgetMs: nil)
             }
         }
 
         // Save As: create new user preset + hot-reload
-        let onSaveAsPreset: (String, String) -> ScriptSaveResult = { [weak au, weak pm] name, source in
+        let onSaveAsPreset: (String, String, ScriptLanguage) -> ScriptSaveResult = { [weak au, weak pm] name, source, language in
             guard let au, let pm else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
             do {
-                let saved = try pm.saveUserPreset(name: name, source: source)
-                let result = au.reloadScript(source: source)
-                pm.setCurrentPreset(saved, source: source)
-                return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+                let saved = try pm.saveUserPreset(name: name, source: source, language: language)
+                switch language {
+                case .python:
+                    let result = au.reloadScript(source: source)
+                    pm.setCurrentPreset(saved, source: source)
+                    return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+                case .rust:
+                    au.currentScriptLanguage = .rust
+                    pm.setCurrentPreset(saved, source: source)
+                    return ScriptSaveResult(success: true, error: nil, processTimeMs: nil, budgetMs: nil)
+                }
             } catch {
                 return ScriptSaveResult(success: false, error: error.localizedDescription, processTimeMs: nil, budgetMs: nil)
             }
@@ -183,21 +202,30 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             try? pm.deleteUserPreset(current)
         }
 
-        // New: reset to default passthrough script
+        // New: reset to default template for the selected language
         let extensionBundle = Bundle(for: type(of: self))
-        let onNew: () -> ScriptSaveResult = { [weak au, weak pm] in
+        let onNew: (ScriptLanguage) -> ScriptSaveResult = { [weak au, weak pm] language in
             guard let au, let pm else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
-            guard let entry = FactoryPresetRegistry.entries.first,
-                  let url = extensionBundle.url(forResource: entry.resourceName, withExtension: "py"),
+            let ext = language == .rust ? "rs" : "py"
+            guard let url = extensionBundle.url(forResource: "process", withExtension: ext),
                   let source = try? String(contentsOf: url, encoding: .utf8) else {
-                return ScriptSaveResult(success: false, error: "Default script not found", processTimeMs: nil, budgetMs: nil)
+                return ScriptSaveResult(success: false, error: "Default \(language.rawValue) template not found", processTimeMs: nil, budgetMs: nil)
             }
-            let result = au.reloadScript(source: source)
-            pm.setCurrentPreset(nil, source: source)
-            au.scriptSourceDidChange.send(source)
-            return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+            switch language {
+            case .python:
+                let result = au.reloadScript(source: source)
+                pm.setCurrentPreset(nil, source: source)
+                au.scriptSourceDidChange.send(source)
+                return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+            case .rust:
+                // Don't compile on New — just show the template
+                au.currentScriptLanguage = .rust
+                pm.setCurrentPreset(nil, source: source)
+                au.scriptSourceDidChange.send(source)
+                return ScriptSaveResult(success: true, error: nil, processTimeMs: nil, budgetMs: nil)
+            }
         }
 
         let scriptPublisher = au.scriptSourceDidChange
@@ -209,6 +237,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         let content = BearBoneExtensionMainView(
             buildID: buildID,
             defaultScriptSource: initialScript,
+            defaultLanguage: initialLanguage,
+            extensionBundle: extensionBundle,
             scriptSourcePublisher: scriptPublisher,
             presetManager: pm,
             aiService: ai,

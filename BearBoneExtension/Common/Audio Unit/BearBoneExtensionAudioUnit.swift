@@ -22,6 +22,12 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	// Current script source (cached on successful reload, persisted in fullState)
 	private var currentScriptSource: String?
 
+	// Current script language (for fullState persistence and UI syncing)
+	var currentScriptLanguage: ScriptLanguage = .python
+
+	// Cached WASM bytes for Rust scripts (for instant fullState restore)
+	private var currentWasmBytes: Data?
+
 	/// The current Python script source, if one has been loaded via reloadScript or fullState.
 	public var scriptSource: String? {
 		return currentScriptSource
@@ -152,6 +158,84 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
+	/// Load a pre-compiled WASM module into the DSP kernel.
+	public func loadWasm(bytes: Data) -> (success: Bool, error: String?, processTimeMs: Double?, budgetMs: Double?) {
+		let success = bytes.withUnsafeBytes { rawBuffer -> Bool in
+			guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+				return false
+			}
+			return dsp_kernel_load_wasm(kernel, ptr, UInt32(bytes.count))
+		}
+
+		if success {
+			pluginLog.info("WASM module loaded successfully")
+
+			let benchmarkSecs = dsp_kernel_benchmark_process(kernel)
+			var processTimeMs: Double? = nil
+			var budgetMs: Double? = nil
+
+			if benchmarkSecs >= 0 {
+				processTimeMs = benchmarkSecs * 1000.0
+				let sampleRate = _outputBus.format.sampleRate
+				let maxFrames = Double(dsp_kernel_get_max_frames(kernel))
+				budgetMs = maxFrames / sampleRate * 1000.0
+				pluginLog.info("WASM benchmark: \(processTimeMs!, privacy: .public)ms / \(budgetMs!, privacy: .public)ms budget")
+			}
+
+			return (true, nil, processTimeMs, budgetMs)
+		} else {
+			var errorMsg = "Failed to load WASM module"
+			if let errPtr = dsp_kernel_last_error(kernel) {
+				errorMsg = String(cString: errPtr)
+			}
+			pluginLog.error("Failed to load WASM: \(errorMsg, privacy: .public)")
+			return (false, errorMsg, nil, nil)
+		}
+	}
+
+	/// Compile source code (detecting language) and load into the DSP kernel.
+	/// For Python: direct load (sync). For Rust: compile to WASM, cache, then load.
+	public func compileAndRun(source: String) async -> (success: Bool, error: String?, processTimeMs: Double?, budgetMs: Double?) {
+		let language = ScriptLanguage.detect(from: source)
+
+		switch language {
+		case .python:
+			let result = reloadScript(source: source)
+			currentScriptLanguage = .python
+			currentWasmBytes = nil
+			return result
+
+		case .rust:
+			// Check cache first
+			let cache = WasmCache()
+			if let cachedWasm = cache.cachedWasm(for: source) {
+				let result = loadWasm(bytes: cachedWasm)
+				if result.success {
+					currentScriptSource = source
+					currentScriptLanguage = .rust
+					currentWasmBytes = cachedWasm
+				}
+				return result
+			}
+
+			// Compile
+			let compiler = RustCompiler()
+			do {
+				let wasmBytes = try await compiler.compile(source: source)
+				cache.cache(wasm: wasmBytes, for: source)
+				let result = loadWasm(bytes: wasmBytes)
+				if result.success {
+					currentScriptSource = source
+					currentScriptLanguage = .rust
+					currentWasmBytes = wasmBytes
+				}
+				return result
+			} catch {
+				return (false, error.localizedDescription, nil, nil)
+			}
+		}
+	}
+
 	deinit {
 		if let kernel = kernel {
 			dsp_kernel_destroy(kernel)
@@ -184,6 +268,8 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	// MARK: - State Persistence
 
 	private static let scriptSourceKey = "pythonScriptSource"
+	private static let scriptLanguageKey = "scriptLanguage"
+	private static let wasmBytesKey = "wasmBytes"
 
 	public override var fullState: [String : Any]? {
 		get {
@@ -191,6 +277,10 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			if let source = currentScriptSource,
 			   let data = source.data(using: .utf8) {
 				state[Self.scriptSourceKey] = data
+			}
+			state[Self.scriptLanguageKey] = currentScriptLanguage.rawValue
+			if let wasmBytes = currentWasmBytes {
+				state[Self.wasmBytesKey] = wasmBytes
 			}
 			return state
 		}
@@ -201,11 +291,36 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				  let source = String(data: data, encoding: .utf8) else {
 				return
 			}
-			let result = reloadScript(source: source)
-			if result.success {
-				scriptSourceDidChange.send(source)
+
+			let languageRaw = state[Self.scriptLanguageKey] as? String ?? "python"
+			let language = ScriptLanguage(rawValue: languageRaw) ?? .python
+
+			switch language {
+			case .python:
+				let result = reloadScript(source: source)
+				if result.success {
+					scriptSourceDidChange.send(source)
+				}
+
+			case .rust:
+				// Try to load cached WASM bytes directly (instant, no compilation)
+				if let wasmBytes = state[Self.wasmBytesKey] as? Data {
+					let result = loadWasm(bytes: wasmBytes)
+					if result.success {
+						currentScriptSource = source
+						currentScriptLanguage = .rust
+						currentWasmBytes = wasmBytes
+						scriptSourceDidChange.send(source)
+					}
+				} else {
+					// No cached WASM — just show the source, user must click Run
+					currentScriptSource = source
+					currentScriptLanguage = .rust
+					scriptSourceDidChange.send(source)
+				}
 			}
-			pluginLog.info("Restored script from fullState (\(source.count) chars)")
+
+			pluginLog.info("Restored \(language.rawValue) script from fullState (\(source.count) chars)")
 		}
 	}
 
@@ -225,7 +340,7 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	/// Load a preset into the DSP kernel and update preset manager state.
 	/// Called from the UI when the user selects a preset from the browser.
-	/// Always updates the editor and preset manager, even if the script has errors.
+	/// Python presets are loaded immediately. Rust presets just show the source — user clicks Run.
 	@MainActor
 	func selectPreset(_ preset: Preset) -> ScriptSaveResult {
 		let pm = presetManager
@@ -234,7 +349,18 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			return ScriptSaveResult(success: false, error: "Failed to load preset source", processTimeMs: nil, budgetMs: nil)
 		}
 
-		let result = reloadScript(source: source)
+		let result: (success: Bool, error: String?, processTimeMs: Double?, budgetMs: Double?)
+		switch preset.language {
+		case .python:
+			result = reloadScript(source: source)
+			currentScriptLanguage = .python
+			currentWasmBytes = nil
+		case .rust:
+			// Don't auto-compile — just show source, user clicks Run
+			currentScriptSource = source
+			currentScriptLanguage = .rust
+			result = (true, nil, nil, nil)
+		}
 
 		// Always update preset manager and editor so the user can see/fix the script
 		pm.setCurrentPreset(preset, source: source)
@@ -277,25 +403,37 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 			guard let entry = FactoryPresetRegistry.entries.first(where: { $0.number == preset.number }) else { return }
 
+			let ext = entry.language == .rust ? "rs" : "py"
 			let bundle = Bundle(for: type(of: self))
-			guard let url = bundle.url(forResource: entry.resourceName, withExtension: "py"),
+			guard let url = bundle.url(forResource: entry.resourceName, withExtension: ext),
 				  let source = try? String(contentsOf: url, encoding: .utf8) else {
-				pluginLog.error("Factory preset script not found: \(entry.resourceName, privacy: .public)")
+				pluginLog.error("Factory preset script not found: \(entry.resourceName).\(ext, privacy: .public)")
 				return
 			}
 
-			let result = reloadScript(source: source)
-			if result.success {
+			switch entry.language {
+			case .python:
+				let result = reloadScript(source: source)
+				if result.success {
+					currentScriptLanguage = .python
+					currentWasmBytes = nil
+					scriptSourceDidChange.send(source)
+					pluginLog.info("Loaded factory preset: \(entry.name, privacy: .public)")
+				}
+			case .rust:
+				// Don't auto-compile — just show source, user clicks Run
+				currentScriptSource = source
+				currentScriptLanguage = .rust
 				scriptSourceDidChange.send(source)
-				pluginLog.info("Loaded factory preset: \(entry.name, privacy: .public)")
+				pluginLog.info("Loaded Rust factory preset: \(entry.name, privacy: .public)")
+			}
 
-				// Update preset manager if it exists (dispatch to main actor)
-				if let pm = _presetManager {
-					let presetNumber = preset.number
-					Task { @MainActor in
-						let factoryPreset = pm.presets.first { $0.factoryPresetNumber == presetNumber }
-						pm.setCurrentPreset(factoryPreset, source: source)
-					}
+			// Update preset manager if it exists (dispatch to main actor)
+			if let pm = _presetManager {
+				let presetNumber = preset.number
+				Task { @MainActor in
+					let factoryPreset = pm.presets.first { $0.factoryPresetNumber == presetNumber }
+					pm.setCurrentPreset(factoryPreset, source: source)
 				}
 			}
 		}

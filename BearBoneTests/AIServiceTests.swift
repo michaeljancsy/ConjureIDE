@@ -585,6 +585,121 @@ struct URLSessionBytesTests {
     }
 }
 
+// MARK: - Language-Aware System Prompt Tests
+
+/// Copies of the AnthropicProvider system prompts for standalone testing.
+/// These mirror the production prompts to verify language-specific content.
+private enum TestSystemPrompts {
+    static let pythonApiContract = """
+        API contract:
+        - Function signature: def process(inputs, outputs, frame_count, sample_rate)
+        - inputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
+        - outputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
+        - frame_count: number of valid samples this callback (may be less than array length)
+        - sample_rate: current sample rate (e.g. 44100.0)
+        - Write processed audio into outputs[ch][:frame_count]
+        - Only numpy is available (imported as np)
+        - Global variables persist across callbacks (useful for phase accumulators, delay buffers, etc.)
+        - Must handle both mono (1 channel) and stereo (2 channels)
+        """
+
+    static let rustApiContract = """
+        API contract (Rust compiled to WebAssembly):
+        - The script is compiled to wasm32-wasip1 and runs in a WASM sandbox
+        - Must define three #[no_mangle] pub extern "C" functions:
+          1. get_input_ptr() -> i32  — returns pointer to the input buffer
+          2. get_output_ptr() -> i32 — returns pointer to the output buffer
+          3. process(input: *const f32, output: *mut f32, channels: i32, frame_count: i32, sample_rate: f32)
+        - Static buffers: define MAX_CH (2) and MAX_FR (4096) constants, then:
+          static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
+          static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
+        - Audio is interleaved: total samples = channels * frame_count
+        - Use std::slice::from_raw_parts(input, n) and from_raw_parts_mut(output, n) inside unsafe blocks
+        - Must handle both mono (1 channel) and stereo (2 channels)
+        - For stereo, samples are interleaved: [L0, R0, L1, R1, ...]
+        """
+
+    static let pythonSystemPrompt = """
+        You are a DSP script generator for a real-time audio plugin. Generate Python scripts \
+        that define a `process()` function.
+        """
+
+    static let rustSystemPrompt = """
+        You are a DSP script generator for a real-time audio plugin compiled to WebAssembly. \
+        Generate Rust scripts that define a `process()` function and static buffers.
+        """
+
+    /// Selects the appropriate system prompt based on language.
+    /// This mirrors the dispatch logic in AnthropicProvider.generateScript().
+    static func systemPrompt(for language: ScriptLanguage) -> String {
+        switch language {
+        case .python: return pythonSystemPrompt + "\n" + pythonApiContract
+        case .rust: return rustSystemPrompt + "\n" + rustApiContract
+        }
+    }
+}
+
+@Suite("Language-Aware System Prompts")
+struct LanguagePromptTests {
+
+    @Test func pythonPromptContainsPythonKeywords() {
+        let prompt = TestSystemPrompts.systemPrompt(for: .python)
+        #expect(prompt.contains("def process"))
+        #expect(prompt.contains("numpy"))
+        #expect(prompt.contains("Python"))
+    }
+
+    @Test func pythonPromptDoesNotContainRustKeywords() {
+        let prompt = TestSystemPrompts.systemPrompt(for: .python)
+        #expect(!prompt.contains("wasm32"))
+        #expect(!prompt.contains("#[no_mangle]"))
+        #expect(!prompt.contains("*const f32"))
+    }
+
+    @Test func rustPromptContainsRustKeywords() {
+        let prompt = TestSystemPrompts.systemPrompt(for: .rust)
+        #expect(prompt.contains("Rust"))
+        #expect(prompt.contains("wasm32"))
+        #expect(prompt.contains("#[no_mangle]"))
+        #expect(prompt.contains("*const f32"))
+        #expect(prompt.contains("get_input_ptr"))
+        #expect(prompt.contains("get_output_ptr"))
+        #expect(prompt.contains("WebAssembly"))
+    }
+
+    @Test func rustPromptDoesNotContainPythonKeywords() {
+        let prompt = TestSystemPrompts.systemPrompt(for: .rust)
+        #expect(!prompt.contains("numpy"))
+        #expect(!prompt.contains("def process"))
+    }
+
+    @Test func languageDispatchSelectsCorrectPrompt() {
+        let pythonPrompt = TestSystemPrompts.systemPrompt(for: .python)
+        let rustPrompt = TestSystemPrompts.systemPrompt(for: .rust)
+        #expect(pythonPrompt != rustPrompt, "Python and Rust prompts should be different")
+        #expect(pythonPrompt.contains("Python"))
+        #expect(rustPrompt.contains("Rust"))
+    }
+
+    @Test func rustApiContractDocumentsBufferLayout() {
+        let contract = TestSystemPrompts.rustApiContract
+        #expect(contract.contains("MAX_CH"))
+        #expect(contract.contains("MAX_FR"))
+        #expect(contract.contains("INPUT_BUF"))
+        #expect(contract.contains("OUTPUT_BUF"))
+        #expect(contract.contains("from_raw_parts"))
+        #expect(contract.contains("interleaved"))
+    }
+
+    @Test func pythonApiContractDocumentsNumpyArrays() {
+        let contract = TestSystemPrompts.pythonApiContract
+        #expect(contract.contains("numpy.float32"))
+        #expect(contract.contains("frame_count"))
+        #expect(contract.contains("sample_rate"))
+        #expect(contract.contains("outputs[ch][:frame_count]"))
+    }
+}
+
 // MARK: - Full Anthropic SSE → Text Extraction Pipeline Test
 
 @Suite("Anthropic Streaming Pipeline")

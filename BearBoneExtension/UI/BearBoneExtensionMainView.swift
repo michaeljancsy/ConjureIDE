@@ -18,22 +18,26 @@ struct ScriptSaveResult {
 struct BearBoneExtensionMainView: View {
     var buildID: Int
     var defaultScriptSource: String
+    var defaultLanguage: ScriptLanguage = .python
+    var extensionBundle: Bundle
     var scriptSourcePublisher: AnyPublisher<String, Never>?
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var aiService: AIService
-    var onRun: (String) -> ScriptSaveResult
+    var onRun: (String) async -> ScriptSaveResult
     var onSelectPreset: (Preset) -> ScriptSaveResult
-    var onSavePreset: (String) -> ScriptSaveResult
-    var onSaveAsPreset: (String, String) -> ScriptSaveResult
+    var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
+    var onSaveAsPreset: (String, String, ScriptLanguage) -> ScriptSaveResult
     var onDeletePreset: () -> Void
-    var onNew: () -> ScriptSaveResult
+    var onNew: (ScriptLanguage) -> ScriptSaveResult
 
     @State private var scriptSource: String = ""
+    @State private var selectedLanguage: ScriptLanguage = .python
     @State private var errorMessage: String?
     @State private var showingSaveAs = false
     @State private var saveAsName = ""
     @State private var showSuccess: Bool = false
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
+    @State private var isCompiling: Bool = false
     @Environment(\.colorScheme) private var colorScheme
 
     /// Color for the benchmark timing based on how close to budget.
@@ -51,31 +55,38 @@ struct BearBoneExtensionMainView: View {
             PresetToolbar(
                 presetManager: presetManager,
                 aiService: aiService,
+                isCompiling: isCompiling,
+                selectedLanguage: $selectedLanguage,
                 onSelectPreset: { preset in
                     let result = onSelectPreset(preset)
+                    selectedLanguage = preset.language
                     handleResult(result)
                 },
                 onRun: {
-                    let result = onRun(scriptSource)
-                    handleResult(result)
+                    Task {
+                        isCompiling = true
+                        let result = await onRun(scriptSource)
+                        isCompiling = false
+                        handleResult(result)
+                    }
                 },
                 onSave: {
-                    let result = onSavePreset(scriptSource)
+                    let result = onSavePreset(scriptSource, selectedLanguage)
                     handleResult(result)
                 },
                 onSaveAs: { name in
-                    let result = onSaveAsPreset(name, scriptSource)
+                    let result = onSaveAsPreset(name, scriptSource, selectedLanguage)
                     handleResult(result)
                 },
                 onDelete: {
                     onDeletePreset()
                 },
                 onNew: {
-                    let result = onNew()
+                    let result = onNew(selectedLanguage)
                     handleResult(result)
                 },
                 onGenerate: { prompt in
-                    aiService.generate(prompt: prompt, existingScript: scriptSource) { accumulated in
+                    aiService.generate(prompt: prompt, existingScript: scriptSource, language: selectedLanguage) { accumulated in
                         scriptSource = accumulated
                     }
                 },
@@ -99,6 +110,7 @@ struct BearBoneExtensionMainView: View {
                 HighlightedTextEditor(
                     text: $scriptSource,
                     colorScheme: colorScheme,
+                    language: selectedLanguage,
                     isEditable: !aiService.isGenerating
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -109,17 +121,29 @@ struct BearBoneExtensionMainView: View {
                 .padding(.horizontal)
                 .padding(.top, buildID != 0 ? 0 : 8)
 
-                if let errorMessage = errorMessage {
+                if isCompiling {
+                    HStack(spacing: 4) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Compiling\u{2026}")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                    .padding(.horizontal)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("compilingStatus")
+                } else if let errorMessage = errorMessage {
                     HStack(spacing: 8) {
                         Text(errorMessage)
                             .foregroundColor(.red)
                             .font(.caption)
                             .lineLimit(3)
+                            .accessibilityIdentifier("errorStatus")
 
                         Spacer()
 
                         Button("Fix with AI") {
-                            aiService.fix(script: scriptSource, error: errorMessage) { accumulated in
+                            aiService.fix(script: scriptSource, error: errorMessage, language: selectedLanguage) { accumulated in
                                 scriptSource = accumulated
                             }
                         }
@@ -136,12 +160,14 @@ struct BearBoneExtensionMainView: View {
                             .font(.caption)
                             .padding(.horizontal)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("successStatus")
                     } else {
                         Text("Script reloaded successfully")
                             .foregroundColor(.green)
                             .font(.caption)
                             .padding(.horizontal)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("successStatus")
                     }
                 }
 
@@ -157,12 +183,22 @@ struct BearBoneExtensionMainView: View {
         }
         .onAppear {
             scriptSource = defaultScriptSource
+            selectedLanguage = defaultLanguage
         }
         .onReceive(scriptSourcePublisher ?? Empty().eraseToAnyPublisher()) { newSource in
             scriptSource = newSource
+            selectedLanguage = ScriptLanguage.detect(from: newSource)
         }
         .onChange(of: scriptSource) { _, newValue in
             presetManager.scriptDidChange(to: newValue)
+        }
+        .onChange(of: selectedLanguage) { oldLang, newLang in
+            // Swap template when switching language on a default/empty script
+            if isDefaultTemplate(scriptSource, for: oldLang) {
+                if let template = loadTemplate(for: newLang) {
+                    scriptSource = template
+                }
+            }
         }
         .background(
             Button(action: handleCmdS) { EmptyView() }
@@ -180,12 +216,24 @@ struct BearBoneExtensionMainView: View {
 
     private func handleCmdS() {
         if canSave {
-            let result = onSavePreset(scriptSource)
+            let result = onSavePreset(scriptSource, selectedLanguage)
             handleResult(result)
         } else {
             saveAsName = presetManager.currentPreset?.name ?? ""
             showingSaveAs = true
         }
+    }
+
+    private func isDefaultTemplate(_ source: String, for language: ScriptLanguage) -> Bool {
+        guard let template = loadTemplate(for: language) else { return false }
+        return source.trimmingCharacters(in: .whitespacesAndNewlines) == template.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func loadTemplate(for language: ScriptLanguage) -> String? {
+        let ext = language == .rust ? "rs" : "py"
+        guard let url = extensionBundle.url(forResource: "process", withExtension: ext),
+              let source = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return source
     }
 
     private func handleResult(_ result: ScriptSaveResult) {

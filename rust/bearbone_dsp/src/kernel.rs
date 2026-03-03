@@ -1,26 +1,18 @@
-use numpy::{PyArray1, PyArrayMethods};
-use pyo3::prelude::*;
-use pyo3::types::PyList;
-use std::ffi::CString;
+use crate::backend::Backend;
+use crate::python_backend::PythonBackend;
+use crate::wasm_backend::WasmBackend;
 
-/// Real-time audio DSP kernel with optional Python processing.
+/// Real-time audio DSP kernel with pluggable processing backends.
 ///
-/// When a Python script is loaded, `process()` delegates to the script's
-/// `process(inputs, outputs, frame_count, sample_rate)` function with
-/// pre-allocated numpy arrays. When no script is loaded, the original
-/// Rust gain processing is used as fallback.
+/// Supports Python scripts (via pyo3/numpy) and WASM modules (via wasmtime).
+/// When a backend is loaded, `process()` delegates to it. When no backend
+/// is loaded or the backend errors, the kernel falls back to passthrough.
 pub struct DSPKernel {
     sample_rate: f64,
     bypassed: bool,
     max_frames_to_render: u32,
-
-    // Python state
-    py_process_fn: Option<Py<PyAny>>,
-    py_input_arrays: Vec<Py<PyAny>>,
-    py_output_arrays: Vec<Py<PyAny>>,
-    py_channel_count: usize,
-
-    // Last error message for diagnostics
+    channel_count: usize,
+    backend: Option<Box<dyn Backend>>,
     last_error: Option<String>,
 }
 
@@ -30,55 +22,24 @@ impl DSPKernel {
             sample_rate: 44100.0,
             bypassed: false,
             max_frames_to_render: 1024,
-            py_process_fn: None,
-            py_input_arrays: Vec::new(),
-            py_output_arrays: Vec::new(),
-            py_channel_count: 0,
+            channel_count: 0,
+            backend: None,
             last_error: None,
         }
     }
 
     pub fn initialize(&mut self, input_channels: i32, _output_channels: i32, sample_rate: f64) {
         self.sample_rate = sample_rate;
-        let channel_count = input_channels as usize;
-        self.py_channel_count = channel_count;
+        self.channel_count = input_channels as usize;
 
-        // Pre-allocate numpy arrays if Python is loaded
-        if self.py_process_fn.is_some() {
-            self.allocate_py_arrays(channel_count);
+        if let Some(backend) = &mut self.backend {
+            backend.initialize(self.channel_count, sample_rate, self.max_frames_to_render);
         }
     }
 
-    /// Allocate numpy arrays for the given channel count, sized to max_frames_to_render.
-    fn allocate_py_arrays(&mut self, channel_count: usize) {
-        let max_frames = self.max_frames_to_render as usize;
-
-        Python::with_gil(|py| {
-            self.py_input_arrays = (0..channel_count)
-                .map(|_| {
-                    PyArray1::<f32>::zeros(py, max_frames, false)
-                        .into_any()
-                        .unbind()
-                })
-                .collect();
-
-            self.py_output_arrays = (0..channel_count)
-                .map(|_| {
-                    PyArray1::<f32>::zeros(py, max_frames, false)
-                        .into_any()
-                        .unbind()
-                })
-                .collect();
-        });
-    }
-
     pub fn deinitialize(&mut self) {
-        // Drop pre-allocated arrays (GIL needed to decref)
-        if !self.py_input_arrays.is_empty() {
-            Python::with_gil(|_py| {
-                self.py_input_arrays.clear();
-                self.py_output_arrays.clear();
-            });
+        if let Some(backend) = &mut self.backend {
+            backend.deinitialize();
         }
     }
 
@@ -86,45 +47,38 @@ impl DSPKernel {
     /// `python_home` sets PYTHONHOME before interpreter init.
     /// Returns true on success.
     pub fn load_script(&mut self, python_home: &str, script_path: &str) -> bool {
-        // Log paths for debugging
-        eprintln!("BearBone-Rust: load_script called, python_home={}, script_path={}", python_home, script_path);
-
-        // Set PYTHONHOME so the embedded interpreter finds its stdlib + numpy
-        std::env::set_var("PYTHONHOME", python_home);
-
-        let result: Result<(), PyErr> = Python::with_gil(|py| {
-            // Read the script source
-            let code = std::fs::read_to_string(script_path)
-                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-
-            // Convert to CString for pyo3 API
-            let code_c = CString::new(code)
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-            let path_c = CString::new(script_path)
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-            let module_name = CString::new("dsp_script")
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-
-            let module = PyModule::from_code(py, &code_c, &path_c, &module_name)?;
-            let process_fn = module.getattr("process")?;
-            self.py_process_fn = Some(process_fn.unbind());
-
-            Ok(())
-        });
-
-        match result {
-            Ok(()) => {
+        match PythonBackend::load(python_home, script_path) {
+            Ok(mut pb) => {
                 // If already initialized with channels, allocate arrays now
-                if self.py_channel_count > 0 {
-                    self.allocate_py_arrays(self.py_channel_count);
+                if self.channel_count > 0 {
+                    pb.initialize(self.channel_count, self.sample_rate, self.max_frames_to_render);
                 }
-                eprintln!("BearBone-Rust: Python script loaded successfully");
+                self.backend = Some(Box::new(pb));
+                self.last_error = None;
                 true
             }
-            Err(e) => {
-                let err_msg = format!("python_home: {}\nscript_path: {}\nerror: {:?}", python_home, script_path, e);
+            Err(err_msg) => {
                 self.last_error = Some(err_msg);
-                Python::with_gil(|py| e.print(py));
+                false
+            }
+        }
+    }
+
+    /// Load a WASM module for DSP processing.
+    /// The module must export a `process` function and `memory`.
+    /// Returns true on success.
+    pub fn load_wasm(&mut self, wasm_bytes: &[u8]) -> bool {
+        match WasmBackend::load(wasm_bytes) {
+            Ok(mut wb) => {
+                if self.channel_count > 0 {
+                    wb.initialize(self.channel_count, self.sample_rate, self.max_frames_to_render);
+                }
+                self.backend = Some(Box::new(wb));
+                self.last_error = None;
+                true
+            }
+            Err(err_msg) => {
+                self.last_error = Some(err_msg);
                 false
             }
         }
@@ -156,28 +110,37 @@ impl DSPKernel {
 
     /// Returns the last error message, if any.
     pub fn last_error(&self) -> Option<&str> {
-        self.last_error.as_deref()
+        // Check kernel-level error first, then delegate to backend
+        if let Some(ref err) = self.last_error {
+            return Some(err.as_str());
+        }
+        if let Some(ref backend) = self.backend {
+            return backend.last_error();
+        }
+        None
     }
 
-    /// Benchmark the Python process function with a 440 Hz sine wave.
+    /// Benchmark the process function with a 440 Hz sine wave.
     /// Returns the max execution time in seconds over 5 runs (after 1 warm-up),
-    /// or None if no script is loaded.
+    /// or None if no backend is loaded.
     pub fn benchmark_process(&mut self) -> Option<f64> {
-        if self.py_process_fn.is_none() {
+        if self.backend.is_none() {
             return None;
         }
 
-        let channel_count = if self.py_channel_count > 0 {
-            self.py_channel_count
+        let channel_count = if self.channel_count > 0 {
+            self.channel_count
         } else {
             2
         };
         let frame_count = self.max_frames_to_render as usize;
 
-        // Temporarily allocate numpy arrays if needed
-        let needs_temp_arrays = self.py_input_arrays.is_empty();
-        if needs_temp_arrays {
-            self.allocate_py_arrays(channel_count);
+        // Temporarily initialize backend if needed
+        let needs_temp_init = self.channel_count == 0;
+        if needs_temp_init {
+            if let Some(backend) = &mut self.backend {
+                backend.initialize(channel_count, self.sample_rate, self.max_frames_to_render);
+            }
         }
 
         // Generate 440 Hz sine wave input
@@ -189,7 +152,9 @@ impl DSPKernel {
         let input_data: Vec<Vec<f32>> = (0..channel_count)
             .map(|_| {
                 (0..frame_count)
-                    .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sample_rate as f32).sin())
+                    .map(|i| {
+                        (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sample_rate as f32).sin()
+                    })
                     .collect()
             })
             .collect();
@@ -228,12 +193,11 @@ impl DSPKernel {
             }
         }
 
-        // Clean up temp arrays
-        if needs_temp_arrays {
-            Python::with_gil(|_py| {
-                self.py_input_arrays.clear();
-                self.py_output_arrays.clear();
-            });
+        // Clean up temp init
+        if needs_temp_init {
+            if let Some(backend) = &mut self.backend {
+                backend.deinitialize();
+            }
         }
 
         Some(max_time)
@@ -241,15 +205,16 @@ impl DSPKernel {
 
     /// Process audio buffers. Called from the real-time audio thread.
     ///
-    /// If a Python script is loaded, delegates to Python with pre-allocated
-    /// numpy arrays. Otherwise falls back to Rust gain processing.
+    /// Delegates to the loaded backend (Python or WASM). Falls back to
+    /// passthrough (copy input to output) when bypassed, no backend is
+    /// loaded, or the backend errors at runtime.
     ///
     /// # Safety
     /// - `input_buffers` must point to `channel_count` valid `*const f32` pointers.
     /// - `output_buffers` must point to `channel_count` valid `*mut f32` pointers.
     /// - Each channel buffer must contain at least `frame_count` samples.
     pub unsafe fn process(
-        &self,
+        &mut self,
         input_buffers: *const *const f32,
         output_buffers: *const *mut f32,
         channel_count: u32,
@@ -261,86 +226,33 @@ impl DSPKernel {
         let outputs = std::slice::from_raw_parts(output_buffers, channel_count);
 
         if self.bypassed {
-            for ch in 0..channel_count {
-                let src = std::slice::from_raw_parts(inputs[ch], frame_count);
-                let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
-                dst.copy_from_slice(src);
-            }
+            Self::passthrough(inputs, outputs, channel_count, frame_count);
             return;
         }
 
-        // Try Python processing
-        if self.py_process_fn.is_some() && !self.py_input_arrays.is_empty() {
-            if self.process_with_python(inputs, outputs, channel_count, frame_count) {
+        // Try backend processing
+        if let Some(ref mut backend) = self.backend {
+            if backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate) {
                 return;
             }
-            // Python failed — fall through to Rust
+            // Backend failed — fall through to passthrough
         }
 
         // Fallback: passthrough (copy input to output unchanged)
-        for ch in 0..channel_count {
-            let src = std::slice::from_raw_parts(inputs[ch], frame_count);
-            let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
-            dst.copy_from_slice(src);
-        }
+        Self::passthrough(inputs, outputs, channel_count, frame_count);
     }
 
-    /// Delegate audio processing to the loaded Python script.
-    /// Returns true on success.
-    unsafe fn process_with_python(
-        &self,
+    /// Copy input to output unchanged.
+    unsafe fn passthrough(
         inputs: &[*const f32],
         outputs: &[*mut f32],
         channel_count: usize,
         frame_count: usize,
-    ) -> bool {
-        let process_fn = match &self.py_process_fn {
-            Some(f) => f,
-            None => return false,
-        };
-
-        let result: Result<(), PyErr> = Python::with_gil(|py| {
-            // Copy input audio data into pre-allocated numpy arrays
-            for ch in 0..channel_count {
-                let src = std::slice::from_raw_parts(inputs[ch], frame_count);
-                let py_arr: &Bound<'_, PyArray1<f32>> = self.py_input_arrays[ch].bind(py).downcast()?;
-                let py_slice = py_arr.as_slice_mut()?;
-                py_slice[..frame_count].copy_from_slice(src);
-            }
-
-            // Build Python lists referencing the pre-allocated arrays
-            let input_list = PyList::new(
-                py,
-                self.py_input_arrays.iter().map(|a| a.bind(py)),
-            )?;
-            let output_list = PyList::new(
-                py,
-                self.py_output_arrays.iter().map(|a| a.bind(py)),
-            )?;
-
-            // Call: process(inputs, outputs, frame_count, sample_rate)
-            process_fn.call1(
-                py,
-                (input_list, output_list, frame_count as u32, self.sample_rate),
-            )?;
-
-            // Copy output from pre-allocated numpy arrays back to audio buffers
-            for ch in 0..channel_count {
-                let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
-                let py_arr: &Bound<'_, PyArray1<f32>> = self.py_output_arrays[ch].bind(py).downcast()?;
-                let py_slice = py_arr.as_slice()?;
-                dst.copy_from_slice(&py_slice[..frame_count]);
-            }
-
-            Ok(())
-        });
-
-        match result {
-            Ok(()) => true,
-            Err(e) => {
-                Python::with_gil(|py| e.print(py));
-                false
-            }
+    ) {
+        for ch in 0..channel_count {
+            let src = std::slice::from_raw_parts(inputs[ch], frame_count);
+            let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
+            dst.copy_from_slice(src);
         }
     }
 }
@@ -424,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_passthrough_when_no_script() {
-        let kernel = DSPKernel::new(); // not bypassed, no script loaded
+        let mut kernel = DSPKernel::new(); // not bypassed, no script loaded
 
         let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
         let mut output: [f32; 4] = [0.0; 4];
@@ -441,7 +353,7 @@ mod tests {
 
     #[test]
     fn test_passthrough_stereo() {
-        let kernel = DSPKernel::new();
+        let mut kernel = DSPKernel::new();
 
         let input_l: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
         let input_r: [f32; 4] = [0.0, -0.5, 1.0, 0.25];
@@ -505,7 +417,9 @@ mod tests {
             let mut output: [f32; 4] = [0.0; 4];
             let ip: *const f32 = input.as_ptr();
             let op: *mut f32 = output.as_mut_ptr();
-            unsafe { kernel.process(&ip, &op, 1, 4); }
+            unsafe {
+                kernel.process(&ip, &op, 1, 4);
+            }
             assert_eq!(output, [1.0; 4]);
             kernel.deinitialize();
         }
@@ -519,12 +433,14 @@ mod tests {
 
     #[test]
     fn test_process_single_frame() {
-        let kernel = DSPKernel::new();
+        let mut kernel = DSPKernel::new();
         let input: [f32; 1] = [0.75];
         let mut output: [f32; 1] = [0.0];
         let ip: *const f32 = input.as_ptr();
         let op: *mut f32 = output.as_mut_ptr();
-        unsafe { kernel.process(&ip, &op, 1, 1); }
+        unsafe {
+            kernel.process(&ip, &op, 1, 1);
+        }
         assert_eq!(output, [0.75]);
     }
 
@@ -536,7 +452,9 @@ mod tests {
         let mut output = vec![0.0f32; 4096];
         let ip: *const f32 = input.as_ptr();
         let op: *mut f32 = output.as_mut_ptr();
-        unsafe { kernel.process(&ip, &op, 1, 4096); }
+        unsafe {
+            kernel.process(&ip, &op, 1, 4096);
+        }
         assert!(output.iter().all(|&s| s == 0.5));
     }
 
@@ -544,10 +462,10 @@ mod tests {
     fn test_initialize_changes_channel_count() {
         let mut kernel = DSPKernel::new();
         kernel.initialize(1, 1, 44100.0);
-        assert_eq!(kernel.py_channel_count, 1);
+        assert_eq!(kernel.channel_count, 1);
         kernel.deinitialize();
         kernel.initialize(2, 2, 48000.0);
-        assert_eq!(kernel.py_channel_count, 2);
+        assert_eq!(kernel.channel_count, 2);
     }
 
     #[test]
@@ -560,13 +478,17 @@ mod tests {
 
         // Process with bypass on
         kernel.set_bypassed(true);
-        unsafe { kernel.process(&ip, &op, 1, 4); }
+        unsafe {
+            kernel.process(&ip, &op, 1, 4);
+        }
         assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
 
         // Process with bypass off (still passthrough, no script)
         kernel.set_bypassed(false);
         output = [0.0; 4];
-        unsafe { kernel.process(&ip, &op, 1, 4); }
+        unsafe {
+            kernel.process(&ip, &op, 1, 4);
+        }
         assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
     }
 
@@ -706,10 +628,13 @@ mod tests {
     fn test_python_error_recovery_falls_back_to_passthrough() {
         let (python_home, _) = match test_python_paths() {
             Some(paths) => paths,
-            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
         };
         let script = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sample_rate):\n    raise RuntimeError('intentional error')\n"
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sample_rate):\n    raise RuntimeError('intentional error')\n",
         );
         let mut kernel = DSPKernel::new();
         assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
@@ -719,7 +644,9 @@ mod tests {
         let mut output: [f32; 4] = [0.0; 4];
         let ip: *const f32 = input.as_ptr();
         let op: *mut f32 = output.as_mut_ptr();
-        unsafe { kernel.process(&ip, &op, 1, 4); }
+        unsafe {
+            kernel.process(&ip, &op, 1, 4);
+        }
         assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
         std::fs::remove_file(script).ok();
     }
@@ -728,10 +655,13 @@ mod tests {
     fn test_process_after_python_error_continues_working() {
         let (python_home, _) = match test_python_paths() {
             Some(paths) => paths,
-            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
         };
         let script = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    raise ValueError('boom')\n"
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    raise ValueError('boom')\n",
         );
         let mut kernel = DSPKernel::new();
         assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
@@ -744,7 +674,9 @@ mod tests {
 
         for _ in 0..5 {
             output = [0.0; 4];
-            unsafe { kernel.process(&ip, &op, 1, 4); }
+            unsafe {
+                kernel.process(&ip, &op, 1, 4);
+            }
             assert_eq!(output, [0.7, 0.7, 0.7, 0.7]);
         }
         std::fs::remove_file(script).ok();
@@ -754,10 +686,13 @@ mod tests {
     fn test_script_hot_reload() {
         let (python_home, _) = match test_python_paths() {
             Some(paths) => paths,
-            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
         };
         let script_half = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5\n"
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5\n",
         );
         let mut kernel = DSPKernel::new();
         assert!(kernel.load_script(&python_home, script_half.to_str().unwrap()));
@@ -767,18 +702,22 @@ mod tests {
         let mut output: [f32; 4] = [0.0; 4];
         let ip: *const f32 = input.as_ptr();
         let op: *mut f32 = output.as_mut_ptr();
-        unsafe { kernel.process(&ip, &op, 1, 4); }
+        unsafe {
+            kernel.process(&ip, &op, 1, 4);
+        }
         assert_eq!(output, [0.5, 0.5, 0.5, 0.5]);
 
         // Hot-reload with a different gain
         let script_quarter = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25\n"
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25\n",
         );
         assert!(kernel.load_script(&python_home, script_quarter.to_str().unwrap()));
         kernel.initialize(1, 1, 44100.0);
 
         output = [0.0; 4];
-        unsafe { kernel.process(&ip, &op, 1, 4); }
+        unsafe {
+            kernel.process(&ip, &op, 1, 4);
+        }
         assert_eq!(output, [0.25, 0.25, 0.25, 0.25]);
 
         std::fs::remove_file(script_half).ok();
@@ -789,7 +728,10 @@ mod tests {
     fn test_load_script_missing_process_function() {
         let (python_home, _) = match test_python_paths() {
             Some(paths) => paths,
-            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
         };
         let script = write_temp_script("import numpy as np\ndef not_process(): pass\n");
         let mut kernel = DSPKernel::new();
@@ -803,7 +745,10 @@ mod tests {
     fn test_load_script_syntax_error() {
         let (python_home, _) = match test_python_paths() {
             Some(paths) => paths,
-            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
         };
         let script = write_temp_script("def process(\n");
         let mut kernel = DSPKernel::new();
@@ -817,9 +762,13 @@ mod tests {
     fn test_load_script_import_error() {
         let (python_home, _) = match test_python_paths() {
             Some(paths) => paths,
-            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
         };
-        let script = write_temp_script("import nonexistent_module_xyz\ndef process(i,o,f,s): pass\n");
+        let script =
+            write_temp_script("import nonexistent_module_xyz\ndef process(i,o,f,s): pass\n");
         let mut kernel = DSPKernel::new();
         let result = kernel.load_script(&python_home, script.to_str().unwrap());
         assert!(!result);
@@ -839,7 +788,10 @@ mod tests {
     fn test_benchmark_with_script() {
         let (python_home, script_path) = match test_python_paths() {
             Some(paths) => paths,
-            None => { eprintln!("Skipping: bundled Python runtime not found"); return; }
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
         };
         let mut kernel = DSPKernel::new();
         assert!(kernel.load_script(&python_home, &script_path));
@@ -849,5 +801,216 @@ mod tests {
         assert!(result.is_some());
         let time = result.unwrap();
         assert!(time > 0.0, "Benchmark time should be positive, got {}", time);
+    }
+
+    // --- WASM integration tests ---
+
+    fn gain_half_wasm() -> Vec<u8> {
+        wat::parse_str(r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                (local $i i32)
+                (local $total i32)
+                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (block $break
+                  (loop $loop
+                    (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
+                    (f32.store
+                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (f32.mul
+                        (f32.load (i32.add (local.get $in) (i32.mul (local.get $i) (i32.const 4))))
+                        (f32.const 0.5)
+                      )
+                    )
+                    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                    (br $loop)
+                  )
+                )
+              )
+            )
+        "#).expect("Failed to parse WAT")
+    }
+
+    #[test]
+    fn test_load_wasm_and_process() {
+        let wasm = gain_half_wasm();
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
+    }
+
+    #[test]
+    fn test_load_wasm_stereo() {
+        let wasm = gain_half_wasm();
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm));
+        kernel.initialize(2, 2, 44100.0);
+
+        let input_l: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let input_r: [f32; 4] = [0.0, -0.5, 1.0, 0.25];
+        let mut output_l: [f32; 4] = [0.0; 4];
+        let mut output_r: [f32; 4] = [0.0; 4];
+
+        let input_ptrs: [*const f32; 2] = [input_l.as_ptr(), input_r.as_ptr()];
+        let output_ptrs: [*mut f32; 2] = [output_l.as_mut_ptr(), output_r.as_mut_ptr()];
+
+        unsafe { kernel.process(input_ptrs.as_ptr(), output_ptrs.as_ptr(), 2, 4); }
+        assert_eq!(output_l, [0.5, 0.25, -0.5, 0.0]);
+        assert_eq!(output_r, [0.0, -0.25, 0.5, 0.125]);
+    }
+
+    #[test]
+    fn test_load_wasm_invalid() {
+        let mut kernel = DSPKernel::new();
+        assert!(!kernel.load_wasm(&[0xFF, 0xFF, 0xFF, 0xFF]));
+        assert!(kernel.last_error().is_some());
+    }
+
+    #[test]
+    fn test_wasm_benchmark() {
+        let wasm = gain_half_wasm();
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm));
+        kernel.initialize(1, 1, 44100.0);
+
+        let result = kernel.benchmark_process();
+        assert!(result.is_some());
+        assert!(result.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn test_wasm_bypass() {
+        let wasm = gain_half_wasm();
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm));
+        kernel.initialize(1, 1, 44100.0);
+        kernel.set_bypassed(true);
+
+        let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        // Bypass should passthrough unchanged, not apply 0.5x gain
+        assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn test_hot_reload_wasm_replaces_wasm() {
+        let wasm = gain_half_wasm();
+        let passthrough_wasm = wat::parse_str(r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                (local $i i32)
+                (local $total i32)
+                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (block $break
+                  (loop $loop
+                    (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
+                    (f32.store
+                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (f32.load (i32.add (local.get $in) (i32.mul (local.get $i) (i32.const 4))))
+                    )
+                    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                    (br $loop)
+                  )
+                )
+              )
+            )
+        "#).expect("Failed to parse WAT");
+
+        let mut kernel = DSPKernel::new();
+
+        // Load gain-half WASM
+        assert!(kernel.load_wasm(&wasm));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
+
+        // Hot-reload to passthrough WASM
+        assert!(kernel.load_wasm(&passthrough_wasm));
+
+        output = [0.0; 4];
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn test_hot_reload_python_to_wasm() {
+        let (python_home, script_path) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let wasm = gain_half_wasm();
+        let mut kernel = DSPKernel::new();
+
+        // Load Python first
+        assert!(kernel.load_script(&python_home, &script_path));
+        kernel.initialize(1, 1, 44100.0);
+
+        // Hot-reload to WASM
+        assert!(kernel.load_wasm(&wasm));
+
+        let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
+    }
+
+    #[test]
+    fn test_hot_reload_wasm_to_python() {
+        let (python_home, script_path) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let wasm = gain_half_wasm();
+        let mut kernel = DSPKernel::new();
+
+        // Load WASM first
+        assert!(kernel.load_wasm(&wasm));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        // WASM applies 0.5x gain
+        assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
+
+        // Hot-reload to Python (process.py applies 0.5x gain too)
+        assert!(kernel.load_script(&python_home, &script_path));
+
+        output = [0.0; 4];
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        // Python process.py also applies 0.5x gain
+        assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
     }
 }

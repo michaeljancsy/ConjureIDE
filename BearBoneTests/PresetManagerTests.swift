@@ -48,11 +48,16 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let factory = manager.presets.filter(\.isFactory)
-        #expect(factory.count == 3)
+        #expect(factory.count == 8)
         let names = factory.map(\.name)
-        #expect(names.contains("Passthrough"))
-        #expect(names.contains("Tremolo"))
-        #expect(names.contains("Bitcrush"))
+        #expect(names.contains("Passthrough (Python)"))
+        #expect(names.contains("Tremolo (Python)"))
+        #expect(names.contains("Bitcrush (Python)"))
+        #expect(names.contains("Passthrough (Rust)"))
+        #expect(names.contains("Tremolo (Rust)"))
+        #expect(names.contains("Bitcrush (Rust)"))
+        #expect(names.contains("Compressor (Python)"))
+        #expect(names.contains("Compressor (Rust)"))
     }
 
     @Test @MainActor func factoryPresetsHavePresetNumbers() throws {
@@ -73,8 +78,23 @@ struct PresetManagerTests {
         for preset in factory {
             let source = manager.loadSource(for: preset)
             #expect(source != nil, "Should load source for factory preset \(preset.name)")
-            #expect(source!.contains("def process"), "Factory preset \(preset.name) should contain process function")
+            if preset.language == .rust {
+                #expect(source!.contains("fn process"), "Rust factory preset \(preset.name) should contain fn process")
+            } else {
+                #expect(source!.contains("def process"), "Python factory preset \(preset.name) should contain def process")
+            }
         }
+    }
+
+    @Test @MainActor func factoryPresetsHaveCorrectLanguage() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let factory = manager.presets.filter(\.isFactory)
+        let rustPresets = factory.filter { $0.language == .rust }
+        let pythonPresets = factory.filter { $0.language == .python }
+        #expect(rustPresets.count == 4, "Should have exactly 4 Rust factory presets")
+        #expect(pythonPresets.count == 4, "Should have exactly 4 Python factory presets")
     }
 
     // MARK: - User Preset CRUD
@@ -89,6 +109,21 @@ struct PresetManagerTests {
         #expect(preset.name == "My Effect")
         #expect(!preset.isFactory)
         #expect(preset.factoryPresetNumber == nil)
+
+        let loaded = manager.loadSource(for: preset)
+        #expect(loaded == script)
+    }
+
+    @Test @MainActor func saveAndLoadRustUserPreset() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let script = "fn process() {}\n"
+        let preset = try manager.saveUserPreset(name: "My Rust Effect", source: script, language: .rust)
+
+        #expect(preset.name == "My Rust Effect")
+        #expect(preset.language == .rust)
+        #expect(!preset.isFactory)
 
         let loaded = manager.loadSource(for: preset)
         #expect(loaded == script)
@@ -246,7 +281,7 @@ struct PresetManagerTests {
         #expect(userPresets.contains(where: { $0.name == "External" }))
     }
 
-    @Test @MainActor func nonPyFilesAreIgnored() throws {
+    @Test @MainActor func nonScriptFilesAreIgnored() throws {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
@@ -262,7 +297,24 @@ struct PresetManagerTests {
         manager.refreshPresets()
 
         let userPresets = manager.presets.filter { !$0.isFactory }
-        #expect(userPresets.isEmpty, "Non-.py files should be ignored")
+        #expect(userPresets.isEmpty, "Non-.py/.rs files should be ignored")
+    }
+
+    @Test @MainActor func rsFilesAreDiscovered() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        try "fn process() {}".write(
+            to: tempDir.appendingPathComponent("MyEffect.rs"),
+            atomically: true, encoding: .utf8
+        )
+
+        manager.refreshPresets()
+
+        let userPresets = manager.presets.filter { !$0.isFactory }
+        #expect(userPresets.count == 1)
+        #expect(userPresets[0].name == "MyEffect")
+        #expect(userPresets[0].language == .rust)
     }
 
     // MARK: - Empty State
@@ -271,7 +323,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        #expect(manager.presets.count == 3, "Should only have factory presets")
+        #expect(manager.presets.count == 8, "Should only have factory presets")
         let allFactory = manager.presets.allSatisfy(\.isFactory)
         #expect(allFactory)
     }
@@ -299,10 +351,10 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         // Save a user preset with the same name as a factory preset
-        try manager.saveUserPreset(name: "Tremolo", source: "# user tremolo\n")
+        try manager.saveUserPreset(name: "Tremolo (Python)", source: "# user tremolo\n")
 
-        let tremolos = manager.presets.filter { $0.name == "Tremolo" }
-        #expect(tremolos.count == 2, "Should have both factory and user 'Tremolo'")
+        let tremolos = manager.presets.filter { $0.name == "Tremolo (Python)" }
+        #expect(tremolos.count == 2, "Should have both factory and user 'Tremolo (Python)'")
 
         let factory = tremolos.first(where: \.isFactory)
         let user = tremolos.first(where: { !$0.isFactory })

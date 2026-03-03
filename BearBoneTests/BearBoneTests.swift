@@ -395,11 +395,16 @@ struct BearBoneTests {
     @Test func factoryPresetsExist() async throws {
         let (_, au) = try await Self.instantiateAU()
         let presets = au.factoryPresets ?? []
-        #expect(presets.count >= 3, "Should have at least 3 factory presets")
+        #expect(presets.count >= 8, "Should have at least 8 factory presets")
         let names = presets.map { $0.name }
-        #expect(names.contains("Passthrough"), "Should have Passthrough preset")
-        #expect(names.contains("Tremolo"), "Should have Tremolo preset")
-        #expect(names.contains("Bitcrush"), "Should have Bitcrush preset")
+        #expect(names.contains("Passthrough (Python)"), "Should have Passthrough (Python) preset")
+        #expect(names.contains("Tremolo (Python)"), "Should have Tremolo (Python) preset")
+        #expect(names.contains("Bitcrush (Python)"), "Should have Bitcrush (Python) preset")
+        #expect(names.contains("Compressor (Python)"), "Should have Compressor (Python) preset")
+        #expect(names.contains("Passthrough (Rust)"), "Should have Passthrough (Rust) preset")
+        #expect(names.contains("Tremolo (Rust)"), "Should have Tremolo (Rust) preset")
+        #expect(names.contains("Bitcrush (Rust)"), "Should have Bitcrush (Rust) preset")
+        #expect(names.contains("Compressor (Rust)"), "Should have Compressor (Rust) preset")
     }
 
     @Test func factoryPresetLoading() async throws {
@@ -407,14 +412,30 @@ struct BearBoneTests {
         let presets = au.factoryPresets ?? []
         #expect(!presets.isEmpty)
 
-        for preset in presets {
+        // Test Python factory presets (should load and contain def process)
+        let pythonPresets = presets.filter { !$0.name.contains("Rust") }
+        for preset in pythonPresets {
             au.currentPreset = preset
-            // After loading a factory preset, fullState should contain a script
             let state = au.fullState
             let data = state?[Self.scriptSourceKey] as? Data
             #expect(data != nil, "Factory preset '\(preset.name)' should set a script in fullState")
             let source = String(data: data!, encoding: .utf8) ?? ""
-            #expect(source.contains("def process"), "Factory preset '\(preset.name)' should contain process function")
+            #expect(source.contains("def process"), "Factory preset '\(preset.name)' should contain Python process function")
+        }
+    }
+
+    @Test func rustFactoryPresetsHaveRustContent() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let presets = au.factoryPresets ?? []
+        let rustPresets = presets.filter { $0.name.contains("Rust") }
+        #expect(rustPresets.count == 4, "Should have 4 Rust factory presets")
+        for rustPreset in rustPresets {
+            au.currentPreset = rustPreset
+            let state = au.fullState
+            let data = state?[Self.scriptSourceKey] as? Data
+            #expect(data != nil, "Rust factory preset '\(rustPreset.name)' should set script source in fullState")
+            let source = String(data: data!, encoding: .utf8) ?? ""
+            #expect(source.contains("fn process"), "Rust factory preset '\(rustPreset.name)' should contain Rust process function")
         }
     }
 
@@ -444,10 +465,11 @@ struct BearBoneTests {
     }
 
     @Test func presetsSwitchScriptInFullState() async throws {
-        // Verify that switching between presets changes the script in fullState
+        // Verify that switching between Python presets changes the script in fullState
         let (_, au) = try await Self.instantiateAU()
         let presets = au.factoryPresets ?? []
-        #expect(presets.count >= 2)
+        // Preset indices: 0=Passthrough(Python), 1=Tremolo(Python), 2=Bitcrush(Python), 3=Passthrough(Rust), 4=Tremolo(Rust), 5=Bitcrush(Rust)
+        #expect(presets.count >= 3)
 
         au.currentPreset = presets[1] // Tremolo
         let state1 = au.fullState
@@ -565,6 +587,52 @@ struct BearBoneTests {
         }
 
         au.deallocateRenderResources()
+    }
+
+    // MARK: - Rust Script Save Regression
+
+    @Test func rustScriptFullStateRoundtripDoesNotCallPythonPath() async throws {
+        // Regression test: saving a Rust script should not route through
+        // the Python reloadScript() path. We verify by setting a Rust script
+        // via fullState (which is what the save flow persists to) and
+        // confirming it roundtrips correctly with the rust language tag.
+        let (_, au) = try await Self.instantiateAU()
+        let rustSource = """
+            const MAX_CH: usize = 2;
+            const MAX_FR: usize = 4096;
+            static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
+            static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
+            #[no_mangle]
+            pub extern "C" fn get_input_ptr() -> i32 { unsafe { INPUT_BUF.as_ptr() as i32 } }
+            #[no_mangle]
+            pub extern "C" fn get_output_ptr() -> i32 { unsafe { OUTPUT_BUF.as_ptr() as i32 } }
+            #[no_mangle]
+            pub extern "C" fn process(input: *const f32, output: *mut f32, channels: i32, frame_count: i32, _sample_rate: f32) {
+                let n = (channels * frame_count) as usize;
+                unsafe {
+                    let inp = std::slice::from_raw_parts(input, n);
+                    let out = std::slice::from_raw_parts_mut(output, n);
+                    for i in 0..n { out[i] = inp[i]; }
+                }
+            }
+            """
+
+        // Set Rust script via fullState with the language key
+        var state: [String: Any] = au.fullState ?? [:]
+        state[Self.scriptSourceKey] = rustSource.data(using: .utf8)!
+        state["scriptLanguage"] = "rust"
+        au.fullState = state
+
+        // Verify the script roundtrips — if it hit the Python path, the source
+        // would not be stored (reloadScript fails and skips scriptSourceDidChange)
+        let restored = au.fullState
+        let data = restored?[Self.scriptSourceKey] as? Data
+        #expect(data != nil, "Rust script should be persisted in fullState")
+        let restoredSource = String(data: data!, encoding: .utf8)
+        #expect(restoredSource == rustSource, "Rust script should roundtrip through fullState")
+
+        let lang = restored?["scriptLanguage"] as? String
+        #expect(lang == "rust", "Language should be persisted as rust")
     }
 
     // MARK: - Build ID
