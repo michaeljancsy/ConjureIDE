@@ -158,9 +158,17 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             }
             do {
                 let saved = try pm.saveUserPreset(name: current.name, source: source, language: language)
-                let result = au.reloadScript(source: source)
-                pm.setCurrentPreset(saved, source: source)
-                return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+                switch language {
+                case .python:
+                    let result = au.reloadScript(source: source)
+                    pm.setCurrentPreset(saved, source: source)
+                    return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+                case .rust:
+                    // Rust saves persist source only — user clicks Run to compile
+                    au.currentScriptLanguage = .rust
+                    pm.setCurrentPreset(saved, source: source)
+                    return ScriptSaveResult(success: true, error: nil, processTimeMs: nil, budgetMs: nil)
+                }
             } catch {
                 return ScriptSaveResult(success: false, error: error.localizedDescription, processTimeMs: nil, budgetMs: nil)
             }
@@ -173,9 +181,16 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             }
             do {
                 let saved = try pm.saveUserPreset(name: name, source: source, language: language)
-                let result = au.reloadScript(source: source)
-                pm.setCurrentPreset(saved, source: source)
-                return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+                switch language {
+                case .python:
+                    let result = au.reloadScript(source: source)
+                    pm.setCurrentPreset(saved, source: source)
+                    return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+                case .rust:
+                    au.currentScriptLanguage = .rust
+                    pm.setCurrentPreset(saved, source: source)
+                    return ScriptSaveResult(success: true, error: nil, processTimeMs: nil, budgetMs: nil)
+                }
             } catch {
                 return ScriptSaveResult(success: false, error: error.localizedDescription, processTimeMs: nil, budgetMs: nil)
             }

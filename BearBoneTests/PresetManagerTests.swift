@@ -48,12 +48,14 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let factory = manager.presets.filter(\.isFactory)
-        #expect(factory.count == 4)
+        #expect(factory.count == 6)
         let names = factory.map(\.name)
         #expect(names.contains("Passthrough (Python)"))
         #expect(names.contains("Tremolo (Python)"))
         #expect(names.contains("Bitcrush (Python)"))
         #expect(names.contains("Passthrough (Rust)"))
+        #expect(names.contains("Tremolo (Rust)"))
+        #expect(names.contains("Bitcrush (Rust)"))
     }
 
     @Test @MainActor func factoryPresetsHavePresetNumbers() throws {
@@ -89,9 +91,8 @@ struct PresetManagerTests {
         let factory = manager.presets.filter(\.isFactory)
         let rustPresets = factory.filter { $0.language == .rust }
         let pythonPresets = factory.filter { $0.language == .python }
-        #expect(rustPresets.count == 1, "Should have exactly 1 Rust factory preset")
+        #expect(rustPresets.count == 3, "Should have exactly 3 Rust factory presets")
         #expect(pythonPresets.count == 3, "Should have exactly 3 Python factory presets")
-        #expect(rustPresets[0].name == "Passthrough (Rust)")
     }
 
     // MARK: - User Preset CRUD
@@ -320,7 +321,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        #expect(manager.presets.count == 4, "Should only have factory presets")
+        #expect(manager.presets.count == 6, "Should only have factory presets")
         let allFactory = manager.presets.allSatisfy(\.isFactory)
         #expect(allFactory)
     }
