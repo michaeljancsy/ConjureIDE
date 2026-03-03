@@ -4,6 +4,9 @@ rust/target/
 # Bundled Python distribution (created by rust/setup-python.sh)
 rust/python-dist/
 
+# Bundled Rust compiler distribution (created by scripts/setup-rustc.sh)
+rustc-dist/
+
 # Xcode build artifacts
 build/
 DerivedData/

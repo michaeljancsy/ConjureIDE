@@ -2,6 +2,7 @@
 
 ## In Progress
 - Multi-language WASM DSP: Phases 1-5 done (Backend trait, WasmBackend, Rust compilation pipeline, UI language selector, AI multi-language generation). Remaining: Phase 6 (DSP utility libraries), C/C++ compilation support
+- Bundle Rust compiler for sandbox-safe compilation: AU extension sandbox blocks Process.run() on any binary outside the container (NSCocoaErrorDomain code 4, not EPERM). Bundled standalone rustc 1.93.1 + wasm32-wasip1 sysroot (~390 MB) inside the .appex Resources, following the Python bundling pattern. Created `scripts/setup-rustc.sh`, added "Copy Rust Compiler" Xcode build phase with code-signing, updated `RustCompiler.swift` to prefer bundled compiler with fallback to user-installed. Build succeeds, all unit tests pass. Needs manual verification: click Run on Rust preset in BearBone.app, then test in a DAW.
 
 ## To Do
 - Host app DAW controls: Add preset selection and a bypass button to the BearBone host app, like a DAW would provide

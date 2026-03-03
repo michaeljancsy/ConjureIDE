@@ -131,12 +131,14 @@ struct BearBoneExtensionMainView: View {
                     }
                     .padding(.horizontal)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("compilingStatus")
                 } else if let errorMessage = errorMessage {
                     HStack(spacing: 8) {
                         Text(errorMessage)
                             .foregroundColor(.red)
                             .font(.caption)
                             .lineLimit(3)
+                            .accessibilityIdentifier("errorStatus")
 
                         Spacer()
 
@@ -158,12 +160,14 @@ struct BearBoneExtensionMainView: View {
                             .font(.caption)
                             .padding(.horizontal)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("successStatus")
                     } else {
                         Text("Script reloaded successfully")
                             .foregroundColor(.green)
                             .font(.caption)
                             .padding(.horizontal)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("successStatus")
                     }
                 }
 

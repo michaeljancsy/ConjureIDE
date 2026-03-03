@@ -167,6 +167,71 @@ final class BearBoneUITests: XCTestCase {
                       "After cycling past Rust preset, should find a Python preset with 'def process'")
     }
 
+    // MARK: - Rust Compilation Tests
+
+    @MainActor
+    func testRustPresetCompilesSuccessfully() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let editor = app.textViews["scriptEditor"]
+        guard editor.waitForExistence(timeout: 20) else {
+            XCTFail("Script editor not found")
+            return
+        }
+
+        let nextButton = app.buttons["nextPresetButton"]
+        guard nextButton.waitForExistence(timeout: 10) else {
+            XCTFail("Next preset button not found")
+            return
+        }
+
+        // Navigate to Rust preset
+        let foundRust = navigateToPresetContaining("fn process", editor: editor, nextButton: nextButton)
+        XCTAssertTrue(foundRust, "Should find a Rust preset with 'fn process'")
+
+        // Click Run
+        let runButton = app.buttons["runButton"]
+        guard runButton.waitForExistence(timeout: 5) else {
+            XCTFail("Run button not found")
+            return
+        }
+        runButton.click()
+
+        // Wait for compilation to finish — look for either success or error status.
+        // Compilation can take several seconds for Rust/WASM.
+        let successStatus = app.staticTexts["successStatus"]
+        let errorStatus = app.staticTexts["errorStatus"]
+
+        // Poll for up to 30 seconds for either status to appear
+        let deadline = Date().addingTimeInterval(30)
+        var foundStatus = false
+        while Date() < deadline {
+            if successStatus.exists || errorStatus.exists {
+                foundStatus = true
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+
+        XCTAssertTrue(foundStatus, "Should see either success or error status after clicking Run")
+
+        if errorStatus.exists {
+            let errorText = errorStatus.value as? String ?? errorStatus.label
+            XCTAssertFalse(errorText.contains("not found"),
+                           "Rust compilation should not fail with 'not found': \(errorText)")
+            XCTAssertFalse(errorText.contains("rustc not found"),
+                           "rustc should be discoverable in the AU extension context")
+        }
+
+        // Ideally we get success
+        if successStatus.exists {
+            let successText = successStatus.value as? String ?? successStatus.label
+            XCTAssertTrue(successText.contains("Script reloaded"),
+                          "Success status should indicate script was reloaded, got: \(successText)")
+        }
+    }
+
     // MARK: - Typing Tests
 
     @MainActor

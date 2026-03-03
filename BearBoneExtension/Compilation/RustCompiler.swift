@@ -1,25 +1,30 @@
 import Foundation
+import os
 
-/// Compiles Rust source files to WASM using the system `rustc`.
+/// Compiles Rust source files to WASM.
+///
+/// Prefers the bundled Rust compiler (shipped inside the extension's Resources)
+/// which works even in sandboxed DAW hosts. Falls back to user-installed rustc
+/// for development convenience.
 final class RustCompiler: ScriptCompiler {
     let displayName = "Rust"
 
     private var cachedRustcURL: URL?
+    private var useBundledSysroot = false
+    private let log = Logger(subsystem: "com.MichaelJancsy.BearBone", category: "RustCompiler")
 
     func isAvailable() async -> Bool {
-        return findRustc() != nil && isWasmTargetInstalled()
+        return findRustc() != nil
     }
 
     func compile(source: String) async throws -> Data {
         guard let rustc = findRustc() else {
+            log.error("compile: findRustc returned nil")
             throw CompilationError.compilerNotFound(
-                "rustc not found. Install Rust via https://rustup.rs")
+                "Rust compiler not found. The bundled compiler may be missing — "
+                    + "run scripts/setup-rustc.sh and rebuild.")
         }
-
-        guard isWasmTargetInstalled() else {
-            throw CompilationError.targetNotInstalled(
-                "wasm32-wasip1 target not installed. Run: rustup target add wasm32-wasip1")
-        }
+        log.info("compile: using rustc at \(rustc.path, privacy: .public), bundled=\(self.useBundledSysroot)")
 
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("bearbone-compile-\(UUID().uuidString)")
@@ -32,7 +37,8 @@ final class RustCompiler: ScriptCompiler {
 
         let process = Process()
         process.executableURL = rustc
-        process.arguments = [
+
+        var args = [
             "--target", "wasm32-wasip1",
             "--edition", "2021",
             "-C", "opt-level=2",
@@ -41,6 +47,18 @@ final class RustCompiler: ScriptCompiler {
             inputFile.path,
         ]
 
+        // When using bundled compiler, set explicit sysroot
+        if useBundledSysroot, let sysroot = bundledSysroot() {
+            args = ["--sysroot", sysroot.path] + args
+
+            // Set DYLD_LIBRARY_PATH so librustc_driver can be found
+            var env = ProcessInfo.processInfo.environment
+            env["DYLD_LIBRARY_PATH"] = sysroot.appendingPathComponent("lib").path
+            process.environment = env
+        }
+
+        process.arguments = args
+
         let stderrPipe = Pipe()
         process.standardError = stderrPipe
         process.standardOutput = FileHandle.nullDevice
@@ -48,10 +66,10 @@ final class RustCompiler: ScriptCompiler {
         do {
             try process.run()
         } catch {
-            // EPERM or similar — sandboxed environment
+            let nsErr = error as NSError
+            log.error("compile: Process.run() failed: domain=\(nsErr.domain, privacy: .public) code=\(nsErr.code) \(error.localizedDescription, privacy: .public)")
             throw CompilationError.sandboxRestriction(
-                "Rust compilation requires BearBone host app. "
-                    + "Load a pre-compiled .wasm file or compile in BearBone.app."
+                "Failed to run Rust compiler: \(error.localizedDescription)"
             )
         }
 
@@ -69,10 +87,46 @@ final class RustCompiler: ScriptCompiler {
 
     // MARK: - Private
 
+    /// Find the bundled rustc-dist sysroot in the extension bundle's Resources.
+    private func bundledSysroot() -> URL? {
+        let bundle = Bundle(for: RustCompiler.self)
+        guard let path = bundle.path(forResource: "rustc-dist", ofType: nil) else {
+            return nil
+        }
+        return URL(fileURLWithPath: path)
+    }
+
+    /// Find the bundled rustc binary.
+    private func bundledRustc() -> URL? {
+        guard let sysroot = bundledSysroot() else { return nil }
+        let rustc = sysroot.appendingPathComponent("bin/rustc")
+        if FileManager.default.fileExists(atPath: rustc.path) {
+            return rustc
+        }
+        return nil
+    }
+
+    /// Real user home directory, bypassing sandbox container redirection.
+    private var realUserHome: String {
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            return String(cString: dir)
+        }
+        return NSHomeDirectory()
+    }
+
     private func findRustc() -> URL? {
         if let cached = cachedRustcURL { return cached }
 
-        let home = NSHomeDirectory()
+        // Prefer bundled compiler (works in sandbox)
+        if let bundled = bundledRustc() {
+            log.info("findRustc: using bundled compiler at \(bundled.path, privacy: .public)")
+            cachedRustcURL = bundled
+            useBundledSysroot = true
+            return cachedRustcURL
+        }
+
+        // Fall back to user-installed rustc (development convenience)
+        let home = realUserHome
         let candidates = [
             "\(home)/.cargo/bin/rustc",
             "/usr/local/bin/rustc",
@@ -80,56 +134,16 @@ final class RustCompiler: ScriptCompiler {
         ]
 
         for path in candidates {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                cachedRustcURL = URL(fileURLWithPath: path)
+            if FileManager.default.fileExists(atPath: path) {
+                let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+                log.info("findRustc: found system rustc at \(path, privacy: .public) → \(resolved.path, privacy: .public)")
+                cachedRustcURL = resolved
+                useBundledSysroot = false
                 return cachedRustcURL
             }
         }
 
-        // Try which rustc with augmented PATH
-        if let path = runCommand("/usr/bin/which", args: ["rustc"], extraPath: "\(home)/.cargo/bin") {
-            let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty && FileManager.default.isExecutableFile(atPath: trimmed) {
-                cachedRustcURL = URL(fileURLWithPath: trimmed)
-                return cachedRustcURL
-            }
-        }
-
+        log.error("findRustc: no rustc found (home=\(home, privacy: .public))")
         return nil
-    }
-
-    private func isWasmTargetInstalled() -> Bool {
-        guard let rustc = findRustc() else { return false }
-        guard let output = runCommand(rustc.path, args: ["--print", "target-list"]) else {
-            return false
-        }
-        return output.contains("wasm32-wasip1")
-    }
-
-    private func runCommand(
-        _ path: String, args: [String], extraPath: String? = nil
-    ) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-
-        if let extraPath = extraPath {
-            var env = ProcessInfo.processInfo.environment
-            env["PATH"] = (env["PATH"] ?? "") + ":" + extraPath
-            process.environment = env
-        }
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            return String(data: data, encoding: .utf8)
-        } catch {
-            return nil
-        }
     }
 }
