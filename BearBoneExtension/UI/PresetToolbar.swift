@@ -109,6 +109,7 @@ struct PresetToolbar: View {
             .popover(isPresented: $showingGenerate) {
                 GeneratePopover(
                     aiService: aiService,
+                    language: selectedLanguage,
                     isPresented: $showingGenerate,
                     onGenerate: onGenerate
                 )

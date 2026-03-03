@@ -30,15 +30,16 @@ enum AIProviderError: LocalizedError {
     }
 }
 
-/// Protocol for LLM providers that generate Python DSP scripts.
+/// Protocol for LLM providers that generate DSP scripts.
 protocol AIProvider {
     var name: String { get }
 
-    /// Generate a complete Python DSP script from a user's natural language description.
+    /// Generate a complete DSP script from a user's natural language description.
     /// Yields text chunks as they arrive from the streaming API.
     func generateScript(
         prompt: String,
         existingScript: String?,
+        language: ScriptLanguage,
         apiKey: String
     ) -> AsyncThrowingStream<String, Error>
 
@@ -47,6 +48,7 @@ protocol AIProvider {
     func fixScript(
         script: String,
         error: String,
+        language: ScriptLanguage,
         apiKey: String
     ) -> AsyncThrowingStream<String, Error>
 }

@@ -56,6 +56,74 @@ final class AnthropicProvider: AIProvider {
         - All subsequent calls must be allocation-free
         """
 
+    // MARK: - Rust Prompts
+
+    private static let rustApiContract = """
+        API contract (Rust compiled to WebAssembly):
+        - The script is compiled to wasm32-wasip1 and runs in a WASM sandbox
+        - Must define three #[no_mangle] pub extern "C" functions:
+          1. get_input_ptr() -> i32  — returns pointer to the input buffer
+          2. get_output_ptr() -> i32 — returns pointer to the output buffer
+          3. process(input: *const f32, output: *mut f32, channels: i32, frame_count: i32, sample_rate: f32)
+        - Static buffers: define MAX_CH (2) and MAX_FR (4096) constants, then:
+          static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
+          static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
+        - Audio is interleaved: total samples = channels * frame_count
+        - Use std::slice::from_raw_parts(input, n) and from_raw_parts_mut(output, n) inside unsafe blocks
+        - Must handle both mono (1 channel) and stereo (2 channels)
+        - For stereo, samples are interleaved: [L0, R0, L1, R1, ...]
+        """
+
+    private static let rustRealTimeRules = """
+        Real-time safety rules — process() runs in the audio callback inside a WASM sandbox:
+
+        NO HEAP ALLOCATIONS:
+        - No Box, Vec, String, format!, or any heap-allocating types
+        - No std::collections (HashMap, BTreeMap, etc.)
+        - No dynamic dispatch (Box<dyn Trait>)
+        - All state must be in static mut globals (safe in single-threaded WASM)
+
+        NO PANICS:
+        - Use wrapping arithmetic or manual bounds checks instead of indexing that could panic
+        - No unwrap() or expect() on Option/Result
+        - No integer overflow in debug mode (use wrapping_add, wrapping_mul, etc.)
+
+        NO I/O:
+        - No println!, eprintln!, or any print macros
+        - No file access or network access
+        - No std::io operations
+
+        SAFE PATTERNS:
+        - State persistence via static mut globals (WASM is single-threaded, so this is safe)
+        - Direct pointer arithmetic with std::slice::from_raw_parts / from_raw_parts_mut
+        - Inline math (f32 operations: sin, cos, etc. via f32 methods)
+        - Constants via const or static
+        """
+
+    private static let rustSystemPrompt = """
+        You are a DSP script generator for a real-time audio plugin compiled to WebAssembly. \
+        Generate Rust scripts that define a `process()` function and static buffers.
+
+        \(rustApiContract)
+
+        \(rustRealTimeRules)
+
+        Output ONLY the Rust source code. No explanations, no markdown fences, no comments about \
+        what the script does. The script must be complete and immediately compilable.
+        """
+
+    private static let rustFixSystemPrompt = """
+        You are a DSP script debugger for a real-time audio plugin compiled to WebAssembly. \
+        The user's Rust DSP script has a compilation or runtime error. Fix the script to resolve \
+        the error while preserving the intended behavior.
+
+        \(rustApiContract)
+
+        \(rustRealTimeRules)
+
+        Output ONLY the corrected Rust source code. No explanations, no markdown fences.
+        """
+
     private static let systemPrompt = """
         You are a DSP script generator for a real-time audio plugin. Generate Python scripts \
         that define a `process()` function.
@@ -82,6 +150,7 @@ final class AnthropicProvider: AIProvider {
     func generateScript(
         prompt: String,
         existingScript: String?,
+        language: ScriptLanguage,
         apiKey: String
     ) -> AsyncThrowingStream<String, Error> {
         var userContent = prompt
@@ -93,12 +162,14 @@ final class AnthropicProvider: AIProvider {
             ["role": "user", "content": userContent],
         ]
 
-        return streamRequest(messages: messages, systemPrompt: Self.systemPrompt, apiKey: apiKey)
+        let prompt = language == .rust ? Self.rustSystemPrompt : Self.systemPrompt
+        return streamRequest(messages: messages, systemPrompt: prompt, apiKey: apiKey)
     }
 
     func fixScript(
         script: String,
         error: String,
+        language: ScriptLanguage,
         apiKey: String
     ) -> AsyncThrowingStream<String, Error> {
         let userContent = """
@@ -115,7 +186,8 @@ final class AnthropicProvider: AIProvider {
             ["role": "user", "content": userContent],
         ]
 
-        return streamRequest(messages: messages, systemPrompt: Self.fixSystemPrompt, apiKey: apiKey)
+        let prompt = language == .rust ? Self.rustFixSystemPrompt : Self.fixSystemPrompt
+        return streamRequest(messages: messages, systemPrompt: prompt, apiKey: apiKey)
     }
 
     private func streamRequest(

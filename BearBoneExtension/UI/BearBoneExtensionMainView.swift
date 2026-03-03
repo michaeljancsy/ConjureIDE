@@ -86,7 +86,7 @@ struct BearBoneExtensionMainView: View {
                     handleResult(result)
                 },
                 onGenerate: { prompt in
-                    aiService.generate(prompt: prompt, existingScript: scriptSource) { accumulated in
+                    aiService.generate(prompt: prompt, existingScript: scriptSource, language: selectedLanguage) { accumulated in
                         scriptSource = accumulated
                     }
                 },
@@ -141,7 +141,7 @@ struct BearBoneExtensionMainView: View {
                         Spacer()
 
                         Button("Fix with AI") {
-                            aiService.fix(script: scriptSource, error: errorMessage) { accumulated in
+                            aiService.fix(script: scriptSource, error: errorMessage, language: selectedLanguage) { accumulated in
                                 scriptSource = accumulated
                             }
                         }

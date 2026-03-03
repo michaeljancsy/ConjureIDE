@@ -59,6 +59,7 @@ final class AIService: ObservableObject {
     /// Generate a script from a natural language prompt. Streams text chunks via onUpdate.
     func generate(
         prompt: String, existingScript: String?,
+        language: ScriptLanguage,
         onUpdate: @Sendable @escaping (String) -> Void
     ) {
         cancel()
@@ -77,7 +78,8 @@ final class AIService: ObservableObject {
 
             do {
                 let stream = self.selectedProvider.generateScript(
-                    prompt: prompt, existingScript: existingScript, apiKey: key
+                    prompt: prompt, existingScript: existingScript,
+                    language: language, apiKey: key
                 )
                 for try await chunk in stream {
                     guard !Task.isCancelled else { break }
@@ -104,6 +106,7 @@ final class AIService: ObservableObject {
     /// Fix a broken script given the error message. Streams text chunks via onUpdate.
     func fix(
         script: String, error: String,
+        language: ScriptLanguage,
         onUpdate: @Sendable @escaping (String) -> Void
     ) {
         cancel()
@@ -122,7 +125,8 @@ final class AIService: ObservableObject {
 
             do {
                 let stream = self.selectedProvider.fixScript(
-                    script: script, error: error, apiKey: key
+                    script: script, error: error,
+                    language: language, apiKey: key
                 )
                 for try await chunk in stream {
                     guard !Task.isCancelled else { break }
