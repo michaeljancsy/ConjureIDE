@@ -165,6 +165,172 @@ struct SyntaxHighlighterTests {
 
     // MARK: - Full script (default process.py)
 
+    // MARK: - Rust Highlighter
+
+    private static func rustColorAt(
+        offset: Int,
+        in source: String,
+        theme: RustSyntaxHighlighter.Theme = .dark
+    ) -> NSColor {
+        let ts = NSTextStorage(string: source)
+        let highlighter = RustSyntaxHighlighter(theme: theme)
+        highlighter.highlight(ts)
+        let attrs = ts.attributes(at: offset, effectiveRange: nil)
+        return attrs[.foregroundColor] as? NSColor ?? .clear
+    }
+
+    @Test func rustHighlightsKeywords() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        let color = Self.rustColorAt(offset: 0, in: "fn main() {}")
+        #expect(Self.colorsMatch(color, theme.keyword),
+                "'fn' should be colored as a keyword")
+    }
+
+    @Test func rustHighlightsLetMut() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        let color = Self.rustColorAt(offset: 0, in: "let mut x = 5;")
+        #expect(Self.colorsMatch(color, theme.keyword),
+                "'let' should be colored as a keyword")
+    }
+
+    @Test func rustHighlightsTypes() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        // "x: f32" — "f32" starts at offset 3
+        let color = Self.rustColorAt(offset: 3, in: "x: f32")
+        #expect(Self.colorsMatch(color, theme.type),
+                "'f32' should be colored as a type")
+    }
+
+    @Test func rustHighlightsStrings() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        // "let s = \"hello\"" — inside the string
+        let source = #"let s = "hello""#
+        let quoteIdx = (source as NSString).range(of: "\"").location
+        let color = Self.rustColorAt(offset: quoteIdx + 1, in: source)
+        #expect(Self.colorsMatch(color, theme.string),
+                "String content should be colored as a string")
+    }
+
+    @Test func rustHighlightsLineComments() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        let color = Self.rustColorAt(offset: 3, in: "// this is a comment")
+        #expect(Self.colorsMatch(color, theme.comment),
+                "Comment text should be colored as a comment")
+    }
+
+    @Test func rustHighlightsBlockComments() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        let color = Self.rustColorAt(offset: 3, in: "/* block comment */")
+        #expect(Self.colorsMatch(color, theme.comment),
+                "Block comment should be colored as a comment")
+    }
+
+    @Test func rustHighlightsNumbers() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        let color = Self.rustColorAt(offset: 4, in: "x = 42;")
+        #expect(Self.colorsMatch(color, theme.number),
+                "Integer literal should be colored as a number")
+    }
+
+    @Test func rustHighlightsMacros() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        // "println!" — offset 0 is start of macro
+        let color = Self.rustColorAt(offset: 0, in: "println!(\"hi\")")
+        #expect(Self.colorsMatch(color, theme.macro),
+                "'println!' should be colored as a macro")
+    }
+
+    @Test func rustHighlightsAttributes() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        let color = Self.rustColorAt(offset: 1, in: "#[no_mangle]")
+        #expect(Self.colorsMatch(color, theme.attribute),
+                "'#[no_mangle]' should be colored as an attribute")
+    }
+
+    @Test func rustHighlightsLifetimes() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        // "fn foo<'a>" — 'a starts at offset 7
+        let color = Self.rustColorAt(offset: 8, in: "fn foo<'a>()")
+        #expect(Self.colorsMatch(color, theme.lifetime),
+                "Lifetime should be colored")
+    }
+
+    @Test func rustHighlightsFnNames() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        // "fn process()" — "process" starts at offset 3
+        let color = Self.rustColorAt(offset: 3, in: "fn process()")
+        #expect(Self.colorsMatch(color, theme.fnName),
+                "Function name after 'fn' should be colored as fnName")
+    }
+
+    @Test func rustDarkAndLightThemesProduceDifferentColors() {
+        let source = "fn main() {}"
+        let darkColor = Self.rustColorAt(offset: 0, in: source, theme: .dark)
+        let lightColor = Self.rustColorAt(offset: 0, in: source, theme: .light)
+        #expect(!Self.colorsMatch(darkColor, lightColor),
+                "Dark and light themes should produce different keyword colors")
+    }
+
+    @Test func rustCommentsOverrideKeywords() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        let source = "// fn not_a_function"
+        let fnOffset = 3
+        let color = Self.rustColorAt(offset: fnOffset, in: source)
+        #expect(Self.colorsMatch(color, theme.comment),
+                "'fn' inside a comment should be colored as a comment")
+    }
+
+    @Test func rustHighlightsFullTemplate() {
+        let theme = RustSyntaxHighlighter.Theme.dark
+        let source = """
+        #[no_mangle]
+        pub extern "C" fn process(input: *const f32, output: *mut f32) {
+            let n = 42;
+            // copy input to output
+        }
+        """
+        let ts = NSTextStorage(string: source)
+        let highlighter = RustSyntaxHighlighter(theme: theme)
+        highlighter.highlight(ts)
+
+        // "#[no_mangle]" at offset 0 → attribute
+        let attrColor = ts.attributes(at: 1, effectiveRange: nil)[.foregroundColor] as? NSColor ?? .clear
+        #expect(Self.colorsMatch(attrColor, theme.attribute), "Attribute should be highlighted")
+
+        // "pub" → keyword
+        let pubIdx = (source as NSString).range(of: "pub").location
+        let pubColor = ts.attributes(at: pubIdx, effectiveRange: nil)[.foregroundColor] as? NSColor ?? .clear
+        #expect(Self.colorsMatch(pubColor, theme.keyword), "'pub' should be keyword-colored")
+
+        // "f32" → type
+        let f32Idx = (source as NSString).range(of: "f32").location
+        let f32Color = ts.attributes(at: f32Idx, effectiveRange: nil)[.foregroundColor] as? NSColor ?? .clear
+        #expect(Self.colorsMatch(f32Color, theme.type), "'f32' should be type-colored")
+
+        // "42" → number
+        let numIdx = (source as NSString).range(of: "42").location
+        let numColor = ts.attributes(at: numIdx, effectiveRange: nil)[.foregroundColor] as? NSColor ?? .clear
+        #expect(Self.colorsMatch(numColor, theme.number), "'42' should be number-colored")
+
+        // "// copy" → comment
+        let commentIdx = (source as NSString).range(of: "// copy").location
+        let commentColor = ts.attributes(at: commentIdx + 3, effectiveRange: nil)[.foregroundColor] as? NSColor ?? .clear
+        #expect(Self.colorsMatch(commentColor, theme.comment), "Comment should be highlighted")
+    }
+
+    // MARK: - Protocol Conformance
+
+    @Test func bothHighlightersConformToProtocol() {
+        let python: any SyntaxHighlighter = PythonSyntaxHighlighter(theme: .dark)
+        let rust: any SyntaxHighlighter = RustSyntaxHighlighter(theme: .dark)
+        let ts = NSTextStorage(string: "test")
+        python.highlight(ts)
+        rust.highlight(ts)
+        // If this compiles and runs, both conform to SyntaxHighlighter
+    }
+
+    // MARK: - Full Python script
+
     @Test func highlightsDefaultScript() {
         let theme = PythonSyntaxHighlighter.Theme.dark
         let source = """

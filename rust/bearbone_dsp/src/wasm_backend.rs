@@ -1,6 +1,15 @@
 use crate::backend::Backend;
 use wasmtime::*;
 
+/// How I/O buffer addresses are determined in WASM memory.
+enum BufferMode {
+    /// Backend chooses fixed offsets (for hand-written WAT modules without getters).
+    FixedOffset,
+    /// Module exports `get_input_ptr()`/`get_output_ptr()` that return buffer addresses.
+    /// Used by compiled Rust/C modules whose memory layout is managed by the compiler.
+    ModuleAllocated,
+}
+
 /// WASM DSP backend using wasmtime.
 ///
 /// Loads a WASM module that exports a `process` function and `memory`.
@@ -12,10 +21,17 @@ use wasmtime::*;
 /// Memory layout at input_ptr / output_ptr:
 ///   Channels laid out sequentially, each `frame_count` floats.
 ///   `[ch0_f0, ch0_f1, ..., ch1_f0, ch1_f1, ...]`
+///
+/// Compiled modules (Rust/C targeting wasm32-wasip1) should export `get_input_ptr()` and
+/// `get_output_ptr()` functions that return the addresses of pre-allocated static buffers.
+/// This avoids memory layout conflicts with the compiler's stack/heap.
 pub struct WasmBackend {
     store: Store<()>,
     memory: Memory,
     process_fn: TypedFunc<(i32, i32, i32, i32, f32), ()>,
+    get_input_ptr_fn: Option<TypedFunc<(), i32>>,
+    get_output_ptr_fn: Option<TypedFunc<(), i32>>,
+    buffer_mode: BufferMode,
     input_offset: i32,
     output_offset: i32,
     channel_count: usize,
@@ -27,8 +43,12 @@ pub struct WasmBackend {
 /// Base offset in WASM linear memory to avoid the null page.
 const MEMORY_BASE: i32 = 1024;
 
-/// Default fuel budget per audio callback (~1M instructions).
+/// Default fuel budget per audio callback (~1M instructions) for hand-written WAT.
 const DEFAULT_FUEL: u64 = 1_000_000;
+
+/// Higher fuel budget for compiled modules (Rust/C via wasm32-wasip1).
+/// Compiled code includes musl overhead, bounds checking, etc.
+const COMPILED_FUEL: u64 = 10_000_000;
 
 impl WasmBackend {
     /// Load a WASM module from bytes.
@@ -36,6 +56,12 @@ impl WasmBackend {
     /// The module must export:
     /// - `memory`: linear memory
     /// - `process(i32, i32, i32, i32, f32) -> ()`: DSP function
+    ///
+    /// Optionally, the module may export:
+    /// - `get_input_ptr() -> i32`: returns address of pre-allocated input buffer
+    /// - `get_output_ptr() -> i32`: returns address of pre-allocated output buffer
+    ///
+    /// WASI preview1 imports are automatically stubbed for compiled modules.
     pub fn load(wasm_bytes: &[u8]) -> Result<Self, String> {
         let mut config = Config::new();
         config.consume_fuel(true);
@@ -46,12 +72,16 @@ impl WasmBackend {
             Module::new(&engine, wasm_bytes).map_err(|e| format!("Invalid WASM module: {}", e))?;
 
         let mut store = Store::new(&engine, ());
-        // Add initial fuel for module instantiation
         store
-            .set_fuel(DEFAULT_FUEL)
+            .set_fuel(COMPILED_FUEL)
             .map_err(|e| format!("Failed to set fuel: {}", e))?;
 
-        let instance = Instance::new(&mut store, &module, &[])
+        // Use Linker for instantiation so we can provide WASI stubs
+        let mut linker = Linker::new(&engine);
+        Self::add_wasi_stubs(&mut linker)?;
+
+        let instance = linker
+            .instantiate(&mut store, &module)
             .map_err(|e| format!("Failed to instantiate module: {}", e))?;
 
         let memory = instance
@@ -62,17 +92,228 @@ impl WasmBackend {
             .get_typed_func::<(i32, i32, i32, i32, f32), ()>(&mut store, "process")
             .map_err(|e| format!("Module does not export a valid 'process' function: {}", e))?;
 
+        // Detect module-allocated buffers
+        let get_input_ptr_fn = instance
+            .get_typed_func::<(), i32>(&mut store, "get_input_ptr")
+            .ok();
+        let get_output_ptr_fn = instance
+            .get_typed_func::<(), i32>(&mut store, "get_output_ptr")
+            .ok();
+
+        let buffer_mode =
+            if get_input_ptr_fn.is_some() && get_output_ptr_fn.is_some() {
+                BufferMode::ModuleAllocated
+            } else {
+                BufferMode::FixedOffset
+            };
+
+        let fuel_per_callback = match buffer_mode {
+            BufferMode::ModuleAllocated => COMPILED_FUEL,
+            BufferMode::FixedOffset => DEFAULT_FUEL,
+        };
+
         Ok(Self {
             store,
             memory,
             process_fn,
+            get_input_ptr_fn,
+            get_output_ptr_fn,
+            buffer_mode,
             input_offset: 0,
             output_offset: 0,
             channel_count: 0,
             max_frames: 0,
-            fuel_per_callback: DEFAULT_FUEL,
+            fuel_per_callback,
             last_error: None,
         })
+    }
+
+    /// Register minimal WASI preview1 stubs so compiled modules can instantiate.
+    /// These stubs provide no real I/O — they return success with empty results.
+    fn add_wasi_stubs(linker: &mut Linker<()>) -> Result<(), String> {
+        let e = |err: Error| format!("Failed to register WASI stub: {}", err);
+
+        // fd_write(fd, iovs_ptr, iovs_len, nwritten_ptr) -> errno
+        linker
+            .func_wrap(
+                "wasi_snapshot_preview1",
+                "fd_write",
+                |mut caller: Caller<'_, ()>,
+                 _fd: i32,
+                 _iovs: i32,
+                 _iovs_len: i32,
+                 nwritten_ptr: i32|
+                 -> i32 {
+                    if let Some(memory) =
+                        caller.get_export("memory").and_then(|e| e.into_memory())
+                    {
+                        let data = memory.data_mut(&mut caller);
+                        let ptr = nwritten_ptr as usize;
+                        if ptr + 4 <= data.len() {
+                            data[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                        }
+                    }
+                    0
+                },
+            )
+            .map_err(e)?;
+
+        // fd_read(fd, iovs_ptr, iovs_len, nread_ptr) -> errno
+        linker
+            .func_wrap(
+                "wasi_snapshot_preview1",
+                "fd_read",
+                |mut caller: Caller<'_, ()>,
+                 _fd: i32,
+                 _iovs: i32,
+                 _iovs_len: i32,
+                 nread_ptr: i32|
+                 -> i32 {
+                    if let Some(memory) =
+                        caller.get_export("memory").and_then(|e| e.into_memory())
+                    {
+                        let data = memory.data_mut(&mut caller);
+                        let ptr = nread_ptr as usize;
+                        if ptr + 4 <= data.len() {
+                            data[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                        }
+                    }
+                    0
+                },
+            )
+            .map_err(e)?;
+
+        // fd_close(fd) -> errno
+        linker
+            .func_wrap("wasi_snapshot_preview1", "fd_close", |_fd: i32| -> i32 { 0 })
+            .map_err(e)?;
+
+        // fd_seek(fd, offset, whence, new_offset_ptr) -> errno
+        linker
+            .func_wrap(
+                "wasi_snapshot_preview1",
+                "fd_seek",
+                |_fd: i32, _offset: i64, _whence: i32, _new_offset_ptr: i32| -> i32 { 8 },
+            )
+            .map_err(e)?;
+
+        // fd_prestat_get(fd, buf_ptr) -> errno
+        linker
+            .func_wrap(
+                "wasi_snapshot_preview1",
+                "fd_prestat_get",
+                |_fd: i32, _buf: i32| -> i32 { 8 },
+            )
+            .map_err(e)?;
+
+        // fd_prestat_dir_name(fd, path_ptr, path_len) -> errno
+        linker
+            .func_wrap(
+                "wasi_snapshot_preview1",
+                "fd_prestat_dir_name",
+                |_fd: i32, _path: i32, _path_len: i32| -> i32 { 8 },
+            )
+            .map_err(e)?;
+
+        // fd_fdstat_get(fd, buf_ptr) -> errno
+        linker
+            .func_wrap(
+                "wasi_snapshot_preview1",
+                "fd_fdstat_get",
+                |_fd: i32, _buf: i32| -> i32 { 8 },
+            )
+            .map_err(e)?;
+
+        // environ_sizes_get(count_ptr, size_ptr) -> errno
+        linker
+            .func_wrap(
+                "wasi_snapshot_preview1",
+                "environ_sizes_get",
+                |mut caller: Caller<'_, ()>, count_ptr: i32, size_ptr: i32| -> i32 {
+                    if let Some(memory) =
+                        caller.get_export("memory").and_then(|e| e.into_memory())
+                    {
+                        let data = memory.data_mut(&mut caller);
+                        let cp = count_ptr as usize;
+                        let sp = size_ptr as usize;
+                        if cp + 4 <= data.len() {
+                            data[cp..cp + 4].copy_from_slice(&0u32.to_le_bytes());
+                        }
+                        if sp + 4 <= data.len() {
+                            data[sp..sp + 4].copy_from_slice(&0u32.to_le_bytes());
+                        }
+                    }
+                    0
+                },
+            )
+            .map_err(e)?;
+
+        // environ_get(environ_ptr, environ_buf_ptr) -> errno
+        linker
+            .func_wrap(
+                "wasi_snapshot_preview1",
+                "environ_get",
+                |_environ: i32, _environ_buf: i32| -> i32 { 0 },
+            )
+            .map_err(e)?;
+
+        // args_sizes_get(count_ptr, size_ptr) -> errno
+        linker
+            .func_wrap(
+                "wasi_snapshot_preview1",
+                "args_sizes_get",
+                |mut caller: Caller<'_, ()>, count_ptr: i32, size_ptr: i32| -> i32 {
+                    if let Some(memory) =
+                        caller.get_export("memory").and_then(|e| e.into_memory())
+                    {
+                        let data = memory.data_mut(&mut caller);
+                        let cp = count_ptr as usize;
+                        let sp = size_ptr as usize;
+                        if cp + 4 <= data.len() {
+                            data[cp..cp + 4].copy_from_slice(&0u32.to_le_bytes());
+                        }
+                        if sp + 4 <= data.len() {
+                            data[sp..sp + 4].copy_from_slice(&0u32.to_le_bytes());
+                        }
+                    }
+                    0
+                },
+            )
+            .map_err(e)?;
+
+        // args_get(argv_ptr, argv_buf_ptr) -> errno
+        linker
+            .func_wrap(
+                "wasi_snapshot_preview1",
+                "args_get",
+                |_argv: i32, _argv_buf: i32| -> i32 { 0 },
+            )
+            .map_err(e)?;
+
+        // proc_exit(code) — should never return; if called, the module traps afterward
+        linker
+            .func_wrap("wasi_snapshot_preview1", "proc_exit", |_code: i32| {})
+            .map_err(e)?;
+
+        // clock_time_get(clock_id, precision, time_ptr) -> errno
+        linker
+            .func_wrap(
+                "wasi_snapshot_preview1",
+                "clock_time_get",
+                |_clock_id: i32, _precision: i64, _time_ptr: i32| -> i32 { 0 },
+            )
+            .map_err(e)?;
+
+        // random_get(buf_ptr, buf_len) -> errno
+        linker
+            .func_wrap(
+                "wasi_snapshot_preview1",
+                "random_get",
+                |_buf: i32, _buf_len: i32| -> i32 { 0 },
+            )
+            .map_err(e)?;
+
+        Ok(())
     }
 }
 
@@ -81,24 +322,52 @@ impl Backend for WasmBackend {
         self.channel_count = channel_count;
         self.max_frames = max_frames;
 
-        // Calculate buffer sizes
-        let bytes_per_buffer = channel_count * max_frames as usize * std::mem::size_of::<f32>();
-        let total_needed = MEMORY_BASE as usize + bytes_per_buffer * 2;
+        match self.buffer_mode {
+            BufferMode::ModuleAllocated => {
+                // Call module's getter functions to find buffer addresses
+                if let (Some(get_in), Some(get_out)) =
+                    (self.get_input_ptr_fn.clone(), self.get_output_ptr_fn.clone())
+                {
+                    // Need fuel for the getter calls
+                    let _ = self.store.set_fuel(self.fuel_per_callback);
+                    match (
+                        get_in.call(&mut self.store, ()),
+                        get_out.call(&mut self.store, ()),
+                    ) {
+                        (Ok(in_ptr), Ok(out_ptr)) => {
+                            self.input_offset = in_ptr;
+                            self.output_offset = out_ptr;
+                        }
+                        _ => {
+                            self.last_error =
+                                Some("Failed to call buffer getter functions".to_string());
+                            self.input_offset = 0;
+                            self.output_offset = 0;
+                        }
+                    }
+                }
+            }
+            BufferMode::FixedOffset => {
+                // Calculate buffer sizes and use fixed offsets
+                let bytes_per_buffer =
+                    channel_count * max_frames as usize * std::mem::size_of::<f32>();
+                let total_needed = MEMORY_BASE as usize + bytes_per_buffer * 2;
 
-        // Grow memory if needed (WASM pages are 64KiB)
-        let current_bytes = self.memory.data_size(&self.store);
-        if total_needed > current_bytes {
-            let pages_needed =
-                ((total_needed - current_bytes) + 65535) / 65536; // ceil division
-            if let Err(e) = self.memory.grow(&mut self.store, pages_needed as u64) {
-                eprintln!("BearBone-WASM: Failed to grow memory: {}", e);
-                self.last_error = Some(format!("Failed to grow WASM memory: {}", e));
-                return;
+                // Grow memory if needed (WASM pages are 64KiB)
+                let current_bytes = self.memory.data_size(&self.store);
+                if total_needed > current_bytes {
+                    let pages_needed = ((total_needed - current_bytes) + 65535) / 65536;
+                    if let Err(e) = self.memory.grow(&mut self.store, pages_needed as u64) {
+                        eprintln!("BearBone-WASM: Failed to grow memory: {}", e);
+                        self.last_error = Some(format!("Failed to grow WASM memory: {}", e));
+                        return;
+                    }
+                }
+
+                self.input_offset = MEMORY_BASE;
+                self.output_offset = MEMORY_BASE + bytes_per_buffer as i32;
             }
         }
-
-        self.input_offset = MEMORY_BASE;
-        self.output_offset = MEMORY_BASE + bytes_per_buffer as i32;
     }
 
     fn deinitialize(&mut self) {
@@ -496,5 +765,231 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- WASI stub tests ---
+
+    /// WAT module that imports fd_write from WASI (simulates a compiled module).
+    const WASI_FD_WRITE_WAT: &str = r#"
+        (module
+          (import "wasi_snapshot_preview1" "fd_write"
+            (func $fd_write (param i32 i32 i32 i32) (result i32)))
+          (memory (export "memory") 1)
+          (func (export "process")
+            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+            ;; Just passthrough — the fd_write import exists but is not called
+            (local $i i32)
+            (local $total i32)
+            (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+            (block $break
+              (loop $loop
+                (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
+                (f32.store
+                  (i32.add (local.get $out) (i32.shl (local.get $i) (i32.const 2)))
+                  (f32.load (i32.add (local.get $in) (i32.shl (local.get $i) (i32.const 2))))
+                )
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $loop)
+              )
+            )
+          )
+        )
+    "#;
+
+    /// WAT module that imports and calls environ_sizes_get.
+    const WASI_ENVIRON_WAT: &str = r#"
+        (module
+          (import "wasi_snapshot_preview1" "environ_sizes_get"
+            (func $environ_sizes_get (param i32 i32) (result i32)))
+          (memory (export "memory") 1)
+          (func (export "process")
+            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+            (local $i i32)
+            (local $total i32)
+            ;; Call environ_sizes_get to verify the stub works
+            ;; Write count to offset 0, size to offset 4
+            (drop (call $environ_sizes_get (i32.const 0) (i32.const 4)))
+            (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+            (block $break
+              (loop $loop
+                (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
+                (f32.store
+                  (i32.add (local.get $out) (i32.shl (local.get $i) (i32.const 2)))
+                  (f32.load (i32.add (local.get $in) (i32.shl (local.get $i) (i32.const 2))))
+                )
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $loop)
+              )
+            )
+          )
+        )
+    "#;
+
+    /// WAT module with buffer getter exports (simulates a compiled Rust module).
+    /// Uses data segment at offset 256 for input buffer and 512 for output buffer.
+    const BUFFER_GETTERS_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+
+          ;; Buffer getter exports — return addresses of pre-allocated buffers
+          (func (export "get_input_ptr") (result i32)
+            (i32.const 256)
+          )
+          (func (export "get_output_ptr") (result i32)
+            (i32.const 512)
+          )
+
+          ;; 0.5x gain using the module's own buffer addresses
+          (func (export "process")
+            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+            (local $i i32)
+            (local $total i32)
+            (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+            (block $break
+              (loop $loop
+                (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
+                (f32.store
+                  (i32.add (local.get $out) (i32.shl (local.get $i) (i32.const 2)))
+                  (f32.mul
+                    (f32.load (i32.add (local.get $in) (i32.shl (local.get $i) (i32.const 2))))
+                    (f32.const 0.5)
+                  )
+                )
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $loop)
+              )
+            )
+          )
+        )
+    "#;
+
+    #[test]
+    fn test_wasm_wasi_module_loads() {
+        let wasm = wat_to_wasm(WASI_FD_WRITE_WAT);
+        let backend = WasmBackend::load(&wasm);
+        assert!(
+            backend.is_ok(),
+            "Module with WASI imports should load via stubs: {:?}",
+            backend.err()
+        );
+    }
+
+    #[test]
+    fn test_wasm_wasi_module_processes() {
+        let wasm = wat_to_wasm(WASI_FD_WRITE_WAT);
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+        backend.initialize(1, 44100.0, 1024);
+
+        let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+        let mut output: [f32; 4] = [0.0; 4];
+
+        let ok = unsafe {
+            backend.process(
+                &[input.as_ptr()],
+                &[output.as_mut_ptr()],
+                1,
+                4,
+                44100.0,
+            )
+        };
+        assert!(ok, "WASI module should process audio");
+        assert_eq!(output, [0.1, 0.2, 0.3, 0.4]);
+    }
+
+    #[test]
+    fn test_wasm_wasi_environ_stubs() {
+        let wasm = wat_to_wasm(WASI_ENVIRON_WAT);
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+        backend.initialize(1, 44100.0, 1024);
+
+        let input: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
+        let mut output: [f32; 4] = [0.0; 4];
+
+        let ok = unsafe {
+            backend.process(
+                &[input.as_ptr()],
+                &[output.as_mut_ptr()],
+                1,
+                4,
+                44100.0,
+            )
+        };
+        assert!(ok, "Module calling environ_sizes_get should work");
+        assert_eq!(output, [1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_wasm_buffer_getters_detected() {
+        let wasm = wat_to_wasm(BUFFER_GETTERS_WAT);
+        let backend = WasmBackend::load(&wasm).unwrap();
+        assert!(
+            backend.get_input_ptr_fn.is_some(),
+            "Should detect get_input_ptr export"
+        );
+        assert!(
+            backend.get_output_ptr_fn.is_some(),
+            "Should detect get_output_ptr export"
+        );
+        assert!(
+            matches!(backend.buffer_mode, BufferMode::ModuleAllocated),
+            "Should use ModuleAllocated mode"
+        );
+    }
+
+    #[test]
+    fn test_wasm_buffer_getters_not_detected_for_simple_modules() {
+        let wasm = wat_to_wasm(GAIN_HALF_WAT);
+        let backend = WasmBackend::load(&wasm).unwrap();
+        assert!(
+            backend.get_input_ptr_fn.is_none(),
+            "Simple module should not have getters"
+        );
+        assert!(
+            matches!(backend.buffer_mode, BufferMode::FixedOffset),
+            "Should use FixedOffset mode"
+        );
+    }
+
+    #[test]
+    fn test_wasm_buffer_getters_process_audio() {
+        let wasm = wat_to_wasm(BUFFER_GETTERS_WAT);
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+        backend.initialize(1, 44100.0, 1024);
+
+        // Verify offsets were set from getter functions (256 and 512)
+        assert_eq!(backend.input_offset, 256, "input should be at getter address");
+        assert_eq!(backend.output_offset, 512, "output should be at getter address");
+
+        let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let mut output: [f32; 4] = [0.0; 4];
+
+        let ok = unsafe {
+            backend.process(
+                &[input.as_ptr()],
+                &[output.as_mut_ptr()],
+                1,
+                4,
+                44100.0,
+            )
+        };
+        assert!(ok, "Module with buffer getters should process audio");
+        assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
+    }
+
+    #[test]
+    fn test_wasm_compiled_module_gets_higher_fuel() {
+        let wasm = wat_to_wasm(BUFFER_GETTERS_WAT);
+        let backend = WasmBackend::load(&wasm).unwrap();
+        assert_eq!(
+            backend.fuel_per_callback, COMPILED_FUEL,
+            "Compiled modules should get higher fuel budget"
+        );
+
+        let wasm = wat_to_wasm(GAIN_HALF_WAT);
+        let backend = WasmBackend::load(&wasm).unwrap();
+        assert_eq!(
+            backend.fuel_per_callback, DEFAULT_FUEL,
+            "Simple modules should get default fuel budget"
+        );
     }
 }

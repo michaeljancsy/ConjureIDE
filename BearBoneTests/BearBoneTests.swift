@@ -395,11 +395,12 @@ struct BearBoneTests {
     @Test func factoryPresetsExist() async throws {
         let (_, au) = try await Self.instantiateAU()
         let presets = au.factoryPresets ?? []
-        #expect(presets.count >= 3, "Should have at least 3 factory presets")
+        #expect(presets.count >= 4, "Should have at least 4 factory presets")
         let names = presets.map { $0.name }
         #expect(names.contains("Passthrough"), "Should have Passthrough preset")
         #expect(names.contains("Tremolo"), "Should have Tremolo preset")
         #expect(names.contains("Bitcrush"), "Should have Bitcrush preset")
+        #expect(names.contains("Passthrough (Rust)"), "Should have Passthrough (Rust) preset")
     }
 
     @Test func factoryPresetLoading() async throws {
@@ -407,15 +408,30 @@ struct BearBoneTests {
         let presets = au.factoryPresets ?? []
         #expect(!presets.isEmpty)
 
-        for preset in presets {
+        // Test Python factory presets (should load and contain def process)
+        let pythonPresets = presets.filter { $0.name != "Passthrough (Rust)" }
+        for preset in pythonPresets {
             au.currentPreset = preset
-            // After loading a factory preset, fullState should contain a script
             let state = au.fullState
             let data = state?[Self.scriptSourceKey] as? Data
             #expect(data != nil, "Factory preset '\(preset.name)' should set a script in fullState")
             let source = String(data: data!, encoding: .utf8) ?? ""
-            #expect(source.contains("def process"), "Factory preset '\(preset.name)' should contain process function")
+            #expect(source.contains("def process"), "Factory preset '\(preset.name)' should contain Python process function")
         }
+    }
+
+    @Test func rustFactoryPresetHasRustContent() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let presets = au.factoryPresets ?? []
+        let rustPreset = presets.first { $0.name == "Passthrough (Rust)" }
+        #expect(rustPreset != nil, "Should have Passthrough (Rust) preset")
+        au.currentPreset = rustPreset
+        // Rust presets store source but don't auto-compile — fullState should contain fn process
+        let state = au.fullState
+        let data = state?[Self.scriptSourceKey] as? Data
+        #expect(data != nil, "Rust factory preset should set script source in fullState")
+        let source = String(data: data!, encoding: .utf8) ?? ""
+        #expect(source.contains("fn process"), "Rust factory preset should contain Rust process function")
     }
 
     @Test func factoryPresetThenModify() async throws {
@@ -444,10 +460,11 @@ struct BearBoneTests {
     }
 
     @Test func presetsSwitchScriptInFullState() async throws {
-        // Verify that switching between presets changes the script in fullState
+        // Verify that switching between Python presets changes the script in fullState
         let (_, au) = try await Self.instantiateAU()
         let presets = au.factoryPresets ?? []
-        #expect(presets.count >= 2)
+        // Preset indices: 0=Passthrough, 1=Tremolo, 2=Bitcrush, 3=Passthrough(Rust)
+        #expect(presets.count >= 3)
 
         au.currentPreset = presets[1] // Tremolo
         let state1 = au.fullState

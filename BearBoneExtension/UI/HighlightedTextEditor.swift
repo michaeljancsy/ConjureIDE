@@ -4,6 +4,7 @@ import AppKit
 struct HighlightedTextEditor: NSViewRepresentable {
     @Binding var text: String
     var colorScheme: ColorScheme
+    var language: ScriptLanguage = .python
     var isEditable: Bool = true
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -45,8 +46,8 @@ struct HighlightedTextEditor: NSViewRepresentable {
 
         textView.isEditable = isEditable
 
-        // Update highlighter theme if color scheme changed
-        let newHighlighter = Self.makeHighlighter(colorScheme: colorScheme)
+        // Update highlighter if color scheme or language changed
+        let newHighlighter = Self.makeHighlighter(colorScheme: colorScheme, language: language)
         context.coordinator.highlighter = newHighlighter
 
         // Only update text if it changed externally (not from user typing)
@@ -73,21 +74,27 @@ struct HighlightedTextEditor: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, highlighter: Self.makeHighlighter(colorScheme: colorScheme))
+        Coordinator(text: $text, highlighter: Self.makeHighlighter(colorScheme: colorScheme, language: language))
     }
 
-    private static func makeHighlighter(colorScheme: ColorScheme) -> PythonSyntaxHighlighter {
-        let theme: PythonSyntaxHighlighter.Theme = colorScheme == .dark ? .dark : .light
-        return PythonSyntaxHighlighter(theme: theme)
+    private static func makeHighlighter(colorScheme: ColorScheme, language: ScriptLanguage) -> any SyntaxHighlighter {
+        switch language {
+        case .python:
+            let theme: PythonSyntaxHighlighter.Theme = colorScheme == .dark ? .dark : .light
+            return PythonSyntaxHighlighter(theme: theme)
+        case .rust:
+            let theme: RustSyntaxHighlighter.Theme = colorScheme == .dark ? .dark : .light
+            return RustSyntaxHighlighter(theme: theme)
+        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         var text: Binding<String>
-        var highlighter: PythonSyntaxHighlighter
+        var highlighter: any SyntaxHighlighter
         var isHighlighting = false
         private var highlightTimer: Timer?
 
-        init(text: Binding<String>, highlighter: PythonSyntaxHighlighter) {
+        init(text: Binding<String>, highlighter: any SyntaxHighlighter) {
             self.text = text
             self.highlighter = highlighter
         }

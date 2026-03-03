@@ -4,6 +4,8 @@ import SwiftUI
 struct PresetToolbar: View {
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var aiService: AIService
+    var isCompiling: Bool = false
+    @Binding var selectedLanguage: ScriptLanguage
     var onSelectPreset: (Preset) -> Void
     var onRun: () -> Void
     var onSave: () -> Void
@@ -86,6 +88,15 @@ struct PresetToolbar: View {
             .disabled(presetManager.presets.isEmpty)
             .accessibilityIdentifier("nextPresetButton")
 
+            // Language selector
+            Picker("Language", selection: $selectedLanguage) {
+                Text("Python").tag(ScriptLanguage.python)
+                Text("Rust").tag(ScriptLanguage.rust)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 120)
+            .accessibilityIdentifier("languagePicker")
+
             Spacer()
 
             // Generate with AI
@@ -113,11 +124,11 @@ struct PresetToolbar: View {
                 .accessibilityIdentifier("cancelGenerateButton")
             }
 
-            // Run (hot-reload into kernel)
+            // Run (compile if needed, then load into kernel)
             Button("Run") {
                 onRun()
             }
-            .disabled(aiService.isGenerating)
+            .disabled(aiService.isGenerating || isCompiling)
             .accessibilityIdentifier("runButton")
 
             // Save (overwrite current user preset)

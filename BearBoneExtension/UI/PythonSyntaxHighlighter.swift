@@ -1,6 +1,6 @@
 import AppKit
 
-final class PythonSyntaxHighlighter {
+final class PythonSyntaxHighlighter: SyntaxHighlighter {
 
     struct Theme {
         var keyword: NSColor

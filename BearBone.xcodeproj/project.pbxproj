@@ -11,6 +11,10 @@
 		2510F93C2F5211FC0046A41D /* backlog.md in Resources */ = {isa = PBXBuildFile; fileRef = 2510F9382F5211FC0046A41D /* backlog.md */; };
 		2510F93D2F5211FC0046A41D /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 2510F93A2F5211FC0046A41D /* README.md */; };
 		2579117F2F5013850036AAB6 /* BearBoneExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2579117E2F5013850036AAB6 /* BearBoneExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		25BC19422F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
+		25BC19432F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
+		25BC19442F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
+		25BC19452F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +63,7 @@
 		257911682F5013850036AAB6 /* BearBoneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BearBoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		257911722F5013850036AAB6 /* BearBoneUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BearBoneUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2579117E2F5013850036AAB6 /* BearBoneExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BearBoneExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		25BC19412F563DB20009EA0D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = BearBone/Assets.xcassets; sourceTree = "<group>"; };
 		AABB00022F5013850036AAB6 /* rust */ = {isa = PBXFileReference; lastKnownFileType = folder; path = rust; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -142,6 +147,7 @@
 				257911822F5013850036AAB6 /* BearBoneExtension */,
 				AABB00022F5013850036AAB6 /* rust */,
 				257911412F5013840036AAB6 /* Products */,
+				25BC19412F563DB20009EA0D /* Assets.xcassets */,
 			);
 			sourceTree = "<group>";
 		};
@@ -311,6 +317,7 @@
 				2510F93B2F5211FC0046A41D /* CLAUDE.md in Resources */,
 				2510F93C2F5211FC0046A41D /* backlog.md in Resources */,
 				2510F93D2F5211FC0046A41D /* README.md in Resources */,
+				25BC19452F563DB20009EA0D /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -318,6 +325,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				25BC19422F563DB20009EA0D /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -325,6 +333,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				25BC19442F563DB20009EA0D /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -332,6 +341,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				25BC19432F563DB20009EA0D /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
