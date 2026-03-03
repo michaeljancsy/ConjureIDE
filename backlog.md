@@ -3,6 +3,8 @@
 ## In Progress
 
 ## To Do
+- Parameter-aware factory presets: Update tremolo preset to use params[0]/params[1] instead of hardcoded values, demonstrating DAW automation
+- Parameter UI in extension: Consider adding knobs/sliders in the AU extension UI for the 8 parameters
 - DSP utility libraries (WASM Phase 6): Provide helper libraries/modules for common DSP operations in WASM scripts
 - Host app DAW controls: Add preset selection and a bypass button to the BearBone host app, like a DAW would provide
 - Visualization and diagnostics in the Mac host app (not just the AU extension)
@@ -11,9 +13,11 @@
 - Latency reporting and adjustment: Report latency frames to the host/DAW and allow the user to adjust the latency value
 - GitHub: Set up public GitHub repository
 - Script reload indicator: Visual indication that the editor script has changed and needs to be reloaded (e.g. Run button highlight or dot badge)
+- Fix flaky `extensionPlistContainsBuildID` test: Fails intermittently depending on build phase timing — the "Stamp Build ID" phase may not have written BuildID to the plist before the test reads it
 
 
 ## Done
+- DAW parameter pipeline (2026-03-03): Wired 8 fixed AUParameters (Param 1–8, range 0–1) end-to-end from DAW through Swift AUParameterTree to Rust kernel to Python/WASM scripts. Atomic storage in Rust kernel (`AtomicU32` with `f32::to_bits/from_bits`, `Relaxed` ordering) for lock-free thread safety between main thread (DAW writes) and audio thread (reads). Python scripts receive params as optional 5th argument (`process(inputs, outputs, frame_count, sample_rate, params)`) with backward compatibility for 4-arg scripts. WASM modules can export `get_params_ptr()` to receive params in linear memory (same pattern as `get_input_ptr()`/`get_output_ptr()`). Swift `implementorValueObserver`/`implementorValueProvider` call Rust FFI directly (removed Swift-side `parameterValues` array). 76 Rust tests + all Swift unit tests pass. Tested in Ableton and Logic — parameters appear in DAW Configure panel.
 - Fix backend swap crash (2026-03-03): Wrapped `backend` field in `Mutex` to prevent use-after-free when the main thread swaps backends (preset change) while the render thread is processing audio. The render thread uses `try_lock()` (never blocks — falls back to passthrough if lock is held during swap). The main thread uses `lock()` to swap. Crash was SIGSEGV in `WasmBackend::process()` → `copy_from_slice()` on munmapped WASM memory. 76 Rust tests + all Swift unit tests pass.
 - Safety limiter (2026-03-03): Hard clipper at ±1.0 (0 dBFS) in the Rust kernel, applied after backend processing (Python/WASM) on every render call. Prevents dangerously loud output from user scripts. Does not apply during bypass (host input is already safe). No parameters, no UI — invisible safety net. Added `safety_clamp()` to `kernel.rs`. 5 new Rust tests (clamp loud WASM, clamp loud Python, normal signal passthrough, no clamp during bypass, stereo). 76 Rust tests + all Swift unit tests pass.
 - Bundle Rust compiler for sandbox-safe compilation (2026-03-03): Bundled standalone rustc 1.93.1 + wasm32-wasip1 sysroot (~390 MB) inside the .appex Resources. Created `scripts/setup-rustc.sh`, added "Copy Rust Compiler" Xcode build phase with code-signing, updated `RustCompiler.swift` to prefer bundled compiler with fallback to user-installed. Verified working in host app and DAW.

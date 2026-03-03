@@ -1,4 +1,5 @@
 use crate::backend::Backend;
+use crate::params::PARAM_COUNT;
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -97,6 +98,7 @@ impl PythonBackend {
         channel_count: usize,
         frame_count: usize,
         sample_rate: f64,
+        params: &[f32; PARAM_COUNT],
     ) -> bool {
         let result: Result<(), PyErr> = Python::with_gil(|py| {
             // Copy input audio data into pre-allocated numpy arrays
@@ -114,9 +116,26 @@ impl PythonBackend {
             let output_list =
                 PyList::new(py, self.py_output_arrays.iter().map(|a| a.bind(py)))?;
 
-            // Call: process(inputs, outputs, frame_count, sample_rate)
-            self.py_process_fn
-                .call1(py, (input_list, output_list, frame_count as u32, sample_rate))?;
+            // Build params list (8 floats)
+            let params_list = PyList::new(py, params.iter())?;
+
+            // Try 5-arg call first: process(inputs, outputs, frame_count, sample_rate, params)
+            // Fall back to 4-arg call for backward compatibility with old scripts.
+            let call_result = self.py_process_fn
+                .call1(py, (input_list.clone(), output_list.clone(), frame_count as u32, sample_rate, params_list));
+
+            match call_result {
+                Ok(_) => {}
+                Err(e) => {
+                    // Check if this is a TypeError from wrong arg count — fall back to 4-arg
+                    if e.is_instance_of::<pyo3::exceptions::PyTypeError>(py) {
+                        self.py_process_fn
+                            .call1(py, (input_list, output_list, frame_count as u32, sample_rate))?;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
 
             // Copy output from pre-allocated numpy arrays back to audio buffers
             for ch in 0..channel_count {
@@ -161,11 +180,12 @@ impl Backend for PythonBackend {
         channel_count: usize,
         frame_count: usize,
         sample_rate: f64,
+        params: &[f32; PARAM_COUNT],
     ) -> bool {
         if self.py_input_arrays.is_empty() {
             return false;
         }
-        self.process_with_python(inputs, outputs, channel_count, frame_count, sample_rate)
+        self.process_with_python(inputs, outputs, channel_count, frame_count, sample_rate, params)
     }
 
     fn last_error(&self) -> Option<&str> {

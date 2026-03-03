@@ -1,10 +1,17 @@
 // Bitcrush — bit depth reduction and sample rate reduction.
+//
+// Applies two lo-fi effects in series:
+// 1. Bit depth reduction: quantizes the signal to fewer amplitude levels,
+//    producing a gritty, digital distortion.
+// 2. Sample rate reduction: holds every Nth sample, discarding the rest,
+//    which introduces aliasing artifacts and a characteristic stepped sound.
 
 const MAX_CH: usize = 2;
 const MAX_FR: usize = 4096;
 
 static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
+static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
 // Bitcrush parameters
 const BIT_DEPTH: i32 = 8;   // Reduce to this many bits (1-16)
@@ -23,6 +30,18 @@ pub extern "C" fn get_output_ptr() -> i32 {
     unsafe { OUTPUT_BUF.as_ptr() as i32 }
 }
 
+#[no_mangle]
+pub extern "C" fn get_params_ptr() -> i32 {
+    unsafe { PARAMS_BUF.as_ptr() as i32 }
+}
+
+/// Bitcrush — bit depth reduction and sample rate reduction.
+///
+/// For each sample: first quantizes the amplitude to 2^BIT_DEPTH discrete levels
+/// (bit crushing), then applies sample-and-hold at a 1/DOWNSAMPLE rate (sample
+/// rate reduction). The held sample state persists across callbacks for seamless
+/// processing. DAW-automatable parameters are available in PARAMS_BUF[0..8] but
+/// unused by this preset.
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32,

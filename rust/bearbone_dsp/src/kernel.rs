@@ -1,6 +1,8 @@
 use crate::backend::Backend;
+use crate::params::PARAM_COUNT;
 use crate::python_backend::PythonBackend;
 use crate::wasm_backend::WasmBackend;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
 /// Real-time audio DSP kernel with pluggable processing backends.
@@ -20,10 +22,14 @@ pub struct DSPKernel {
     channel_count: usize,
     backend: Mutex<Option<Box<dyn Backend>>>,
     last_error: Option<String>,
+    /// 8 generic parameters (0.0–1.0), stored as AtomicU32 via f32::to_bits/from_bits.
+    /// Main thread writes (DAW automation), audio thread reads — lock-free via Relaxed ordering.
+    params: [AtomicU32; PARAM_COUNT],
 }
 
 impl DSPKernel {
     pub fn new() -> Self {
+        const ZERO: AtomicU32 = AtomicU32::new(0);
         Self {
             sample_rate: 44100.0,
             bypassed: false,
@@ -31,6 +37,7 @@ impl DSPKernel {
             channel_count: 0,
             backend: Mutex::new(None),
             last_error: None,
+            params: [ZERO; PARAM_COUNT],
         }
     }
 
@@ -108,12 +115,30 @@ impl DSPKernel {
         self.bypassed
     }
 
-    pub fn set_parameter(&mut self, _address: u64, _value: f32) {
-        // No parameters currently defined
+    /// Set a parameter value. Addresses are 1-based (1–8).
+    /// Called from the main thread (DAW automation).
+    pub fn set_parameter(&self, address: u64, value: f32) {
+        if address >= 1 && address <= PARAM_COUNT as u64 {
+            self.params[(address - 1) as usize].store(value.to_bits(), Ordering::Relaxed);
+        }
     }
 
-    pub fn get_parameter(&self, _address: u64) -> f32 {
-        0.0
+    /// Get a parameter value. Addresses are 1-based (1–8).
+    pub fn get_parameter(&self, address: u64) -> f32 {
+        if address >= 1 && address <= PARAM_COUNT as u64 {
+            f32::from_bits(self.params[(address - 1) as usize].load(Ordering::Relaxed))
+        } else {
+            0.0
+        }
+    }
+
+    /// Snapshot all parameter values into a stack array for the audio thread.
+    fn snapshot_params(&self) -> [f32; PARAM_COUNT] {
+        let mut out = [0.0f32; PARAM_COUNT];
+        for i in 0..PARAM_COUNT {
+            out[i] = f32::from_bits(self.params[i].load(Ordering::Relaxed));
+        }
+        out
     }
 
     pub fn maximum_frames_to_render(&self) -> u32 {
@@ -257,11 +282,14 @@ impl DSPKernel {
             return;
         }
 
+        // Snapshot parameters once per callback (lock-free atomic reads)
+        let params = self.snapshot_params();
+
         // Try backend processing — use try_lock to never block the render thread.
         // If the main thread is swapping backends, we fall through to passthrough.
         if let Ok(mut guard) = self.backend.try_lock() {
             if let Some(ref mut backend) = *guard {
-                if backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate) {
+                if backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate, &params) {
                     Self::safety_clamp(outputs, channel_count, frame_count);
                     return;
                 }

@@ -11,8 +11,26 @@ MAKEUP_DB = 6.0       # Makeup gain in dB
 _envelope = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate):
-    """Compressor — dynamic range compression with envelope follower."""
+def process(inputs, outputs, frame_count, sample_rate, params):
+    """
+    Compressor — dynamic range compression with envelope follower.
+
+    Reduces the dynamic range of the audio signal using a peak-detecting
+    envelope follower. When the signal exceeds the threshold, gain is reduced
+    according to the compression ratio. Attack and release times control how
+    quickly the compressor responds to level changes. Makeup gain compensates
+    for the overall volume reduction caused by compression.
+
+    The envelope follower operates per-sample across all channels (peak detection),
+    so stereo signals are compressed with linked gain to preserve the stereo image.
+
+    Args:
+        inputs:      list of numpy.float32 arrays, one per channel
+        outputs:     list of numpy.float32 arrays, one per channel
+        frame_count: number of valid samples this callback
+        sample_rate: current sample rate in Hz
+        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    """
     global _envelope
 
     threshold = 10.0 ** (THRESHOLD_DB / 20.0)

@@ -1,3 +1,5 @@
+use crate::params::PARAM_COUNT;
+
 /// Trait for pluggable DSP processing backends (Python, WASM, etc.).
 ///
 /// Implementations must be real-time safe in `process()`:
@@ -13,6 +15,9 @@ pub trait Backend {
 
     /// Process audio. Returns true on success, false to trigger passthrough fallback.
     ///
+    /// `params` contains the 8 DAW-automatable parameter values (0.0–1.0),
+    /// snapshotted once per audio callback from atomic storage.
+    ///
     /// Takes `&mut self` because some backends (e.g. wasmtime) require mutable
     /// access to their execution state during function calls.
     ///
@@ -27,6 +32,7 @@ pub trait Backend {
         channel_count: usize,
         frame_count: usize,
         sample_rate: f64,
+        params: &[f32; PARAM_COUNT],
     ) -> bool;
 
     /// Returns the last error message, if any.

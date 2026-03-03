@@ -16,6 +16,43 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	// Rust DSP kernel (opaque pointer)
 	private var kernel: DSPKernelRef!
 
+	// MARK: - Parameter Tree (8 fixed generic parameters, range 0–1)
+
+	static let paramCount = 8
+
+	private func buildParameterTree() {
+		var params: [AUParameter] = []
+		for i in 1...Self.paramCount {
+			let param = AUParameterTree.createParameter(
+				withIdentifier: "param\(i)",
+				name: "Param \(i)",
+				address: AUParameterAddress(i),
+				min: 0.0,
+				max: 1.0,
+				unit: .generic,
+				unitName: nil,
+				flags: [.flag_IsReadable, .flag_IsWritable],
+				valueStrings: nil,
+				dependentParameters: nil
+			)
+			param.value = 0.0
+			params.append(param)
+		}
+		let tree = AUParameterTree.createTree(withChildren: params)
+		let kernelRef = self.kernel!
+		tree.implementorValueObserver = { param, value in
+			dsp_kernel_set_parameter(kernelRef, param.address, value)
+		}
+		tree.implementorValueProvider = { param in
+			return dsp_kernel_get_parameter(kernelRef, param.address)
+		}
+		tree.implementorStringFromValueCallback = { param, valuePtr in
+			let value = valuePtr?.pointee ?? param.value
+			return String(format: "%.3f", value)
+		}
+		self.parameterTree = tree
+	}
+
 	// Cached path to bundled Python runtime for script reloads
 	private var pythonHome: String?
 
@@ -63,6 +100,8 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		_inputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .input, busses: [_inputBus])
 		_outputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .output, busses: [_outputBus])
+
+		buildParameterTree()
 
 		// Load the bundled Python DSP script
 		loadPythonScript()
