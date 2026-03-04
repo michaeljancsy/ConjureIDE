@@ -16,6 +16,10 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	// Rust DSP kernel (opaque pointer)
 	private var kernel: DSPKernelRef!
 
+	/// Expose kernel reference for audio capture (spectrogram visualization).
+	/// Only used by AudioCaptureManager on the UI thread.
+	var kernelReference: DSPKernelRef? { kernel }
+
 	// MARK: - Parameter Tree (8 fixed generic parameters, range 0–1)
 
 	static let paramCount = 8

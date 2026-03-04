@@ -40,6 +40,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 
     private var hostingView: SafeHostingView<BearBoneExtensionMainView>?
     private var aiService: AIService?
+    private var captureManager: AudioCaptureManager?
     private var parameterState: ParameterState?
 
 	deinit {
@@ -131,6 +132,13 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             aiService = AIService()
         }
         let ai = aiService!
+
+        if captureManager == nil {
+            captureManager = AudioCaptureManager()
+        }
+        let capture = captureManager!
+        capture.kernel = au.kernelReference
+        capture.hostView = self.view
 
         if parameterState == nil {
             parameterState = ParameterState()
@@ -251,6 +259,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             scriptSourcePublisher: scriptPublisher,
             presetManager: pm,
             aiService: ai,
+            captureManager: capture,
             parameterState: ps,
             onRun: onRun,
             onSelectPreset: onSelectPreset,

@@ -10,6 +10,12 @@
 #define PARAM_COUNT 8
 
 /**
+ * Default capacity: 8192 samples (~185ms at 44.1kHz).
+ * Enough for multiple FFT windows with overlap.
+ */
+#define AudioRingBuffer_DEFAULT_CAPACITY 8192
+
+/**
  * Real-time audio DSP kernel with pluggable processing backends.
  *
  * Supports Python scripts (via pyo3/numpy) and WASM modules (via wasmtime).
@@ -148,5 +154,36 @@ double dsp_kernel_benchmark_process(DSPKernelRef kernel);
  * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
  */
 const char *dsp_kernel_last_error(DSPKernelRef kernel);
+
+/**
+ * Enable or disable audio capture for spectrogram visualization.
+ * When disabled, ring buffers are not written to (saves CPU on audio thread).
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+void dsp_kernel_set_capture_enabled(DSPKernelRef kernel, bool enabled);
+
+/**
+ * Read available samples from the input (pre-processing) ring buffer.
+ * Returns the number of samples actually read (up to `max_samples`).
+ * Called from the UI thread only.
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * - `out` must point to at least `max_samples` writable f32 values.
+ */
+uint32_t dsp_kernel_read_input_ring(DSPKernelRef kernel, float *out, uint32_t max_samples);
+
+/**
+ * Read available samples from the output (post-processing) ring buffer.
+ * Returns the number of samples actually read (up to `max_samples`).
+ * Called from the UI thread only.
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * - `out` must point to at least `max_samples` writable f32 values.
+ */
+uint32_t dsp_kernel_read_output_ring(DSPKernelRef kernel, float *out, uint32_t max_samples);
 
 #endif  /* BEARBONE_DSP_H */
