@@ -41,6 +41,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var hostingView: SafeHostingView<BearBoneExtensionMainView>?
     private var aiService: AIService?
     private var captureManager: AudioCaptureManager?
+    private var parameterState: ParameterState?
 
 	deinit {
         log.info("deinit called")
@@ -137,6 +138,14 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         }
         let capture = captureManager!
         capture.kernel = au.kernelReference
+
+        if parameterState == nil {
+            parameterState = ParameterState()
+        }
+        let ps = parameterState!
+        if let tree = au.parameterTree {
+            ps.attach(to: tree)
+        }
 
         // Run: detect language, compile if needed, load into kernel + benchmark
         let onRun: (String) async -> ScriptSaveResult = { [weak au] source in
@@ -250,6 +259,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             presetManager: pm,
             aiService: ai,
             captureManager: capture,
+            parameterState: ps,
             onRun: onRun,
             onSelectPreset: onSelectPreset,
             onSavePreset: onSavePreset,

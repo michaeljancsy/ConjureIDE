@@ -700,4 +700,90 @@ struct BearBoneTests {
 
         au.deallocateRenderResources()
     }
+
+    // MARK: - Parameter Tree
+
+    @Test func parameterTreeHasEightParameters() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let tree = try #require(au.parameterTree, "Parameter tree should exist")
+        let params = tree.allParameters
+        #expect(params.count == 8, "Should have 8 parameters")
+        for i in 0..<8 {
+            let param = tree.parameter(withAddress: AUParameterAddress(i))
+            #expect(param != nil, "Parameter at address \(i) should exist")
+        }
+    }
+
+    @Test func parameterUIPathMatchesDAWPath() async throws {
+        // Setting param.value (the UI codepath) should write through
+        // implementorValueObserver → dsp_kernel_set_parameter() and be
+        // readable back via implementorValueProvider → dsp_kernel_get_parameter().
+        let (_, au) = try await Self.instantiateAU()
+        let tree = try #require(au.parameterTree)
+
+        for i in 0..<8 {
+            let param = try #require(tree.parameter(withAddress: AUParameterAddress(i)))
+            let testValue = Float(i + 1) / 10.0  // 0.1, 0.2, ..., 0.8
+            param.value = testValue
+            #expect(abs(param.value - testValue) < 1e-6,
+                   "Param \(i): value set via AUParameter.value should round-trip through Rust kernel")
+        }
+    }
+
+    @Test func parameterTreeObserverFiresOnValueSet() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let tree = try #require(au.parameterTree)
+        let param = try #require(tree.parameter(withAddress: 0))
+
+        let observedAddress = UnsafeMutablePointer<AUParameterAddress>.allocate(capacity: 1)
+        let observedValue = UnsafeMutablePointer<AUValue>.allocate(capacity: 1)
+        let fired = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
+        observedAddress.pointee = UInt64.max
+        observedValue.pointee = -1
+        fired.pointee = false
+        defer {
+            observedAddress.deallocate()
+            observedValue.deallocate()
+            fired.deallocate()
+        }
+
+        let token = tree.token(byAddingParameterObserver: { address, value in
+            observedAddress.pointee = address
+            observedValue.pointee = value
+            fired.pointee = true
+        })
+
+        param.value = 0.42
+
+        // Observer may fire on an arbitrary thread; wait briefly
+        for _ in 0..<100 {
+            if fired.pointee { break }
+            try await Task.sleep(nanoseconds: 10_000_000) // 10ms
+        }
+
+        #expect(fired.pointee, "Observer should have fired")
+        #expect(observedAddress.pointee == 0, "Observer should fire with address 0")
+        #expect(abs(observedValue.pointee - 0.42) < 1e-6, "Observer should receive the set value")
+
+        tree.removeParameterObserver(token)
+    }
+
+    @Test func parameterValueRoundTrip() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let tree = try #require(au.parameterTree)
+
+        // Set all 8 params to distinct values
+        let testValues: [Float] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 1.0]
+        for i in 0..<8 {
+            let param = try #require(tree.parameter(withAddress: AUParameterAddress(i)))
+            param.value = testValues[i]
+        }
+
+        // Read all back and verify
+        for i in 0..<8 {
+            let param = try #require(tree.parameter(withAddress: AUParameterAddress(i)))
+            #expect(abs(param.value - testValues[i]) < 1e-6,
+                   "Param \(i): expected \(testValues[i]), got \(param.value)")
+        }
+    }
 }

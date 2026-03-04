@@ -24,6 +24,7 @@ struct BearBoneExtensionMainView: View {
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var aiService: AIService
     @ObservedObject var captureManager: AudioCaptureManager
+    @ObservedObject var parameterState: ParameterState
     var onRun: (String) async -> ScriptSaveResult
     var onSelectPreset: (Preset) -> ScriptSaveResult
     var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
@@ -100,6 +101,10 @@ struct BearBoneExtensionMainView: View {
                 showingSaveAs: $showingSaveAs,
                 saveAsName: $saveAsName
             )
+
+            Divider()
+
+            ParameterSlidersView(parameterState: parameterState)
 
             Divider()
 
