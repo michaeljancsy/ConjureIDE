@@ -56,11 +56,20 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     }
 
     public override var preferredMaximumSize: NSSize {
-        NSSize(width: 1400, height: 800)
+        NSSize(width: 2560, height: 1600)
     }
 
     public override func loadView() {
-        let defaultSize = NSSize(width: 600, height: 500)
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        let defaultSize: NSSize
+        if let screenFrame = screen?.visibleFrame {
+            defaultSize = NSSize(
+                width: round(screenFrame.width * 0.7),
+                height: round(screenFrame.height * 0.8)
+            )
+        } else {
+            defaultSize = NSSize(width: 960, height: 800)
+        }
         self.view = NSView(frame: NSRect(origin: .zero, size: defaultSize))
         self.preferredContentSize = defaultSize
         log.info("loadView called")
