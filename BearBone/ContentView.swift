@@ -18,48 +18,48 @@ struct ContentView: View {
     }
     
     var body: some View {
-        VStack() {
-            VStack {
-                if hostModel.audioUnitCrashed {
-                    HStack(spacing: 2) {
-                        Text("(\(hostModel.viewModel.title))")
-                            .textSelection(.enabled)
-                        Text("crashed!")
-                    }
+        VStack(spacing: 0) {
+            if hostModel.audioUnitCrashed {
+                HStack(spacing: 2) {
+                    Text("(\(hostModel.viewModel.title))")
+                        .textSelection(.enabled)
+                    Text("crashed!")
+                }
+                .padding(.top, margin)
+                ValidationView(hostModel: hostModel, isSheetPresented: $isSheetPresented)
+            } else {
+                HStack(spacing: 8) {
+                    Text("\(hostModel.viewModel.title)")
+                        .textSelection(.enabled)
+                        .bold()
                     ValidationView(hostModel: hostModel, isSheetPresented: $isSheetPresented)
+                }
+                .padding(.vertical, 4)
+
+                if let viewController = hostModel.viewModel.viewController {
+                    AUViewControllerUI(viewController: viewController)
+                        .frame(minWidth: 400, maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
                 } else {
-                    VStack {
-                        Text("\(hostModel.viewModel.title)")
-                            .textSelection(.enabled)
-                            .bold()
-                        ValidationView(hostModel: hostModel, isSheetPresented: $isSheetPresented)
-                        if let viewController = hostModel.viewModel.viewController {
-                            AUViewControllerUI(viewController: viewController)
-                                .frame(minWidth: 400, maxWidth: .infinity, minHeight: 500, maxHeight: .infinity)
-                                .padding(margin)
-                        } else {
-                            Text(hostModel.viewModel.message)
-                                .frame(minWidth: 400, minHeight: 200)
-                        }
-                    }
+                    Text(hostModel.viewModel.message)
+                        .frame(minWidth: 400, minHeight: 200)
                 }
             }
-            .padding(doubleMargin)
-            
+
             if hostModel.viewModel.showAudioControls {
-                Text("Audio Playback")
-                Button {
-                    hostModel.isPlaying ? hostModel.stopPlaying() : hostModel.startPlaying()
-                    
-                } label: {
-                    Text(hostModel.isPlaying ? "Stop" : "Play")
+                HStack(spacing: 8) {
+                    Text("Audio Playback")
+                    Button {
+                        hostModel.isPlaying ? hostModel.stopPlaying() : hostModel.startPlaying()
+                    } label: {
+                        Text(hostModel.isPlaying ? "Stop" : "Play")
+                    }
                 }
+                .padding(.vertical, 4)
             }
             if hostModel.viewModel.showMIDIContols {
                 Text("MIDI Input: Enabled")
+                    .padding(.vertical, 4)
             }
-            Spacer()
-                .frame(height: margin)
         }
     }
 }

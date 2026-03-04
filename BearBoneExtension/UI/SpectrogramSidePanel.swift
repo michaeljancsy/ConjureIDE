@@ -28,6 +28,7 @@ struct SpectrogramSidePanel: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
                 .frame(maxWidth: 160)
 
                 Spacer()
@@ -55,7 +56,8 @@ struct SpectrogramSidePanel: View {
                 .help(showNoteNames ? "Show Hz labels" : "Show note names")
             }
             .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .padding(.vertical, 2)
+            .controlSize(.small)
             .background(.bar)
 
             Divider()
