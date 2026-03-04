@@ -262,23 +262,23 @@ mod tests {
     fn test_ffi_parameter_roundtrip() {
         let kernel = dsp_kernel_create();
         unsafe {
-            // Valid addresses (1–8) should round-trip
-            assert_eq!(dsp_kernel_get_parameter(kernel, 1), 0.0);
-            dsp_kernel_set_parameter(kernel, 1, 0.75);
-            assert_eq!(dsp_kernel_get_parameter(kernel, 1), 0.75);
+            // Valid addresses (0–7) should round-trip
+            assert_eq!(dsp_kernel_get_parameter(kernel, 0), 0.0);
+            dsp_kernel_set_parameter(kernel, 0, 0.75);
+            assert_eq!(dsp_kernel_get_parameter(kernel, 0), 0.75);
 
             // All 8 parameters
-            for addr in 1..=8u64 {
-                dsp_kernel_set_parameter(kernel, addr, addr as f32 * 0.1);
+            for addr in 0..8u64 {
+                dsp_kernel_set_parameter(kernel, addr, (addr + 1) as f32 * 0.1);
             }
-            for addr in 1..=8u64 {
-                let expected = addr as f32 * 0.1;
+            for addr in 0..8u64 {
+                let expected = (addr + 1) as f32 * 0.1;
                 let actual = dsp_kernel_get_parameter(kernel, addr);
                 assert!((actual - expected).abs() < 1e-6, "addr={} expected={} got={}", addr, expected, actual);
             }
 
             // Out-of-range address returns 0.0
-            assert_eq!(dsp_kernel_get_parameter(kernel, 0), 0.0);
+            assert_eq!(dsp_kernel_get_parameter(kernel, 8), 0.0);
             assert_eq!(dsp_kernel_get_parameter(kernel, 9), 0.0);
             assert_eq!(dsp_kernel_get_parameter(kernel, 999), 0.0);
 

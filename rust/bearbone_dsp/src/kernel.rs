@@ -115,18 +115,18 @@ impl DSPKernel {
         self.bypassed
     }
 
-    /// Set a parameter value. Addresses are 1-based (1–8).
+    /// Set a parameter value. Addresses are 0-based (0–7).
     /// Called from the main thread (DAW automation).
     pub fn set_parameter(&self, address: u64, value: f32) {
-        if address >= 1 && address <= PARAM_COUNT as u64 {
-            self.params[(address - 1) as usize].store(value.to_bits(), Ordering::Relaxed);
+        if (address as usize) < PARAM_COUNT {
+            self.params[address as usize].store(value.to_bits(), Ordering::Relaxed);
         }
     }
 
-    /// Get a parameter value. Addresses are 1-based (1–8).
+    /// Get a parameter value. Addresses are 0-based (0–7).
     pub fn get_parameter(&self, address: u64) -> f32 {
-        if address >= 1 && address <= PARAM_COUNT as u64 {
-            f32::from_bits(self.params[(address - 1) as usize].load(Ordering::Relaxed))
+        if (address as usize) < PARAM_COUNT {
+            f32::from_bits(self.params[address as usize].load(Ordering::Relaxed))
         } else {
             0.0
         }

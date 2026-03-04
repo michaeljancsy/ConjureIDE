@@ -16,7 +16,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         frame_count: number of valid samples this callback (may be < array length)
         sample_rate: current sample rate in Hz (e.g. 44100.0)
         params:      list of 8 floats (0.0–1.0), the DAW-automatable parameter
-                     values (Param 1–8). Use these to control your DSP in real time.
+                     values (Param 0–7). Use these to control your DSP in real time.
     """
     for ch in range(len(inputs)):
         # Example: apply 0.5x gain (halve the volume)
