@@ -138,6 +138,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         }
         let capture = captureManager!
         capture.kernel = au.kernelReference
+        capture.hostView = self.view
 
         if parameterState == nil {
             parameterState = ParameterState()

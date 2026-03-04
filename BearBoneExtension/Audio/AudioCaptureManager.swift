@@ -7,34 +7,35 @@
 //
 
 import Accelerate
+import AppKit
 import Combine
-import Foundation
+import QuartzCore
 
 /// Reads audio samples from the Rust kernel's lock-free ring buffers,
 /// computes FFT magnitudes via Accelerate/vDSP, and publishes results
 /// for spectrogram rendering.
 ///
-/// Operates entirely on the main thread via a Timer.
-/// When `isActive` is false, no reads or FFT computation occur.
+/// Operates entirely on the main thread via a `CADisplayLink` tied to
+/// the host view's display. When `isActive` is false, no reads or FFT
+/// computation occur.
 final class AudioCaptureManager: ObservableObject {
 
     // MARK: - Published FFT Results
 
-    /// FFT magnitudes in dB for the input (pre-processing) signal.
-    /// Array length = fftSize / 2. Values clamped to [floorDB, 0].
-    @Published var inputMagnitudes: [Float] = []
+    /// Queued FFT magnitude snapshots for the input signal.
+    /// Each entry is one FFT window's worth of dB magnitudes (length = fftSize / 2).
+    /// SpectrogramView drains this queue each frame, appending one column per entry.
+    var pendingInputColumns: [[Float]] = []
 
-    /// FFT magnitudes in dB for the output (post-processing) signal.
-    @Published var outputMagnitudes: [Float] = []
+    /// Queued FFT magnitude snapshots for the output signal.
+    var pendingOutputColumns: [[Float]] = []
 
-    /// Difference magnitudes: output_dB - input_dB per bin.
-    /// Positive = boost, negative = cut, zero = unchanged.
-    @Published var differenceMagnitudes: [Float] = []
+    /// Queued difference magnitude snapshots (output_dB - input_dB per bin).
+    var pendingDifferenceColumns: [[Float]] = []
 
     /// Monotonically increasing counter, incremented every time new FFT data
-    /// is published. Use this in `.onChange` instead of the magnitude arrays
-    /// to avoid O(n) array comparisons and to ensure updates even when
-    /// magnitudes are unchanged (e.g. silence → identical arrays each frame).
+    /// is queued. Use this in `.onChange` to trigger SpectrogramView updates.
+    /// Uses Int comparison (O(1)) rather than array comparison (O(n)).
     @Published var updateCounter: Int = 0
 
     // MARK: - Configuration
@@ -56,7 +57,7 @@ final class AudioCaptureManager: ObservableObject {
     // MARK: - State
 
     /// When true, reads from ring buffers and computes FFT.
-    /// Setting to false stops the timer and disables capture in the kernel.
+    /// Setting to false stops the display link and disables capture in the kernel.
     var isActive: Bool = false {
         didSet {
             guard isActive != oldValue else { return }
@@ -73,10 +74,13 @@ final class AudioCaptureManager: ObservableObject {
         }
     }
 
+    /// The host NSView used to create a display-synced CADisplayLink.
+    /// Must be set before activating capture.
+    weak var hostView: NSView?
+
     // MARK: - Private
 
-    private var timer: Timer?
-    private let timerInterval: TimeInterval = 1.0 / 60.0 // ~60 Hz
+    private var displayLink: CADisplayLink?
 
     // Read buffers (reused across timer ticks)
     private var inputReadBuffer: [Float] = []
@@ -105,7 +109,7 @@ final class AudioCaptureManager: ObservableObject {
     }
 
     deinit {
-        timer?.invalidate()
+        displayLink?.invalidate()
         if let kernel = kernel {
             dsp_kernel_set_capture_enabled(kernel, false)
         }
@@ -139,14 +143,13 @@ final class AudioCaptureManager: ObservableObject {
         inputAccumulator.removeAll(keepingCapacity: true)
         outputAccumulator.removeAll(keepingCapacity: true)
 
-        // Reset published data
-        let binCount = n / 2
-        inputMagnitudes = [Float](repeating: Self.floorDB, count: binCount)
-        outputMagnitudes = [Float](repeating: Self.floorDB, count: binCount)
-        differenceMagnitudes = [Float](repeating: 0, count: binCount)
+        // Reset pending columns
+        pendingInputColumns.removeAll()
+        pendingOutputColumns.removeAll()
+        pendingDifferenceColumns.removeAll()
     }
 
-    // MARK: - Timer Management
+    // MARK: - Display Link Management
 
     private func updateCaptureState() {
         if isActive {
@@ -164,25 +167,29 @@ final class AudioCaptureManager: ObservableObject {
         inputAccumulator.removeAll(keepingCapacity: true)
         outputAccumulator.removeAll(keepingCapacity: true)
 
-        timer?.invalidate()
-        let t = Timer(timeInterval: timerInterval, repeats: true) { [weak self] _ in
-            self?.tick()
-        }
-        // Add to .common modes so the timer fires during UI tracking
-        // (e.g. slider drags, gesture tracking) — not just the default mode.
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
+        displayLink?.invalidate()
+
+        guard let view = hostView else { return }
+        let link = view.displayLink(target: self, selector: #selector(displayLinkFired(_:)))
+        // Add to .common modes so it fires during gesture tracking
+        // (e.g. slider drags) — not just the default run loop mode.
+        link.add(to: .main, forMode: .common)
+        displayLink = link
     }
 
     private func stopCapture() {
-        timer?.invalidate()
-        timer = nil
+        displayLink?.invalidate()
+        displayLink = nil
         if let kernel = kernel {
             dsp_kernel_set_capture_enabled(kernel, false)
         }
     }
 
-    // MARK: - Timer Tick
+    // MARK: - Display Link Callback
+
+    @objc private func displayLinkFired(_ link: CADisplayLink) {
+        tick()
+    }
 
     private func tick() {
         guard let kernel = kernel else { return }
@@ -206,26 +213,52 @@ final class AudioCaptureManager: ObservableObject {
             outputAccumulator.append(contentsOf: outputReadBuffer[0..<outputCount])
         }
 
-        // Process accumulated samples with overlap
+        // Process accumulated samples with overlap, queuing each FFT result
         let hopSize = Int(Float(fftSize) * hopFraction)
-        var inputUpdated = false
-        var outputUpdated = false
+        var newInputColumns: [[Float]] = []
+        var newOutputColumns: [[Float]] = []
 
         while inputAccumulator.count >= fftSize {
-            computeFFT(samples: &inputAccumulator, result: &inputMagnitudes)
+            var mags = [Float](repeating: 0, count: fftSize / 2)
+            computeFFT(samples: &inputAccumulator, result: &mags)
             inputAccumulator.removeFirst(hopSize)
-            inputUpdated = true
+            newInputColumns.append(mags)
         }
 
         while outputAccumulator.count >= fftSize {
-            computeFFT(samples: &outputAccumulator, result: &outputMagnitudes)
+            var mags = [Float](repeating: 0, count: fftSize / 2)
+            computeFFT(samples: &outputAccumulator, result: &mags)
             outputAccumulator.removeFirst(hopSize)
-            outputUpdated = true
+            newOutputColumns.append(mags)
         }
 
-        // Compute difference when both updated
-        if inputUpdated || outputUpdated {
-            computeDifference()
+        // Queue all columns, computing difference for each pair
+        let columnCount = max(newInputColumns.count, newOutputColumns.count)
+        if columnCount > 0 {
+            // Keep track of latest input/output for difference when counts don't match
+            var lastInput = newInputColumns.last ?? pendingInputColumns.last
+                ?? [Float](repeating: Self.floorDB, count: fftSize / 2)
+            var lastOutput = newOutputColumns.last ?? pendingOutputColumns.last
+                ?? [Float](repeating: Self.floorDB, count: fftSize / 2)
+
+            for i in 0..<columnCount {
+                if i < newInputColumns.count {
+                    lastInput = newInputColumns[i]
+                    pendingInputColumns.append(lastInput)
+                } else {
+                    pendingInputColumns.append(lastInput)
+                }
+
+                if i < newOutputColumns.count {
+                    lastOutput = newOutputColumns[i]
+                    pendingOutputColumns.append(lastOutput)
+                } else {
+                    pendingOutputColumns.append(lastOutput)
+                }
+
+                pendingDifferenceColumns.append(computeDifference(input: lastInput, output: lastOutput))
+            }
+
             updateCounter &+= 1
         }
     }
@@ -291,15 +324,36 @@ final class AudioCaptureManager: ObservableObject {
         result = dbValues
     }
 
+    // MARK: - Column Draining
+
+    /// Remove and return all pending columns for the given channel.
+    /// Called by SpectrogramView to consume queued FFT results.
+    func drainColumns(for channel: SpectrogramChannel) -> [[Float]] {
+        switch channel {
+        case .input:
+            let cols = pendingInputColumns
+            pendingInputColumns.removeAll(keepingCapacity: true)
+            return cols
+        case .output:
+            let cols = pendingOutputColumns
+            pendingOutputColumns.removeAll(keepingCapacity: true)
+            return cols
+        case .difference:
+            let cols = pendingDifferenceColumns
+            pendingDifferenceColumns.removeAll(keepingCapacity: true)
+            return cols
+        }
+    }
+
     // MARK: - Difference
 
     /// Compute per-bin difference: output_dB - input_dB
-    private func computeDifference() {
-        let count = min(inputMagnitudes.count, outputMagnitudes.count)
-        guard count > 0 else { return }
+    private func computeDifference(input: [Float], output: [Float]) -> [Float] {
+        let count = min(input.count, output.count)
+        guard count > 0 else { return [] }
 
         var diff = [Float](repeating: 0, count: count)
-        vDSP_vsub(inputMagnitudes, 1, outputMagnitudes, 1, &diff, 1, vDSP_Length(count))
-        differenceMagnitudes = diff
+        vDSP_vsub(input, 1, output, 1, &diff, 1, vDSP_Length(count))
+        return diff
     }
 }

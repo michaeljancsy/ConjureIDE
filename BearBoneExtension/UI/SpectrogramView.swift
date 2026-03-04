@@ -40,10 +40,7 @@ struct SpectrogramView: View {
             }
             .onChange(of: captureManager.updateCounter) { _, _ in
                 ensureBuffer(width: width, height: height)
-                let mags = magnitudes
-                if !mags.isEmpty {
-                    appendColumn(magnitudes: mags, height: height)
-                }
+                drainPendingColumns(height: height)
             }
             .onChange(of: geometry.size) { _, newSize in
                 let w = Int(newSize.width)
@@ -69,11 +66,15 @@ struct SpectrogramView: View {
         }
     }
 
-    private var magnitudes: [Float] {
-        switch channel {
-        case .input: return captureManager.inputMagnitudes
-        case .output: return captureManager.outputMagnitudes
-        case .difference: return captureManager.differenceMagnitudes
+    /// Drain all pending columns for this channel, appending each as a
+    /// spectrogram column. This ensures no FFT windows are lost when
+    /// display link callbacks are delayed (e.g. during slider drags).
+    private func drainPendingColumns(height: Int) {
+        let columns = captureManager.drainColumns(for: channel)
+        for mags in columns {
+            if !mags.isEmpty {
+                appendColumn(magnitudes: mags, height: height)
+            }
         }
     }
 
