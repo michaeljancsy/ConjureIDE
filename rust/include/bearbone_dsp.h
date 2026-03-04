@@ -5,6 +5,11 @@
 #include <stdbool.h>
 
 /**
+ * Number of fixed generic parameters exposed to the DAW.
+ */
+#define PARAM_COUNT 8
+
+/**
  * Real-time audio DSP kernel with pluggable processing backends.
  *
  * Supports Python scripts (via pyo3/numpy) and WASM modules (via wasmtime).

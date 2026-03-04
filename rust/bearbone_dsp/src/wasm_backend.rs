@@ -1,4 +1,5 @@
 use crate::backend::Backend;
+use crate::params::PARAM_COUNT;
 use wasmtime::*;
 
 /// How I/O buffer addresses are determined in WASM memory.
@@ -31,9 +32,11 @@ pub struct WasmBackend {
     process_fn: TypedFunc<(i32, i32, i32, i32, f32), ()>,
     get_input_ptr_fn: Option<TypedFunc<(), i32>>,
     get_output_ptr_fn: Option<TypedFunc<(), i32>>,
+    get_params_ptr_fn: Option<TypedFunc<(), i32>>,
     buffer_mode: BufferMode,
     input_offset: i32,
     output_offset: i32,
+    params_offset: i32,
     channel_count: usize,
     max_frames: u32,
     fuel_per_callback: u64,
@@ -99,6 +102,9 @@ impl WasmBackend {
         let get_output_ptr_fn = instance
             .get_typed_func::<(), i32>(&mut store, "get_output_ptr")
             .ok();
+        let get_params_ptr_fn = instance
+            .get_typed_func::<(), i32>(&mut store, "get_params_ptr")
+            .ok();
 
         let buffer_mode =
             if get_input_ptr_fn.is_some() && get_output_ptr_fn.is_some() {
@@ -118,9 +124,11 @@ impl WasmBackend {
             process_fn,
             get_input_ptr_fn,
             get_output_ptr_fn,
+            get_params_ptr_fn,
             buffer_mode,
             input_offset: 0,
             output_offset: 0,
+            params_offset: 0,
             channel_count: 0,
             max_frames: 0,
             fuel_per_callback,
@@ -345,6 +353,12 @@ impl Backend for WasmBackend {
                             self.output_offset = 0;
                         }
                     }
+                    // Optional: get params buffer address
+                    if let Some(get_params) = self.get_params_ptr_fn.clone() {
+                        if let Ok(ptr) = get_params.call(&mut self.store, ()) {
+                            self.params_offset = ptr;
+                        }
+                    }
                 }
             }
             BufferMode::FixedOffset => {
@@ -376,6 +390,7 @@ impl Backend for WasmBackend {
         self.max_frames = 0;
         self.input_offset = 0;
         self.output_offset = 0;
+        self.params_offset = 0;
     }
 
     unsafe fn process(
@@ -385,6 +400,7 @@ impl Backend for WasmBackend {
         channel_count: usize,
         frame_count: usize,
         sample_rate: f64,
+        params: &[f32; PARAM_COUNT],
     ) -> bool {
         if self.input_offset == 0 || channel_count == 0 || frame_count == 0 {
             return false;
@@ -407,6 +423,18 @@ impl Backend for WasmBackend {
             // Copy f32 samples as raw bytes
             for (i, &sample) in src.iter().enumerate() {
                 dst[i * 4..(i + 1) * 4].copy_from_slice(&sample.to_le_bytes());
+            }
+        }
+
+        // Write params into WASM memory if the module exports get_params_ptr
+        if self.params_offset != 0 {
+            let params_byte_offset = self.params_offset as usize;
+            let params_end = params_byte_offset + PARAM_COUNT * 4;
+            if params_end <= mem_data.len() {
+                for (i, &val) in params.iter().enumerate() {
+                    let offset = params_byte_offset + i * 4;
+                    mem_data[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
+                }
             }
         }
 
@@ -570,6 +598,7 @@ mod tests {
                 1,
                 4,
                 44100.0,
+                &[0.0; PARAM_COUNT],
             )
         };
         assert!(ok, "process should succeed");
@@ -594,6 +623,7 @@ mod tests {
                 2,
                 4,
                 44100.0,
+                &[0.0; PARAM_COUNT],
             )
         };
         assert!(ok, "process should succeed");
@@ -617,6 +647,7 @@ mod tests {
                 1,
                 4,
                 44100.0,
+                &[0.0; PARAM_COUNT],
             )
         };
         assert!(ok);
@@ -677,6 +708,7 @@ mod tests {
                 1,
                 4,
                 44100.0,
+                &[0.0; PARAM_COUNT],
             )
         };
         assert!(!ok, "Infinite loop should fail due to fuel exhaustion");
@@ -702,6 +734,7 @@ mod tests {
                 1,
                 4,
                 44100.0,
+                &[0.0; PARAM_COUNT],
             )
         };
         assert!(!ok, "Should fail without initialize");
@@ -724,6 +757,7 @@ mod tests {
                     1,
                     4,
                     48000.0,
+                    &[0.0; PARAM_COUNT],
                 )
             };
             assert!(ok);
@@ -752,6 +786,7 @@ mod tests {
                     1,
                     4,
                     44100.0,
+                    &[0.0; PARAM_COUNT],
                 )
             };
             assert!(ok, "Callback {} should succeed", i);
@@ -890,6 +925,7 @@ mod tests {
                 1,
                 4,
                 44100.0,
+                &[0.0; PARAM_COUNT],
             )
         };
         assert!(ok, "WASI module should process audio");
@@ -912,6 +948,7 @@ mod tests {
                 1,
                 4,
                 44100.0,
+                &[0.0; PARAM_COUNT],
             )
         };
         assert!(ok, "Module calling environ_sizes_get should work");
@@ -970,6 +1007,7 @@ mod tests {
                 1,
                 4,
                 44100.0,
+                &[0.0; PARAM_COUNT],
             )
         };
         assert!(ok, "Module with buffer getters should process audio");

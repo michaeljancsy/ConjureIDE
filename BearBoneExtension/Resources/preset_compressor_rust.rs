@@ -1,10 +1,20 @@
 // Compressor — dynamic range compression with envelope follower.
+//
+// Reduces the dynamic range of the audio signal using a peak-detecting
+// envelope follower. When the signal exceeds the threshold, gain is reduced
+// according to the compression ratio. Attack and release times control how
+// quickly the compressor responds to level changes. Makeup gain compensates
+// for the overall volume reduction caused by compression.
+//
+// The envelope follower operates per-sample across all channels (peak detection),
+// so stereo signals are compressed with linked gain to preserve the stereo image.
 
 const MAX_CH: usize = 2;
 const MAX_FR: usize = 4096;
 
 static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
+static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
 // Compressor parameters
 const THRESHOLD_DB: f32 = -20.0; // Level above which compression kicks in
@@ -26,6 +36,11 @@ pub extern "C" fn get_output_ptr() -> i32 {
     unsafe { OUTPUT_BUF.as_ptr() as i32 }
 }
 
+#[no_mangle]
+pub extern "C" fn get_params_ptr() -> i32 {
+    unsafe { PARAMS_BUF.as_ptr() as i32 }
+}
+
 fn db_to_lin(db: f32) -> f32 {
     (10.0_f32).powf(db / 20.0)
 }
@@ -34,6 +49,13 @@ fn lin_to_db(lin: f32) -> f32 {
     20.0 * (lin + 1e-30).log10()
 }
 
+/// Compressor — dynamic range compression with envelope follower.
+///
+/// Per-sample processing: detects the peak level across all channels, smooths it
+/// with attack/release coefficients, and computes gain reduction when the envelope
+/// exceeds the threshold. The gain curve follows a soft-knee-less ratio (hard knee).
+/// Makeup gain is applied uniformly to compensate for compression. DAW-automatable
+/// parameters are available in PARAMS_BUF[0..8] but unused by this preset.
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32,

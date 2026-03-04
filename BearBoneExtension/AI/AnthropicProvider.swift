@@ -15,11 +15,13 @@ final class AnthropicProvider: AIProvider {
 
     private static let apiContract = """
         API contract:
-        - Function signature: def process(inputs, outputs, frame_count, sample_rate)
+        - Function signature: def process(inputs, outputs, frame_count, sample_rate, params)
         - inputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
         - outputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
         - frame_count: number of valid samples this callback (may be less than array length)
         - sample_rate: current sample rate (e.g. 44100.0)
+        - params: list of 8 floats (0.0–1.0), DAW-automatable parameter values (Param 1–8). \
+          Use these to make your effect controllable in real time from the host DAW.
         - Write processed audio into outputs[ch][:frame_count]
         - Only numpy is available (imported as np)
         - Global variables persist across callbacks (useful for phase accumulators, delay buffers, etc.)
@@ -61,13 +63,18 @@ final class AnthropicProvider: AIProvider {
     private static let rustApiContract = """
         API contract (Rust compiled to WebAssembly):
         - The script is compiled to wasm32-wasip1 and runs in a WASM sandbox
-        - Must define three #[no_mangle] pub extern "C" functions:
+        - Must define four #[no_mangle] pub extern "C" functions:
           1. get_input_ptr() -> i32  — returns pointer to the input buffer
           2. get_output_ptr() -> i32 — returns pointer to the output buffer
-          3. process(input: *const f32, output: *mut f32, channels: i32, frame_count: i32, sample_rate: f32)
+          3. get_params_ptr() -> i32 — returns pointer to the params buffer (8 × f32)
+          4. process(input: *const f32, output: *mut f32, channels: i32, frame_count: i32, sample_rate: f32)
         - Static buffers: define MAX_CH (2) and MAX_FR (4096) constants, then:
           static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
           static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
+          static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
+        - The host writes 8 DAW-automatable parameter values (0.0–1.0) into PARAMS_BUF before \
+          each process() call. Read PARAMS_BUF[0]–PARAMS_BUF[7] to access Param 1–8 and make \
+          your effect controllable in real time from the host DAW.
         - Audio is interleaved: total samples = channels * frame_count
         - Use std::slice::from_raw_parts(input, n) and from_raw_parts_mut(output, n) inside unsafe blocks
         - Must handle both mono (1 channel) and stereo (2 channels)
