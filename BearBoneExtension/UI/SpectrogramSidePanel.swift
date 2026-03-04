@@ -19,43 +19,48 @@ struct SpectrogramSidePanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Mini toolbar
-            HStack(spacing: 6) {
-                // Frequency scale picker
-                Picker("Scale", selection: $frequencyScale) {
-                    ForEach(FrequencyScale.allCases) { scale in
-                        Text(scale.rawValue).tag(scale)
+            // Mini toolbar — uses GeometryReader to constrain controls to panel width
+            GeometryReader { geo in
+                HStack(spacing: 6) {
+                    // Frequency scale picker
+                    Picker(selection: $frequencyScale) {
+                        ForEach(FrequencyScale.allCases) { scale in
+                            Text(scale.rawValue).tag(scale)
+                        }
+                    } label: {
+                        EmptyView()
                     }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 160)
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: max(60, geo.size.width * 0.55))
 
-                Spacer()
+                    Spacer(minLength: 0)
 
-                // FFT size picker
-                Picker("FFT", selection: $fftSizeIndex) {
-                    ForEach(0..<Self.fftSizes.count, id: \.self) { i in
-                        Text("\(Self.fftSizes[i])").tag(i)
+                    // FFT size picker
+                    Picker("FFT", selection: $fftSizeIndex) {
+                        ForEach(0..<Self.fftSizes.count, id: \.self) { i in
+                            Text("\(Self.fftSizes[i])").tag(i)
+                        }
                     }
-                }
-                .pickerStyle(.menu)
-                .frame(maxWidth: 80)
-                .onChange(of: fftSizeIndex) { _, newValue in
-                    captureManager.fftSize = Self.fftSizes[newValue]
-                }
+                    .pickerStyle(.menu)
+                    .onChange(of: fftSizeIndex) { _, newValue in
+                        captureManager.fftSize = Self.fftSizes[newValue]
+                    }
 
-                // Hz / Notes toggle
-                Button {
-                    showNoteNames.toggle()
-                } label: {
-                    Image(systemName: showNoteNames ? "music.note" : "number")
-                        .font(.caption)
+                    // Hz / Notes toggle
+                    Button {
+                        showNoteNames.toggle()
+                    } label: {
+                        Image(systemName: showNoteNames ? "music.note" : "number")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .help(showNoteNames ? "Show Hz labels" : "Show note names")
                 }
-                .buttonStyle(.plain)
-                .help(showNoteNames ? "Show Hz labels" : "Show note names")
+                .padding(.horizontal, 6)
+                .frame(width: geo.size.width, height: geo.size.height)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .frame(height: 28)
             .background(.bar)
 
             Divider()
