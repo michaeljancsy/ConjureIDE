@@ -630,7 +630,8 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
-	/// Walk the event linked list, skipping all events at the current timestamp.
+	/// Walk the event linked list, handling all events at the current timestamp.
+	/// Parameter events are dispatched to the Rust kernel; MIDI events are skipped.
 	private static func performAllSimultaneousEvents(
 		kernel: DSPKernelRef,
 		now: AUEventSampleTime,
@@ -639,6 +640,17 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		var current: UnsafePointer<AURenderEvent>? = event
 		repeat {
 			guard let evt = current else { break }
+
+			// Handle parameter events from DAW automation
+			if evt.pointee.head.eventType == .parameter {
+				let paramEvent = evt.pointee.parameter
+				dsp_kernel_set_parameter(kernel, paramEvent.parameterAddress, paramEvent.value)
+			} else if evt.pointee.head.eventType == .parameterRamp {
+				// For ramp events, apply the target value immediately
+				// (sample-accurate ramping would require per-sample interpolation in the kernel)
+				let paramEvent = evt.pointee.parameter
+				dsp_kernel_set_parameter(kernel, paramEvent.parameterAddress, paramEvent.value)
+			}
 
 			// Advance to next event
 			if let next = evt.pointee.head.next {
