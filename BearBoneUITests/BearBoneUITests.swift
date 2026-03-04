@@ -232,6 +232,25 @@ final class BearBoneUITests: XCTestCase {
         }
     }
 
+    // MARK: - Parameter Sliders
+
+    @MainActor
+    func testParameterSlidersPanelExists() throws {
+        let app = XCUIApplication()
+        app.launch()
+        let panel = app.disclosureTriangles["parameterSlidersPanel"].firstMatch
+        // DisclosureGroup may surface as different element types through ViewBridge;
+        // fall back to searching any element with the identifier.
+        let anyMatch = app.descendants(matching: .any)["parameterSlidersPanel"].firstMatch
+        XCTAssertTrue(panel.waitForExistence(timeout: 10) || anyMatch.waitForExistence(timeout: 2),
+                      "Parameter sliders panel should be visible after launch")
+    }
+
+    // Note: testParameterSliderExists was removed because SwiftUI Sliders
+    // are not accessible through the AU ViewBridge (NSViewServiceMarshal) in XCUITest.
+    // The sliders are visually present and functional but not discoverable via XCUI queries.
+    // Same limitation as the language segmented picker.
+
     // MARK: - Typing Tests
 
     @MainActor

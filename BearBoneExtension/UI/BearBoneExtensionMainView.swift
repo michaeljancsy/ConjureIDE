@@ -23,6 +23,7 @@ struct BearBoneExtensionMainView: View {
     var scriptSourcePublisher: AnyPublisher<String, Never>?
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var aiService: AIService
+    @ObservedObject var parameterState: ParameterState
     var onRun: (String) async -> ScriptSaveResult
     var onSelectPreset: (Preset) -> ScriptSaveResult
     var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
@@ -93,6 +94,10 @@ struct BearBoneExtensionMainView: View {
                 showingSaveAs: $showingSaveAs,
                 saveAsName: $saveAsName
             )
+
+            Divider()
+
+            ParameterSlidersView(parameterState: parameterState)
 
             Divider()
 
