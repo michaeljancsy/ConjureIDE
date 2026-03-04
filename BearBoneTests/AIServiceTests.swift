@@ -597,7 +597,7 @@ private enum TestSystemPrompts {
         - outputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
         - frame_count: number of valid samples this callback (may be less than array length)
         - sample_rate: current sample rate (e.g. 44100.0)
-        - params: list of 8 floats (0.0–1.0), DAW-automatable parameter values (Param 1–8). \
+        - params: list of 8 floats (0.0–1.0), DAW-automatable parameter values (Param 0–7). \
           Use these to make your effect controllable in real time from the host DAW.
         - Write processed audio into outputs[ch][:frame_count]
         - Only numpy is available (imported as np)
@@ -618,7 +618,7 @@ private enum TestSystemPrompts {
           static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
           static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
         - The host writes 8 DAW-automatable parameter values (0.0–1.0) into PARAMS_BUF before \
-          each process() call. Read PARAMS_BUF[0]–PARAMS_BUF[7] to access Param 1–8 and make \
+          each process() call. Read PARAMS_BUF[0]–PARAMS_BUF[7] to access Param 0–7 and make \
           your effect controllable in real time from the host DAW.
         - Audio is interleaved: total samples = channels * frame_count
         - Use std::slice::from_raw_parts(input, n) and from_raw_parts_mut(output, n) inside unsafe blocks

@@ -22,7 +22,7 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	private func buildParameterTree() {
 		var params: [AUParameter] = []
-		for i in 1...Self.paramCount {
+		for i in 0..<Self.paramCount {
 			let param = AUParameterTree.createParameter(
 				withIdentifier: "param\(i)",
 				name: "Param \(i)",

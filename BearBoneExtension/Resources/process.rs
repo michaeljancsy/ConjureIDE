@@ -4,7 +4,7 @@
 // The `process` function is called once per audio buffer.
 //
 // Parameters: The host writes 8 floats (0.0–1.0) into PARAMS_BUF before each
-// `process()` call. Read PARAMS_BUF[0]–PARAMS_BUF[7] to access Param 1–8.
+// `process()` call. Read PARAMS_BUF[0]–PARAMS_BUF[7] to access Param 0–7.
 //
 // Safety: avoid allocations, I/O, or panics in `process()`.
 
@@ -35,7 +35,7 @@ pub extern "C" fn get_params_ptr() -> i32 {
 /// Called once per audio render callback. Input samples are in the interleaved
 /// INPUT_BUF (channels × frame_count), and results should be written to
 /// OUTPUT_BUF in the same layout. DAW-automatable parameters are available
-/// in PARAMS_BUF[0..8] (Param 1–8, each 0.0–1.0).
+/// in PARAMS_BUF[0..8] (Param 0–7, each 0.0–1.0).
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
