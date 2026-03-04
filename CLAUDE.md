@@ -82,13 +82,15 @@ BearBoneUITests/           UI tests (XCUITest)
 
 ## Parameter System
 
-No parameters are currently defined. The parameter infrastructure exists in:
+8 fixed generic parameters (Param 0–7, range 0–1, unit `.generic`) are created dynamically in `buildParameterTree()`. Parameter definitions live in:
 
-1. **Rust** (`rust/bearbone_dsp/src/params.rs`) — parameter address constants
-2. **Swift enum** (`Parameters.swift`) — `BearBoneExtensionParameterAddress`
-3. **Rust kernel** (`rust/bearbone_dsp/src/kernel.rs`) — `set_parameter`/`get_parameter`
+1. **Swift** (`BearBoneExtensionAudioUnit.swift`) — `buildParameterTree()` loop creates 8 `AUParameter`s with addresses 0–7
+2. **Rust** (`rust/bearbone_dsp/src/params.rs`) — `PARAM_COUNT = 8`
+3. **Rust kernel** (`rust/bearbone_dsp/src/kernel.rs`) — `AtomicU32` array, lock-free `set_parameter`/`get_parameter`
 
-To add a new parameter, define its address in all three layers and keep them in sync.
+Parameters are passed to Python scripts as an optional 5th argument and to WASM modules via `get_params_ptr()`.
+
+**Known Logic Pro quirk:** On the master channel strip, Logic's "Automatic Smart Controls" layout has fewer knob slots than on regular channel strips, so only 7 of 8 parameters get mapped to knobs. All 8 parameters are still registered and automatable — this is a Logic Smart Controls grid limitation, not an AU bug.
 
 ## DSP Conventions
 
