@@ -1,8 +1,9 @@
 use crate::backend::Backend;
 use crate::params::PARAM_COUNT;
 use crate::python_backend::PythonBackend;
+use crate::ring_buffer::AudioRingBuffer;
 use crate::wasm_backend::WasmBackend;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 /// Real-time audio DSP kernel with pluggable processing backends.
@@ -25,6 +26,16 @@ pub struct DSPKernel {
     /// 8 generic parameters (0.0–1.0), stored as AtomicU32 via f32::to_bits/from_bits.
     /// Main thread writes (DAW automation), audio thread reads — lock-free via Relaxed ordering.
     params: [AtomicU32; PARAM_COUNT],
+    /// Lock-free ring buffers for spectrogram visualization.
+    /// Audio thread writes mono-downmixed samples; UI thread reads for FFT.
+    input_ring: AudioRingBuffer,
+    output_ring: AudioRingBuffer,
+    /// When false, ring buffers are not written to (saves CPU when spectrogram is hidden).
+    /// UI thread sets this via `set_capture_enabled`; audio thread checks before writing.
+    capture_enabled: AtomicBool,
+    /// Scratch buffer for mono downmix (avoids per-callback allocation).
+    /// Sized to `max_frames_to_render`.
+    capture_scratch: Vec<f32>,
 }
 
 impl DSPKernel {
@@ -38,6 +49,10 @@ impl DSPKernel {
             backend: Mutex::new(None),
             last_error: None,
             params: [ZERO; PARAM_COUNT],
+            input_ring: AudioRingBuffer::new(AudioRingBuffer::DEFAULT_CAPACITY),
+            output_ring: AudioRingBuffer::new(AudioRingBuffer::DEFAULT_CAPACITY),
+            capture_enabled: AtomicBool::new(false),
+            capture_scratch: vec![0.0; 1024],
         }
     }
 
@@ -147,6 +162,68 @@ impl DSPKernel {
 
     pub fn set_maximum_frames_to_render(&mut self, max_frames: u32) {
         self.max_frames_to_render = max_frames;
+        // Resize scratch buffer to match (no allocation on audio thread)
+        self.capture_scratch.resize(max_frames as usize, 0.0);
+    }
+
+    /// Enable or disable audio capture for spectrogram visualization.
+    /// Called from the UI thread. When disabled, the audio thread skips
+    /// writing to ring buffers.
+    pub fn set_capture_enabled(&self, enabled: bool) {
+        self.capture_enabled.store(enabled, Ordering::Relaxed);
+        if !enabled {
+            self.input_ring.clear();
+            self.output_ring.clear();
+        }
+    }
+
+    /// Check if capture is enabled.
+    pub fn is_capture_enabled(&self) -> bool {
+        self.capture_enabled.load(Ordering::Relaxed)
+    }
+
+    /// Read available samples from the input ring buffer into `output`.
+    /// Returns the number of samples actually read. Called from UI thread.
+    pub fn read_input_ring(&self, output: &mut [f32]) -> usize {
+        self.input_ring.read(output)
+    }
+
+    /// Read available samples from the output ring buffer into `output`.
+    /// Returns the number of samples actually read. Called from UI thread.
+    pub fn read_output_ring(&self, output: &mut [f32]) -> usize {
+        self.output_ring.read(output)
+    }
+
+    /// Mono-downmix multi-channel audio into the scratch buffer and write to ring buffer.
+    /// Called from the audio thread during process().
+    unsafe fn capture_to_ring(
+        &self,
+        buffers: &[*const f32],
+        channel_count: usize,
+        frame_count: usize,
+        ring: &AudioRingBuffer,
+    ) {
+        let scratch = self.capture_scratch.as_ptr() as *mut f32;
+        let count = frame_count.min(self.capture_scratch.len());
+
+        if channel_count == 1 {
+            // Mono: copy directly
+            let src = std::slice::from_raw_parts(buffers[0], count);
+            std::ptr::copy_nonoverlapping(src.as_ptr(), scratch, count);
+        } else {
+            // Multi-channel: sum and divide
+            let inv_channels = 1.0 / channel_count as f32;
+            for i in 0..count {
+                let mut sum = 0.0f32;
+                for ch in 0..channel_count {
+                    sum += *buffers[ch].add(i);
+                }
+                *scratch.add(i) = sum * inv_channels;
+            }
+        }
+
+        let mono_slice = std::slice::from_raw_parts(scratch, count);
+        ring.write(mono_slice);
     }
 
     /// Returns the last error message, if any.
@@ -277,8 +354,19 @@ impl DSPKernel {
         let inputs = std::slice::from_raw_parts(input_buffers, channel_count);
         let outputs = std::slice::from_raw_parts(output_buffers, channel_count);
 
+        let capturing = self.capture_enabled.load(Ordering::Relaxed);
+
+        // Capture input audio for spectrogram (before processing)
+        if capturing {
+            self.capture_to_ring(inputs, channel_count, frame_count, &self.input_ring);
+        }
+
         if self.bypassed {
             Self::passthrough(inputs, outputs, channel_count, frame_count);
+            // Capture output (same as input during bypass)
+            if capturing {
+                self.capture_to_ring(inputs, channel_count, frame_count, &self.output_ring);
+            }
             return;
         }
 
@@ -291,6 +379,12 @@ impl DSPKernel {
             if let Some(ref mut backend) = *guard {
                 if backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate, &params) {
                     Self::safety_clamp(outputs, channel_count, frame_count);
+                    // Capture output audio for spectrogram (after processing)
+                    if capturing {
+                        // Cast output pointers to const for capture
+                        let out_as_const: Vec<*const f32> = outputs.iter().map(|p| *p as *const f32).collect();
+                        self.capture_to_ring(&out_as_const, channel_count, frame_count, &self.output_ring);
+                    }
                     return;
                 }
                 // Backend failed — fall through to passthrough
@@ -299,6 +393,10 @@ impl DSPKernel {
 
         // Fallback: passthrough (copy input to output unchanged)
         Self::passthrough(inputs, outputs, channel_count, frame_count);
+        // Capture output (same as input during passthrough)
+        if capturing {
+            self.capture_to_ring(inputs, channel_count, frame_count, &self.output_ring);
+        }
     }
 
     /// Clamp all output samples to [-1.0, 1.0] to prevent dangerously loud output.

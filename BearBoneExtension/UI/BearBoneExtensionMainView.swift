@@ -23,6 +23,7 @@ struct BearBoneExtensionMainView: View {
     var scriptSourcePublisher: AnyPublisher<String, Never>?
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var aiService: AIService
+    @ObservedObject var captureManager: AudioCaptureManager
     var onRun: (String) async -> ScriptSaveResult
     var onSelectPreset: (Preset) -> ScriptSaveResult
     var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
@@ -38,6 +39,11 @@ struct BearBoneExtensionMainView: View {
     @State private var showSuccess: Bool = false
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
     @State private var isCompiling: Bool = false
+    @State private var showSpectrogram: Bool = false
+    @State private var spectrogramWidth: CGFloat = 250
+    @State private var spectrogramFrequencyScale: FrequencyScale = .log
+    @State private var spectrogramFFTSizeIndex: Int = 2 // default: 2048
+    @State private var spectrogramShowNoteNames: Bool = false
     @Environment(\.colorScheme) private var colorScheme
 
     /// Color for the benchmark timing based on how close to budget.
@@ -57,6 +63,7 @@ struct BearBoneExtensionMainView: View {
                 aiService: aiService,
                 isCompiling: isCompiling,
                 selectedLanguage: $selectedLanguage,
+                showSpectrogram: $showSpectrogram,
                 onSelectPreset: { preset in
                     let result = onSelectPreset(preset)
                     selectedLanguage = preset.language
@@ -96,6 +103,7 @@ struct BearBoneExtensionMainView: View {
 
             Divider()
 
+            HStack(spacing: 0) {
             VStack(spacing: 8) {
                 if buildID != 0 {
                     Text(verbatim: "Build \(buildID)")
@@ -180,6 +188,40 @@ struct BearBoneExtensionMainView: View {
                 }
             }
             .padding(.bottom, 8)
+
+            // Spectrogram side panel (collapsible)
+            if showSpectrogram {
+                // Resizable divider
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.2))
+                    .frame(width: 4)
+                    .contentShape(Rectangle().inset(by: -4))
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                spectrogramWidth = max(150, min(500, spectrogramWidth - value.translation.width))
+                            }
+                    )
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.resizeLeftRight.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+
+                SpectrogramSidePanel(
+                    captureManager: captureManager,
+                    frequencyScale: $spectrogramFrequencyScale,
+                    fftSizeIndex: $spectrogramFFTSizeIndex,
+                    showNoteNames: $spectrogramShowNoteNames
+                )
+                .frame(width: spectrogramWidth)
+            }
+            } // HStack
+        }
+        .onChange(of: showSpectrogram) { _, newValue in
+            captureManager.isActive = newValue
         }
         .onAppear {
             scriptSource = defaultScriptSource

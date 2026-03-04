@@ -6,6 +6,7 @@ struct PresetToolbar: View {
     @ObservedObject var aiService: AIService
     var isCompiling: Bool = false
     @Binding var selectedLanguage: ScriptLanguage
+    @Binding var showSpectrogram: Bool
     var onSelectPreset: (Preset) -> Void
     var onRun: () -> Void
     var onSave: () -> Void
@@ -181,6 +182,14 @@ struct PresetToolbar: View {
                     Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This cannot be undone.")
                 }
             }
+
+            // Spectrogram toggle
+            Button(action: { showSpectrogram.toggle() }) {
+                Image(systemName: showSpectrogram ? "chart.bar.xaxis.ascending" : "chart.bar.xaxis")
+            }
+            .buttonStyle(.borderless)
+            .help(showSpectrogram ? "Hide spectrogram" : "Show spectrogram")
+            .accessibilityIdentifier("spectrogramToggleButton")
 
             // AI Settings
             Button(action: { showingSettings = true }) {

@@ -2,6 +2,7 @@ mod backend;
 mod kernel;
 mod params;
 mod python_backend;
+mod ring_buffer;
 mod wasm_backend;
 
 use kernel::DSPKernel;
@@ -190,6 +191,50 @@ pub unsafe extern "C" fn dsp_kernel_last_error(kernel: DSPKernelRef) -> *const c
         }
         None => std::ptr::null(),
     }
+}
+
+/// Enable or disable audio capture for spectrogram visualization.
+/// When disabled, ring buffers are not written to (saves CPU on audio thread).
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_set_capture_enabled(kernel: DSPKernelRef, enabled: bool) {
+    (*kernel).set_capture_enabled(enabled);
+}
+
+/// Read available samples from the input (pre-processing) ring buffer.
+/// Returns the number of samples actually read (up to `max_samples`).
+/// Called from the UI thread only.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+/// - `out` must point to at least `max_samples` writable f32 values.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_read_input_ring(
+    kernel: DSPKernelRef,
+    out: *mut f32,
+    max_samples: u32,
+) -> u32 {
+    let output = std::slice::from_raw_parts_mut(out, max_samples as usize);
+    (*kernel).read_input_ring(output) as u32
+}
+
+/// Read available samples from the output (post-processing) ring buffer.
+/// Returns the number of samples actually read (up to `max_samples`).
+/// Called from the UI thread only.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+/// - `out` must point to at least `max_samples` writable f32 values.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_read_output_ring(
+    kernel: DSPKernelRef,
+    out: *mut f32,
+    max_samples: u32,
+) -> u32 {
+    let output = std::slice::from_raw_parts_mut(out, max_samples as usize);
+    (*kernel).read_output_ring(output) as u32
 }
 
 #[cfg(test)]
@@ -440,6 +485,148 @@ mod tests {
             assert!(result > 0.0, "benchmark should return positive time, got {}", result);
 
             dsp_kernel_deinitialize(kernel);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_capture_disabled_by_default() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+
+            let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+
+            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+
+            // Ring buffers should be empty when capture is disabled
+            let mut ring_out = [0.0f32; 4];
+            let count = dsp_kernel_read_input_ring(kernel, ring_out.as_mut_ptr(), 4);
+            assert_eq!(count, 0);
+            let count = dsp_kernel_read_output_ring(kernel, ring_out.as_mut_ptr(), 4);
+            assert_eq!(count, 0);
+
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_capture_enabled_captures_passthrough() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+            dsp_kernel_set_capture_enabled(kernel, true);
+
+            let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+
+            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+
+            // Both ring buffers should have data
+            let mut ring_in = [0.0f32; 4];
+            let count = dsp_kernel_read_input_ring(kernel, ring_in.as_mut_ptr(), 4);
+            assert_eq!(count, 4);
+            assert_eq!(ring_in, [0.1, 0.2, 0.3, 0.4]);
+
+            let mut ring_out = [0.0f32; 4];
+            let count = dsp_kernel_read_output_ring(kernel, ring_out.as_mut_ptr(), 4);
+            assert_eq!(count, 4);
+            // Passthrough: output should match input
+            assert_eq!(ring_out, [0.1, 0.2, 0.3, 0.4]);
+
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_capture_stereo_mono_downmix() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            dsp_kernel_initialize(kernel, 2, 2, 44100.0);
+            dsp_kernel_set_capture_enabled(kernel, true);
+
+            let input_l: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+            let input_r: [f32; 4] = [0.0, 0.5, 1.0, 0.0];
+            let mut output_l: [f32; 4] = [0.0; 4];
+            let mut output_r: [f32; 4] = [0.0; 4];
+
+            let input_ptrs: [*const f32; 2] = [input_l.as_ptr(), input_r.as_ptr()];
+            let output_ptrs: [*mut f32; 2] = [output_l.as_mut_ptr(), output_r.as_mut_ptr()];
+
+            dsp_kernel_process(kernel, input_ptrs.as_ptr(), output_ptrs.as_ptr(), 2, 4);
+
+            // Ring buffer should contain mono downmix: (L + R) / 2
+            let mut ring_in = [0.0f32; 4];
+            let count = dsp_kernel_read_input_ring(kernel, ring_in.as_mut_ptr(), 4);
+            assert_eq!(count, 4);
+            assert_eq!(ring_in, [0.5, 0.5, 0.0, 0.0]);
+
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_capture_with_wasm_backend() {
+        let wasm = passthrough_wasm_bytes();
+        let kernel = dsp_kernel_create();
+        unsafe {
+            assert!(dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32));
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+            dsp_kernel_set_capture_enabled(kernel, true);
+
+            let input: [f32; 4] = [0.5, -0.5, 0.25, -0.25];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+
+            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+
+            // Both ring buffers should have captured data
+            let mut ring_in = [0.0f32; 4];
+            let count = dsp_kernel_read_input_ring(kernel, ring_in.as_mut_ptr(), 4);
+            assert_eq!(count, 4);
+            assert_eq!(ring_in, [0.5, -0.5, 0.25, -0.25]);
+
+            let mut ring_out = [0.0f32; 4];
+            let count = dsp_kernel_read_output_ring(kernel, ring_out.as_mut_ptr(), 4);
+            assert_eq!(count, 4);
+            // WASM passthrough: output matches input
+            assert_eq!(ring_out, [0.5, -0.5, 0.25, -0.25]);
+
+            dsp_kernel_deinitialize(kernel);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_capture_toggle() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+
+            let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+
+            // Enable, process, verify capture
+            dsp_kernel_set_capture_enabled(kernel, true);
+            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+            let mut ring_in = [0.0f32; 4];
+            let count = dsp_kernel_read_input_ring(kernel, ring_in.as_mut_ptr(), 4);
+            assert_eq!(count, 4);
+
+            // Disable, process, verify no capture
+            dsp_kernel_set_capture_enabled(kernel, false);
+            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+            let count = dsp_kernel_read_input_ring(kernel, ring_in.as_mut_ptr(), 4);
+            assert_eq!(count, 0);
+
             dsp_kernel_destroy(kernel);
         }
     }
