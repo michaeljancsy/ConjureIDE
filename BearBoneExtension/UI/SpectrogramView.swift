@@ -28,7 +28,6 @@ struct SpectrogramView: View {
     private static let columnCount = 256
 
     @State private var pixelBuffer: SpectrogramPixelBuffer?
-    @State private var lastMagnitudeID: Int = 0
 
     var body: some View {
         GeometryReader { geometry in
@@ -39,10 +38,11 @@ struct SpectrogramView: View {
                 guard let buffer = pixelBuffer, let image = buffer.makeImage() else { return }
                 context.draw(Image(image, scale: 1, label: Text("")), in: CGRect(origin: .zero, size: size))
             }
-            .onChange(of: magnitudes) { _, newValue in
+            .onChange(of: captureManager.updateCounter) { _, _ in
                 ensureBuffer(width: width, height: height)
-                if !newValue.isEmpty {
-                    appendColumn(magnitudes: newValue, height: height)
+                let mags = magnitudes
+                if !mags.isEmpty {
+                    appendColumn(magnitudes: mags, height: height)
                 }
             }
             .onChange(of: geometry.size) { _, newSize in

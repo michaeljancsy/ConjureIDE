@@ -31,6 +31,12 @@ final class AudioCaptureManager: ObservableObject {
     /// Positive = boost, negative = cut, zero = unchanged.
     @Published var differenceMagnitudes: [Float] = []
 
+    /// Monotonically increasing counter, incremented every time new FFT data
+    /// is published. Use this in `.onChange` instead of the magnitude arrays
+    /// to avoid O(n) array comparisons and to ensure updates even when
+    /// magnitudes are unchanged (e.g. silence → identical arrays each frame).
+    @Published var updateCounter: Int = 0
+
     // MARK: - Configuration
 
     /// FFT size (number of samples per FFT window). Must be a power of 2.
@@ -159,9 +165,13 @@ final class AudioCaptureManager: ObservableObject {
         outputAccumulator.removeAll(keepingCapacity: true)
 
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: timerInterval, repeats: true) { [weak self] _ in
+        let t = Timer(timeInterval: timerInterval, repeats: true) { [weak self] _ in
             self?.tick()
         }
+        // Add to .common modes so the timer fires during UI tracking
+        // (e.g. slider drags, gesture tracking) — not just the default mode.
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
     private func stopCapture() {
@@ -216,6 +226,7 @@ final class AudioCaptureManager: ObservableObject {
         // Compute difference when both updated
         if inputUpdated || outputUpdated {
             computeDifference()
+            updateCounter &+= 1
         }
     }
 
