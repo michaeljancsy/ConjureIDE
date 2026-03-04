@@ -3,6 +3,8 @@
 ## In Progress
 
 ## To Do
+- Make scrolling smoother
+- Normalized difference spectrogram
 - Parameter-aware factory presets: Update tremolo preset to use params[0]/params[1] instead of hardcoded values, demonstrating DAW automation
 - DSP utility libraries (WASM Phase 6): Provide helper libraries/modules for common DSP operations in WASM scripts
 - Host app DAW controls: Add preset selection and a bypass button to the BearBone host app, like a DAW would provide

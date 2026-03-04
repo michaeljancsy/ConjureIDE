@@ -90,12 +90,14 @@ struct PresetToolbar: View {
             .accessibilityIdentifier("nextPresetButton")
 
             // Language selector
-            Picker("Language", selection: $selectedLanguage) {
+            Picker("", selection: $selectedLanguage) {
                 Text("Python").tag(ScriptLanguage.python)
                 Text("Rust").tag(ScriptLanguage.rust)
             }
             .pickerStyle(.segmented)
-            .frame(width: 120)
+            .labelsHidden()
+            .frame(width: 110)
+            .controlSize(.small)
             .accessibilityIdentifier("languagePicker")
 
             Spacer()
@@ -204,8 +206,9 @@ struct PresetToolbar: View {
                 )
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
+        .controlSize(.small)
     }
 
     private func selectPrevious() {
