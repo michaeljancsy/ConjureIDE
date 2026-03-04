@@ -193,8 +193,9 @@ struct BearBoneTests {
     @Test @MainActor func viewControllerPreferredContentSize() async throws {
         let (_, au) = try await Self.instantiateAU()
         let vc = try await Self.requestVC(au)
-        #expect(vc.preferredContentSize.width == 600)
-        #expect(vc.preferredContentSize.height == 500)
+        // Size is dynamic (70% screen width, 80% screen height) so just verify it's reasonable
+        #expect(vc.preferredContentSize.width >= 400, "Preferred width should be at least minimum")
+        #expect(vc.preferredContentSize.height >= 300, "Preferred height should be at least minimum")
     }
 
     @Test @MainActor func viewControllerIsResizable() async throws {
