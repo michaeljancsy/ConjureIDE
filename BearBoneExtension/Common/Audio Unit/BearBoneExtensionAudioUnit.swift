@@ -279,6 +279,35 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
+	// MARK: - License
+
+	/// Verify a license serial key against the kernel's embedded public key.
+	/// Returns true if valid (kernel is now in licensed state).
+	func verifyLicense(_ serial: String) -> Bool {
+		return dsp_kernel_verify_license(kernel, serial)
+	}
+
+	/// Check if kernel is currently licensed.
+	func isLicensed() -> Bool {
+		return dsp_kernel_is_licensed(kernel)
+	}
+
+	/// Get remaining demo seconds at current sample rate.
+	func demoSecondsRemaining() -> Double {
+		let sampleRate = _outputBus?.format.sampleRate ?? 48000.0
+		return dsp_kernel_demo_seconds_remaining(kernel, sampleRate)
+	}
+
+	/// Reset the demo counter, giving another 60 seconds of demo time.
+	func resetDemo() {
+		dsp_kernel_reset_demo(kernel)
+	}
+
+	/// Set the licensed state directly (used by tests and license restore).
+	func setLicensed(_ licensed: Bool) {
+		dsp_kernel_set_licensed(kernel, licensed)
+	}
+
 	deinit {
 		if let kernel = kernel {
 			dsp_kernel_destroy(kernel)

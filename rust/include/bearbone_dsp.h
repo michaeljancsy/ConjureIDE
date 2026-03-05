@@ -186,4 +186,47 @@ uint32_t dsp_kernel_read_input_ring(DSPKernelRef kernel, float *out, uint32_t ma
  */
 uint32_t dsp_kernel_read_output_ring(DSPKernelRef kernel, float *out, uint32_t max_samples);
 
+/**
+ * Verify a license serial key and set the kernel's licensed state.
+ * Returns true if the license is valid.
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * - `serial` must be a valid null-terminated C string.
+ */
+bool dsp_kernel_verify_license(DSPKernelRef kernel, const char *serial);
+
+/**
+ * Check if the kernel has a valid license.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+bool dsp_kernel_is_licensed(DSPKernelRef kernel);
+
+/**
+ * Get the remaining demo time in seconds at the given sample rate.
+ * Returns infinity if licensed.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+double dsp_kernel_demo_seconds_remaining(DSPKernelRef kernel, double sample_rate);
+
+/**
+ * Set the licensed state directly (for restoring from persisted license).
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+void dsp_kernel_set_licensed(DSPKernelRef kernel, bool licensed);
+
+/**
+ * Reset the demo sample counter, giving another 60 seconds of demo time.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+void dsp_kernel_reset_demo(DSPKernelRef kernel);
+
 #endif  /* BEARBONE_DSP_H */

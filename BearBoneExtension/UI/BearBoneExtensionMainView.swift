@@ -25,6 +25,7 @@ struct BearBoneExtensionMainView: View {
     @ObservedObject var aiService: AIService
     @ObservedObject var captureManager: AudioCaptureManager
     @ObservedObject var parameterState: ParameterState
+    @ObservedObject var licenseManager: LicenseManager
     var onRun: (String) async -> ScriptSaveResult
     var onSelectPreset: (Preset) async -> ScriptSaveResult
     var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
@@ -62,6 +63,7 @@ struct BearBoneExtensionMainView: View {
             PresetToolbar(
                 presetManager: presetManager,
                 aiService: aiService,
+                licenseManager: licenseManager,
                 isCompiling: isCompiling,
                 selectedLanguage: $selectedLanguage,
                 showSpectrogram: $showSpectrogram,
@@ -112,6 +114,7 @@ struct BearBoneExtensionMainView: View {
 
             Divider()
 
+            ZStack {
             HStack(spacing: 0) {
             VStack(spacing: 8) {
                 if buildID != 0 {
@@ -228,6 +231,58 @@ struct BearBoneExtensionMainView: View {
                 .frame(width: spectrogramWidth)
             }
             } // HStack
+
+            // Demo expired overlay
+            if !licenseManager.isLicensed && licenseManager.demoSecondsRemaining <= 0 {
+                Color.black.opacity(0.6)
+                    .ignoresSafeArea()
+
+                VStack(spacing: 16) {
+                    Image(systemName: "speaker.slash.fill")
+                        .font(.system(size: 32))
+                        .foregroundColor(.orange)
+
+                    Text("Demo Expired")
+                        .font(.title2.bold())
+                        .foregroundColor(.white)
+
+                    Text("Audio output is silenced.")
+                        .font(.body)
+                        .foregroundColor(.white.opacity(0.8))
+
+                    VStack(spacing: 10) {
+                        Button {
+                            licenseManager.restartDemo()
+                        } label: {
+                            Text("Restart Demo")
+                                .frame(minWidth: 160)
+                        }
+                        .controlSize(.large)
+                        .accessibilityIdentifier("restartDemoButton")
+
+                        Button {
+                            showingSaveAs = false // dismiss any other popover
+                            // Open settings by triggering the toolbar gear button
+                            NotificationCenter.default.post(name: .openLicenseSettings, object: nil)
+                        } label: {
+                            Text("Enter License Key")
+                                .frame(minWidth: 160)
+                        }
+                        .controlSize(.large)
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("enterLicenseKeyButton")
+                    }
+                    .padding(.top, 4)
+                }
+                .padding(32)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(nsColor: .windowBackgroundColor))
+                        .shadow(radius: 20)
+                )
+                .accessibilityIdentifier("demoExpiredOverlay")
+            }
+            } // ZStack
         }
         .onChange(of: showSpectrogram) { _, newValue in
             captureManager.isActive = newValue

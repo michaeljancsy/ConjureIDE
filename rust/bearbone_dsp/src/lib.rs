@@ -1,5 +1,6 @@
 mod backend;
 mod kernel;
+mod license;
 mod params;
 mod python_backend;
 mod ring_buffer;
@@ -235,6 +236,73 @@ pub unsafe extern "C" fn dsp_kernel_read_output_ring(
 ) -> u32 {
     let output = std::slice::from_raw_parts_mut(out, max_samples as usize);
     (*kernel).read_output_ring(output) as u32
+}
+
+/// Verify a license serial key and set the kernel's licensed state.
+/// Returns true if the license is valid.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+/// - `serial` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_verify_license(
+    kernel: DSPKernelRef,
+    serial: *const c_char,
+) -> bool {
+    let serial_str = match CStr::from_ptr(serial).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    match crate::license::verify_license(serial_str) {
+        Ok(_payload) => {
+            (*kernel).set_licensed(true);
+            true
+        }
+        Err(e) => {
+            (*kernel).last_error = Some(format!("License verification failed: {}", e));
+            false
+        }
+    }
+}
+
+/// Check if the kernel has a valid license.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_is_licensed(kernel: DSPKernelRef) -> bool {
+    (*kernel).is_licensed()
+}
+
+/// Get the remaining demo time in seconds at the given sample rate.
+/// Returns infinity if licensed.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_demo_seconds_remaining(
+    kernel: DSPKernelRef,
+    sample_rate: f64,
+) -> f64 {
+    (*kernel).demo_seconds_remaining(sample_rate)
+}
+
+/// Set the licensed state directly (for restoring from persisted license).
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_set_licensed(kernel: DSPKernelRef, licensed: bool) {
+    (*kernel).set_licensed(licensed);
+}
+
+/// Reset the demo sample counter, giving another 60 seconds of demo time.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_reset_demo(kernel: DSPKernelRef) {
+    (*kernel).reset_demo();
 }
 
 #[cfg(test)]
@@ -626,6 +694,62 @@ mod tests {
             dsp_kernel_process(kernel, &ip, &op, 1, 4);
             let count = dsp_kernel_read_input_ring(kernel, ring_in.as_mut_ptr(), 4);
             assert_eq!(count, 0);
+
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    // --- License FFI tests ---
+
+    #[test]
+    fn test_ffi_license_default_unlicensed() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            assert!(!dsp_kernel_is_licensed(kernel));
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_set_licensed_roundtrip() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            assert!(!dsp_kernel_is_licensed(kernel));
+            dsp_kernel_set_licensed(kernel, true);
+            assert!(dsp_kernel_is_licensed(kernel));
+            dsp_kernel_set_licensed(kernel, false);
+            assert!(!dsp_kernel_is_licensed(kernel));
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_demo_seconds_remaining() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            let remaining = dsp_kernel_demo_seconds_remaining(kernel, 48000.0);
+            assert!((remaining - 60.0).abs() < 0.1);
+
+            dsp_kernel_set_licensed(kernel, true);
+            let remaining = dsp_kernel_demo_seconds_remaining(kernel, 48000.0);
+            assert!(remaining.is_infinite());
+
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_verify_license_invalid_serial() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            let serial = std::ffi::CString::new("invalid.serial").unwrap();
+            let result = dsp_kernel_verify_license(kernel, serial.as_ptr());
+            assert!(!result);
+            assert!(!dsp_kernel_is_licensed(kernel));
+
+            // Should have set an error message
+            let err = dsp_kernel_last_error(kernel);
+            assert!(!err.is_null());
 
             dsp_kernel_destroy(kernel);
         }
