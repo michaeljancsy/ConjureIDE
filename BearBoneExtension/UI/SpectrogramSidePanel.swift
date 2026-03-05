@@ -30,9 +30,10 @@ struct SpectrogramSidePanel: View {
                     } label: {
                         EmptyView()
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(maxWidth: max(60, geo.size.width * 0.55))
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 160)
 
                     Spacer(minLength: 0)
 
@@ -60,7 +61,9 @@ struct SpectrogramSidePanel: View {
                 .padding(.horizontal, 6)
                 .frame(width: geo.size.width, height: geo.size.height)
             }
-            .frame(height: 28)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .controlSize(.small)
             .background(.bar)
 
             Divider()

@@ -4,6 +4,8 @@
 
 ## To Do
 - Preset comparison tests: tighten tolerance — current 1e-5 tolerance accommodates WASM libm vs native libm differences; investigate using native Rust compilation (non-WASM) to eliminate math library differences and achieve 1e-6 tolerance
+- Make scrolling smoother
+- Normalized difference spectrogram
 - Parameter-aware factory presets: Update tremolo preset to use params[0]/params[1] instead of hardcoded values, demonstrating DAW automation
 - DSP utility libraries (WASM Phase 6): Provide helper libraries/modules for common DSP operations in WASM scripts
 - Host app DAW controls: Add preset selection and a bypass button to the BearBone host app, like a DAW would provide
