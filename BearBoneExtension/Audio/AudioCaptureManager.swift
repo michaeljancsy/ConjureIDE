@@ -33,6 +33,9 @@ final class AudioCaptureManager: ObservableObject {
     /// Queued difference magnitude snapshots (output_dB - input_dB per bin).
     var pendingDifferenceColumns: [[Float]] = []
 
+    /// Queued normalized difference: (S_out - S_in) / (S_out + S_in) per bin, in [-1, 1].
+    var pendingNormalizedDifferenceColumns: [[Float]] = []
+
     /// Monotonically increasing counter, incremented every time new FFT data
     /// is queued. Use this in `.onChange` to trigger SpectrogramView updates.
     /// Uses Int comparison (O(1)) rather than array comparison (O(n)).
@@ -147,6 +150,7 @@ final class AudioCaptureManager: ObservableObject {
         pendingInputColumns.removeAll()
         pendingOutputColumns.removeAll()
         pendingDifferenceColumns.removeAll()
+        pendingNormalizedDifferenceColumns.removeAll()
     }
 
     // MARK: - Display Link Management
@@ -257,6 +261,7 @@ final class AudioCaptureManager: ObservableObject {
                 }
 
                 pendingDifferenceColumns.append(computeDifference(input: lastInput, output: lastOutput))
+                pendingNormalizedDifferenceColumns.append(computeNormalizedDifference(inputDB: lastInput, outputDB: lastOutput))
             }
 
             updateCounter &+= 1
@@ -342,6 +347,10 @@ final class AudioCaptureManager: ObservableObject {
             let cols = pendingDifferenceColumns
             pendingDifferenceColumns.removeAll(keepingCapacity: true)
             return cols
+        case .normalizedDifference:
+            let cols = pendingNormalizedDifferenceColumns
+            pendingNormalizedDifferenceColumns.removeAll(keepingCapacity: true)
+            return cols
         }
     }
 
@@ -355,5 +364,24 @@ final class AudioCaptureManager: ObservableObject {
         var diff = [Float](repeating: 0, count: count)
         vDSP_vsub(input, 1, output, 1, &diff, 1, vDSP_Length(count))
         return diff
+    }
+
+    /// Compute per-bin normalized difference: (S_out - S_in) / (S_out + S_in)
+    /// where S = 10^(dB/10) converts from dB back to linear power.
+    /// Result is in [-1, 1]. Returns 0 where both signals are near silence.
+    private func computeNormalizedDifference(inputDB: [Float], outputDB: [Float]) -> [Float] {
+        let count = min(inputDB.count, outputDB.count)
+        guard count > 0 else { return [] }
+
+        var result = [Float](repeating: 0, count: count)
+        for i in 0..<count {
+            let sIn = powf(10.0, inputDB[i] / 10.0)
+            let sOut = powf(10.0, outputDB[i] / 10.0)
+            let denom = sOut + sIn
+            if denom > 1e-20 {
+                result[i] = (sOut - sIn) / denom
+            }
+        }
+        return result
     }
 }

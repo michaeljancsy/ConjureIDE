@@ -12,6 +12,7 @@ enum SpectrogramChannel {
     case input
     case output
     case difference
+    case normalizedDifference
 }
 
 /// Renders a single scrolling waterfall spectrogram from FFT magnitude data.
@@ -22,7 +23,7 @@ struct SpectrogramView: View {
     @ObservedObject var captureManager: AudioCaptureManager
     let channel: SpectrogramChannel
     var frequencyScale: FrequencyScale = .log
-    var isDifference: Bool { channel == .difference }
+    var isDivergingMap: Bool { channel == .difference || channel == .normalizedDifference }
 
     /// Number of time columns visible in the waterfall
     private static let columnCount = 256
@@ -63,6 +64,7 @@ struct SpectrogramView: View {
         case .input: return "input"
         case .output: return "output"
         case .difference: return "difference"
+        case .normalizedDifference: return "normalizedDifference"
         }
     }
 
@@ -102,7 +104,9 @@ struct SpectrogramView: View {
 
             let value = magnitudes[binIndex]
 
-            if isDifference {
+            if channel == .normalizedDifference {
+                column[y] = SpectrogramColorMap.divergingForDB(value, range: 1.0)
+            } else if isDivergingMap {
                 column[y] = SpectrogramColorMap.divergingForDB(value, range: 40.0)
             } else {
                 column[y] = SpectrogramColorMap.magmaForDB(value, floor: AudioCaptureManager.floorDB)
