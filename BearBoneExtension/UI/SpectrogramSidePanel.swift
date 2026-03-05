@@ -30,10 +30,9 @@ struct SpectrogramSidePanel: View {
                     } label: {
                         EmptyView()
                     }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 160)
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 160)
 
                     Spacer(minLength: 0)
 
@@ -115,6 +114,23 @@ struct SpectrogramSidePanel: View {
                     SpectrogramView(
                         captureManager: captureManager,
                         channel: .difference,
+                        frequencyScale: frequencyScale
+                    )
+                }
+
+                Divider()
+
+                // Normalized difference spectrogram
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Normalized Diff")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 4)
+                        .padding(.top, 2)
+
+                    SpectrogramView(
+                        captureManager: captureManager,
+                        channel: .normalizedDifference,
                         frequencyScale: frequencyScale
                     )
                 }
