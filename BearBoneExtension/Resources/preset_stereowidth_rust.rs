@@ -54,8 +54,8 @@ pub extern "C" fn process(
         }
 
         for i in 0..frames {
-            let left = inp[i * ch];
-            let right = inp[i * ch + 1];
+            let left = inp[i];
+            let right = inp[frames + i];
 
             // Encode to mid/side
             let mid = (left + right) * 0.5;
@@ -65,8 +65,8 @@ pub extern "C" fn process(
             let side_scaled = side * WIDTH;
 
             // Decode back to L/R
-            out[i * ch] = mid + side_scaled;
-            out[i * ch + 1] = mid - side_scaled;
+            out[i] = mid + side_scaled;
+            out[frames + i] = mid - side_scaled;
         }
     }
 }

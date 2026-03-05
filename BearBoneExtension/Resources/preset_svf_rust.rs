@@ -12,13 +12,14 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const CUTOFF_HZ: f32 = 1000.0;
-const RESONANCE: f32 = 2.0;
+const CUTOFF_HZ: f64 = 1000.0;
+const RESONANCE: f64 = 2.0;
 const MODE: usize = 0; // 0=LP, 1=HP, 2=BP, 3=Notch
 
 // Persistent state per channel: [low, band]
-static mut STATE_LOW: [f32; MAX_CH] = [0.0; MAX_CH];
-static mut STATE_BAND: [f32; MAX_CH] = [0.0; MAX_CH];
+// Use f64 to match Python's float64 precision in the coupled feedback loop.
+static mut STATE_LOW: [f64; MAX_CH] = [0.0; MAX_CH];
+static mut STATE_BAND: [f64; MAX_CH] = [0.0; MAX_CH];
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -45,7 +46,8 @@ pub extern "C" fn process(
 ) {
     let ch = channels as usize;
     let frames = frame_count as usize;
-    let f = 2.0 * (core::f32::consts::PI * CUTOFF_HZ / sample_rate).sin();
+    let sr = sample_rate as f64;
+    let f = 2.0 * (core::f64::consts::PI * CUTOFF_HZ / sr).sin();
     let q = 1.0 / RESONANCE;
 
     unsafe {
@@ -57,17 +59,17 @@ pub extern "C" fn process(
             let mut band = STATE_BAND[c];
 
             for i in 0..frames {
-                let idx = i * ch + c;
-                let x = inp[idx];
+                let idx = c * frames + i;
+                let x = inp[idx] as f64;
                 low += f * band;
                 let high = x - low - q * band;
                 band += f * high;
 
                 out[idx] = match MODE {
-                    0 => low,
-                    1 => high,
-                    2 => band,
-                    _ => low + high, // notch
+                    0 => low as f32,
+                    1 => high as f32,
+                    2 => band as f32,
+                    _ => (low + high) as f32, // notch
                 };
             }
 

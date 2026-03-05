@@ -50,9 +50,9 @@ pub extern "C" fn process(
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
 
-        for i in 0..frames {
-            for c in 0..ch {
-                let idx = i * ch + c;
+        for c in 0..ch {
+            for i in 0..frames {
+                let idx = c * frames + i;
                 out[idx] = tanh_f32(DRIVE * inp[idx]) * norm;
             }
         }

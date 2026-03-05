@@ -55,8 +55,8 @@ pub extern "C" fn process(
             let left_gain = gain * (PAN * half_pi).cos();
             let right_gain = gain * (PAN * half_pi).sin();
             for i in 0..frames {
-                out[i * ch] = inp[i * ch] * left_gain;
-                out[i * ch + 1] = inp[i * ch + 1] * right_gain;
+                out[i] = inp[i] * left_gain;
+                out[frames + i] = inp[frames + i] * right_gain;
             }
         }
     }

@@ -13,10 +13,11 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const CARRIER_HZ: f32 = 440.0;
+const CARRIER_HZ: f64 = 440.0;
 
 // Persistent phase across callbacks
-static mut PHASE: f32 = 0.0;
+// Use f64 to match Python's float64 precision in the phase accumulator.
+static mut PHASE: f64 = 0.0;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -43,23 +44,27 @@ pub extern "C" fn process(
 ) {
     let ch = channels as usize;
     let frames = frame_count as usize;
-    let two_pi = 2.0 * core::f32::consts::PI;
-    let phase_inc = two_pi * CARRIER_HZ / sample_rate;
+    let sr = sample_rate as f64;
+    let two_pi = 2.0 * core::f64::consts::PI;
+    let phase_inc = two_pi * CARRIER_HZ / sr;
 
     unsafe {
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
-        let mut phase = PHASE;
+        let phase_start = PHASE;
 
+        // Match Python's vectorized pattern: compute carrier from absolute
+        // time within the chunk rather than accumulating phase per-sample.
+        // This avoids floating-point drift from per-sample phase addition.
         for i in 0..frames {
-            let carrier = phase.sin();
+            let t = (i as f64) / sr;
+            let carrier = (two_pi * CARRIER_HZ * t + phase_start).sin();
             for c in 0..ch {
-                let idx = i * ch + c;
-                out[idx] = inp[idx] * carrier;
+                let idx = c * frames + i;
+                out[idx] = (inp[idx] as f64 * carrier) as f32;
             }
-            phase += phase_inc;
         }
 
-        PHASE = phase % two_pi;
+        PHASE = (phase_start + two_pi * CARRIER_HZ * (frames as f64) / sr) % two_pi;
     }
 }

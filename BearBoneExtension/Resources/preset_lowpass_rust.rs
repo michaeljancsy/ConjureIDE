@@ -13,10 +13,11 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const CUTOFF_HZ: f32 = 800.0;
+const CUTOFF_HZ: f64 = 800.0;
 
 // Persistent state: previous output per channel
-static mut PREV_OUT: [f32; MAX_CH] = [0.0; MAX_CH];
+// Use f64 to match Python's float64 precision in the feedback loop.
+static mut PREV_OUT: [f64; MAX_CH] = [0.0; MAX_CH];
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -43,8 +44,9 @@ pub extern "C" fn process(
 ) {
     let ch = channels as usize;
     let frames = frame_count as usize;
-    let two_pi = 2.0 * core::f32::consts::PI;
-    let a = (-two_pi * CUTOFF_HZ / sample_rate).exp();
+    let sr = sample_rate as f64;
+    let two_pi = 2.0 * core::f64::consts::PI;
+    let a = (-two_pi * CUTOFF_HZ / sr).exp();
     let b = 1.0 - a;
 
     unsafe {
@@ -54,9 +56,9 @@ pub extern "C" fn process(
         for c in 0..ch {
             let mut y = PREV_OUT[c];
             for i in 0..frames {
-                let idx = i * ch + c;
-                y = b * inp[idx] + a * y;
-                out[idx] = y;
+                let idx = c * frames + i;
+                y = b * inp[idx] as f64 + a * y;
+                out[idx] = y as f32;
             }
             PREV_OUT[c] = y;
         }

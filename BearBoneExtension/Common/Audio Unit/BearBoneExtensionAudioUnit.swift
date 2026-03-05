@@ -383,31 +383,20 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	/// Load a preset into the DSP kernel and update preset manager state.
 	/// Called from the UI when the user selects a preset from the browser.
-	/// Python presets are loaded immediately. Rust presets just show the source — user clicks Run.
+	/// Both Python and Rust presets are compiled/loaded immediately.
 	@MainActor
-	func selectPreset(_ preset: Preset) -> ScriptSaveResult {
+	func selectPreset(_ preset: Preset) async -> ScriptSaveResult {
 		let pm = presetManager
 		guard let source = pm.loadSource(for: preset) else {
 			pluginLog.error("Failed to load preset source: \(preset.name, privacy: .public)")
 			return ScriptSaveResult(success: false, error: "Failed to load preset source", processTimeMs: nil, budgetMs: nil)
 		}
 
-		let result: (success: Bool, error: String?, processTimeMs: Double?, budgetMs: Double?)
-		switch preset.language {
-		case .python:
-			result = reloadScript(source: source)
-			currentScriptLanguage = .python
-			currentWasmBytes = nil
-		case .rust:
-			// Don't auto-compile — just show source, user clicks Run
-			currentScriptSource = source
-			currentScriptLanguage = .rust
-			result = (true, nil, nil, nil)
-		}
-
-		// Always update preset manager and editor so the user can see/fix the script
+		// Always update preset manager and editor so the user can see the script
 		pm.setCurrentPreset(preset, source: source)
 		scriptSourceDidChange.send(source)
+
+		let result = await compileAndRun(source: source)
 
 		if result.success {
 			// Sync DAW-facing currentPreset for factory presets
@@ -464,11 +453,17 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					pluginLog.info("Loaded factory preset: \(entry.name, privacy: .public)")
 				}
 			case .rust:
-				// Don't auto-compile — just show source, user clicks Run
+				// Show source immediately, then compile async
 				currentScriptSource = source
 				currentScriptLanguage = .rust
 				scriptSourceDidChange.send(source)
 				pluginLog.info("Loaded Rust factory preset: \(entry.name, privacy: .public)")
+				Task {
+					let result = await self.compileAndRun(source: source)
+					if !result.success {
+						pluginLog.error("Failed to compile Rust factory preset: \(result.error ?? "unknown", privacy: .public)")
+					}
+				}
 			}
 
 			// Update preset manager if it exists (dispatch to main actor)

@@ -13,11 +13,12 @@ static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
 // Tremolo parameters
-const RATE_HZ: f32 = 4.0;
-const DEPTH: f32 = 0.5; // 0.0 = no effect, 1.0 = full tremolo
+const RATE_HZ: f64 = 4.0;
+const DEPTH: f64 = 0.5; // 0.0 = no effect, 1.0 = full tremolo
 
 // Persistent phase across callbacks
-static mut PHASE: f32 = 0.0;
+// Use f64 to match Python's float64 precision in the phase accumulator.
+static mut PHASE: f64 = 0.0;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -51,8 +52,9 @@ pub extern "C" fn process(
 ) {
     let ch = channels as usize;
     let frames = frame_count as usize;
-    let two_pi = 2.0 * core::f32::consts::PI;
-    let phase_inc = two_pi * RATE_HZ / sample_rate;
+    let sr = sample_rate as f64;
+    let two_pi = 2.0 * core::f64::consts::PI;
+    let phase_inc = two_pi * RATE_HZ / sr;
 
     unsafe {
         let inp = std::slice::from_raw_parts(input, ch * frames);
@@ -60,10 +62,10 @@ pub extern "C" fn process(
         let mut phase = PHASE;
 
         for i in 0..frames {
-            let lfo = 1.0 - DEPTH * 0.5 * (1.0 + (phase).sin());
+            let lfo = 1.0 - DEPTH * 0.5 * (1.0 + phase.sin());
             for c in 0..ch {
-                let idx = i * ch + c;
-                out[idx] = inp[idx] * lfo;
+                let idx = c * frames + i;
+                out[idx] = (inp[idx] as f64 * lfo) as f32;
             }
             phase += phase_inc;
         }

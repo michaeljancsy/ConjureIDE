@@ -56,7 +56,7 @@ pub extern "C" fn process(
         for i in 0..frames {
             let sample = next_f32() * AMPLITUDE;
             for c in 0..ch {
-                out[i * ch + c] = sample;
+                out[c * frames + i] = sample;
             }
         }
     }

@@ -61,7 +61,7 @@ pub extern "C" fn process(
             let read_pos = chunk_size - 1 - wp;
 
             for c in 0..ch {
-                let idx = i * ch + c;
+                let idx = c * frames + i;
 
                 if RECORDING_A {
                     // Record to A, play from B

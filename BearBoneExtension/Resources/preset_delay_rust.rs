@@ -60,7 +60,7 @@ pub extern "C" fn process(
             let rp = (wp + MAX_DELAY - delay_samples) % MAX_DELAY;
 
             for c in 0..ch {
-                let idx = i * ch + c;
+                let idx = c * frames + i;
                 let delayed = DELAY_BUF[c][rp];
 
                 // Write input + feedback to delay line

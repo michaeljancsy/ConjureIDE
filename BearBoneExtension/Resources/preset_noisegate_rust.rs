@@ -13,13 +13,14 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const THRESHOLD_DB: f32 = -40.0;
-const ATTACK_MS: f32 = 0.5;
-const RELEASE_MS: f32 = 50.0;
-const HOLD_MS: f32 = 20.0;
+const THRESHOLD_DB: f64 = -40.0;
+const ATTACK_MS: f64 = 0.5;
+const RELEASE_MS: f64 = 50.0;
+const HOLD_MS: f64 = 20.0;
 
 // Persistent state
-static mut ENVELOPE: f32 = 0.0;
+// Use f64 to match Python's float64 precision in the envelope feedback loop.
+static mut ENVELOPE: f64 = 0.0;
 static mut HOLD_COUNTER: i32 = 0;
 
 #[no_mangle]
@@ -47,10 +48,11 @@ pub extern "C" fn process(
 ) {
     let ch = channels as usize;
     let frames = frame_count as usize;
-    let threshold = (10.0_f32).powf(THRESHOLD_DB / 20.0);
-    let attack_coeff = (-1.0 / (ATTACK_MS * 0.001 * sample_rate)).exp();
-    let release_coeff = (-1.0 / (RELEASE_MS * 0.001 * sample_rate)).exp();
-    let hold_samples = (HOLD_MS * 0.001 * sample_rate) as i32;
+    let sr = sample_rate as f64;
+    let threshold = (10.0_f64).powf(THRESHOLD_DB / 20.0);
+    let attack_coeff = (-1.0 / (ATTACK_MS * 0.001 * sr)).exp();
+    let release_coeff = (-1.0 / (RELEASE_MS * 0.001 * sr)).exp();
+    let hold_samples = (HOLD_MS * 0.001 * sr) as i32;
 
     unsafe {
         let inp = std::slice::from_raw_parts(input, ch * frames);
@@ -60,9 +62,9 @@ pub extern "C" fn process(
 
         for i in 0..frames {
             // Peak detect across all channels
-            let mut peak: f32 = 0.0;
+            let mut peak: f64 = 0.0;
             for c in 0..ch {
-                let abs_val = inp[i * ch + c].abs();
+                let abs_val = (inp[c * frames + i] as f64).abs();
                 if abs_val > peak {
                     peak = abs_val;
                 }
@@ -81,8 +83,8 @@ pub extern "C" fn process(
             }
 
             for c in 0..ch {
-                let idx = i * ch + c;
-                out[idx] = inp[idx] * env;
+                let idx = c * frames + i;
+                out[idx] = (inp[idx] as f64 * env) as f32;
             }
         }
 

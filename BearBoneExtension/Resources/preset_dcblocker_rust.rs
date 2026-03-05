@@ -13,11 +13,13 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const R: f32 = 0.995;
+const R: f64 = 0.995;
 
 // Persistent state per channel: [prev_x, prev_y]
-static mut PREV_X: [f32; MAX_CH] = [0.0; MAX_CH];
-static mut PREV_Y: [f32; MAX_CH] = [0.0; MAX_CH];
+// Use f64 to match Python's float64 precision — f32 accumulation
+// in the feedback loop (R * prev_y) causes audible rounding drift.
+static mut PREV_X: [f64; MAX_CH] = [0.0; MAX_CH];
+static mut PREV_Y: [f64; MAX_CH] = [0.0; MAX_CH];
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -54,11 +56,11 @@ pub extern "C" fn process(
             let mut py = PREV_Y[c];
 
             for i in 0..frames {
-                let idx = i * ch + c;
-                let x = inp[idx];
+                let idx = c * frames + i;
+                let x = inp[idx] as f64;
                 py = x - px + R * py;
                 px = x;
-                out[idx] = py;
+                out[idx] = py as f32;
             }
 
             PREV_X[c] = px;

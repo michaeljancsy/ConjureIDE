@@ -14,12 +14,13 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const THRESHOLD_DB: f32 = -3.0;
-const ATTACK_MS: f32 = 0.1;
-const RELEASE_MS: f32 = 100.0;
+const THRESHOLD_DB: f64 = -3.0;
+const ATTACK_MS: f64 = 0.1;
+const RELEASE_MS: f64 = 100.0;
 
 // Persistent envelope follower state
-static mut ENVELOPE: f32 = 0.0;
+// Use f64 to match Python's float64 precision in the envelope feedback loop.
+static mut ENVELOPE: f64 = 0.0;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -46,9 +47,10 @@ pub extern "C" fn process(
 ) {
     let ch = channels as usize;
     let frames = frame_count as usize;
-    let threshold = (10.0_f32).powf(THRESHOLD_DB / 20.0);
-    let attack_coeff = (-1.0 / (ATTACK_MS * 0.001 * sample_rate)).exp();
-    let release_coeff = (-1.0 / (RELEASE_MS * 0.001 * sample_rate)).exp();
+    let sr = sample_rate as f64;
+    let threshold = (10.0_f64).powf(THRESHOLD_DB / 20.0);
+    let attack_coeff = (-1.0 / (ATTACK_MS * 0.001 * sr)).exp();
+    let release_coeff = (-1.0 / (RELEASE_MS * 0.001 * sr)).exp();
 
     unsafe {
         let inp = std::slice::from_raw_parts(input, ch * frames);
@@ -57,9 +59,9 @@ pub extern "C" fn process(
 
         for i in 0..frames {
             // Peak detect across all channels
-            let mut peak: f32 = 0.0;
+            let mut peak: f64 = 0.0;
             for c in 0..ch {
-                let abs_val = inp[i * ch + c].abs();
+                let abs_val = (inp[c * frames + i] as f64).abs();
                 if abs_val > peak {
                     peak = abs_val;
                 }
@@ -73,14 +75,15 @@ pub extern "C" fn process(
             }
 
             // Gain reduction: clamp output to threshold
-            let gain = if env > threshold {
-                threshold / env
+            // Truncate gain to f32 to match Python's np.float32 gain array.
+            let gain: f32 = if env > threshold {
+                (threshold / env) as f32
             } else {
                 1.0
             };
 
             for c in 0..ch {
-                let idx = i * ch + c;
+                let idx = c * frames + i;
                 out[idx] = inp[idx] * gain;
             }
         }

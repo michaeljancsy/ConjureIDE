@@ -76,13 +76,13 @@ pub extern "C" fn process(
                 let right_delayed = RIGHT_BUF[rp];
 
                 // Input goes to left, left feeds right, right feeds back to left
-                let mono_in = (inp[i * ch] + inp[i * ch + 1]) * 0.5;
+                let mono_in = (inp[i] + inp[frames + i]) * 0.5;
                 LEFT_BUF[wp] = mono_in + right_delayed * FEEDBACK;
                 RIGHT_BUF[wp] = left_delayed * FEEDBACK;
 
                 // Mix dry + wet
-                out[i * ch] = inp[i * ch] * (1.0 - MIX) + left_delayed * MIX;
-                out[i * ch + 1] = inp[i * ch + 1] * (1.0 - MIX) + right_delayed * MIX;
+                out[i] = inp[i] * (1.0 - MIX) + left_delayed * MIX;
+                out[frames + i] = inp[frames + i] * (1.0 - MIX) + right_delayed * MIX;
 
                 wp = (wp + 1) % MAX_DELAY;
             }

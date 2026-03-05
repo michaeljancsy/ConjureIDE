@@ -45,9 +45,9 @@ pub extern "C" fn process(
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
 
-        for i in 0..frames {
-            for c in 0..ch {
-                let idx = i * ch + c;
+        for c in 0..ch {
+            for i in 0..frames {
+                let idx = c * frames + i;
                 let x = inp[idx] * DRIVE;
                 // Triangle-wave fold: maps any value into [-1, 1]
                 let t = (x + 1.0) * 0.25;

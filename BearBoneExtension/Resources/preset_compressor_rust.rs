@@ -17,14 +17,15 @@ static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
 // Compressor parameters
-const THRESHOLD_DB: f32 = -20.0; // Level above which compression kicks in
-const RATIO: f32 = 4.0;          // Compression ratio (4:1)
-const ATTACK_MS: f32 = 5.0;      // Attack time in milliseconds
-const RELEASE_MS: f32 = 50.0;    // Release time in milliseconds
-const MAKEUP_DB: f32 = 6.0;      // Makeup gain in dB
+const THRESHOLD_DB: f64 = -20.0; // Level above which compression kicks in
+const RATIO: f64 = 4.0;          // Compression ratio (4:1)
+const ATTACK_MS: f64 = 5.0;      // Attack time in milliseconds
+const RELEASE_MS: f64 = 50.0;    // Release time in milliseconds
+const MAKEUP_DB: f64 = 6.0;      // Makeup gain in dB
 
 // Persistent envelope follower state
-static mut ENVELOPE: f32 = 0.0;
+// Use f64 to match Python's float64 precision in the envelope feedback loop.
+static mut ENVELOPE: f64 = 0.0;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -41,11 +42,11 @@ pub extern "C" fn get_params_ptr() -> i32 {
     unsafe { PARAMS_BUF.as_ptr() as i32 }
 }
 
-fn db_to_lin(db: f32) -> f32 {
-    (10.0_f32).powf(db / 20.0)
+fn db_to_lin(db: f64) -> f64 {
+    (10.0_f64).powf(db / 20.0)
 }
 
-fn lin_to_db(lin: f32) -> f32 {
+fn lin_to_db(lin: f64) -> f64 {
     20.0 * (lin + 1e-30).log10()
 }
 
@@ -66,10 +67,11 @@ pub extern "C" fn process(
 ) {
     let ch = channels as usize;
     let frames = frame_count as usize;
+    let sr = sample_rate as f64;
     let threshold = db_to_lin(THRESHOLD_DB);
     let makeup = db_to_lin(MAKEUP_DB);
-    let attack_coeff = (-1.0 / (ATTACK_MS * 0.001 * sample_rate)).exp();
-    let release_coeff = (-1.0 / (RELEASE_MS * 0.001 * sample_rate)).exp();
+    let attack_coeff = (-1.0 / (ATTACK_MS * 0.001 * sr)).exp();
+    let release_coeff = (-1.0 / (RELEASE_MS * 0.001 * sr)).exp();
 
     unsafe {
         let inp = std::slice::from_raw_parts(input, ch * frames);
@@ -78,9 +80,9 @@ pub extern "C" fn process(
 
         for i in 0..frames {
             // Peak detect across all channels
-            let mut peak: f32 = 0.0;
+            let mut peak: f64 = 0.0;
             for c in 0..ch {
-                let abs_val = inp[i * ch + c].abs();
+                let abs_val = (inp[c * frames + i] as f64).abs();
                 if abs_val > peak {
                     peak = abs_val;
                 }
@@ -103,8 +105,8 @@ pub extern "C" fn process(
             };
 
             for c in 0..ch {
-                let idx = i * ch + c;
-                out[idx] = inp[idx] * gain * makeup;
+                let idx = c * frames + i;
+                out[idx] = (inp[idx] as f64 * gain * makeup) as f32;
             }
         }
 
