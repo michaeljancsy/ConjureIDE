@@ -60,7 +60,7 @@ pub extern "C" fn process(
 
         for i in 0..frames {
             for c in 0..ch {
-                let idx = i * ch + c;
+                let idx = c * frames + i;
                 // Bit depth reduction: quantize to fewer levels
                 let crushed = (inp[idx] * levels).round() / levels;
                 // Sample rate reduction: hold every Nth sample

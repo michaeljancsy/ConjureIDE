@@ -27,7 +27,7 @@ pub extern "C" fn get_params_ptr() -> i32 {
 
 /// Passthrough — copies input to output unchanged.
 ///
-/// Iterates over all interleaved samples (channels × frames) and copies each
+/// Iterates over all channel-sequential samples (channels × frames) and copies each
 /// input sample directly to the output buffer. DAW-automatable parameters are
 /// available in PARAMS_BUF[0..8] but unused by this preset.
 #[no_mangle]

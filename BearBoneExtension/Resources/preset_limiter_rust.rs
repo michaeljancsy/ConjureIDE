@@ -1,13 +1,11 @@
-// Compressor — dynamic range compression with envelope follower.
+// Limiter — brick-wall peak limiter.
 //
-// Reduces the dynamic range of the audio signal using a peak-detecting
-// envelope follower. When the signal exceeds the threshold, gain is reduced
-// according to the compression ratio. Attack and release times control how
-// quickly the compressor responds to level changes. Makeup gain compensates
-// for the overall volume reduction caused by compression.
-//
-// The envelope follower operates per-sample across all channels (peak detection),
-// so stereo signals are compressed with linked gain to preserve the stereo image.
+// Prevents the signal from exceeding the threshold using a fast-attack
+// envelope follower. When the peak level exceeds the threshold, gain
+// is reduced so the output stays at the threshold. The ultra-fast attack
+// (0.1 ms) catches transients; the slower release allows natural decay.
+// Unlike a compressor, the ratio is effectively infinite — nothing
+// passes above the ceiling.
 
 const MAX_CH: usize = 2;
 const MAX_FR: usize = 4096;
@@ -16,12 +14,9 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-// Compressor parameters
-const THRESHOLD_DB: f64 = -20.0; // Level above which compression kicks in
-const RATIO: f64 = 4.0;          // Compression ratio (4:1)
-const ATTACK_MS: f64 = 5.0;      // Attack time in milliseconds
-const RELEASE_MS: f64 = 50.0;    // Release time in milliseconds
-const MAKEUP_DB: f64 = 6.0;      // Makeup gain in dB
+const THRESHOLD_DB: f64 = -3.0;
+const ATTACK_MS: f64 = 0.1;
+const RELEASE_MS: f64 = 100.0;
 
 // Persistent envelope follower state
 // Use f64 to match Python's float64 precision in the envelope feedback loop.
@@ -42,21 +37,6 @@ pub extern "C" fn get_params_ptr() -> i32 {
     unsafe { PARAMS_BUF.as_ptr() as i32 }
 }
 
-fn db_to_lin(db: f64) -> f64 {
-    (10.0_f64).powf(db / 20.0)
-}
-
-fn lin_to_db(lin: f64) -> f64 {
-    20.0 * (lin + 1e-30).log10()
-}
-
-/// Compressor — dynamic range compression with envelope follower.
-///
-/// Per-sample processing: detects the peak level across all channels, smooths it
-/// with attack/release coefficients, and computes gain reduction when the envelope
-/// exceeds the threshold. The gain curve follows a soft-knee-less ratio (hard knee).
-/// Makeup gain is applied uniformly to compensate for compression. DAW-automatable
-/// parameters are available in PARAMS_BUF[0..8] but unused by this preset.
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
@@ -68,8 +48,7 @@ pub extern "C" fn process(
     let ch = channels as usize;
     let frames = frame_count as usize;
     let sr = sample_rate as f64;
-    let threshold = db_to_lin(THRESHOLD_DB);
-    let makeup = db_to_lin(MAKEUP_DB);
+    let threshold = (10.0_f64).powf(THRESHOLD_DB / 20.0);
     let attack_coeff = (-1.0 / (ATTACK_MS * 0.001 * sr)).exp();
     let release_coeff = (-1.0 / (RELEASE_MS * 0.001 * sr)).exp();
 
@@ -95,18 +74,17 @@ pub extern "C" fn process(
                 env = release_coeff * env + (1.0 - release_coeff) * peak;
             }
 
-            // Gain computation
-            let gain = if env > threshold {
-                let db_over = lin_to_db(env) - lin_to_db(threshold);
-                let db_reduction = db_over * (1.0 - 1.0 / RATIO);
-                db_to_lin(-db_reduction)
+            // Gain reduction: clamp output to threshold
+            // Truncate gain to f32 to match Python's np.float32 gain array.
+            let gain: f32 = if env > threshold {
+                (threshold / env) as f32
             } else {
                 1.0
             };
 
             for c in 0..ch {
                 let idx = c * frames + i;
-                out[idx] = (inp[idx] as f64 * gain * makeup) as f32;
+                out[idx] = inp[idx] * gain;
             }
         }
 

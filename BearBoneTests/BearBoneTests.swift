@@ -429,7 +429,7 @@ struct BearBoneTests {
         let (_, au) = try await Self.instantiateAU()
         let presets = au.factoryPresets ?? []
         let rustPresets = presets.filter { $0.name.contains("Rust") }
-        #expect(rustPresets.count == 4, "Should have 4 Rust factory presets")
+        #expect(rustPresets.count == 22, "Should have 22 Rust factory presets")
         for rustPreset in rustPresets {
             au.currentPreset = rustPreset
             let state = au.fullState
@@ -469,15 +469,17 @@ struct BearBoneTests {
         // Verify that switching between Python presets changes the script in fullState
         let (_, au) = try await Self.instantiateAU()
         let presets = au.factoryPresets ?? []
-        // Preset indices: 0=Passthrough(Python), 1=Tremolo(Python), 2=Bitcrush(Python), 3=Passthrough(Rust), 4=Tremolo(Rust), 5=Bitcrush(Rust)
         #expect(presets.count >= 3)
 
-        au.currentPreset = presets[1] // Tremolo
+        let tremoloPreset = try #require(presets.first { $0.name == "Tremolo (Python)" })
+        let bitcrushPreset = try #require(presets.first { $0.name == "Bitcrush (Python)" })
+
+        au.currentPreset = tremoloPreset
         let state1 = au.fullState
         let data1 = state1?[Self.scriptSourceKey] as? Data
         let source1 = String(data: data1!, encoding: .utf8)!
 
-        au.currentPreset = presets[2] // Bitcrush
+        au.currentPreset = bitcrushPreset
         let state2 = au.fullState
         let data2 = state2?[Self.scriptSourceKey] as? Data
         let source2 = String(data: data2!, encoding: .utf8)!

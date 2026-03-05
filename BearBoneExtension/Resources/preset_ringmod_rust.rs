@@ -1,9 +1,10 @@
-// Tremolo — sine-based amplitude modulation.
+// Ring Modulator — multiplies the signal by a sine-wave carrier.
 //
-// Modulates the audio amplitude with a low-frequency sine oscillator (LFO).
-// The LFO phase is tracked across callbacks for seamless modulation.
-// At DEPTH=0.0 the signal passes through unchanged; at DEPTH=1.0 the signal
-// fades fully to silence at the LFO troughs.
+// Multiplies the input signal by a sine wave at the carrier frequency.
+// This creates sum and difference frequencies, producing metallic,
+// bell-like, or robotic timbres. Unlike tremolo (which modulates
+// amplitude around a bias), ring modulation has no DC offset, so the
+// carrier frequency components are always present in the output.
 
 const MAX_CH: usize = 2;
 const MAX_FR: usize = 4096;
@@ -12,9 +13,7 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-// Tremolo parameters
-const RATE_HZ: f64 = 4.0;
-const DEPTH: f64 = 0.5; // 0.0 = no effect, 1.0 = full tremolo
+const CARRIER_HZ: f64 = 440.0;
 
 // Persistent phase across callbacks
 // Use f64 to match Python's float64 precision in the phase accumulator.
@@ -35,13 +34,6 @@ pub extern "C" fn get_params_ptr() -> i32 {
     unsafe { PARAMS_BUF.as_ptr() as i32 }
 }
 
-/// Tremolo — sine-based amplitude modulation.
-///
-/// Computes a per-sample LFO gain using a sine wave at RATE_HZ, then multiplies
-/// each input sample by that gain. The phase accumulates across callbacks so the
-/// modulation is seamless between audio buffers. All channels share the same LFO.
-/// DAW-automatable parameters are available in PARAMS_BUF[0..8] but unused by
-/// this preset.
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
@@ -54,22 +46,25 @@ pub extern "C" fn process(
     let frames = frame_count as usize;
     let sr = sample_rate as f64;
     let two_pi = 2.0 * core::f64::consts::PI;
-    let phase_inc = two_pi * RATE_HZ / sr;
+    let phase_inc = two_pi * CARRIER_HZ / sr;
 
     unsafe {
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
-        let mut phase = PHASE;
+        let phase_start = PHASE;
 
+        // Match Python's vectorized pattern: compute carrier from absolute
+        // time within the chunk rather than accumulating phase per-sample.
+        // This avoids floating-point drift from per-sample phase addition.
         for i in 0..frames {
-            let lfo = 1.0 - DEPTH * 0.5 * (1.0 + phase.sin());
+            let t = (i as f64) / sr;
+            let carrier = (two_pi * CARRIER_HZ * t + phase_start).sin();
             for c in 0..ch {
                 let idx = c * frames + i;
-                out[idx] = (inp[idx] as f64 * lfo) as f32;
+                out[idx] = (inp[idx] as f64 * carrier) as f32;
             }
-            phase += phase_inc;
         }
 
-        PHASE = phase % two_pi;
+        PHASE = (phase_start + two_pi * CARRIER_HZ * (frames as f64) / sr) % two_pi;
     }
 }

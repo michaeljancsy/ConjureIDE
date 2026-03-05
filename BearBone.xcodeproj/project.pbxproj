@@ -393,26 +393,6 @@
 			shellPath = /bin/bash;
 			shellScript = "# Copy Python dylib into Frameworks\nmkdir -p \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\ncp \"${SRCROOT}/rust/python-dist/lib/libpython3.14t.dylib\" \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/\"\n\n# Code-sign the dylib with the same identity as the build\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libpython3.14t.dylib\"\n\n# Copy Python stdlib + site-packages into Resources/python-dist\nPYDST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/python-dist\"\nmkdir -p \"${PYDST}/lib\"\ncp -R \"${SRCROOT}/rust/python-dist/lib/python3.14t\" \"${PYDST}/lib/\"\n\n# Code-sign all .so files (numpy, stdlib extensions) for hardened runtime\nfind \"${PYDST}\" -name '*.so' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none {} \\;\n";
 		};
-		AABB00092F5013850036AAB6 /* Copy Rust Compiler */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/rustc-dist/bin/rustc",
-			);
-			name = "Copy Rust Compiler";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/rustc-dist/bin/rustc",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "# Copy bundled Rust compiler into the extension bundle for sandbox-safe compilation\nRUSTC_SRC=\"${SRCROOT}/rustc-dist\"\n\nif [ ! -d \"${RUSTC_SRC}\" ]; then\n    # Check if we're in a worktree and can symlink from main\n    MAIN_WORKTREE=$(git -C \"${SRCROOT}\" worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //')\n    if [ -n \"${MAIN_WORKTREE}\" ] && [ \"${MAIN_WORKTREE}\" != \"${SRCROOT}\" ] && [ -d \"${MAIN_WORKTREE}/rustc-dist\" ]; then\n        echo \"note: Symlinking rustc-dist from main worktree\" >&2\n        ln -s \"${MAIN_WORKTREE}/rustc-dist\" \"${RUSTC_SRC}\"\n    else\n        echo \"warning: Bundled Rust compiler not found at ${RUSTC_SRC}. Run scripts/setup-rustc.sh first.\" >&2\n        echo \"warning: Rust compilation will only work with user-installed rustc (not in sandboxed DAWs).\" >&2\n        exit 0\n    fi\nfi\n\nRUSTC_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/rustc-dist\"\n\n# Copy the sysroot\nmkdir -p \"${RUSTC_DST}\"\nrsync -a --delete \"${RUSTC_SRC}/\" \"${RUSTC_DST}/\"\n\n# Code-sign all executables and dylibs\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${RUSTC_DST}/bin/rustc\"\nfind \"${RUSTC_DST}/lib\" -name '*.dylib' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none {} \\;\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/rust-lld\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/wasm-ld\"\n";
-		};
 		AABB00052F5013850036AAB6 /* Patch AU Identity for Worktree */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -450,6 +430,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "\"${SRCROOT}/scripts/stamp-build-id.sh\"\n";
+		};
+		AABB00092F5013850036AAB6 /* Copy Rust Compiler */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/rustc-dist/bin/rustc",
+			);
+			name = "Copy Rust Compiler";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/rustc-dist/bin/rustc",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# Copy bundled Rust compiler into the extension bundle for sandbox-safe compilation\nRUSTC_SRC=\"${SRCROOT}/rustc-dist\"\n\nif [ ! -d \"${RUSTC_SRC}\" ]; then\n    # Check if we're in a worktree and can symlink from main\n    MAIN_WORKTREE=$(git -C \"${SRCROOT}\" worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //')\n    if [ -n \"${MAIN_WORKTREE}\" ] && [ \"${MAIN_WORKTREE}\" != \"${SRCROOT}\" ] && [ -d \"${MAIN_WORKTREE}/rustc-dist\" ]; then\n        echo \"note: Symlinking rustc-dist from main worktree\" >&2\n        ln -s \"${MAIN_WORKTREE}/rustc-dist\" \"${RUSTC_SRC}\"\n    else\n        echo \"warning: Bundled Rust compiler not found at ${RUSTC_SRC}. Run scripts/setup-rustc.sh first.\" >&2\n        echo \"warning: Rust compilation will only work with user-installed rustc (not in sandboxed DAWs).\" >&2\n        exit 0\n    fi\nfi\n\nRUSTC_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/rustc-dist\"\n\n# Copy the sysroot\nmkdir -p \"${RUSTC_DST}\"\nrsync -a --delete \"${RUSTC_SRC}/\" \"${RUSTC_DST}/\"\n\n# Code-sign all executables and dylibs\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${RUSTC_DST}/bin/rustc\"\nfind \"${RUSTC_DST}/lib\" -name '*.dylib' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none {} \\;\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/rust-lld\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/wasm-ld\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -843,9 +843,22 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/rust/include";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@loader_path/../../../BearBoneExtension.appex/Contents/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(BUILT_PRODUCTS_DIR)",
+					"$(SRCROOT)/rust/python-dist/lib",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-lbearbone_dsp",
+					"-lpython3.14t",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.BearBoneTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -853,6 +866,7 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "BearBoneTests/BearBoneTests-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
@@ -869,9 +883,22 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/rust/include";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@loader_path/../../../BearBoneExtension.appex/Contents/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(BUILT_PRODUCTS_DIR)",
+					"$(SRCROOT)/rust/python-dist/lib",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-lbearbone_dsp",
+					"-lpython3.14t",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.BearBoneTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -879,6 +906,7 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "BearBoneTests/BearBoneTests-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";

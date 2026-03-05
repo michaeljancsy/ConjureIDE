@@ -26,7 +26,7 @@ struct BearBoneExtensionMainView: View {
     @ObservedObject var captureManager: AudioCaptureManager
     @ObservedObject var parameterState: ParameterState
     var onRun: (String) async -> ScriptSaveResult
-    var onSelectPreset: (Preset) -> ScriptSaveResult
+    var onSelectPreset: (Preset) async -> ScriptSaveResult
     var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
     var onSaveAsPreset: (String, String, ScriptLanguage) -> ScriptSaveResult
     var onDeletePreset: () -> Void
@@ -66,9 +66,13 @@ struct BearBoneExtensionMainView: View {
                 selectedLanguage: $selectedLanguage,
                 showSpectrogram: $showSpectrogram,
                 onSelectPreset: { preset in
-                    let result = onSelectPreset(preset)
-                    selectedLanguage = preset.language
-                    handleResult(result)
+                    Task {
+                        isCompiling = true
+                        selectedLanguage = preset.language
+                        let result = await onSelectPreset(preset)
+                        isCompiling = false
+                        handleResult(result)
+                    }
                 },
                 onRun: {
                     Task {
