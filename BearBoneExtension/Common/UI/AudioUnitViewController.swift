@@ -42,6 +42,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var aiService: AIService?
     private var captureManager: AudioCaptureManager?
     private var parameterState: ParameterState?
+    private var licenseManager: LicenseManager?
 
 	deinit {
         log.info("deinit called")
@@ -157,6 +158,18 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             ps.attach(to: tree)
         }
 
+        if licenseManager == nil {
+            licenseManager = LicenseManager()
+        }
+        let lm = licenseManager!
+        lm.verifyWithKernel = { [weak au] serial in
+            au?.verifyLicense(serial) ?? false
+        }
+        lm.getDemoSecondsRemaining = { [weak au] in
+            au?.demoSecondsRemaining() ?? 0
+        }
+        lm.loadAndVerify()
+
         // Run: detect language, compile if needed, load into kernel + benchmark
         let onRun: (String) async -> ScriptSaveResult = { [weak au] source in
             guard let au else {
@@ -270,6 +283,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             aiService: ai,
             captureManager: capture,
             parameterState: ps,
+            licenseManager: lm,
             onRun: onRun,
             onSelectPreset: onSelectPreset,
             onSavePreset: onSavePreset,

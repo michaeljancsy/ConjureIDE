@@ -3,8 +3,13 @@ use crate::params::PARAM_COUNT;
 use crate::python_backend::PythonBackend;
 use crate::ring_buffer::AudioRingBuffer;
 use crate::wasm_backend::WasmBackend;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
+
+/// Demo limit: 60 seconds at 48kHz = 2,880,000 samples.
+/// Using a fixed count keeps the atomic check simple on the audio thread.
+/// At 44.1kHz this is ~65.3s; at 96kHz this is ~30s.
+const DEMO_LIMIT_SAMPLES: u64 = 2_880_000;
 
 /// Real-time audio DSP kernel with pluggable processing backends.
 ///
@@ -22,7 +27,7 @@ pub struct DSPKernel {
     max_frames_to_render: u32,
     channel_count: usize,
     backend: Mutex<Option<Box<dyn Backend>>>,
-    last_error: Option<String>,
+    pub(crate) last_error: Option<String>,
     /// 8 generic parameters (0.0–1.0), stored as AtomicU32 via f32::to_bits/from_bits.
     /// Main thread writes (DAW automation), audio thread reads — lock-free via Relaxed ordering.
     params: [AtomicU32; PARAM_COUNT],
@@ -36,6 +41,13 @@ pub struct DSPKernel {
     /// Scratch buffer for mono downmix (avoids per-callback allocation).
     /// Sized to `max_frames_to_render`.
     capture_scratch: Vec<f32>,
+    /// Whether a valid license has been verified. Default: false (demo mode).
+    /// Main thread writes (after verification), audio thread reads — lock-free.
+    licensed: AtomicBool,
+    /// Cumulative count of audio samples processed while unlicensed.
+    /// Once this reaches DEMO_LIMIT_SAMPLES, output is silenced.
+    /// Incremented on audio thread, read from UI thread — lock-free.
+    demo_samples_processed: AtomicU64,
 }
 
 impl DSPKernel {
@@ -53,6 +65,8 @@ impl DSPKernel {
             output_ring: AudioRingBuffer::new(AudioRingBuffer::DEFAULT_CAPACITY),
             capture_enabled: AtomicBool::new(false),
             capture_scratch: vec![0.0; 1024],
+            licensed: AtomicBool::new(false),
+            demo_samples_processed: AtomicU64::new(0),
         }
     }
 
@@ -192,6 +206,31 @@ impl DSPKernel {
     /// Returns the number of samples actually read. Called from UI thread.
     pub fn read_output_ring(&self, output: &mut [f32]) -> usize {
         self.output_ring.read(output)
+    }
+
+    /// Set the licensed state. Called from the main thread after verification.
+    /// Resets the demo counter when licensing (so re-licensing works cleanly).
+    pub fn set_licensed(&self, licensed: bool) {
+        self.licensed.store(licensed, Ordering::Relaxed);
+        if licensed {
+            self.demo_samples_processed.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Check if the kernel is licensed.
+    pub fn is_licensed(&self) -> bool {
+        self.licensed.load(Ordering::Relaxed)
+    }
+
+    /// Returns the approximate seconds of demo time remaining at the given sample rate.
+    /// Returns infinity if licensed.
+    pub fn demo_seconds_remaining(&self, sample_rate: f64) -> f64 {
+        if self.is_licensed() {
+            return f64::INFINITY;
+        }
+        let processed = self.demo_samples_processed.load(Ordering::Relaxed);
+        let remaining = DEMO_LIMIT_SAMPLES.saturating_sub(processed);
+        remaining as f64 / sample_rate
     }
 
     /// Mono-downmix multi-channel audio into the scratch buffer and write to ring buffer.
@@ -367,7 +406,33 @@ impl DSPKernel {
             if capturing {
                 self.capture_to_ring(inputs, channel_count, frame_count, &self.output_ring);
             }
+            // Bypass does NOT count against demo time
             return;
+        }
+
+        // Demo mode gate: if unlicensed and demo time exhausted, output silence.
+        if !self.licensed.load(Ordering::Relaxed) {
+            let processed = self.demo_samples_processed.load(Ordering::Relaxed);
+            if processed >= DEMO_LIMIT_SAMPLES {
+                // Zero all output buffers
+                for ch in 0..channel_count {
+                    let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
+                    for sample in dst.iter_mut() {
+                        *sample = 0.0;
+                    }
+                }
+                if capturing {
+                    let out_as_const: Vec<*const f32> =
+                        outputs.iter().map(|p| *p as *const f32).collect();
+                    self.capture_to_ring(
+                        &out_as_const,
+                        channel_count,
+                        frame_count,
+                        &self.output_ring,
+                    );
+                }
+                return;
+            }
         }
 
         // Snapshot parameters once per callback (lock-free atomic reads)
@@ -385,6 +450,11 @@ impl DSPKernel {
                         let out_as_const: Vec<*const f32> = outputs.iter().map(|p| *p as *const f32).collect();
                         self.capture_to_ring(&out_as_const, channel_count, frame_count, &self.output_ring);
                     }
+                    // Increment demo counter (after successful processing)
+                    if !self.licensed.load(Ordering::Relaxed) {
+                        self.demo_samples_processed
+                            .fetch_add(frame_count as u64, Ordering::Relaxed);
+                    }
                     return;
                 }
                 // Backend failed — fall through to passthrough
@@ -396,6 +466,11 @@ impl DSPKernel {
         // Capture output (same as input during passthrough)
         if capturing {
             self.capture_to_ring(inputs, channel_count, frame_count, &self.output_ring);
+        }
+        // Increment demo counter (after passthrough fallback)
+        if !self.licensed.load(Ordering::Relaxed) {
+            self.demo_samples_processed
+                .fetch_add(frame_count as u64, Ordering::Relaxed);
         }
     }
 
@@ -1312,5 +1387,143 @@ mod tests {
         unsafe { kernel.process(&ip, &op, 1, 4); }
         // Python process.py also applies 0.5x gain
         assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
+    }
+
+    // --- License & demo mode tests ---
+
+    #[test]
+    fn test_new_kernel_is_unlicensed() {
+        let kernel = DSPKernel::new();
+        assert!(!kernel.is_licensed());
+    }
+
+    #[test]
+    fn test_license_toggle() {
+        let kernel = DSPKernel::new();
+        assert!(!kernel.is_licensed());
+        kernel.set_licensed(true);
+        assert!(kernel.is_licensed());
+        kernel.set_licensed(false);
+        assert!(!kernel.is_licensed());
+    }
+
+    #[test]
+    fn test_demo_seconds_remaining_initial() {
+        let kernel = DSPKernel::new();
+        let remaining = kernel.demo_seconds_remaining(48000.0);
+        assert!((remaining - 60.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_demo_seconds_remaining_licensed_is_infinite() {
+        let kernel = DSPKernel::new();
+        kernel.set_licensed(true);
+        assert!(kernel.demo_seconds_remaining(48000.0).is_infinite());
+    }
+
+    #[test]
+    fn test_licensed_kernel_processes_indefinitely() {
+        let mut kernel = DSPKernel::new();
+        kernel.set_licensed(true);
+        kernel.initialize(1, 1, 48000.0);
+
+        let frames = 4096u32;
+        // Process well past the demo limit
+        let iterations = (DEMO_LIMIT_SAMPLES / frames as u64) + 100;
+
+        let input = vec![0.5f32; frames as usize];
+        let mut output = vec![0.0f32; frames as usize];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        for _ in 0..iterations {
+            unsafe {
+                kernel.process(&ip, &op, 1, frames);
+            }
+        }
+
+        // Output should still be non-zero (passthrough, no backend)
+        assert_eq!(output[0], 0.5);
+    }
+
+    #[test]
+    fn test_unlicensed_kernel_silences_after_limit() {
+        let mut kernel = DSPKernel::new();
+        assert!(!kernel.is_licensed());
+        kernel.initialize(1, 1, 48000.0);
+
+        let frames = 4096u32;
+        let iterations_to_exceed = (DEMO_LIMIT_SAMPLES / frames as u64) + 10;
+
+        let input = vec![0.5f32; frames as usize];
+        let mut output = vec![0.0f32; frames as usize];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        for _ in 0..iterations_to_exceed {
+            unsafe {
+                kernel.process(&ip, &op, 1, frames);
+            }
+        }
+
+        // Output should be silence
+        assert_eq!(output[0], 0.0);
+        assert!(output.iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn test_license_toggle_resets_demo_counter() {
+        let mut kernel = DSPKernel::new();
+        kernel.initialize(1, 1, 48000.0);
+
+        // Process some frames to decrement demo time
+        let input = vec![0.5f32; 1024];
+        let mut output = vec![0.0f32; 1024];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe {
+            kernel.process(&ip, &op, 1, 1024);
+        }
+        assert!(kernel.demo_seconds_remaining(48000.0) < 60.0);
+
+        // License — counter resets
+        kernel.set_licensed(true);
+        assert!(kernel.demo_seconds_remaining(48000.0).is_infinite());
+    }
+
+    #[test]
+    fn test_bypass_does_not_count_against_demo() {
+        let mut kernel = DSPKernel::new();
+        kernel.set_bypassed(true);
+        kernel.initialize(1, 1, 48000.0);
+
+        let frames = 4096u32;
+        let iterations = (DEMO_LIMIT_SAMPLES / frames as u64) + 100;
+
+        let input = vec![0.5f32; frames as usize];
+        let mut output = vec![0.0f32; frames as usize];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        for _ in 0..iterations {
+            unsafe {
+                kernel.process(&ip, &op, 1, frames);
+            }
+        }
+
+        // Demo counter should still be at 0 (bypass doesn't count)
+        let remaining = kernel.demo_seconds_remaining(48000.0);
+        assert!((remaining - 60.0).abs() < 0.1);
+
+        // Un-bypass: audio should still work (demo not expired)
+        kernel.set_bypassed(false);
+        // Re-zero output and get fresh pointer
+        for s in output.iter_mut() {
+            *s = 0.0;
+        }
+        unsafe {
+            kernel.process(&ip, &op, 1, frames);
+        }
+        assert_eq!(output[0], 0.5); // passthrough
     }
 }

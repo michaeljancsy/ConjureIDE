@@ -25,6 +25,7 @@ struct BearBoneExtensionMainView: View {
     @ObservedObject var aiService: AIService
     @ObservedObject var captureManager: AudioCaptureManager
     @ObservedObject var parameterState: ParameterState
+    @ObservedObject var licenseManager: LicenseManager
     var onRun: (String) async -> ScriptSaveResult
     var onSelectPreset: (Preset) async -> ScriptSaveResult
     var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
@@ -62,6 +63,7 @@ struct BearBoneExtensionMainView: View {
             PresetToolbar(
                 presetManager: presetManager,
                 aiService: aiService,
+                licenseManager: licenseManager,
                 isCompiling: isCompiling,
                 selectedLanguage: $selectedLanguage,
                 showSpectrogram: $showSpectrogram,

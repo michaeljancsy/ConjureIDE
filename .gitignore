@@ -7,6 +7,10 @@ rust/python-dist/
 # Bundled Rust compiler distribution (created by scripts/setup-rustc.sh)
 rustc-dist/
 
+# License key generation tool build artifacts and private key
+tools/generate-license/target/
+tools/generate-license/keypair.bin
+
 # Xcode build artifacts
 build/
 DerivedData/

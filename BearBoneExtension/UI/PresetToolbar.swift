@@ -4,6 +4,7 @@ import SwiftUI
 struct PresetToolbar: View {
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var aiService: AIService
+    @ObservedObject var licenseManager: LicenseManager
     var isCompiling: Bool = false
     @Binding var selectedLanguage: ScriptLanguage
     @Binding var showSpectrogram: Bool
@@ -193,17 +194,33 @@ struct PresetToolbar: View {
             .help(showSpectrogram ? "Hide spectrogram" : "Show spectrogram")
             .accessibilityIdentifier("spectrogramToggleButton")
 
-            // AI Settings
+            // Demo mode indicator
+            if !licenseManager.isLicensed {
+                Text("DEMO")
+                    .font(.caption2.bold())
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Color.orange.opacity(0.15))
+                    .cornerRadius(3)
+                    .accessibilityIdentifier("demoIndicator")
+            }
+
+            // Settings (License + AI)
             Button(action: { showingSettings = true }) {
                 Image(systemName: "gearshape")
             }
             .buttonStyle(.borderless)
             .accessibilityIdentifier("settingsButton")
             .popover(isPresented: $showingSettings) {
-                AISettingsPopover(
-                    aiService: aiService,
-                    onDone: { showingSettings = false }
-                )
+                VStack(spacing: 0) {
+                    LicenseSettingsView(licenseManager: licenseManager)
+                    Divider()
+                    AISettingsPopover(
+                        aiService: aiService,
+                        onDone: { showingSettings = false }
+                    )
+                }
             }
         }
         .padding(.horizontal, 8)
