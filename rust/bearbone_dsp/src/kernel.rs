@@ -233,6 +233,11 @@ impl DSPKernel {
         remaining as f64 / sample_rate
     }
 
+    /// Reset the demo sample counter to zero, giving another 60 seconds of demo time.
+    pub fn reset_demo(&self) {
+        self.demo_samples_processed.store(0, Ordering::Relaxed);
+    }
+
     /// Mono-downmix multi-channel audio into the scratch buffer and write to ring buffer.
     /// Called from the audio thread during process().
     unsafe fn capture_to_ring(

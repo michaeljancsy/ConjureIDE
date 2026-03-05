@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension Notification.Name {
+    static let openLicenseSettings = Notification.Name("openLicenseSettings")
+}
+
 /// Toolbar for browsing, running, saving, and deleting presets.
 struct PresetToolbar: View {
     @ObservedObject var presetManager: PresetManager
@@ -226,6 +230,9 @@ struct PresetToolbar: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 2)
         .controlSize(.small)
+        .onReceive(NotificationCenter.default.publisher(for: .openLicenseSettings)) { _ in
+            showingSettings = true
+        }
     }
 
     private func selectPrevious() {

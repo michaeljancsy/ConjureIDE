@@ -221,4 +221,12 @@ double dsp_kernel_demo_seconds_remaining(DSPKernelRef kernel, double sample_rate
  */
 void dsp_kernel_set_licensed(DSPKernelRef kernel, bool licensed);
 
+/**
+ * Reset the demo sample counter, giving another 60 seconds of demo time.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+void dsp_kernel_reset_demo(DSPKernelRef kernel);
+
 #endif  /* BEARBONE_DSP_H */

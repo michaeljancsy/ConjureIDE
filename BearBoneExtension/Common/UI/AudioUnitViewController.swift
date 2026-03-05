@@ -168,6 +168,9 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         lm.getDemoSecondsRemaining = { [weak au] in
             au?.demoSecondsRemaining() ?? 0
         }
+        lm.resetDemoInKernel = { [weak au] in
+            au?.resetDemo()
+        }
         lm.loadAndVerify()
 
         // Run: detect language, compile if needed, load into kernel + benchmark

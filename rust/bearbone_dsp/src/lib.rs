@@ -296,6 +296,15 @@ pub unsafe extern "C" fn dsp_kernel_set_licensed(kernel: DSPKernelRef, licensed:
     (*kernel).set_licensed(licensed);
 }
 
+/// Reset the demo sample counter, giving another 60 seconds of demo time.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_reset_demo(kernel: DSPKernelRef) {
+    (*kernel).reset_demo();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

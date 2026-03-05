@@ -28,6 +28,9 @@ class LicenseManager: ObservableObject {
     /// Closure that calls dsp_kernel_demo_seconds_remaining.
     var getDemoSecondsRemaining: (() -> Double)?
 
+    /// Closure that calls dsp_kernel_reset_demo.
+    var resetDemoInKernel: (() -> Void)?
+
     /// Timer for updating demo countdown in UI.
     private var demoTimer: Timer?
 
@@ -80,6 +83,12 @@ class LicenseManager: ObservableObject {
             }
         }
         return valid
+    }
+
+    /// Reset the demo counter in the kernel, giving another 60 seconds.
+    func restartDemo() {
+        resetDemoInKernel?()
+        updateDemoTime()
     }
 
     // MARK: - File I/O

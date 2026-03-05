@@ -236,6 +236,7 @@ struct PresetComparisonTests {
         let kernel = dsp_kernel_create()!
         defer { dsp_kernel_destroy(kernel) }
 
+        dsp_kernel_set_licensed(kernel, true) // License so demo mode doesn't interfere
         dsp_kernel_initialize(kernel, Int32(channels), Int32(channels), sampleRate)
         dsp_kernel_set_max_frames(kernel, UInt32(chunkSize))
 
@@ -267,6 +268,7 @@ struct PresetComparisonTests {
         let kernel = dsp_kernel_create()!
         defer { dsp_kernel_destroy(kernel) }
 
+        dsp_kernel_set_licensed(kernel, true) // License so demo mode doesn't interfere
         dsp_kernel_initialize(kernel, Int32(channels), Int32(channels), sampleRate)
         dsp_kernel_set_max_frames(kernel, UInt32(chunkSize))
 

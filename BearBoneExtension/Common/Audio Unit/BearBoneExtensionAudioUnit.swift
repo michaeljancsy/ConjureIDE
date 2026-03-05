@@ -298,6 +298,16 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		return dsp_kernel_demo_seconds_remaining(kernel, sampleRate)
 	}
 
+	/// Reset the demo counter, giving another 60 seconds of demo time.
+	func resetDemo() {
+		dsp_kernel_reset_demo(kernel)
+	}
+
+	/// Set the licensed state directly (used by tests and license restore).
+	func setLicensed(_ licensed: Bool) {
+		dsp_kernel_set_licensed(kernel, licensed)
+	}
+
 	deinit {
 		if let kernel = kernel {
 			dsp_kernel_destroy(kernel)
