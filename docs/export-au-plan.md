@@ -203,36 +203,40 @@ The player AU reads this at init to determine which backend to use and how to co
 **Placeholder AU identity (patched at export time):**
 - Type: `aufx`, Subtype: `TMPL`, Manufacturer: `A000`, Name: `BearBone: ExportTemplate`
 
-### Phase 2: Export Pipeline
+### Phase 2: Export Pipeline ✅ COMPLETE (2026-03-05)
 
 **Goal:** Given a preset (script source + compiled WASM if Rust), produce a working exported .app bundle.
 
-**Deliverables:**
-- [ ] `ExportManager` class (Swift) with `exportPreset(name:, source:, wasm:, language:) async throws -> URL`
-- [ ] Pipeline steps:
-  1. Locate pre-built template .app in BearBone's own bundle Resources
-  2. Copy template to App Group container (or temp directory if running unsandboxed)
+**Implemented as:** `BearBoneExtension/Export/` — three files.
+
+**Deliverables (all complete):**
+- [x] `ExportManager` class with `exportPreset(name:, source:, wasmData:, language:, templateURL:, outputDirectory:) throws -> URL`
+- [x] Pipeline steps:
+  1. Locate template at provided `templateURL`
+  2. Copy template to `outputDirectory/<SanitizedName>.app`
   3. Write preset file (`preset.py` or `preset.wasm`) into .appex Resources
   4. Generate `runtime-config.json` and write to .appex Resources
-  5. Patch .app Info.plist: bundle ID, app name
-  6. Patch .appex Info.plist: bundle ID, AU subtype, AU name
-  7. If Python: copy `libpython3.14t.dylib` into .appex Frameworks
-  8. Ad-hoc code sign the entire .app bundle (deepest first: frameworks → appex → app)
-  9. Return URL to the signed .app
-- [ ] `ExportRegistry` class: JSON file tracking exported AUs (name, subtype, bundle ID, date)
-- [ ] Subtype generator: hash preset name → 4-char code, collision check
-- [ ] Unit tests: plist patching, subtype generation, registry CRUD, code signing validation
+  5. Patch .app Info.plist: `CFBundleIdentifier`, `CFBundleName`, `CFBundleDisplayName`
+  6. Patch .appex Info.plist: `CFBundleIdentifier`, AU subtype, AU name, AU description
+  7. For Python: remove placeholder `preset.wasm` (libpython already in template)
+  8. Ad-hoc code sign (deepest first: frameworks → appex → app) via `/usr/bin/codesign -s -`
+  9. Register in ExportRegistry
+  10. Return URL to the signed .app
+- [x] `ExportRegistry` class: JSON file at `~/Library/Application Support/BearBone/export-registry.json`
+- [x] `SubtypeGenerator`: SHA256 hash → 4-char alphanumeric code, collision + reserved code avoidance
+- [x] 20 unit tests: 8 SubtypeGenerator + 6 ExportRegistry + 6 ExportManager (end-to-end with mock template)
 
-**Key files to create:**
+**Key files created:**
 - `BearBoneExtension/Export/ExportManager.swift`
 - `BearBoneExtension/Export/ExportRegistry.swift`
 - `BearBoneExtension/Export/SubtypeGenerator.swift`
+- `BearBoneTests/ExportTests.swift` (+ test copies of Export files)
 
 **Technical notes:**
-- Pre-built template: The BearBoneExportAUTemplate project's built product needs to be copied into BearBone's bundle during the build. Add a "Copy Export Template" build phase to the main BearBone target that copies `BearBoneExportAUTemplate.app` into `BearBone.app/Contents/Resources/ExportTemplate/`
-- Code signing order matters: sign frameworks first, then appex, then app. Use `codesign -s - --force --deep` or explicit per-component signing
-- The template .app binary is universal (if needed) or arm64-only (matching BearBone's deployment target)
-- For Rust presets, the WASM is already compiled (user clicked Run in BearBone). Just embed the cached .wasm from `WasmCache`
+- Template embedding deferred to Phase 3 — `ExportManager` accepts `templateURL` parameter
+- Plist patching uses Foundation `PropertyListSerialization` (pure Swift, sandbox-compatible)
+- Re-exporting same preset name reuses existing subtype from registry
+- Code signing order: frameworks → appex → app (deepest first)
 
 ### Phase 3: Export UI in AU Extension
 
