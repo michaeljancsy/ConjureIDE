@@ -7,8 +7,8 @@ Export a BearBone preset (Python or Rust) as a standalone AUv3 plugin that the u
 | Decision | Choice |
 |----------|--------|
 | Exportable languages | Both: Python (.py source) and Rust (.wasm binary only) |
-| Template app behavior | Auto-register-and-quit (launch → macOS discovers .appex → terminate) |
-| Template location | Separate Xcode project (its own app bundle) |
+| Template app behavior | Richer info window (AU metadata, DAW instructions, Quit button) |
+| Template location | Separate XcodeGen project (`BearBoneExportAUTemplate/`) |
 | Export trigger | Toolbar button in the AU extension UI |
 | Sandbox strategy | App Group container for DAW-hosted extension writes |
 | Code signing | Ad-hoc (`codesign -s -`) for local use |
@@ -161,39 +161,47 @@ The player AU reads this at init to determine which backend to use and how to co
 
 ## Implementation Phases
 
-### Phase 1: Template AU Player (New Xcode Target)
+### Phase 1: Template AU ✅ COMPLETE (2026-03-05)
 
 **Goal:** A minimal AUv3 that loads a DSP preset from its own bundle Resources and processes audio. WASM-only initially.
 
-**Deliverables:**
-- [ ] New separate Xcode project: `BearBonePlayer.xcodeproj` (its own app bundle)
-  - Contains `BearBonePlayer` app target and `BearBonePlayerExtension` appex target
-  - Lives in a `BearBonePlayer/` directory alongside the main `BearBone.xcodeproj`
-- [ ] Player app: auto-register-and-quit (`NSApp.terminate()` after brief delay in `applicationDidFinishLaunching`)
-- [ ] Player AU extension: `BearBonePlayerAudioUnit` (AUAudioUnit subclass)
-  - Loads `preset.wasm` from own bundle Resources
-  - Loads `runtime-config.json` for metadata
-  - Same 8 generic parameters as BearBone
-  - Render block calls Rust kernel with WASM backend
-  - Minimal SwiftUI UI with labeled sliders for the 8 parameters
-- [ ] Player extension links `libbearbone_dsp.a` (same Rust crate, own build phase)
-- [ ] Player extension includes wasmtime runtime (already linked via Rust crate)
-- [ ] Verify: manually copy a .wasm preset into player Resources, build, load in DAW
+**Implemented as:** `BearBoneExportAUTemplate/` — a separate XcodeGen-based project.
 
-**Key files to create:**
-- `BearBonePlayer/BearBonePlayer.xcodeproj` — separate Xcode project
-- `BearBonePlayer/BearBonePlayer/` — host app directory
-- `BearBonePlayer/BearBonePlayerExtension/` — AU extension directory
-- `BearBonePlayer/BearBonePlayerExtension/Audio Unit/BearBonePlayerAudioUnit.swift`
-- `BearBonePlayer/BearBonePlayerExtension/UI/PlayerSliderView.swift` — minimal labeled slider UI
-- `BearBonePlayer/BearBonePlayerExtension/Info.plist` — AU component description
+**Deliverables (all complete):**
+- [x] Separate XcodeGen project: `BearBoneExportAUTemplate/project.yml` → generates `.xcodeproj`
+  - Host app target (`BearBoneExportAUTemplate`) — info window with AU metadata, DAW instructions, Quit button
+  - AU extension target (`BearBoneExportAUTemplateExtension`) — sandboxed appex
+  - Unit test target (`BearBoneExportAUTemplateTests`) — 13 tests
+- [x] Host app: richer info view showing AU name, type, subtype, manufacturer, version, DAW-specific hints
+- [x] AU extension: `ExportAUAudioUnit` (AUAudioUnit subclass)
+  - Loads `preset.wasm` from own bundle Resources via `dsp_kernel_load_wasm()`
+  - Loads `runtime-config.json` for metadata (preset name, param count, param names)
+  - Config-driven parameter tree (paramCount and paramNames from runtime-config.json)
+  - Render block copied from main BearBone AU (same event processing, bypass, safety clamp)
+  - Calls `dsp_kernel_set_licensed(kernel, true)` — no demo timer in exports
+- [x] Minimal SwiftUI UI: preset name header, labeled sliders, "Made with BearBone" footer
+- [x] Extension links same full `libbearbone_dsp.a` (with pyo3). Bundles `libpython3.14t.dylib` for linker resolution
+- [x] Passthrough WASM preset compiled from `process.rs` included as placeholder
+- [x] 13 unit tests: 4 Rust FFI (kernel lifecycle, bypass, params, licensing) + 9 AU component (instantiation, buses, channels, params, bypass, render lifecycle, WASM loading)
 
-**Technical notes:**
-- Separate project keeps the player cleanly decoupled from the main BearBone app
-- The player AU uses the same Rust kernel (`dsp_kernel_create`, `dsp_kernel_process`, `dsp_kernel_load_wasm`) but NOT the Python-specific functions initially
-- The player's Info.plist has placeholder AU identity values that get patched at export time
-- The player project's "Build Rust" phase can reuse `build-rust.sh` since it produces the same static library
-- The pre-built `BearBonePlayer.app` gets copied into `BearBone.app/Contents/Resources/ExportTemplate/` during the main BearBone build
+**Key files created:**
+- `BearBoneExportAUTemplate/project.yml` — XcodeGen spec (3 targets + scheme)
+- `BearBoneExportAUTemplate/BearBoneExportAUTemplate/` — host app (App.swift, InfoView.swift, AUInfo.swift)
+- `BearBoneExportAUTemplate/BearBoneExportAUTemplateExtension/Audio Unit/ExportAUAudioUnit.swift`
+- `BearBoneExportAUTemplate/BearBoneExportAUTemplateExtension/UI/` — ExportAUViewController, ExportAUMainView, ExportParameterState
+- `BearBoneExportAUTemplate/BearBoneExportAUTemplateExtension/Model/RuntimeConfig.swift`
+- `BearBoneExportAUTemplate/BearBoneExportAUTemplateExtension/Resources/` — preset.wasm, runtime-config.json
+- `BearBoneExportAUTemplate/BearBoneExportAUTemplateTests/ExportAUTests.swift`
+
+**Key build requirements discovered:**
+- `ENABLE_APP_SANDBOX: YES` on extension target — required for PluginKit to register the AU
+- `DEVELOPMENT_TEAM` + `CODE_SIGN_STYLE: Automatic` — proper code signing needed for AU registration
+- `LD_RUNPATH_SEARCH_PATHS` must include `@loader_path/../Frameworks` on extension (for in-process loading)
+- Test target needs `LD_RUNPATH_SEARCH_PATHS` to python-dist/lib and extension Frameworks
+- XcodeGen `schemes:` section needed to include test target in Cmd+U
+
+**Placeholder AU identity (patched at export time):**
+- Type: `aufx`, Subtype: `TMPL`, Manufacturer: `A000`, Name: `BearBone: ExportTemplate`
 
 ### Phase 2: Export Pipeline
 
@@ -221,7 +229,7 @@ The player AU reads this at init to determine which backend to use and how to co
 - `BearBoneExtension/Export/SubtypeGenerator.swift`
 
 **Technical notes:**
-- Pre-built template: The BearBonePlayer target's built product needs to be copied into BearBone's bundle during the build. Add a "Copy Player Template" build phase to the main BearBone target that copies `BearBonePlayer.app` into `BearBone.app/Contents/Resources/ExportTemplate/`
+- Pre-built template: The BearBoneExportAUTemplate project's built product needs to be copied into BearBone's bundle during the build. Add a "Copy Export Template" build phase to the main BearBone target that copies `BearBoneExportAUTemplate.app` into `BearBone.app/Contents/Resources/ExportTemplate/`
 - Code signing order matters: sign frameworks first, then appex, then app. Use `codesign -s - --force --deep` or explicit per-component signing
 - The template .app binary is universal (if needed) or arm64-only (matching BearBone's deployment target)
 - For Rust presets, the WASM is already compiled (user clicked Run in BearBone). Just embed the cached .wasm from `WasmCache`
