@@ -2,12 +2,12 @@
 
 ## In Progress
 
-## To Do
-
 ### Export Preset as Standalone AUv3
 Export a BearBone preset as a standalone AUv3 plugin installable in any DAW. See `docs/export-au-plan.md` for full plan.
-- Phase 1: Template AU player (new Xcode target, auto-register-and-quit host app, WASM-only player AU)
+- Phase 1: Template AU (BearBoneExportAUTemplate) — **complete** (2026-03-05)
 - Phase 2: Export pipeline (copy template, inject preset, patch identity, ad-hoc sign)
+
+## To Do
 - Phase 3: Export UI in AU extension (toolbar button, App Group sandbox strategy, host app pending-export handler)
 - Phase 4: Python export support (shared runtime at ~/Library/Application Support/BearBone/PythonRuntime-3.14/, error UI with auto-download)
 - Phase 5: Polish & validation (integration tests, edge cases, documentation)
@@ -33,6 +33,7 @@ Export a BearBone preset as a standalone AUv3 plugin installable in any DAW. See
 
 
 ## Done
+- Export AU Template — Phase 1 complete (2026-03-05): Built `BearBoneExportAUTemplate/` — a separate XcodeGen-based project containing a minimal AUv3 template that loads a single WASM preset from its bundle and processes audio. Includes: host app with AU info view (effect name, AU metadata, DAW instructions, Quit button), AU extension with render block copied from main BearBone AU, config-driven parameter labels via `runtime-config.json`, SwiftUI slider UI, placeholder passthrough WASM preset compiled from `process.rs`. 13 unit tests (4 Rust FFI + 9 AU component tests covering instantiation, bus config, channel capabilities, parameter tree, parameter round-trip, bypass, render lifecycle, WASM loading). Key build requirements: `ENABLE_APP_SANDBOX = YES` on extension (required for PluginKit registration), `DEVELOPMENT_TEAM` for code signing, `LD_RUNPATH_SEARCH_PATHS` including `@loader_path/../Frameworks` and python-dist paths. Links same full Rust library (with pyo3) — bundles `libpython3.14t.dylib` for linker resolution. Calls `dsp_kernel_set_licensed(kernel, true)` so exported AUs have no demo timer.
 - Demo expired overlay with restart button (2026-03-05): When the 60-second demo timer expires, a ZStack overlay appears over the editor/spectrogram area showing "Demo Expired" with an explanation and two buttons: "Restart Demo" (resets the sample counter for another 60s via `dsp_kernel_reset_demo` FFI) and "Enter License Key" (opens settings popover via NotificationCenter). Toolbar stays accessible. Rust: `reset_demo()` method + FFI. Swift: `resetDemoInKernel` closure wired through AU/VC/LicenseManager. Tests: licensed kernels in PresetComparisonTests to prevent demo interference.
 - Ed25519 license system with demo mode (2026-03-05): Offline license verification using Ed25519 signed serial keys. Rust: `license.rs` module with `verify_license()` (splits base64 payload + signature, verifies Ed25519 sig, checks product field), demo mode in `kernel.rs` (silence after 2,880,000 cumulative samples ≈ 60s at 48kHz, bypass doesn't count, lock-free AtomicBool/AtomicU64), 4 FFI functions (`dsp_kernel_verify_license`, `dsp_kernel_is_licensed`, `dsp_kernel_demo_seconds_remaining`, `dsp_kernel_set_licensed`). Swift: `LicenseManager` (persists serial at `~/Library/Application Support/BearBone/license.key`, 1s timer for remaining time), `LicenseSettingsView` (serial entry field, activate button, status display), wired through `AudioUnitViewController` → `PresetToolbar` (DEMO badge). Key generation tool: `tools/generate-license/` (standalone Rust binary, generates Ed25519 keypair + signs license payloads). Serial format: `base64(json).base64(ed25519_sig)` where JSON is `{"email":"...","product":"bearbone","created":"..."}`. Zero infrastructure — no server, no database, no ongoing costs. 114+ Rust tests + all Swift unit tests pass.
 - Normalized difference spectrogram (2026-03-04): Added fourth spectrogram panel showing point-wise normalized difference ND(f,t) = (S_out - S_in) / (S_out + S_in), where S values are linear power converted from dB. Values range [-1, 1], displayed with the blue-white-red diverging color map. Added `normalizedDifference` case to `SpectrogramChannel`, `computeNormalizedDifference()` in `AudioCaptureManager`, and "Normalized Diff" panel in `SpectrogramSidePanel`. Also fixed pre-existing brace mismatch in `SpectrogramSidePanel.swift` from a merge conflict — the `GeometryReader` wrapper had broken the `HStack` scope.
