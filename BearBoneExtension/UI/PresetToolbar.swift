@@ -19,12 +19,16 @@ struct PresetToolbar: View {
     var onDelete: () -> Void
     var onNew: () -> Void
     var onGenerate: (String) -> Void
+    var onExport: (String) -> Void
+    var isExporting: Bool = false
 
     @Binding var showingSaveAs: Bool
     @Binding var saveAsName: String
     @State private var showDeleteConfirm = false
     @State private var showingGenerate = false
     @State private var showingSettings = false
+    @State private var showingExport = false
+    @State private var exportName = ""
 
     private var currentIsUserPreset: Bool {
         guard let current = presetManager.currentPreset else { return false }
@@ -188,6 +192,35 @@ struct PresetToolbar: View {
                 } message: {
                     Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This cannot be undone.")
                 }
+            }
+
+            // Export as standalone AU
+            Button(action: {
+                exportName = presetManager.currentPreset?.name ?? "My Effect"
+                showingExport = true
+            }) {
+                if isExporting {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "square.and.arrow.up")
+                }
+            }
+            .buttonStyle(.borderless)
+            .disabled(!licenseManager.isLicensed || isExporting || isCompiling)
+            .help(licenseManager.isLicensed ? "Export as standalone AU" : "License required to export")
+            .accessibilityIdentifier("exportButton")
+            .popover(isPresented: $showingExport) {
+                ExportPopover(
+                    exportName: $exportName,
+                    language: selectedLanguage,
+                    isLicensed: licenseManager.isLicensed,
+                    onExport: { name in
+                        showingExport = false
+                        onExport(name)
+                    },
+                    onCancel: { showingExport = false }
+                )
             }
 
             // Spectrogram toggle

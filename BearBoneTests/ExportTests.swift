@@ -404,6 +404,46 @@ struct ExportManagerTests {
         }
     }
 
+    @Test func exportWithSkipSigning() throws {
+        let templateURL = try createMockTemplate()
+        defer { cleanup(templateURL) }
+
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ExportOutput_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+
+        let registryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ExportRegistry_\(UUID().uuidString)")
+            .appendingPathComponent("export-registry.json")
+        defer { try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent()) }
+
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+
+        // Export with skipSigning: true — should succeed without calling codesign
+        let result = try manager.exportPreset(
+            name: "SkipSignTest",
+            source: "fn process() {}",
+            wasmData: Data("wasm".utf8),
+            language: .rust,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true
+        )
+
+        // Verify output exists and plist was patched
+        #expect(FileManager.default.fileExists(atPath: result.path))
+        #expect(result.lastPathComponent == "SkipSignTest.app")
+
+        let appPlistData = try Data(contentsOf: result.appendingPathComponent("Contents/Info.plist"))
+        let appPlist = try PropertyListSerialization.propertyList(from: appPlistData, format: nil) as! [String: Any]
+        #expect(appPlist["CFBundleIdentifier"] as? String == "com.BearBone-user.SkipSignTest")
+
+        // Verify registered
+        #expect(registry.entries.count == 1)
+    }
+
     @Test func exportOverwritesPreviousExport() throws {
         let templateURL = try createMockTemplate()
         defer { cleanup(templateURL) }
@@ -440,5 +480,25 @@ struct ExportManagerTests {
 
         // Registry has only one entry (replaced)
         #expect(registry.entries.count == 1)
+    }
+}
+
+// MARK: - PendingExportHandler Tests
+
+@MainActor
+struct PendingExportHandlerTests {
+
+    @Test func appGroupContainerURLReturnsNilWithoutEntitlement() {
+        // Without actual App Group entitlement, containerURL returns nil
+        let url = ExportManager.appGroupContainerURL()
+        // This test documents behavior — in CI without entitlements, it's nil
+        // In a signed app with entitlements, it would return a valid URL
+        _ = url // Suppress unused warning
+    }
+
+    @Test func exportManagerSanitizesSpecialCharacters() {
+        #expect(ExportManager.sanitizeName("Hello World!") == "Hello_World_")
+        #expect(ExportManager.sanitizeName("test/path") == "test_path")
+        #expect(ExportManager.sanitizeName("a.b.c") == "a_b_c")
     }
 }

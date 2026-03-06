@@ -270,6 +270,93 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             }
         }
 
+        // Export: assemble standalone AU .app
+        // When running in host app, exports directly to final location with signing.
+        // When in a DAW, stages to App Group for the host app to finalize.
+        // AU extensions run in-process: Bundle.main is the host app's bundle.
+        // But in Xcode debug, the main bundle may be the extension itself.
+        // Check both the main bundle and the process name.
+        let mainBundleId = Bundle.main.bundleIdentifier ?? ""
+        let isInHostApp = mainBundleId == "com.MichaelJancsy.BearBone"
+            || mainBundleId.hasPrefix("com.MichaelJancsy.BearBone.BearBoneExtension")
+            || ProcessInfo.processInfo.processName == "BearBone"
+        let onExport: (String) async -> ExportResult = { [weak au] name in
+            guard let au else {
+                return .error("Audio unit not available")
+            }
+            guard let source = au.scriptSource else {
+                return .error("No script loaded")
+            }
+            let language = au.currentScriptLanguage
+            let wasmData = au.wasmBytes
+
+            if language == .rust && wasmData == nil {
+                return .error("Rust preset must be compiled first. Click Run before exporting.")
+            }
+
+            guard let templateURL = extensionBundle.url(forResource: "ExportTemplate", withExtension: "zip") else {
+                return .error("Export template not found in bundle. Rebuild the project.")
+            }
+
+            if !isInHostApp {
+                // In a DAW: stage to App Group, host app finalizes later
+                guard let outputDir = ExportManager.appGroupContainerURL() else {
+                    return .error("App Group container not available. Check entitlements.")
+                }
+
+                let exportDir = outputDir.appendingPathComponent("PendingExports")
+                try? FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+
+                do {
+                    let exportManager = ExportManager()
+                    let appURL = try exportManager.exportPreset(
+                        name: name,
+                        source: source,
+                        wasmData: wasmData,
+                        language: language,
+                        templateURL: templateURL,
+                        outputDirectory: exportDir,
+                        skipSigning: true
+                    )
+                    log.info("Exported preset '\(name, privacy: .public)' to \(appURL.path, privacy: .public)")
+                    return .success("Exported \"\(name)\"! Open BearBone to install.")
+                } catch {
+                    log.error("Export failed: \(error.localizedDescription, privacy: .public)")
+                    return .error(error.localizedDescription)
+                }
+            } else {
+                // In host app: export directly to final location with signing
+                let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                let exportsDir = appSupport.appendingPathComponent("BearBone/Exports")
+                try? FileManager.default.createDirectory(at: exportsDir, withIntermediateDirectories: true)
+
+                do {
+                    let exportManager = ExportManager()
+                    let appURL = try exportManager.exportPreset(
+                        name: name,
+                        source: source,
+                        wasmData: wasmData,
+                        language: language,
+                        templateURL: templateURL,
+                        outputDirectory: exportsDir,
+                        skipSigning: false
+                    )
+                    // Register with LaunchServices so macOS discovers the AU
+                    let lsregister = Process()
+                    lsregister.executableURL = URL(fileURLWithPath: "/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister")
+                    lsregister.arguments = ["-f", "-R", "-trusted", appURL.path]
+                    try? lsregister.run()
+                    lsregister.waitUntilExit()
+
+                    log.info("Exported and installed preset '\(name, privacy: .public)' at \(appURL.path, privacy: .public)")
+                    return .success("Installed \"\(name)\"! Find it in your DAW under Audio Units.")
+                } catch {
+                    log.error("Export failed: \(error.localizedDescription, privacy: .public)")
+                    return .error(error.localizedDescription)
+                }
+            }
+        }
+
         let scriptPublisher = au.scriptSourceDidChange
             .receive(on: DispatchQueue.main)
             .eraseToAnyPublisher()
@@ -292,7 +379,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             onSavePreset: onSavePreset,
             onSaveAsPreset: onSaveAsPreset,
             onDeletePreset: onDeletePreset,
-            onNew: onNew
+            onNew: onNew,
+            onExport: onExport
         )
         let hv = SafeHostingView(rootView: content)
         hv.translatesAutoresizingMaskIntoConstraints = false

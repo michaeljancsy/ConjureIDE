@@ -238,42 +238,48 @@ The player AU reads this at init to determine which backend to use and how to co
 - Re-exporting same preset name reuses existing subtype from registry
 - Code signing order: frameworks → appex → app (deepest first)
 
-### Phase 3: Export UI in AU Extension
+### Phase 3: Export UI in AU Extension ✅ COMPLETE (2026-03-05)
 
 **Goal:** User can trigger export from within the AU extension (in any DAW or the host app).
 
-**Deliverables:**
-- [ ] "Export" toolbar button (next to existing preset controls)
-  - Only enabled when a preset is loaded and user is licensed
-  - Disabled with tooltip "License required" in demo mode
-- [ ] Export confirmation sheet/popover:
-  - Shows preset name (editable for the export)
-  - Shows language (Python/Rust)
-  - "Export" button
-- [ ] Progress indicator during export (spinner in toolbar area)
-- [ ] Post-export notification:
-  - Success: "Exported! Open BearBone to install." or reveal in Finder
-  - Error: display error message
-- [ ] App Group setup:
-  - Add App Group entitlement to both BearBone and BearBoneExtension
-  - `ExportManager` writes to App Group container when sandboxed
-- [ ] Host app handler: on launch, check App Group container for pending exports
-  - Move to user-chosen location via NSSavePanel
-  - Final code sign
-  - Reveal in Finder
-  - Clean up App Group container
+**Deliverables (all complete):**
+- [x] "Export" toolbar button (`square.and.arrow.up` icon) in `PresetToolbar`
+  - Disabled when: not licensed, currently exporting, or compiling
+  - Tooltip: "License required to export" when disabled
+- [x] Export popover (`ExportPopover.swift`): editable effect name, language label, Export/Cancel buttons
+- [x] Progress indicator: spinner replaces export icon during export
+- [x] Post-export alert: success message ("Open BearBone to install") or error
+- [x] App Group setup: `group.com.MichaelJancsy.BearBone` entitlement on extension
+  - Host app accesses Group Containers path directly (unsandboxed, no entitlement needed)
+  - `ExportManager` gains `skipSigning: Bool` parameter and `appGroupContainerURL()` helper
+- [x] Host app handler (`PendingExportHandler`): on launch, checks App Group's `PendingExports/`
+  - Moves to `~/Library/Application Support/BearBone/Exports/`
+  - Code signs via `/usr/bin/codesign -s - --force --deep`
+  - Launches .app via `NSWorkspace` (triggers AU registration)
+  - Reveals in Finder
+  - Alerts user: "Installed [name]. Find it in your DAW."
 
-**Key files to create/modify:**
-- `BearBoneExtension/UI/ExportButton.swift` (or add to `PresetToolbar.swift`)
-- `BearBoneExtension/UI/ExportSheet.swift`
-- `BearBone/Model/PendingExportHandler.swift`
-- Entitlements files (add App Group)
+**Key files created:**
+- `BearBoneExtension/UI/ExportPopover.swift` — export configuration popover
+- `BearBone/Model/PendingExportHandler.swift` — host app pending export installer
+
+**Key files modified:**
+- `BearBoneExtension/UI/PresetToolbar.swift` — added Export button + popover
+- `BearBoneExtension/UI/BearBoneExtensionMainView.swift` — added `onExport` closure, export state, alert
+- `BearBoneExtension/Common/UI/AudioUnitViewController.swift` — added `onExport` closure implementation
+- `BearBoneExtension/Export/ExportManager.swift` — added `skipSigning`, `appGroupContainerURL()`
+- `BearBoneExtension/Common/Audio Unit/BearBoneExtensionAudioUnit.swift` — added public `wasmBytes` accessor
+- `BearBoneExtension/BearBoneExtension.entitlements` — added App Group
+- `BearBone/BearBoneApp.swift` — added `PendingExportHandler`, checks on launch
+- `BearBone/ContentView.swift` — added export installed/error alerts
+- `BearBone.xcodeproj/project.pbxproj` — added "Copy Export Template" build phase
 
 **Technical notes:**
 - App Group identifier: `group.com.MichaelJancsy.BearBone`
-- The extension writes the complete .app to `FileManager.default.containerURL(forSecurityApplicationGroupIdentifier:)`
-- Communication between extension and host app: simplest is just filesystem (host app polls or checks on launch). More sophisticated: `CFNotificationCenter` distributed notifications or `NSXPCConnection`
-- The host app should show a "Pending exports" UI if it finds .app bundles in the App Group container on launch
+- Extension writes unsigned .app to App Group `PendingExports/` directory
+- Host app (unsandboxed) reads `~/Library/Group Containers/group.com.MichaelJancsy.BearBone/PendingExports/` directly
+- "Copy Export Template" build phase copies pre-built template from `BearBoneExportAUTemplate/build/Build/Products/Release/BearBoneExportAUTemplate.app` into extension Resources as `ExportTemplate.app`
+- Prerequisite: must build the template project first and enable App Group capability in Xcode Signing & Capabilities for the extension target
 
 ### Phase 4: Python Support
 
