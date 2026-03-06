@@ -3,6 +3,17 @@
 ## In Progress
 
 ## To Do
+
+### Export Preset as Standalone AUv3
+Export a BearBone preset as a standalone AUv3 plugin installable in any DAW. See `docs/export-au-plan.md` for full plan.
+- Phase 1: Template AU player (new Xcode target, auto-register-and-quit host app, WASM-only player AU)
+- Phase 2: Export pipeline (copy template, inject preset, patch identity, ad-hoc sign)
+- Phase 3: Export UI in AU extension (toolbar button, App Group sandbox strategy, host app pending-export handler)
+- Phase 4: Python export support (shared runtime at ~/Library/Application Support/BearBone/PythonRuntime-3.14/, error UI with auto-download)
+- Phase 5: Polish & validation (integration tests, edge cases, documentation)
+
+### Other
+- Parameter customization for exported AUs: Let users name params, set ranges, choose count (post-export-v1)
 - License system: Generate actual production keypair and embed public key (currently using dev keypair from tools/generate-license)
 - Preset comparison tests: tighten tolerance — current 1e-5 tolerance accommodates WASM libm vs native libm differences; investigate using native Rust compilation (non-WASM) to eliminate math library differences and achieve 1e-6 tolerance
 - Make scrolling smoother
