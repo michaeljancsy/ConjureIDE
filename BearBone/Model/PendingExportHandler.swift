@@ -121,7 +121,12 @@ final class PendingExportHandler: ObservableObject {
     private func codeSign(_ url: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-        process.arguments = ["-s", "-", "--force", "--timestamp=none", "--deep", url.path]
+        // --preserve-metadata=entitlements: keeps the sandbox entitlements from the
+        // Xcode-built template. Without this, ad-hoc signing strips entitlements and
+        // PluginKit refuses to register the extension (requires app-sandbox = true).
+        // No --deep: caller signs in correct order (frameworks → appex → app).
+        process.arguments = ["-s", "-", "--force", "--timestamp=none",
+                             "--preserve-metadata=entitlements", url.path]
 
         let pipe = Pipe()
         process.standardError = pipe

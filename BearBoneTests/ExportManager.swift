@@ -111,10 +111,17 @@ final class ExportManager {
         )
 
         // 7. Ad-hoc code sign (deepest first) — skipped when sandboxed
+        // Sign each item inside Frameworks individually (dylibs, .so files).
+        // Signing the Frameworks directory itself fails ("bundle format unrecognized").
         if !skipSigning {
             let appexFrameworksURL = appexURL.appendingPathComponent("Contents/Frameworks")
             if FileManager.default.fileExists(atPath: appexFrameworksURL.path) {
-                try codeSign(appexFrameworksURL)
+                let frameworkItems = try FileManager.default.contentsOfDirectory(
+                    at: appexFrameworksURL, includingPropertiesForKeys: nil
+                )
+                for item in frameworkItems {
+                    try codeSign(item)
+                }
             }
             try codeSign(appexURL)
             try codeSign(destURL)
@@ -241,7 +248,12 @@ final class ExportManager {
     private func codeSign(_ url: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-        process.arguments = ["-s", "-", "--force", "--timestamp=none", "--deep", url.path]
+        // --preserve-metadata=entitlements: keeps the sandbox entitlements from the
+        // Xcode-built template. Without this, ad-hoc signing strips entitlements and
+        // PluginKit refuses to register the extension (requires app-sandbox = true).
+        // No --deep: we sign in correct order (frameworks → appex → app) already.
+        process.arguments = ["-s", "-", "--force", "--timestamp=none",
+                             "--preserve-metadata=entitlements", url.path]
 
         let pipe = Pipe()
         process.standardError = pipe
