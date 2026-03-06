@@ -1,0 +1,236 @@
+import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.MichaelJancsy.BearBone", category: "ExportManager")
+
+/// Produces a standalone AUv3 .app bundle from a BearBone preset.
+///
+/// Pipeline: copy template → inject preset → patch plists → code sign → register.
+final class ExportManager {
+    enum ExportError: LocalizedError {
+        case templateNotFound
+        case missingWasmData
+        case plistPatchFailed(String)
+        case codeSignFailed(String)
+        case copyFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .templateNotFound: return "Export template not found in app bundle"
+            case .missingWasmData: return "Compiled WASM data is required for Rust preset export"
+            case .plistPatchFailed(let detail): return "Failed to patch Info.plist: \(detail)"
+            case .codeSignFailed(let detail): return "Code signing failed: \(detail)"
+            case .copyFailed(let detail): return "Failed to copy template: \(detail)"
+            }
+        }
+    }
+
+    let registry: ExportRegistry
+
+    init(registry: ExportRegistry = ExportRegistry()) {
+        self.registry = registry
+    }
+
+    /// Exports a preset as a standalone AUv3 .app bundle.
+    ///
+    /// - Parameters:
+    ///   - name: Display name for the exported AU.
+    ///   - source: Script source code (Python or Rust).
+    ///   - wasmData: Compiled WASM bytes (required for Rust, ignored for Python).
+    ///   - language: The preset's scripting language.
+    ///   - templateURL: URL to the pre-built template .app bundle.
+    ///   - outputDirectory: Directory where the exported .app will be written.
+    /// - Returns: URL to the exported .app bundle.
+    func exportPreset(
+        name: String,
+        source: String,
+        wasmData: Data?,
+        language: ScriptLanguage,
+        templateURL: URL,
+        outputDirectory: URL
+    ) throws -> URL {
+        guard FileManager.default.fileExists(atPath: templateURL.path) else {
+            throw ExportError.templateNotFound
+        }
+        if language == .rust {
+            guard wasmData != nil else { throw ExportError.missingWasmData }
+        }
+
+        let sanitized = Self.sanitizeName(name)
+        let bundleIdBase = "com.BearBone-user.\(sanitized)"
+        // Reuse existing subtype for same preset name (re-export/overwrite)
+        let subtype = registry.entry(forName: name)?.subtype
+            ?? SubtypeGenerator.generate(for: name, existing: registry.allSubtypes())
+
+        // 1. Copy template
+        let destURL = outputDirectory.appendingPathComponent("\(sanitized).app")
+        try copyTemplate(from: templateURL, to: destURL)
+
+        // 2. Locate the .appex inside the copied bundle
+        let appexURL = destURL
+            .appendingPathComponent("Contents/PlugIns/BearBoneExportAUTemplateExtension.appex")
+        let appexResourcesURL = appexURL.appendingPathComponent("Contents/Resources")
+
+        // 3. Write preset file
+        switch language {
+        case .rust:
+            try wasmData!.write(to: appexResourcesURL.appendingPathComponent("preset.wasm"))
+        case .python:
+            try Data(source.utf8).write(to: appexResourcesURL.appendingPathComponent("preset.py"))
+            // Remove the placeholder WASM
+            let placeholderWasm = appexResourcesURL.appendingPathComponent("preset.wasm")
+            if FileManager.default.fileExists(atPath: placeholderWasm.path) {
+                try FileManager.default.removeItem(at: placeholderWasm)
+            }
+        }
+
+        // 4. Write runtime-config.json
+        let config = makeRuntimeConfig(name: name, language: language)
+        try config.write(to: appexResourcesURL.appendingPathComponent("runtime-config.json"))
+
+        // 5. Patch host app Info.plist
+        let appPlistURL = destURL.appendingPathComponent("Contents/Info.plist")
+        try patchAppPlist(at: appPlistURL, bundleId: bundleIdBase, displayName: name)
+
+        // 6. Patch extension Info.plist
+        let extPlistURL = appexURL.appendingPathComponent("Contents/Info.plist")
+        try patchExtensionPlist(
+            at: extPlistURL,
+            bundleId: "\(bundleIdBase).Extension",
+            subtype: subtype,
+            displayName: name
+        )
+
+        // 7. Ad-hoc code sign (deepest first)
+        let appexFrameworksURL = appexURL.appendingPathComponent("Contents/Frameworks")
+        if FileManager.default.fileExists(atPath: appexFrameworksURL.path) {
+            try codeSign(appexFrameworksURL)
+        }
+        try codeSign(appexURL)
+        try codeSign(destURL)
+
+        // 8. Register
+        registry.register(ExportRegistry.Entry(
+            name: name,
+            subtype: subtype,
+            bundleId: bundleIdBase,
+            exportDate: Date(),
+            language: language.rawValue
+        ))
+
+        log.info("Exported preset '\(name, privacy: .public)' as \(sanitized).app (subtype: \(subtype, privacy: .public))")
+        return destURL
+    }
+
+    // MARK: - Pipeline Steps
+
+    private func copyTemplate(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destination.path) {
+            try fm.removeItem(at: destination)
+        }
+        do {
+            try fm.copyItem(at: source, to: destination)
+        } catch {
+            throw ExportError.copyFailed(error.localizedDescription)
+        }
+    }
+
+    private func makeRuntimeConfig(name: String, language: ScriptLanguage) -> Data {
+        let config: [String: Any] = [
+            "version": 1,
+            "language": language.rawValue,
+            "presetName": name,
+            "exportDate": ISO8601DateFormatter().string(from: Date()),
+            "paramCount": 8,
+        ]
+        // swiftlint:disable:next force_try
+        return try! JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
+    }
+
+    private func patchAppPlist(at url: URL, bundleId: String, displayName: String) throws {
+        var plist = try loadPlist(at: url)
+        plist["CFBundleIdentifier"] = bundleId
+        plist["CFBundleName"] = displayName
+        plist["CFBundleDisplayName"] = displayName
+        try savePlist(plist, to: url)
+    }
+
+    private func patchExtensionPlist(
+        at url: URL, bundleId: String, subtype: String, displayName: String
+    ) throws {
+        var plist = try loadPlist(at: url)
+        plist["CFBundleIdentifier"] = bundleId
+        plist["CFBundleDisplayName"] = displayName
+
+        // Patch AudioComponents[0]
+        guard var nsExt = plist["NSExtension"] as? [String: Any],
+              var attrs = nsExt["NSExtensionAttributes"] as? [String: Any],
+              var components = attrs["AudioComponents"] as? [[String: Any]],
+              !components.isEmpty
+        else {
+            throw ExportError.plistPatchFailed("Missing AudioComponents in extension plist")
+        }
+
+        components[0]["subtype"] = subtype
+        components[0]["name"] = "BearBone: \(displayName)"
+        components[0]["description"] = displayName
+
+        attrs["AudioComponents"] = components
+        nsExt["NSExtensionAttributes"] = attrs
+        plist["NSExtension"] = nsExt
+
+        try savePlist(plist, to: url)
+    }
+
+    // MARK: - Plist I/O
+
+    private func loadPlist(at url: URL) throws -> [String: Any] {
+        let data = try Data(contentsOf: url)
+        guard let plist = try PropertyListSerialization.propertyList(
+            from: data, format: nil
+        ) as? [String: Any] else {
+            throw ExportError.plistPatchFailed("Plist is not a dictionary at \(url.lastPathComponent)")
+        }
+        return plist
+    }
+
+    private func savePlist(_ plist: [String: Any], to url: URL) throws {
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: plist, format: .xml, options: 0
+        )
+        try data.write(to: url, options: .atomic)
+    }
+
+    // MARK: - Code Signing
+
+    private func codeSign(_ url: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        process.arguments = ["-s", "-", "--force", "--timestamp=none", "--deep", url.path]
+
+        let pipe = Pipe()
+        process.standardError = pipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        if process.terminationStatus != 0 {
+            let stderr = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            throw ExportError.codeSignFailed(stderr)
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// Sanitizes a preset name for use as a bundle ID component and filesystem name.
+    static func sanitizeName(_ name: String) -> String {
+        // Keep only alphanumeric, hyphens, and underscores
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let sanitized = name.unicodeScalars
+            .map { allowed.contains($0) ? String($0) : "_" }
+            .joined()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        return sanitized.isEmpty ? "Untitled" : sanitized
+    }
+}
