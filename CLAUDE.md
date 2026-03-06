@@ -144,6 +144,16 @@ Bundled runtimes require proper code signing for the hardened runtime:
 - Manufacturer: `A000`
 - Subtype: `0001` (main repo), `WT01` (worktree builds)
 
+## Export Preset as Standalone AUv3
+
+Planned feature to export BearBone presets as standalone AUv3 plugins. Full implementation plan in `docs/export-au-plan.md`, design Q&A in `docs/export-au-questions.md`. Key points:
+- Both Python (.py) and Rust (.wasm) presets exportable
+- Pre-built template AU (no xcodebuild at export time) — copy, patch plist, inject preset, ad-hoc sign
+- App Group container for sandbox-safe writes from DAW-hosted AU extension
+- Shared Python runtime at `~/Library/Application Support/BearBone/PythonRuntime-3.14/`
+- Licensed users only can export; exported AUs run freely
+- 5 implementation phases (see `docs/export-au-plan.md`)
+
 ## Backlog Management
 
 At the start of every session, read `backlog.md` in the repo root. Always begin a session by reading backlog.md and briefly summarizing current status. At the end of every session (or when completing/starting features), update `backlog.md` to reflect:
