@@ -229,4 +229,10 @@ void dsp_kernel_set_licensed(DSPKernelRef kernel, bool licensed);
  */
 void dsp_kernel_reset_demo(DSPKernelRef kernel);
 
+/**
+ * Return a pointer to the embedded Ed25519 public key (32 bytes).
+ * The pointer is valid for the lifetime of the process (static data).
+ */
+const uint8_t *dsp_kernel_public_key(void);
+
 #endif  /* BEARBONE_DSP_H */

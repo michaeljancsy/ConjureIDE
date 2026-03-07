@@ -68,12 +68,27 @@ struct LicenseSettingsView: View {
                     .font(.caption)
                     .accessibilityIdentifier("licenseErrorMessage")
             }
+
+            Divider()
+
+            Text("Public Key: \(embeddedPublicKeyFingerprint)")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .textSelection(.enabled)
+                .accessibilityIdentifier("publicKeyFingerprint")
         }
         .padding()
         .frame(minWidth: 300)
         .onChange(of: serialInput) { _, _ in
             showError = false
         }
+    }
+
+    private var embeddedPublicKeyFingerprint: String {
+        let ptr = dsp_kernel_public_key()
+        guard let ptr else { return "unavailable" }
+        let bytes = Array(UnsafeBufferPointer(start: ptr, count: 32))
+        return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
     private var demoStatusText: String {

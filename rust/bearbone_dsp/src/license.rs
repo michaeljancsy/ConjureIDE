@@ -88,6 +88,12 @@ pub fn verify_with_key(
     Ok(payload)
 }
 
+/// Return a pointer to the embedded public key bytes (32 bytes).
+/// Used by the UI to display a fingerprint for debugging key mismatches.
+pub fn public_key_bytes() -> &'static [u8; 32] {
+    &PUBLIC_KEY_BYTES
+}
+
 /// Verify a serial key using the embedded production public key.
 ///
 /// Serial format: `base64(json_payload).base64(ed25519_signature)`
