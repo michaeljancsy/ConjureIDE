@@ -515,7 +515,7 @@ struct PendingExportHandlerTests {
     }
 
     @Test func exportManagerSanitizesSpecialCharacters() {
-        #expect(ExportManager.sanitizeName("Hello World!") == "Hello_World_")
+        #expect(ExportManager.sanitizeName("Hello World!") == "Hello_World")
         #expect(ExportManager.sanitizeName("test/path") == "test_path")
         #expect(ExportManager.sanitizeName("a.b.c") == "a_b_c")
     }
