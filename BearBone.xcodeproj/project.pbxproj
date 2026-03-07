@@ -248,6 +248,7 @@
 				AABB00052F5013850036AAB6 /* Patch AU Identity for Worktree */,
 				AABB00072F5013850036AAB6 /* Stamp Build ID */,
 				AABB000B2F5013850036AAB6 /* Copy Export Template */,
+				AABB000D2F5013850036AAB6 /* Generate Test Serial */,
 			);
 			buildRules = (
 			);
@@ -469,6 +470,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "# Copy bundled Rust compiler into the extension bundle for sandbox-safe compilation\nRUSTC_SRC=\"${SRCROOT}/rustc-dist\"\n\nif [ ! -d \"${RUSTC_SRC}\" ]; then\n    # Check if we're in a worktree and can symlink from main\n    MAIN_WORKTREE=$(git -C \"${SRCROOT}\" worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //')\n    if [ -n \"${MAIN_WORKTREE}\" ] && [ \"${MAIN_WORKTREE}\" != \"${SRCROOT}\" ] && [ -d \"${MAIN_WORKTREE}/rustc-dist\" ]; then\n        echo \"note: Symlinking rustc-dist from main worktree\" >&2\n        ln -s \"${MAIN_WORKTREE}/rustc-dist\" \"${RUSTC_SRC}\"\n    else\n        echo \"warning: Bundled Rust compiler not found at ${RUSTC_SRC}. Run scripts/setup-rustc.sh first.\" >&2\n        echo \"warning: Rust compilation will only work with user-installed rustc (not in sandboxed DAWs).\" >&2\n        exit 0\n    fi\nfi\n\nRUSTC_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/rustc-dist\"\n\n# Copy the sysroot\nmkdir -p \"${RUSTC_DST}\"\nrsync -a --delete \"${RUSTC_SRC}/\" \"${RUSTC_DST}/\"\n\n# Code-sign all executables and dylibs\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${RUSTC_DST}/bin/rustc\"\nfind \"${RUSTC_DST}/lib\" -name '*.dylib' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none {} \\;\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/rust-lld\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/wasm-ld\"\n";
+		};
+		AABB000D2F5013850036AAB6 /* Generate Test Serial */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/tools/generate-license/keypair.bin",
+			);
+			name = "Generate Test Serial";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/.test-serial",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/scripts/generate-test-serial.sh\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
