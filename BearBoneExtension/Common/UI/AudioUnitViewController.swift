@@ -296,43 +296,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                 return .error("Export template not found in bundle. Rebuild the project.")
             }
 
-            // Try direct export with signing (works when Process() is available)
-            do {
-                let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-                let exportsDir = appSupport.appendingPathComponent("BearBone/Exports")
-                try FileManager.default.createDirectory(at: exportsDir, withIntermediateDirectories: true)
-
-                let exportManager = ExportManager()
-                let appURL = try exportManager.exportPreset(
-                    name: name,
-                    source: source,
-                    wasmData: wasmData,
-                    language: language,
-                    templateURL: templateURL,
-                    outputDirectory: exportsDir,
-                    skipSigning: false
-                )
-
-                // Register with LaunchServices so macOS discovers the AU
-                let lsregister = Process()
-                lsregister.executableURL = URL(fileURLWithPath: "/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister")
-                lsregister.arguments = ["-f", "-R", "-trusted", appURL.path]
-                try? lsregister.run()
-                lsregister.waitUntilExit()
-
-                log.info("Exported and installed preset '\(name, privacy: .public)' at \(appURL.path, privacy: .public)")
-                return .success("Installed \"\(name)\"! Find it in your DAW under Audio Units.")
-            } catch {
-                log.info("Direct export failed: \(error.localizedDescription, privacy: .public) — falling back to App Group staging")
-
-                // Clean up any partial export from the failed direct attempt
-                let sanitized = ExportManager.sanitizeName(name)
-                let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-                let partialURL = appSupport.appendingPathComponent("BearBone/Exports/\(sanitized).app")
-                try? FileManager.default.removeItem(at: partialURL)
-            }
-
-            // Fall back to App Group staging (for sandboxed DAW context)
+            // Stage unsigned export in App Group — host app finalizes (signs, registers, reveals)
             guard let outputDir = ExportManager.appGroupContainerURL() else {
                 return .error("Export failed. App Group container not available — check entitlements.")
             }
