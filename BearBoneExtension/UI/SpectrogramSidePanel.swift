@@ -60,6 +60,7 @@ struct SpectrogramSidePanel: View {
                 .padding(.horizontal, 6)
                 .frame(width: geo.size.width, height: geo.size.height)
             }
+            .frame(height: 28)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .controlSize(.small)
