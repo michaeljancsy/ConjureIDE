@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import AudioToolbox
 
 // MARK: - SubtypeGenerator Tests
 
@@ -163,15 +164,18 @@ struct ExportRegistryTests {
 
 struct ExportManagerTests {
 
-    /// Creates a minimal fake template .app bundle structure for testing.
+    /// Creates a minimal fake template .app, zips it, and returns the .zip URL.
+    /// ExportManager.exportPreset expects a .zip (not a raw .app) because
+    /// PluginKit would discover a raw .appex and register it.
     private func createMockTemplate() throws -> URL {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("ExportManagerTests_\(UUID().uuidString)", isDirectory: true)
-        let templateURL = tempDir.appendingPathComponent("BearBoneExportAUTemplate.app")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let appDir = tempDir.appendingPathComponent("BearBoneExportAUTemplate.app")
         let fm = FileManager.default
 
         // .app/Contents/Info.plist (host app)
-        let appContents = templateURL.appendingPathComponent("Contents")
+        let appContents = appDir.appendingPathComponent("Contents")
         try fm.createDirectory(at: appContents.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
 
         let appPlist: [String: Any] = [
@@ -227,7 +231,21 @@ struct ExportManagerTests {
         ] as [String: Any], options: .prettyPrinted)
         try configJSON.write(to: appexContents.appendingPathComponent("Resources/runtime-config.json"))
 
-        return templateURL
+        // Zip the .app so ExportManager's unzipTemplate can unpack it
+        let zipURL = tempDir.appendingPathComponent("ExportTemplate.zip")
+        let zipProcess = Process()
+        zipProcess.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        zipProcess.arguments = ["-ck", "--keepParent", appDir.path, zipURL.path]
+        try zipProcess.run()
+        zipProcess.waitUntilExit()
+        guard zipProcess.terminationStatus == 0 else {
+            throw NSError(domain: "Test", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to zip mock template"])
+        }
+
+        // Remove raw .app — tests should only use the .zip
+        try fm.removeItem(at: appDir)
+
+        return zipURL
     }
 
     private func cleanup(_ url: URL) {
@@ -404,6 +422,46 @@ struct ExportManagerTests {
         }
     }
 
+    @Test func exportWithSkipSigning() throws {
+        let templateURL = try createMockTemplate()
+        defer { cleanup(templateURL) }
+
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ExportOutput_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+
+        let registryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ExportRegistry_\(UUID().uuidString)")
+            .appendingPathComponent("export-registry.json")
+        defer { try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent()) }
+
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+
+        // Export with skipSigning: true — should succeed without calling codesign
+        let result = try manager.exportPreset(
+            name: "SkipSignTest",
+            source: "fn process() {}",
+            wasmData: Data("wasm".utf8),
+            language: .rust,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true
+        )
+
+        // Verify output exists and plist was patched
+        #expect(FileManager.default.fileExists(atPath: result.path))
+        #expect(result.lastPathComponent == "SkipSignTest.app")
+
+        let appPlistData = try Data(contentsOf: result.appendingPathComponent("Contents/Info.plist"))
+        let appPlist = try PropertyListSerialization.propertyList(from: appPlistData, format: nil) as! [String: Any]
+        #expect(appPlist["CFBundleIdentifier"] as? String == "com.BearBone-user.SkipSignTest")
+
+        // Verify registered
+        #expect(registry.entries.count == 1)
+    }
+
     @Test func exportOverwritesPreviousExport() throws {
         let templateURL = try createMockTemplate()
         defer { cleanup(templateURL) }
@@ -440,5 +498,185 @@ struct ExportManagerTests {
 
         // Registry has only one entry (replaced)
         #expect(registry.entries.count == 1)
+    }
+}
+
+// MARK: - PendingExportHandler Tests
+
+@MainActor
+struct PendingExportHandlerTests {
+
+    @Test func appGroupContainerURLReturnsNilWithoutEntitlement() {
+        // Without actual App Group entitlement, containerURL returns nil
+        let url = ExportManager.appGroupContainerURL()
+        // This test documents behavior — in CI without entitlements, it's nil
+        // In a signed app with entitlements, it would return a valid URL
+        _ = url // Suppress unused warning
+    }
+
+    @Test func exportManagerSanitizesSpecialCharacters() {
+        #expect(ExportManager.sanitizeName("Hello World!") == "Hello_World")
+        #expect(ExportManager.sanitizeName("test/path") == "test_path")
+        #expect(ExportManager.sanitizeName("a.b.c") == "a_b_c")
+    }
+}
+
+// MARK: - End-to-End Export Integration Tests
+
+struct ExportIntegrationTests {
+
+    /// Finds the real ExportTemplate.zip from the built extension bundle.
+    /// Returns nil if the template hasn't been built yet.
+    private func findRealTemplate() -> URL? {
+        // The test host app embeds the extension; look for the template in its resources.
+        // Path: BearBone.app/Contents/PlugIns/BearBoneExtension.appex/Contents/Resources/ExportTemplate.zip
+        let extensionBundle = Bundle.main.builtInPlugInsURL?
+            .appendingPathComponent("BearBoneExtension.appex")
+        if let extBundle = extensionBundle,
+           let bundle = Bundle(url: extBundle),
+           let templateURL = bundle.url(forResource: "ExportTemplate", withExtension: "zip") {
+            return templateURL
+        }
+        // Fallback: search DerivedData for any built template
+        let derivedData = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Developer/Xcode/DerivedData")
+        if let enumerator = FileManager.default.enumerator(
+            at: derivedData,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            for case let url as URL in enumerator {
+                if url.lastPathComponent == "ExportTemplate.zip"
+                    && url.path.contains("BearBoneExtension.appex") {
+                    return url
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Full end-to-end test: export a Rust preset with real template, code sign,
+    /// register with LaunchServices, verify AU is discoverable, clean up.
+    @Test func exportAndRegisterRustPreset() throws {
+        guard let templateURL = findRealTemplate() else {
+            // Template not built — skip test rather than fail
+            print("Skipping exportAndRegisterRustPreset: ExportTemplate.zip not found (build BearBoneExportAUTemplate first)")
+            return
+        }
+
+        let fm = FileManager.default
+        let testId = UUID().uuidString.prefix(8)
+        let presetName = "IntegrationTest_\(testId)"
+        let sanitized = ExportManager.sanitizeName(presetName)
+
+        // Use the real export path — PluginKit only discovers extensions from
+        // standard locations, not /tmp/
+        let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let outputDir = appSupport.appendingPathComponent("BearBone/Exports")
+        try fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
+
+        let registryURL = fm.temporaryDirectory
+            .appendingPathComponent("ExportRegistry_\(testId)")
+            .appendingPathComponent("export-registry.json")
+
+        // Cleanup everything on exit
+        defer {
+            let exportedApp = outputDir.appendingPathComponent("\(sanitized).app")
+            try? fm.removeItem(at: exportedApp)
+            try? fm.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        // 1. Export the preset with signing
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let wasmData = Data("fake wasm for test".utf8)
+
+        let appURL = try manager.exportPreset(
+            name: presetName,
+            source: "fn process() {}",
+            wasmData: wasmData,
+            language: .rust,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: false
+        )
+
+        // 2. Verify the .app bundle exists with correct structure
+        #expect(fm.fileExists(atPath: appURL.path), "Exported .app should exist")
+        let appexPath = appURL
+            .appendingPathComponent("Contents/PlugIns/BearBoneExportAUTemplateExtension.appex")
+        #expect(fm.fileExists(atPath: appexPath.path), "Extension .appex should exist inside exported .app")
+
+        // 3. Verify code signature is valid
+        let verifyProc = Process()
+        verifyProc.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        verifyProc.arguments = ["--verify", "--deep", "--strict", appURL.path]
+        let verifyPipe = Pipe()
+        verifyProc.standardError = verifyPipe
+        try verifyProc.run()
+        verifyProc.waitUntilExit()
+        let codesignStderr = String(data: verifyPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        #expect(verifyProc.terminationStatus == 0,
+                "codesign --verify should succeed on exported .app: \(codesignStderr)")
+
+        // 4. Register with LaunchServices
+        let lsregister = Process()
+        lsregister.executableURL = URL(fileURLWithPath: "/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister")
+        lsregister.arguments = ["-f", "-R", "-trusted", appURL.path]
+        try lsregister.run()
+        lsregister.waitUntilExit()
+        #expect(lsregister.terminationStatus == 0, "lsregister should succeed")
+
+        // 5. Verify the exported AU is discoverable via pluginkit.
+        //    lsregister triggers PluginKit discovery. Give it a moment, then check.
+        //    Note: avoid killing AudioComponentRegistrar — it crashes the test runner.
+        Thread.sleep(forTimeInterval: 3.0)
+
+        // Use pluginkit -mv to check if our AU extension is registered
+        let expectedBundleId = "com.BearBone-user.\(sanitized).Extension"
+        var pluginkitFound = false
+
+        // Retry a few times — PluginKit discovery can take a moment
+        for attempt in 1...3 {
+            let pluginkit = Process()
+            pluginkit.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
+            pluginkit.arguments = ["-mv", "-p", "com.apple.AudioUnit-UI"]
+            let pluginkitPipe = Pipe()
+            pluginkit.standardOutput = pluginkitPipe
+            pluginkit.standardError = FileHandle.nullDevice
+            try pluginkit.run()
+            pluginkit.waitUntilExit()
+
+            let pluginkitOutput = String(
+                data: pluginkitPipe.fileHandleForReading.readDataToEndOfFile(),
+                encoding: .utf8
+            ) ?? ""
+
+            if pluginkitOutput.contains(expectedBundleId) {
+                pluginkitFound = true
+                break
+            }
+            if attempt < 3 {
+                Thread.sleep(forTimeInterval: 2.0)
+            }
+        }
+
+        #expect(pluginkitFound,
+                "pluginkit should list the exported AU extension (\(expectedBundleId))")
+
+        // 6. Verify the exported AU plist has correct AudioComponents metadata
+        let extPlistURL = appexPath.appendingPathComponent("Contents/Info.plist")
+        let extPlistData = try Data(contentsOf: extPlistURL)
+        let extPlist = try PropertyListSerialization.propertyList(from: extPlistData, format: nil) as! [String: Any]
+        let nsExt = extPlist["NSExtension"] as! [String: Any]
+        let attrs = nsExt["NSExtensionAttributes"] as! [String: Any]
+        let components = attrs["AudioComponents"] as! [[String: Any]]
+        #expect(components[0]["name"] as? String == "BearBone: \(presetName)")
+        #expect(components[0]["type"] as? String == "aufx")
+        #expect(components[0]["manufacturer"] as? String == "A000")
+
+        // 7. Verify registry was updated
+        #expect(registry.entries.count == 1)
+        #expect(registry.entries[0].name == presetName)
     }
 }

@@ -270,6 +270,95 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             }
         }
 
+        // Export: assemble standalone AU .app
+        // Strategy: try direct export with signing first (works in unsandboxed host app).
+        // If that fails (e.g. sandbox blocks Process()), fall back to App Group staging
+        // for the host app to finalize later.
+        //
+        // Note: AUv3 view controllers run in a ViewBridge XPC process even when the
+        // audio unit is loaded in-process, so Bundle.main is NOT the host app's bundle.
+        // Identity-based host detection doesn't work — use capability-based detection instead.
+        let onExport: (String) async -> ExportResult = { [weak au] name in
+            guard let au else {
+                return .error("Audio unit not available")
+            }
+            guard let source = au.scriptSource else {
+                return .error("No script loaded")
+            }
+            let language = au.currentScriptLanguage
+            let wasmData = au.wasmBytes
+
+            if language == .rust && wasmData == nil {
+                return .error("Rust preset must be compiled first. Click Run before exporting.")
+            }
+
+            guard let templateURL = extensionBundle.url(forResource: "ExportTemplate", withExtension: "zip") else {
+                return .error("Export template not found in bundle. Rebuild the project.")
+            }
+
+            // Try direct export with signing (works when Process() is available)
+            do {
+                let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                let exportsDir = appSupport.appendingPathComponent("BearBone/Exports")
+                try FileManager.default.createDirectory(at: exportsDir, withIntermediateDirectories: true)
+
+                let exportManager = ExportManager()
+                let appURL = try exportManager.exportPreset(
+                    name: name,
+                    source: source,
+                    wasmData: wasmData,
+                    language: language,
+                    templateURL: templateURL,
+                    outputDirectory: exportsDir,
+                    skipSigning: false
+                )
+
+                // Register with LaunchServices so macOS discovers the AU
+                let lsregister = Process()
+                lsregister.executableURL = URL(fileURLWithPath: "/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister")
+                lsregister.arguments = ["-f", "-R", "-trusted", appURL.path]
+                try? lsregister.run()
+                lsregister.waitUntilExit()
+
+                log.info("Exported and installed preset '\(name, privacy: .public)' at \(appURL.path, privacy: .public)")
+                return .success("Installed \"\(name)\"! Find it in your DAW under Audio Units.")
+            } catch {
+                log.info("Direct export failed: \(error.localizedDescription, privacy: .public) — falling back to App Group staging")
+
+                // Clean up any partial export from the failed direct attempt
+                let sanitized = ExportManager.sanitizeName(name)
+                let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                let partialURL = appSupport.appendingPathComponent("BearBone/Exports/\(sanitized).app")
+                try? FileManager.default.removeItem(at: partialURL)
+            }
+
+            // Fall back to App Group staging (for sandboxed DAW context)
+            guard let outputDir = ExportManager.appGroupContainerURL() else {
+                return .error("Export failed. App Group container not available — check entitlements.")
+            }
+
+            let exportDir = outputDir.appendingPathComponent("PendingExports")
+            try? FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+
+            do {
+                let exportManager = ExportManager()
+                let appURL = try exportManager.exportPreset(
+                    name: name,
+                    source: source,
+                    wasmData: wasmData,
+                    language: language,
+                    templateURL: templateURL,
+                    outputDirectory: exportDir,
+                    skipSigning: true
+                )
+                log.info("Staged preset '\(name, privacy: .public)' to App Group at \(appURL.path, privacy: .public)")
+                return .success("Exported \"\(name)\"! Open BearBone to install.")
+            } catch {
+                log.error("Export failed: \(error.localizedDescription, privacy: .public)")
+                return .error(error.localizedDescription)
+            }
+        }
+
         let scriptPublisher = au.scriptSourceDidChange
             .receive(on: DispatchQueue.main)
             .eraseToAnyPublisher()
@@ -292,7 +381,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             onSavePreset: onSavePreset,
             onSaveAsPreset: onSaveAsPreset,
             onDeletePreset: onDeletePreset,
-            onNew: onNew
+            onNew: onNew,
+            onExport: onExport
         )
         let hv = SafeHostingView(rootView: content)
         hv.translatesAutoresizingMaskIntoConstraints = false

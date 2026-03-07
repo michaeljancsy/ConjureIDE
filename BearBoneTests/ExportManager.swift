@@ -41,13 +41,22 @@ final class ExportManager {
     ///   - templateURL: URL to the pre-built template .app bundle.
     ///   - outputDirectory: Directory where the exported .app will be written.
     /// - Returns: URL to the exported .app bundle.
+    /// App Group identifier shared between host app and AU extension.
+    static let appGroupIdentifier = "group.com.MichaelJancsy.BearBone"
+
+    /// Returns the App Group container URL for staging exports.
+    static func appGroupContainerURL() -> URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
+    }
+
     func exportPreset(
         name: String,
         source: String,
         wasmData: Data?,
         language: ScriptLanguage,
         templateURL: URL,
-        outputDirectory: URL
+        outputDirectory: URL,
+        skipSigning: Bool = false
     ) throws -> URL {
         guard FileManager.default.fileExists(atPath: templateURL.path) else {
             throw ExportError.templateNotFound
@@ -62,11 +71,11 @@ final class ExportManager {
         let subtype = registry.entry(forName: name)?.subtype
             ?? SubtypeGenerator.generate(for: name, existing: registry.allSubtypes())
 
-        // 1. Copy template
+        // 1. Unzip template (stored as .zip to prevent PluginKit from discovering the .appex)
         let destURL = outputDirectory.appendingPathComponent("\(sanitized).app")
-        try copyTemplate(from: templateURL, to: destURL)
+        try unzipTemplate(from: templateURL, to: destURL)
 
-        // 2. Locate the .appex inside the copied bundle
+        // 2. Locate the .appex inside the unzipped bundle
         let appexURL = destURL
             .appendingPathComponent("Contents/PlugIns/BearBoneExportAUTemplateExtension.appex")
         let appexResourcesURL = appexURL.appendingPathComponent("Contents/Resources")
@@ -101,13 +110,22 @@ final class ExportManager {
             displayName: name
         )
 
-        // 7. Ad-hoc code sign (deepest first)
-        let appexFrameworksURL = appexURL.appendingPathComponent("Contents/Frameworks")
-        if FileManager.default.fileExists(atPath: appexFrameworksURL.path) {
-            try codeSign(appexFrameworksURL)
+        // 7. Ad-hoc code sign (deepest first) — skipped when sandboxed
+        // Sign each item inside Frameworks individually (dylibs, .so files).
+        // Signing the Frameworks directory itself fails ("bundle format unrecognized").
+        if !skipSigning {
+            let appexFrameworksURL = appexURL.appendingPathComponent("Contents/Frameworks")
+            if FileManager.default.fileExists(atPath: appexFrameworksURL.path) {
+                let frameworkItems = try FileManager.default.contentsOfDirectory(
+                    at: appexFrameworksURL, includingPropertiesForKeys: nil
+                )
+                for item in frameworkItems {
+                    try codeSign(item)
+                }
+            }
+            try codeSign(appexURL)
+            try codeSign(destURL)
         }
-        try codeSign(appexURL)
-        try codeSign(destURL)
 
         // 8. Register
         registry.register(ExportRegistry.Entry(
@@ -124,13 +142,36 @@ final class ExportManager {
 
     // MARK: - Pipeline Steps
 
-    private func copyTemplate(from source: URL, to destination: URL) throws {
+    private func unzipTemplate(from zipURL: URL, to destination: URL) throws {
         let fm = FileManager.default
         if fm.fileExists(atPath: destination.path) {
             try fm.removeItem(at: destination)
         }
+        // Unzip to a temp directory, then move the .app out
+        let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tempDir) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-xk", zipURL.path, tempDir.path]
+        let pipe = Pipe()
+        process.standardError = pipe
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let stderr = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            throw ExportError.copyFailed("Failed to unzip template: \(stderr)")
+        }
+
+        // The zip contains BearBoneExportAUTemplate.app at its root
+        let unzippedApp = tempDir.appendingPathComponent("BearBoneExportAUTemplate.app")
+        guard fm.fileExists(atPath: unzippedApp.path) else {
+            throw ExportError.copyFailed("Unzipped template does not contain BearBoneExportAUTemplate.app")
+        }
         do {
-            try fm.copyItem(at: source, to: destination)
+            try fm.moveItem(at: unzippedApp, to: destination)
         } catch {
             throw ExportError.copyFailed(error.localizedDescription)
         }
@@ -207,7 +248,12 @@ final class ExportManager {
     private func codeSign(_ url: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-        process.arguments = ["-s", "-", "--force", "--timestamp=none", "--deep", url.path]
+        // --preserve-metadata=entitlements: keeps the sandbox entitlements from the
+        // Xcode-built template. Without this, ad-hoc signing strips entitlements and
+        // PluginKit refuses to register the extension (requires app-sandbox = true).
+        // No --deep: we sign in correct order (frameworks → appex → app) already.
+        process.arguments = ["-s", "-", "--force", "--timestamp=none",
+                             "--preserve-metadata=entitlements", url.path]
 
         let pipe = Pipe()
         process.standardError = pipe

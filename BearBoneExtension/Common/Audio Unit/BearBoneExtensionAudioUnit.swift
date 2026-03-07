@@ -74,6 +74,11 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		return currentScriptSource
 	}
 
+	/// Cached compiled WASM bytes for the current Rust script (nil for Python scripts).
+	public var wasmBytes: Data? {
+		return currentWasmBytes
+	}
+
 	/// Publishes script source when it changes externally (preset selection, fullState restore).
 	public let scriptSourceDidChange = PassthroughSubject<String, Never>()
 

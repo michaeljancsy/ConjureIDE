@@ -32,6 +32,7 @@ struct BearBoneExtensionMainView: View {
     var onSaveAsPreset: (String, String, ScriptLanguage) -> ScriptSaveResult
     var onDeletePreset: () -> Void
     var onNew: (ScriptLanguage) -> ScriptSaveResult
+    var onExport: (String) async -> ExportResult
 
     @State private var scriptSource: String = ""
     @State private var selectedLanguage: ScriptLanguage = .python
@@ -42,6 +43,9 @@ struct BearBoneExtensionMainView: View {
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
     @State private var isCompiling: Bool = false
     @State private var showSpectrogram: Bool = false
+    @State private var isExporting: Bool = false
+    @State private var exportAlertMessage: String?
+    @State private var showExportAlert: Bool = false
     @State private var spectrogramWidth: CGFloat = 250
     @State private var spectrogramFrequencyScale: FrequencyScale = .log
     @State private var spectrogramFFTSizeIndex: Int = 2 // default: 2048
@@ -104,6 +108,24 @@ struct BearBoneExtensionMainView: View {
                         scriptSource = accumulated
                     }
                 },
+                onExport: { name in
+                    Task {
+                        isExporting = true
+                        let result = await onExport(name)
+                        isExporting = false
+                        switch result {
+                        case .success(let message):
+                            exportAlertMessage = message
+                            showExportAlert = true
+                        case .error(let message):
+                            exportAlertMessage = message
+                            showExportAlert = true
+                        default:
+                            break
+                        }
+                    }
+                },
+                isExporting: isExporting,
                 showingSaveAs: $showingSaveAs,
                 saveAsName: $saveAsName
             )
@@ -283,6 +305,11 @@ struct BearBoneExtensionMainView: View {
                 .accessibilityIdentifier("demoExpiredOverlay")
             }
             } // ZStack
+        }
+        .alert("Export", isPresented: $showExportAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(exportAlertMessage ?? "")
         }
         .onChange(of: showSpectrogram) { _, newValue in
             captureManager.isActive = newValue
