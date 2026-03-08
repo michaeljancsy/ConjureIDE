@@ -22,15 +22,10 @@ final class PendingExportHandler: ObservableObject {
     }
 
     private var pendingExportsDirectory: URL? {
-        // The host app is NOT sandboxed, so it can access the Group Containers path
-        // directly without needing the App Group entitlement. The AU extension writes
-        // here using its App Group entitlement when running sandboxed in a DAW.
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let groupContainer = home
-            .appendingPathComponent("Library/Group Containers")
-            .appendingPathComponent(Self.appGroupIdentifier)
-            .appendingPathComponent("PendingExports")
-        return groupContainer
+        guard let groupContainer = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier
+        ) else { return nil }
+        return groupContainer.appendingPathComponent("PendingExports")
     }
 
     func checkForPendingExports() {
