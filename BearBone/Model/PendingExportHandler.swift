@@ -98,6 +98,9 @@ final class PendingExportHandler: ObservableObject {
             try codeSign(destURL)
             log.info("Code signed \(name, privacy: .public)")
 
+            // Remove quarantine attribute so Gatekeeper doesn't block the ad-hoc signed app
+            removeQuarantine(destURL)
+
             // Register with LaunchServices so PluginKit discovers the embedded .appex
             registerWithLaunchServices(destURL)
             log.info("Registered \(name, privacy: .public) with LaunchServices")
@@ -137,6 +140,14 @@ final class PendingExportHandler: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "Code signing failed: \(stderr)"]
             )
         }
+    }
+
+    private func removeQuarantine(_ url: URL) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        process.arguments = ["-dr", "com.apple.quarantine", url.path]
+        try? process.run()
+        process.waitUntilExit()
     }
 
     private func registerWithLaunchServices(_ url: URL) {
