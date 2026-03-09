@@ -449,7 +449,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "# Zip pre-built export template into extension Resources.\n# Must be zipped (not a raw .app) to prevent PluginKit from discovering\n# the template's embedded .appex and registering it as an AU.\nTEMPLATE_SRC=\"${SRCROOT}/BearBoneExportAUTemplate/build/Build/Products/Release/BearBoneExportAUTemplate.app\"\nTEMPLATE_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExportTemplate.zip\"\n\nif [ -d \"$TEMPLATE_SRC\" ]; then\n    echo \"Zipping export template from $TEMPLATE_SRC\"\n    cd \"$(dirname \"$TEMPLATE_SRC\")\"\n    zip -qry \"$TEMPLATE_DST\" \"$(basename \"$TEMPLATE_SRC\")\"\nelse\n    echo \"warning: Export template not built at $TEMPLATE_SRC\"\n    echo \"warning: Run: cd BearBoneExportAUTemplate && xcodebuild -scheme BearBoneExportAUTemplate -configuration Release -arch arm64 build\"\nfi\n";
+			shellScript = "\"${SRCROOT}/scripts/copy-export-template.sh\"\n";
 		};
 		AABB00092F5013850036AAB6 /* Copy Rust Compiler */ = {
 			isa = PBXShellScriptBuildPhase;
