@@ -2,8 +2,10 @@
 set -euo pipefail
 
 # Patches the built AU extension's Info.plist when building from a git worktree.
-# This gives worktree builds a different AU identity (subtype WT01) and bundle ID
+# This gives worktree builds a different AU identity (subtype WT01)
 # so they can coexist with the main build in DAWs without conflicting.
+# The bundle ID is intentionally NOT changed — it must match the provisioning
+# profile's explicit App ID for PluginKit to register the extension.
 #
 # Called from the BearBoneExtension target's "Patch AU Identity for Worktree"
 # build phase. No-op for main repo builds.
@@ -36,8 +38,4 @@ ${PLISTBUDDY} -c "Set ${AU_PATH}:subtype WT01" "${PLIST}"
 ${PLISTBUDDY} -c "Set ${AU_PATH}:name Michael Jancsy: BearBoneExtension (Dev)" "${PLIST}"
 ${PLISTBUDDY} -c "Set ${AU_PATH}:description BearBoneExtension (Dev)" "${PLIST}"
 
-# Use a different bundle ID so the worktree extension registers separately from the main build
-CURRENT_BUNDLE_ID=$($PLISTBUDDY -c "Print :CFBundleIdentifier" "${PLIST}")
-${PLISTBUDDY} -c "Set :CFBundleIdentifier ${CURRENT_BUNDLE_ID}.dev" "${PLIST}"
-
-echo "note: AU identity patched — subtype=WT01, bundle=${CURRENT_BUNDLE_ID}.dev" >&2
+echo "note: AU identity patched — subtype=WT01, name=BearBoneExtension (Dev)" >&2
