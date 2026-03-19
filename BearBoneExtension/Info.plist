@@ -16,11 +16,11 @@
 					<key>manufacturer</key>
 					<string>A000</string>
 					<key>name</key>
-					<string>Michael Jancsy: BearBoneExtension</string>
+					<string>$(BB_AU_NAME)</string>
 					<key>sandboxSafe</key>
 					<true/>
 					<key>subtype</key>
-					<string>0001</string>
+					<string>$(BB_AU_SUBTYPE)</string>
 					<key>tags</key>
 					<array>
 						<string>Effect</string>
@@ -28,7 +28,7 @@
 					<key>type</key>
 					<string>aufx</string>
 					<key>version</key>
-					<integer>67075</integer>
+					<integer>67076</integer>
 				</dict>
 			</array>
 		</dict>

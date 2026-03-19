@@ -173,6 +173,7 @@
 				2579113D2F5013840036AAB6 /* Frameworks */,
 				2579113E2F5013840036AAB6 /* Resources */,
 				257911B02F5013850036AAB6 /* Embed Foundation Extensions */,
+				AABB000F2F5013850036AAB6 /* Bust AU Cache */,
 			);
 			buildRules = (
 			);
@@ -245,7 +246,6 @@
 				2579117C2F5013850036AAB6 /* Resources */,
 				AABB00032F5013850036AAB6 /* Copy Python Runtime */,
 				AABB00092F5013850036AAB6 /* Copy Rust Compiler */,
-				AABB00052F5013850036AAB6 /* Patch AU Identity for Worktree */,
 				AABB00072F5013850036AAB6 /* Stamp Build ID */,
 				AABB000B2F5013850036AAB6 /* Copy Export Template */,
 				AABB000D2F5013850036AAB6 /* Generate Test Serial */,
@@ -395,25 +395,6 @@
 			shellPath = /bin/bash;
 			shellScript = "# Copy Python dylib into Frameworks\nmkdir -p \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\ncp \"${SRCROOT}/rust/python-dist/lib/libpython3.14t.dylib\" \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/\"\n\n# Code-sign the dylib with the same identity as the build\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libpython3.14t.dylib\"\n\n# Copy Python stdlib + site-packages into Resources/python-dist\nPYDST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/python-dist\"\nmkdir -p \"${PYDST}/lib\"\ncp -R \"${SRCROOT}/rust/python-dist/lib/python3.14t\" \"${PYDST}/lib/\"\n\n# Code-sign all .so files (numpy, stdlib extensions) for hardened runtime\nfind \"${PYDST}\" -name '*.so' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none {} \\;\n";
 		};
-		AABB00052F5013850036AAB6 /* Patch AU Identity for Worktree */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/scripts/patch-worktree-au-identity.sh",
-			);
-			name = "Patch AU Identity for Worktree";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "\"${SRCROOT}/scripts/patch-worktree-au-identity.sh\"\n";
-		};
 		AABB00072F5013850036AAB6 /* Stamp Build ID */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -491,6 +472,25 @@
 			shellPath = /bin/bash;
 			shellScript = "\"${SRCROOT}/scripts/generate-test-serial.sh\"\n";
 		};
+		AABB000F2F5013850036AAB6 /* Bust AU Cache */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/bust-au-cache.sh",
+			);
+			name = "Bust AU Cache";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/scripts/bust-au-cache.sh\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -546,6 +546,8 @@
 		257911AB2F5013850036AAB6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				BB_AU_NAME = "Michael Jancsy: BearBoneExtension (Debug)";
+				BB_AU_SUBTYPE = DBG1;
 				CODE_SIGN_ENTITLEMENTS = BearBoneExtension/BearBoneExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -581,7 +583,7 @@
 					"-lbearbone_dsp",
 					"-lpython3.14t",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.BearBone.BearBoneExtension;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.BearBone.BearBoneExtension.debug;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				SKIP_INSTALL = YES;
@@ -601,6 +603,8 @@
 		257911AC2F5013850036AAB6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				BB_AU_NAME = "Michael Jancsy: BearBoneExtension";
+				BB_AU_SUBTYPE = 0001;
 				CODE_SIGN_ENTITLEMENTS = BearBoneExtension/BearBoneExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
