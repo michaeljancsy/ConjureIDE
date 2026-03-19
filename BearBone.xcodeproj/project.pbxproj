@@ -583,7 +583,7 @@
 					"-lbearbone_dsp",
 					"-lpython3.14t",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.BearBone.BearBoneExtension.debug;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.BearBone.debug.BearBoneExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				SKIP_INSTALL = YES;
@@ -606,6 +606,7 @@
 				BB_AU_NAME = "Michael Jancsy: BearBoneExtension";
 				BB_AU_SUBTYPE = 0001;
 				CODE_SIGN_ENTITLEMENTS = BearBoneExtension/BearBoneExtension.entitlements;
+				ONLY_ACTIVE_ARCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
@@ -810,7 +811,7 @@
 					"-framework",
 					AVFoundation,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.BearBone;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.BearBone.debug;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
@@ -832,6 +833,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = BearBone/BearBone.entitlements;
+				ONLY_ACTIVE_ARCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
