@@ -29,6 +29,10 @@ impl PythonBackend {
         // Set PYTHONHOME so the embedded interpreter finds its stdlib + numpy
         std::env::set_var("PYTHONHOME", python_home);
 
+        // Prevent Python from writing .pyc bytecode cache files into the sealed
+        // AU bundle's Resources/python-dist/, which corrupts the code signature.
+        std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
+
         let result: Result<Py<PyAny>, PyErr> = Python::with_gil(|py| {
             let code = std::fs::read_to_string(script_path)
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;

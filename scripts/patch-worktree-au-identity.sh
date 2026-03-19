@@ -1,41 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-# Patches the built AU extension's Info.plist when building from a git worktree.
-# This gives worktree builds a different AU identity (subtype WT01)
-# so they can coexist with the main build in DAWs without conflicting.
-# The bundle ID is intentionally NOT changed — it must match the provisioning
-# profile's explicit App ID for PluginKit to register the extension.
+# Previously patched AU identity for worktree builds (WT01 subtype).
+# Disabled: PluginKit only allows one registration per bundle ID, so the
+# worktree's WT01 was never actually registered. All builds now use the
+# same identity (subtype 0001) so AudioComponentFindNext can find the
+# component via the existing PluginKit registration.
 #
 # Called from the BearBoneExtension target's "Patch AU Identity for Worktree"
-# build phase. No-op for main repo builds.
+# build phase. Always a no-op now.
 
-SRCROOT="${SRCROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-
-# Detect if we're in a git worktree
-MAIN_WORKTREE=$(git -C "${SRCROOT}" worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //')
-CURRENT=$(cd "${SRCROOT}" && pwd -P)
-MAIN=$(cd "${MAIN_WORKTREE}" 2>/dev/null && pwd -P || echo "")
-
-if [ "${CURRENT}" = "${MAIN}" ] || [ -z "${MAIN}" ]; then
-    echo "note: Main repo build — AU identity unchanged" >&2
-    exit 0
-fi
-
-echo "note: Worktree build detected — patching AU identity" >&2
-
-# Locate the built Info.plist
-PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
-if [ ! -f "${PLIST}" ]; then
-    echo "error: Built Info.plist not found at ${PLIST}" >&2
-    exit 1
-fi
-
-PLISTBUDDY=/usr/libexec/PlistBuddy
-AU_PATH=":NSExtension:NSExtensionAttributes:AudioComponents:0"
-
-${PLISTBUDDY} -c "Set ${AU_PATH}:subtype WT01" "${PLIST}"
-${PLISTBUDDY} -c "Set ${AU_PATH}:name Michael Jancsy: BearBoneExtension (Dev)" "${PLIST}"
-${PLISTBUDDY} -c "Set ${AU_PATH}:description BearBoneExtension (Dev)" "${PLIST}"
-
-echo "note: AU identity patched — subtype=WT01, name=BearBoneExtension (Dev)" >&2
+echo "note: AU identity patching disabled — all builds use subtype 0001" >&2
+exit 0
