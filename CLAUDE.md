@@ -38,6 +38,9 @@ Note: `--test-threads=1` is required because Python tests share a single interpr
 2. **Run Script — Copy Python Runtime**: copies `libpython3.14t.dylib` into Frameworks, copies `python3.14t/` stdlib+numpy into Resources/python-dist, and code-signs the dylib and all `.so` files with `EXPANDED_CODE_SIGN_IDENTITY`
 3. **Run Script — Copy Rust Compiler**: copies bundled `rustc`, `librustc_driver`, `rust-lld`, and wasm32-wasip1 sysroot into Resources/rustc-dist/, code-signs all executables and dylibs
 
+### Xcode build phases (BearBone host app target)
+4. **Bust AU Cache**: calls `scripts/bust-au-cache.sh` — kills `AudioComponentRegistrar` so macOS re-discovers AU registrations after every build. Skipped during test actions to avoid interfering with the test runner.
+
 ## Architecture
 
 - **Swift + SwiftUI** for all UI, host app logic, buffer management, and render block
@@ -74,7 +77,7 @@ rust/                        Rust DSP crate
 scripts/                     Build and setup scripts
   setup-rustc.sh             Downloads standalone Rust compiler for WASM compilation
   stamp-build-id.sh          Stamps build ID into extension Info.plist
-  patch-worktree-au-identity.sh  No-op (worktree identity patching disabled)
+  bust-au-cache.sh           Kills AudioComponentRegistrar for fresh AU registration
 rustc-dist/                  Bundled Rust compiler + wasm32-wasip1 target (gitignored)
 BearBoneTests/             Unit tests (Swift Testing)
 BearBoneUITests/           UI tests (XCUITest)
@@ -106,7 +109,7 @@ Parameters are passed to Python scripts as an optional 5th argument and to WASM 
 
 Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/` and `rustc-dist/` since they're gitignored. The `build-rust.sh` script auto-symlinks `python-dist/` from the main worktree, and the "Copy Rust Compiler" build phase auto-symlinks `rustc-dist/` from the main worktree. So `xcodebuild build` and `xcodebuild test` work automatically. For standalone `cargo test`, run the Xcode build first (to create the symlink) or manually: `ln -s /path/to/main/repo/rust/python-dist rust/python-dist`.
 
-All builds (main repo and worktrees) use the same AU identity (subtype `0001`). The "Patch AU Identity for Worktree" build phase still exists but is a no-op — it was disabled because PluginKit only allows one registration per bundle ID, so worktree builds with a different subtype (WT01) were never actually discoverable by the audio system. The host app and tests read AU identity from the embedded extension's Info.plist at runtime.
+Debug and Release builds use different AU identities (see Plugin Identity section), so worktree builds in Debug configuration automatically get the debug identity without any special handling. The host app and tests read AU identity from the embedded extension's Info.plist at runtime.
 
 ## AU Registration Troubleshooting
 
@@ -121,9 +124,12 @@ All builds (main repo and worktrees) use the same AU identity (subtype `0001`). 
 
 The clean build into a fresh DerivedData directory gets a new UUID and re-registers with LaunchServices.
 
+**Cache busting:** The "Bust AU Cache" build phase on the host app target automatically kills `AudioComponentRegistrar` after every build (Debug and Release), so macOS re-discovers AU registrations immediately. This is skipped during test actions.
+
 **Useful diagnostic commands:**
 - `pluginkit -mv -p com.apple.AudioUnit-UI` — list registered AU extensions with paths
-- `auval -v aufx 0001 A000` — validate the AU component
+- `auval -v aufx 0001 A000` — validate the Release AU component
+- `auval -v aufx DBG1 A000` — validate the Debug AU component
 
 ## Code Signing
 
@@ -141,7 +147,17 @@ Bundled runtimes require proper code signing for the hardened runtime:
 
 - Type: `aufx` (effect)
 - Manufacturer: `A000`
-- Subtype: `0001`
+- Subtype: `0001` (Release) / `DBG1` (Debug)
+
+Debug and Release builds use different AU identities so they can coexist without interfering:
+
+| | Debug | Release |
+|---|---|---|
+| Bundle ID | `com.MichaelJancsy.BearBone.BearBoneExtension.debug` | `com.MichaelJancsy.BearBone.BearBoneExtension` |
+| AU Subtype | `DBG1` | `0001` |
+| AU Name | `Michael Jancsy: BearBoneExtension (Debug)` | `Michael Jancsy: BearBoneExtension` |
+
+These are configured via per-configuration build settings (`BB_AU_SUBTYPE`, `BB_AU_NAME`) in the pbxproj, referenced in `BearBoneExtension/Info.plist` via `$(VARIABLE)` substitution. PluginKit registers by bundle ID, so the different `.debug` suffix allows both to be registered simultaneously.
 
 ## Export Preset as Standalone AUv3
 
