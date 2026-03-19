@@ -74,7 +74,7 @@ rust/                        Rust DSP crate
 scripts/                     Build and setup scripts
   setup-rustc.sh             Downloads standalone Rust compiler for WASM compilation
   stamp-build-id.sh          Stamps build ID into extension Info.plist
-  patch-worktree-au-identity.sh  Patches AU identity for worktree builds
+  patch-worktree-au-identity.sh  No-op (worktree identity patching disabled)
 rustc-dist/                  Bundled Rust compiler + wasm32-wasip1 target (gitignored)
 BearBoneTests/             Unit tests (Swift Testing)
 BearBoneUITests/           UI tests (XCUITest)
@@ -106,7 +106,7 @@ Parameters are passed to Python scripts as an optional 5th argument and to WASM 
 
 Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/` and `rustc-dist/` since they're gitignored. The `build-rust.sh` script auto-symlinks `python-dist/` from the main worktree, and the "Copy Rust Compiler" build phase auto-symlinks `rustc-dist/` from the main worktree. So `xcodebuild build` and `xcodebuild test` work automatically. For standalone `cargo test`, run the Xcode build first (to create the symlink) or manually: `ln -s /path/to/main/repo/rust/python-dist rust/python-dist`.
 
-Worktree builds automatically register a different AU identity so they can coexist with the main build in DAWs. The "Patch AU Identity for Worktree" build phase (`scripts/patch-worktree-au-identity.sh`) detects worktree builds and patches the extension's built Info.plist to use subtype `WT01` and name `BearBoneExtension (Dev)`. The host app and tests read AU identity from the embedded extension's Info.plist at runtime, so they automatically use the correct codes for both main and worktree builds.
+All builds (main repo and worktrees) use the same AU identity (subtype `0001`). The "Patch AU Identity for Worktree" build phase still exists but is a no-op — it was disabled because PluginKit only allows one registration per bundle ID, so worktree builds with a different subtype (WT01) were never actually discoverable by the audio system. The host app and tests read AU identity from the embedded extension's Info.plist at runtime.
 
 ## AU Registration Troubleshooting
 
@@ -123,8 +123,7 @@ The clean build into a fresh DerivedData directory gets a new UUID and re-regist
 
 **Useful diagnostic commands:**
 - `pluginkit -mv -p com.apple.AudioUnit-UI` — list registered AU extensions with paths
-- `auval -v aufx 0001 A000` — validate the main AU component
-- `auval -v aufx WT01 A000` — validate the worktree AU component
+- `auval -v aufx 0001 A000` — validate the AU component
 
 ## Code Signing
 
@@ -142,7 +141,7 @@ Bundled runtimes require proper code signing for the hardened runtime:
 
 - Type: `aufx` (effect)
 - Manufacturer: `A000`
-- Subtype: `0001` (main repo), `WT01` (worktree builds)
+- Subtype: `0001`
 
 ## Export Preset as Standalone AUv3
 
