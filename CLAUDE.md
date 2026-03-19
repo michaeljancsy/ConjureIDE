@@ -149,15 +149,16 @@ Bundled runtimes require proper code signing for the hardened runtime:
 - Manufacturer: `A000`
 - Subtype: `0001` (Release) / `DBG1` (Debug)
 
-Debug and Release builds use different AU identities so they can coexist without interfering:
+Debug and Release builds use different AU identities and bundle IDs so they can coexist without interfering:
 
 | | Debug | Release |
 |---|---|---|
-| Bundle ID | `com.MichaelJancsy.BearBone.BearBoneExtension.debug` | `com.MichaelJancsy.BearBone.BearBoneExtension` |
+| Host App Bundle ID | `com.MichaelJancsy.BearBone.debug` | `com.MichaelJancsy.BearBone` |
+| Extension Bundle ID | `com.MichaelJancsy.BearBone.debug.BearBoneExtension` | `com.MichaelJancsy.BearBone.BearBoneExtension` |
 | AU Subtype | `DBG1` | `0001` |
 | AU Name | `Michael Jancsy: BearBoneExtension (Debug)` | `Michael Jancsy: BearBoneExtension` |
 
-These are configured via per-configuration build settings (`BB_AU_SUBTYPE`, `BB_AU_NAME`) in the pbxproj, referenced in `BearBoneExtension/Info.plist` via `$(VARIABLE)` substitution. PluginKit registers by bundle ID, so the different `.debug` suffix allows both to be registered simultaneously.
+These are configured via per-configuration build settings (`BB_AU_SUBTYPE`, `BB_AU_NAME`, `PRODUCT_BUNDLE_IDENTIFIER`) in the pbxproj, referenced in `BearBoneExtension/Info.plist` via `$(VARIABLE)` substitution. Both the host app and extension use separate bundle IDs per configuration so PluginKit registers them independently — this prevents a Release build installed at `/Applications/` from shadowing the Debug extension during development.
 
 ## Export Preset as Standalone AUv3
 
