@@ -61,7 +61,8 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
 
         let content = ExportAUMainView(
             parameterState: ps,
-            config: config
+            config: config,
+            pythonRuntimeMissing: au.pythonRuntimeMissing
         )
         let hv = NSHostingView(rootView: content)
         hv.translatesAutoresizingMaskIntoConstraints = false

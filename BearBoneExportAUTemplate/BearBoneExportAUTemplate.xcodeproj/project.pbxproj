@@ -17,6 +17,7 @@
 		888C47BB3A5214331177B10F /* ExportAUTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA5195C6C370FAB81B1B6446 /* ExportAUTests.swift */; };
 		9BE5307B54AA26417EC05FA6 /* ExportAUViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2BAC1A565FB124CFA30ADD8 /* ExportAUViewController.swift */; };
 		9FBAAA50D6AE0E7A07F9C803 /* InfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F040D1713B99E9E5BC7D91A /* InfoView.swift */; };
+		A5D47E6220EA1F73F3249310 /* PythonRuntimeErrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C670E8AF5116A04B9301CF9D /* PythonRuntimeErrorView.swift */; };
 		E2434D90792E22D70BCA3422 /* RuntimeConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59CF6DCC3B6582CA08A5CF78 /* RuntimeConfig.swift */; };
 		EC47729FACC82D18A69A182A /* ExportAUAudioUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBEEB331BCA80E46E416C240 /* ExportAUAudioUnit.swift */; };
 /* End PBXBuildFile section */
@@ -65,6 +66,7 @@
 		9930D3FAEB010E06979DC72E /* runtime-config.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "runtime-config.json"; sourceTree = "<group>"; };
 		9EC6877B8343EECDBD0796EE /* BearBoneExportAUTemplateTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BearBoneExportAUTemplateTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA5195C6C370FAB81B1B6446 /* ExportAUTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUTests.swift; sourceTree = "<group>"; };
+		C670E8AF5116A04B9301CF9D /* PythonRuntimeErrorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonRuntimeErrorView.swift; sourceTree = "<group>"; };
 		D1563F2EA08157C3CFB82FAB /* AUInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AUInfo.swift; sourceTree = "<group>"; };
 		E2BAC1A565FB124CFA30ADD8 /* ExportAUViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUViewController.swift; sourceTree = "<group>"; };
 		F9B1B3C95BDB0878CC0C2318 /* BearBoneExportAUTemplate.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BearBoneExportAUTemplate.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -101,6 +103,7 @@
 				298FAC2A22989D4BF1A244D7 /* ExportAUMainView.swift */,
 				E2BAC1A565FB124CFA30ADD8 /* ExportAUViewController.swift */,
 				5572990347D241783683010B /* ExportParameterState.swift */,
+				C670E8AF5116A04B9301CF9D /* PythonRuntimeErrorView.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -350,6 +353,7 @@
 				7A3F90AFE363F8D2C368AE75 /* ExportAUMainView.swift in Sources */,
 				9BE5307B54AA26417EC05FA6 /* ExportAUViewController.swift in Sources */,
 				67A377E8921535522B895798 /* ExportParameterState.swift in Sources */,
+				A5D47E6220EA1F73F3249310 /* PythonRuntimeErrorView.swift in Sources */,
 				E2434D90792E22D70BCA3422 /* RuntimeConfig.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

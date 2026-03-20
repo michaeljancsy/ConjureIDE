@@ -19,7 +19,8 @@ if [ ! -d "${TEMPLATE_BUILD}" ] && [ ! -L "${TEMPLATE_BUILD}" ]; then
     fi
 fi
 
-TEMPLATE_SRC="${TEMPLATE_BUILD}/Build/Products/Release/BearBoneExportAUTemplate.app"
+TEMPLATE_CONFIG="${CONFIGURATION:-Release}"
+TEMPLATE_SRC="${TEMPLATE_BUILD}/Build/Products/${TEMPLATE_CONFIG}/BearBoneExportAUTemplate.app"
 TEMPLATE_DST="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExportTemplate.zip"
 
 if [ -d "$TEMPLATE_SRC" ]; then
@@ -28,5 +29,5 @@ if [ -d "$TEMPLATE_SRC" ]; then
     zip -qry "$TEMPLATE_DST" "$(basename "$TEMPLATE_SRC")"
 else
     echo "warning: Export template not built at $TEMPLATE_SRC" >&2
-    echo "warning: Run: cd BearBoneExportAUTemplate && xcodebuild -scheme BearBoneExportAUTemplate -configuration Release -arch arm64 build" >&2
+    echo "warning: Run: cd BearBoneExportAUTemplate && xcodebuild -scheme BearBoneExportAUTemplate -configuration ${TEMPLATE_CONFIG} -arch arm64 -derivedDataPath build build" >&2
 fi
