@@ -2,14 +2,9 @@
 
 ## In Progress
 
-### Export Preset as Standalone AUv3
-Export a BearBone preset as a standalone AUv3 plugin installable in any DAW. See `docs/export-au-plan.md` for full plan.
-- Phase 1: Template AU (BearBoneExportAUTemplate) — **complete** (2026-03-05)
-- Phase 2: Export pipeline — **complete** (2026-03-05)
-- Phase 3: Export UI + host app handler — **complete** (2026-03-05)
-
 ## To Do
-- Phase 4: Python export support (shared runtime at ~/Library/Application Support/BearBone/PythonRuntime-3.14/, error UI with auto-download)
+
+### Export Preset as Standalone AUv3
 - Phase 5: Polish & validation (integration tests, edge cases, documentation)
 
 ### Other
@@ -33,6 +28,9 @@ Export a BearBone preset as a standalone AUv3 plugin installable in any DAW. See
 
 ## Done
 - AI chat sidebar with tool use (2026-03-21): Collapsible chat panel alongside the script editor for conversational AI interaction with the DSP engine. Uses Anthropic Messages API with tool use — the AI can compile and run scripts, read errors, set parameters, manage presets, toggle bypass, and read audio state autonomously within a multi-turn conversation. Architecture: ChatService runs an agentic loop (send message → receive tool_use → execute locally → send results → repeat, up to 10 rounds). ToolExecutor maps 9 tools to existing AU functions. AnthropicProvider extended with streamChat() method handling tool_use SSE events. ChatSidebarView shows message bubbles with tool call indicators. Streaming text updates live in the UI. Toggle via bubble icon in toolbar. New files: ChatMessage.swift (content block types + serializer), ChatTools.swift (tool definitions), ToolExecutor.swift (tool dispatch), ChatService.swift (agentic loop + streaming), ChatSidebarView.swift (UI). Modified: AnthropicProvider.swift, AudioUnitViewController.swift, BearBoneExtensionMainView.swift, PresetToolbar.swift. All 162 unit tests + 11 UI tests pass (2 pre-existing BuildID timing failures unrelated).
+- Strip markdown code fences from AI-generated scripts (2026-03-21): AI-generated scripts that arrived wrapped in markdown code fences (```python ... ```) are now automatically stripped before being inserted into the editor.
+- Improve AU build reliability (2026-03-21): Pre-build cleanup, auto-rebuild export template, fix registration docs.
+- Phase 4: Python export support for standalone AUv3 plugins (2026-03-21): Exported Python presets now bundle the shared Python runtime. Shared runtime installed at `~/Library/Application Support/BearBone/PythonRuntime-3.14/`. Error UI with auto-download when runtime is missing.
 - Debug/Release AU identity separation + cache-busting (2026-03-19): Debug builds now use a distinct bundle ID (`.debug` suffix) and AU subtype (`DBG1`) so they never interfere with Release builds in PluginKit. Configured via per-configuration build settings (`BB_AU_SUBTYPE`, `BB_AU_NAME`, `PRODUCT_BUNDLE_IDENTIFIER`) referenced in Info.plist with `$(VARIABLE)` substitution — no plist-patching scripts needed. Added "Bust AU Cache" build phase on host app target that kills `AudioComponentRegistrar` after every build (skipped during tests). Created shared scheme file (`BearBone.xcscheme`). Removed old no-op "Patch AU Identity for Worktree" build phase and `patch-worktree-au-identity.sh`. Bumped AU component version to 67076.
 - Fix exported AU registration and worktree export support (2026-03-08): Exported AUs weren't showing up in DAWs due to two issues: (1) macOS quarantine attribute on ad-hoc signed exported apps blocked launching (required for PluginKit registration) — fixed by stripping `com.apple.quarantine` in `PendingExportHandler` after code signing. (2) Worktree builds appended `.dev` to the extension's `CFBundleIdentifier`, which didn't match the provisioning profile's explicit App ID — PluginKit refused to register. Removed the bundle ID change from `patch-worktree-au-identity.sh` (AU subtype `WT01` is sufficient for DAW coexistence). Also extracted "Copy Export Template" build phase to `scripts/rebuild-and-copy-export-template.sh` with auto-symlink of `BearBoneExportAUTemplate/build/` from the main worktree, matching the pattern used for `python-dist` and `rustc-dist`.
 - Fix "access data from other apps" TCC prompt (2026-03-07): Host app triggered macOS privacy prompt on launch because `PendingExportHandler` accessed `~/Library/Group Containers/` by manually constructing the path. Fixed by adding `com.apple.security.application-groups` entitlement to the host app and switching to `FileManager.containerURL(forSecurityApplicationGroupIdentifier:)` API. macOS now recognizes the host as a legitimate App Group member — no TCC prompt.
