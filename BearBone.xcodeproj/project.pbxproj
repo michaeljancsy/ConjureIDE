@@ -169,6 +169,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 257911B12F5013850036AAB6 /* Build configuration list for PBXNativeTarget "BearBone" */;
 			buildPhases = (
+				AABB00112F5013850036AAB6 /* Pre-Build Clean */,
 				2579113C2F5013840036AAB6 /* Sources */,
 				2579113D2F5013840036AAB6 /* Frameworks */,
 				2579113E2F5013840036AAB6 /* Resources */,
@@ -450,7 +451,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "\"${SRCROOT}/scripts/copy-export-template.sh\"\n";
+			shellScript = "\"${SRCROOT}/scripts/rebuild-and-copy-export-template.sh\"\n";
 		};
 		AABB000D2F5013850036AAB6 /* Generate Test Serial */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -471,6 +472,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "\"${SRCROOT}/scripts/generate-test-serial.sh\"\n";
+		};
+		AABB00112F5013850036AAB6 /* Pre-Build Clean */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/pre-build-clean.sh",
+			);
+			name = "Pre-Build Clean";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/scripts/pre-build-clean.sh\"\n";
 		};
 		AABB000F2F5013850036AAB6 /* Bust AU Cache */ = {
 			isa = PBXShellScriptBuildPhase;

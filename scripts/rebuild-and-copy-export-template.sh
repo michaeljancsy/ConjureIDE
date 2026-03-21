@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Zip pre-built export template into extension Resources.
+# Build the export template and zip it into extension Resources.
 # Must be zipped (not a raw .app) to prevent PluginKit from discovering
 # the template's embedded .appex and registering it as an AU.
 #
@@ -9,6 +9,7 @@ set -euo pipefail
 
 SRCROOT="${SRCROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 TEMPLATE_BUILD="${SRCROOT}/BearBoneExportAUTemplate/build"
+TEMPLATE_PROJECT="${SRCROOT}/BearBoneExportAUTemplate/BearBoneExportAUTemplate.xcodeproj"
 
 # Auto-symlink template build dir from main worktree if missing
 if [ ! -d "${TEMPLATE_BUILD}" ] && [ ! -L "${TEMPLATE_BUILD}" ]; then
@@ -20,6 +21,19 @@ if [ ! -d "${TEMPLATE_BUILD}" ] && [ ! -L "${TEMPLATE_BUILD}" ]; then
 fi
 
 TEMPLATE_CONFIG="${CONFIGURATION:-Release}"
+
+# Build the export template (incremental — fast no-op if nothing changed)
+if [ -f "${TEMPLATE_PROJECT}/project.pbxproj" ]; then
+    echo "Building export template (${TEMPLATE_CONFIG})..."
+    xcodebuild -project "${TEMPLATE_PROJECT}" \
+        -scheme BearBoneExportAUTemplate \
+        -configuration "${TEMPLATE_CONFIG}" \
+        -arch arm64 \
+        -derivedDataPath "${TEMPLATE_BUILD}" \
+        build \
+        2>&1 | tail -1
+fi
+
 TEMPLATE_SRC="${TEMPLATE_BUILD}/Build/Products/${TEMPLATE_CONFIG}/BearBoneExportAUTemplate.app"
 TEMPLATE_DST="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExportTemplate.zip"
 
