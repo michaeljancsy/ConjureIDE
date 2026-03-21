@@ -17,6 +17,9 @@ struct BearBoneApp: App {
             ContentView(hostModel: hostModel, exportHandler: exportHandler)
                 .onAppear {
                     exportHandler.checkForPendingExports()
+                    DispatchQueue.global(qos: .utility).async {
+                        SharedPythonRuntimeInstaller.installIfNeeded()
+                    }
                 }
         }
         .defaultSize(width: 700, height: 650)

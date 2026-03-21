@@ -137,6 +137,55 @@ struct ExportAUComponentTests {
     }
 }
 
+// MARK: - Runtime Config Tests
+
+@Suite("Runtime Config Parsing")
+struct RuntimeConfigTests {
+    // RuntimeConfig is internal to the extension module, so we test the JSON
+    // contract directly to ensure the language field is present and parseable.
+
+    private struct ConfigShape: Codable {
+        let version: Int
+        let language: String
+        let presetName: String
+        let paramCount: Int?
+    }
+
+    @Test("runtime-config.json with Python language parses correctly")
+    func parsesPythonConfig() throws {
+        let json = """
+        {"version":1,"language":"python","presetName":"Test Effect","paramCount":8}
+        """.data(using: .utf8)!
+        let config = try JSONDecoder().decode(ConfigShape.self, from: json)
+        #expect(config.language == "python")
+        #expect(config.presetName == "Test Effect")
+        #expect(config.paramCount == 8)
+    }
+
+    @Test("runtime-config.json with Rust language parses correctly")
+    func parsesRustConfig() throws {
+        let json = """
+        {"version":1,"language":"rust","presetName":"Bitcrusher","paramCount":4}
+        """.data(using: .utf8)!
+        let config = try JSONDecoder().decode(ConfigShape.self, from: json)
+        #expect(config.language == "rust")
+        #expect(config.paramCount == 4)
+    }
+
+    @Test("Bundled runtime-config.json exists and has a language field")
+    func bundledConfigHasLanguage() throws {
+        guard let plugInsURL = Bundle.main.builtInPlugInsURL else {
+            throw TestError("Bundle.main.builtInPlugInsURL is nil")
+        }
+        let configURL = plugInsURL
+            .appendingPathComponent("BearBoneExportAUTemplateExtension.appex")
+            .appendingPathComponent("Contents/Resources/runtime-config.json")
+        let data = try Data(contentsOf: configURL)
+        let config = try JSONDecoder().decode(ConfigShape.self, from: data)
+        #expect(!config.language.isEmpty)
+    }
+}
+
 // MARK: - Rust FFI Direct Tests
 
 @Suite("Rust FFI (direct kernel)")

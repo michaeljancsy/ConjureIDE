@@ -96,7 +96,7 @@ impl PythonBackend {
     /// Delegate audio processing to the loaded Python script.
     /// Returns true on success.
     unsafe fn process_with_python(
-        &self,
+        &mut self,
         inputs: &[*const f32],
         outputs: &[*mut f32],
         channel_count: usize,
@@ -156,6 +156,8 @@ impl PythonBackend {
         match result {
             Ok(()) => true,
             Err(e) => {
+                let err_msg = format!("Python process error: {}", e);
+                self.last_error = Some(err_msg);
                 Python::with_gil(|py| e.print(py));
                 false
             }
@@ -187,6 +189,7 @@ impl Backend for PythonBackend {
         params: &[f32; PARAM_COUNT],
     ) -> bool {
         if self.py_input_arrays.is_empty() {
+            self.last_error = Some("Python arrays not allocated — initialize() not called or failed".to_string());
             return false;
         }
         self.process_with_python(inputs, outputs, channel_count, frame_count, sample_rate, params)

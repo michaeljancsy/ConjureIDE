@@ -113,23 +113,99 @@ Debug and Release builds use different AU identities (see Plugin Identity sectio
 
 ## AU Registration Troubleshooting
 
-**Avoid using `pluginkit -r`** to remove an AU extension registration during development. Although Apple's documentation says `pluginkit` options "cannot make permanent alterations of the automatic registry state" and the `pkd` daemon should re-discover extensions automatically, PluginKit re-registration can be unreliable in practice — extensions sometimes fail to re-register after removal, requiring manual recovery steps. Prefer `pluginkit -e ignore -i <bundle-id>` (and later `pluginkit -e default -i <bundle-id>` to restore) if you need to temporarily hide an extension.
+### Dangerous commands — NEVER use
 
-**Recovery procedure** if an AU disappears from hosts:
-1. Try re-launching the host app (PluginKit re-registers extensions when the parent app launches)
-2. Kill the audio component registrar: `killall -9 AudioComponentRegistrar`
-3. If still missing, delete DerivedData: `rm -rf ~/Library/Developer/Xcode/DerivedData/BearBone-*`
-4. Clear the AU cache: `rm -f ~/Library/Caches/AudioUnitCache/com.apple.audiounits.cache`
-5. Clean build: `xcodebuild -project BearBone.xcodeproj -scheme BearBone clean build`
+- **`pluginkit -r`** — Permanently removes an extension from PluginKit's registry. Despite Apple's documentation claiming this "cannot make permanent alterations," the removal persists across reboots, DerivedData deletion, AU cache clearing, app relaunches, and even `pluginkit -e default`. Recovery requires purging stale LaunchServices entries (see below). **There is no safe use case for `pluginkit -r` during development.**
+- **`pluginkit -e ignore`** — Suppresses an extension's registration. If the build fails before a corresponding `pluginkit -e default` runs, the extension stays suppressed indefinitely. Avoid in build scripts.
 
-The clean build into a fresh DerivedData directory gets a new UUID and re-registers with LaunchServices.
+### How AU extension registration works
 
-**Cache busting:** The "Bust AU Cache" build phase on the host app target automatically kills `AudioComponentRegistrar` after every build (Debug and Release), so macOS re-discovers AU registrations immediately. This is skipped during test actions.
+1. **LaunchServices** tracks which apps exist and where they live on disk
+2. **PluginKit (pkd)** discovers extensions embedded in LaunchServices-registered apps
+3. **AudioComponentRegistrar** reads PluginKit's registry to make AUs available to hosts
 
-**Useful diagnostic commands:**
-- `pluginkit -mv -p com.apple.AudioUnit-UI` — list registered AU extensions with paths
+Registration breaks when any layer has stale or corrupted state.
+
+### Common failure: stale LaunchServices entries
+
+Over time, LaunchServices accumulates entries from old DerivedData directories that no longer exist. If multiple stale entries claim the same bundle ID, PluginKit may fail to discover the extension even from a valid, freshly-built app. This is the most common cause of "AU component not found" errors, especially for the Release bundle ID (which was shared across Debug/Release builds before the bundle ID separation was added).
+
+**Diagnosis:** Check if LaunchServices has stale entries:
+```bash
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
+$LSREGISTER -dump | grep -B20 "identifier:.*com\.MichaelJancsy\.BearBone$" | grep "path:"
+```
+If this shows paths to DerivedData directories that no longer exist, that's the problem.
+
+### Recovery procedure
+
+If an AU disappears from hosts (`Failed to find Audio Unit component`):
+
+**Step 1: Basic recovery**
+```bash
+killall -9 AudioComponentRegistrar
+rm -f ~/Library/Caches/AudioUnitCache/com.apple.audiounits.cache
+```
+Rebuild and relaunch from Xcode. This fixes most transient issues.
+
+**Step 2: If Step 1 fails — purge stale LaunchServices entries**
+
+This is the fix for `pluginkit -r` damage and stale registration conflicts:
+```bash
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
+
+# Unregister ALL stale BearBone entries from LaunchServices
+$LSREGISTER -dump | grep -B20 "identifier:.*com\.MichaelJancsy\.BearBone" | grep "path:" | sed 's/.*path:[[:space:]]*//' | sed 's/ (0x.*//' | while read -r path; do
+    echo "Unregistering: $path"
+    $LSREGISTER -u "$path" 2>/dev/null
+done
+
+# Re-register ONLY the current build
+$LSREGISTER -f -R -trusted ~/Library/Developer/Xcode/DerivedData/BearBone-*/Build/Products/Release/BearBone.app
+$LSREGISTER -f -R -trusted ~/Library/Developer/Xcode/DerivedData/BearBone-*/Build/Products/Debug/BearBone.app
+
+# Restart PluginKit and AudioComponentRegistrar
+killall -9 pkd AudioComponentRegistrar
+```
+Wait a few seconds, then rebuild and launch from Xcode.
+
+**Step 3: If Step 2 fails — reset PluginKit election state**
+
+PluginKit stores election preferences (enabled/disabled) in an Annotations plist:
+```bash
+# Find it (path varies by machine):
+find /private/var/folders -name "Annotations" -path "*/com.apple.pluginkit/*" 2>/dev/null
+
+# Inspect it:
+cat /private/var/folders/<your-path>/0/com.apple.pluginkit/Annotations
+# Look for your bundle ID with election = 0 (disabled)
+
+# Fix it:
+/usr/libexec/PlistBuddy -c "Set :data:com.MichaelJancsy.BearBone.BearBoneExtension:election 1" <path-to-Annotations>
+killall -9 pkd AudioComponentRegistrar
+```
+
+**Step 4: Nuclear option — full LaunchServices database reset**
+```bash
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
+$LSREGISTER -kill -r -domain local -domain system -domain user
+```
+This resets ALL LaunchServices registrations system-wide. Apps will re-register as they're launched. Use only as a last resort.
+
+### Prevention
+
+- **Never use `pluginkit -r` or `pluginkit -e ignore` in build scripts.** The post-build `bust-au-cache.sh` uses only `killall AudioComponentRegistrar` + `lsregister`, which are safe.
+- **Move `/Applications/BearBone.app` during development** if a production install exists — it shadows DerivedData builds via PluginKit. The pre-build script handles this automatically.
+- **Periodically clean old DerivedData** — stale entries accumulate in LaunchServices and can cause registration conflicts: `ls ~/Library/Developer/Xcode/DerivedData/BearBone-*`
+
+### Useful diagnostic commands
+
+- `pluginkit -mv -p com.apple.AudioUnit-UI` — list registered AU extensions with paths (look for `+` prefix = elected)
+- `pluginkit -m | grep BearBone` — search all protocols (not just AU)
 - `auval -v aufx 0001 A000` — validate the Release AU component
 - `auval -v aufx DBG1 A000` — validate the Debug AU component
+- `codesign -v -vvv <path-to-app>` — verify code signing is valid
+- `codesign -d --entitlements - <path-to-appex>` — inspect extension entitlements
 
 ## Code Signing
 

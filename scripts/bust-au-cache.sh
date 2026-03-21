@@ -1,9 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# Kill AudioComponentRegistrar so macOS re-discovers AU registrations.
-# Runs for all configurations (Debug/Release) since switching between them
-# changes the registered AU identity.
+# Post-build: kill AudioComponentRegistrar and re-register the freshly-built
+# app with LaunchServices so PluginKit discovers the embedded extension.
 # Skipped during test actions to avoid interfering with the test runner.
 
 # Detect test actions: ACTION is set by xcodebuild (build, test, etc.)
@@ -17,5 +16,15 @@ fi
 killall -9 AudioComponentRegistrar 2>/dev/null && \
     echo "note: Killed AudioComponentRegistrar for cache bust" >&2 || \
     echo "note: AudioComponentRegistrar not running (nothing to kill)" >&2
+
+# Re-register the freshly-built host app with LaunchServices.
+# This triggers PluginKit to discover the embedded extension, ensuring
+# the DerivedData build is the active registration.
+APP_PATH="${BUILT_PRODUCTS_DIR:-}/BearBone.app"
+if [ -d "${APP_PATH}" ]; then
+    /System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister -f -R -trusted "${APP_PATH}" 2>/dev/null && \
+        echo "note: Re-registered app with LaunchServices: ${APP_PATH}" >&2 || \
+        echo "warning: lsregister failed for ${APP_PATH}" >&2
+fi
 
 exit 0

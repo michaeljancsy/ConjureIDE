@@ -18,6 +18,9 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     // Runtime configuration loaded from bundle
     private var config: RuntimeConfig?
 
+    // True when a Python preset can't find its runtime (stdlib+numpy)
+    private(set) var pythonRuntimeMissing = false
+
     // Audio busses
     private var _inputBus: AUAudioUnitBus!
     private var _outputBus: AUAudioUnitBus!
@@ -50,12 +53,27 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         let bundle = Bundle(for: type(of: self))
         config = RuntimeConfig.load(from: bundle)
 
+        if let config = config {
+            pluginLog.info("RuntimeConfig loaded: language=\(config.language, privacy: .public), preset=\(config.presetName, privacy: .public)")
+        } else {
+            pluginLog.warning("RuntimeConfig not found in bundle — defaulting to rust/wasm")
+        }
+
         buildParameterTree()
 
         // Exported AUs run freely — no demo timer
         dsp_kernel_set_licensed(kernel, true)
 
-        // Load the WASM preset from bundle
+        // Log shared Python runtime filesystem state (for debugging)
+        // Use real home directory (not sandbox container) via getpwuid
+        if let realHome = Self.realHomeDirectory() {
+            let sharedPath = realHome + "/Library/Application Support/BearBone/PythonRuntime-3.14"
+            let libExists = FileManager.default.fileExists(atPath: sharedPath + "/lib/python3.14t")
+            let dylibExists = FileManager.default.fileExists(atPath: sharedPath + "/lib/libpython3.14t.dylib")
+            pluginLog.info("Shared runtime check: path=\(sharedPath, privacy: .public) lib=\(libExists, privacy: .public) dylib=\(dylibExists, privacy: .public)")
+        }
+
+        // Load preset from bundle (language determined by runtime-config.json)
         loadPresetFromBundle()
     }
 
@@ -100,6 +118,17 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
     private func loadPresetFromBundle() {
         let bundle = Bundle(for: type(of: self))
+        let language = config?.language ?? "rust"
+
+        switch language {
+        case "python":
+            loadPythonPreset(from: bundle)
+        default:
+            loadWasmPreset(from: bundle)
+        }
+    }
+
+    private func loadWasmPreset(from bundle: Bundle) {
         guard let wasmURL = bundle.url(forResource: "preset", withExtension: "wasm"),
               let wasmData = try? Data(contentsOf: wasmURL) else {
             pluginLog.error("preset.wasm not found in bundle")
@@ -115,18 +144,99 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
         if success {
             pluginLog.info("WASM preset loaded successfully")
-            // Warm-start: run process() so any first-call setup happens before real audio
-            let warmupTime = dsp_kernel_benchmark_process(kernel)
-            if warmupTime >= 0 {
-                pluginLog.info("Warm-up complete: \(warmupTime * 1000, privacy: .public)ms")
-            }
+            warmStart()
         } else {
-            if let errPtr = dsp_kernel_last_error(kernel) {
-                let errMsg = String(cString: errPtr)
-                pluginLog.error("Failed to load WASM: \(errMsg, privacy: .public)")
-            } else {
-                pluginLog.error("Failed to load WASM preset")
+            logKernelError("Failed to load WASM preset")
+        }
+    }
+
+    private func loadPythonPreset(from bundle: Bundle) {
+        guard let presetPath = bundle.path(forResource: "preset", ofType: "py") else {
+            pluginLog.error("preset.py not found in bundle")
+            return
+        }
+
+        guard let pythonHome = findPythonHome(bundle: bundle) else {
+            pluginLog.error("Python runtime not found — preset will not process audio")
+            pythonRuntimeMissing = true
+            return
+        }
+
+        pluginLog.info("Loading Python preset. pythonHome=\(pythonHome, privacy: .public)")
+        let success = dsp_kernel_load_script(kernel, pythonHome, presetPath)
+
+        if success {
+            pluginLog.info("Python preset loaded successfully")
+            warmStart()
+        } else {
+            logKernelError("Failed to load Python preset")
+        }
+    }
+
+    // MARK: - Python Runtime Resolution
+
+    /// Searches for a Python runtime in order: own bundle, shared location, environment variable.
+    private func findPythonHome(bundle: Bundle) -> String? {
+        // 1. Own bundle (standalone/full export)
+        pluginLog.info("findPythonHome: checking bundle at \(bundle.bundlePath, privacy: .public)")
+        if let bundled = bundle.path(forResource: "python-dist", ofType: nil) {
+            pluginLog.info("findPythonHome: found Python runtime in bundle")
+            return bundled
+        }
+        pluginLog.info("findPythonHome: no bundled python-dist found")
+
+        // 2. Shared location — use real home directory, not sandbox container
+        // In a sandboxed AU extension, FileManager.urls(for: .applicationSupportDirectory)
+        // returns the sandbox container path, but the temp-exception entitlement grants
+        // read access to the real ~/Library/Application Support/ path.
+        if let realHome = Self.realHomeDirectory() {
+            let shared = realHome + "/Library/Application Support/BearBone/PythonRuntime-3.14"
+            pluginLog.info("findPythonHome: checking shared location at \(shared, privacy: .public)")
+            if FileManager.default.fileExists(atPath: shared + "/lib/python3.14t") {
+                pluginLog.info("findPythonHome: found Python runtime at shared location")
+                return shared
             }
+            pluginLog.info("findPythonHome: shared location missing or no lib/python3.14t")
+        } else {
+            pluginLog.warning("findPythonHome: could not resolve real home directory")
+        }
+
+        // 3. Environment variable override (power users)
+        if let envPath = ProcessInfo.processInfo.environment["BEARBONE_PYTHON_HOME"],
+           FileManager.default.fileExists(atPath: envPath) {
+            pluginLog.info("findPythonHome: found Python runtime via BEARBONE_PYTHON_HOME")
+            return envPath
+        }
+        pluginLog.info("findPythonHome: no BEARBONE_PYTHON_HOME set or path does not exist")
+
+        return nil
+    }
+
+    // MARK: - Helpers
+
+    /// Returns the real home directory path, bypassing sandbox container redirection.
+    /// Uses `getpwuid(getuid())` which returns the actual user home (e.g. `/Users/michael`)
+    /// even when running inside an App Sandbox container.
+    private static func realHomeDirectory() -> String? {
+        guard let pw = getpwuid(getuid()), let homeDir = pw.pointee.pw_dir else {
+            return nil
+        }
+        return String(cString: homeDir)
+    }
+
+    private func warmStart() {
+        let warmupTime = dsp_kernel_benchmark_process(kernel)
+        if warmupTime >= 0 {
+            pluginLog.info("Warm-up complete: \(warmupTime * 1000, privacy: .public)ms")
+        }
+    }
+
+    private func logKernelError(_ prefix: String) {
+        if let errPtr = dsp_kernel_last_error(kernel) {
+            let errMsg = String(cString: errPtr)
+            pluginLog.error("\(prefix, privacy: .public): \(errMsg, privacy: .public)")
+        } else {
+            pluginLog.error("\(prefix, privacy: .public)")
         }
     }
 
@@ -178,8 +288,20 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         mutableAudioBufferList = inputPCMBuffer?.mutableAudioBufferList
 
         dsp_kernel_initialize(kernel, Int32(inputChannelCount), Int32(outputChannelCount), _outputBus.format.sampleRate)
+        pluginLog.info("allocateRenderResources: channels=\(inputChannelCount, privacy: .public), sampleRate=\(self._outputBus.format.sampleRate, privacy: .public)")
 
         try super.allocateRenderResources()
+
+        // Check for kernel errors shortly after rendering begins
+        let kernelRef = self.kernel!
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            if let errPtr = dsp_kernel_last_error(kernelRef) {
+                let msg = String(cString: errPtr)
+                pluginLog.error("Post-render kernel error: \(msg, privacy: .public)")
+            } else {
+                pluginLog.info("Post-render check: no kernel errors")
+            }
+        }
     }
 
     public override func deallocateRenderResources() {

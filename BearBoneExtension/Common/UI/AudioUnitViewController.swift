@@ -246,6 +246,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 
         // New: reset to default template for the selected language
         let extensionBundle = Bundle(for: type(of: self))
+        log.info("Extension bundle path: \(extensionBundle.bundlePath, privacy: .public)")
         let onNew: (ScriptLanguage) -> ScriptSaveResult = { [weak au, weak pm] language in
             guard let au, let pm else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
@@ -293,7 +294,13 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             }
 
             guard let templateURL = extensionBundle.url(forResource: "ExportTemplate", withExtension: "zip") else {
+                log.error("ExportTemplate.zip not found in bundle at: \(extensionBundle.bundlePath, privacy: .public)")
                 return .error("Export template not found in bundle. Rebuild the project.")
+            }
+            log.info("ExportTemplate.zip path: \(templateURL.path, privacy: .public)")
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: templateURL.path),
+               let size = attrs[.size] as? Int {
+                log.info("ExportTemplate.zip size: \(size, privacy: .public) bytes")
             }
 
             // Stage unsigned export in App Group — host app finalizes (signs, registers, reveals)

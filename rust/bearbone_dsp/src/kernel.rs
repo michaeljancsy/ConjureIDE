@@ -462,7 +462,10 @@ impl DSPKernel {
                     }
                     return;
                 }
-                // Backend failed — fall through to passthrough
+                // Backend failed — capture error before dropping guard
+                if let Some(err) = backend.last_error() {
+                    self.last_error = Some(err.to_string());
+                }
             }
         }
 
