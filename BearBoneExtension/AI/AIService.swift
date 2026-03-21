@@ -87,7 +87,11 @@ final class AIService: ObservableObject {
                     await MainActor.run { onUpdate(accumulated) }
                 }
                 if !Task.isCancelled {
-                    self.log.info("Script generation complete (\(accumulated.count) chars)")
+                    let cleaned = accumulated.strippingCodeFences()
+                    if cleaned != accumulated {
+                        await MainActor.run { onUpdate(cleaned) }
+                    }
+                    self.log.info("Script generation complete (\(cleaned.count) chars)")
                     self.state = .idle
                 }
             } catch is CancellationError {
@@ -134,7 +138,11 @@ final class AIService: ObservableObject {
                     await MainActor.run { onUpdate(accumulated) }
                 }
                 if !Task.isCancelled {
-                    self.log.info("Script fix complete (\(accumulated.count) chars)")
+                    let cleaned = accumulated.strippingCodeFences()
+                    if cleaned != accumulated {
+                        await MainActor.run { onUpdate(cleaned) }
+                    }
+                    self.log.info("Script fix complete (\(cleaned.count) chars)")
                     self.state = .idle
                 }
             } catch is CancellationError {
