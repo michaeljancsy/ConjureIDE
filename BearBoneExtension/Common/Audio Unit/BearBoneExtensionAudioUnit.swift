@@ -79,8 +79,21 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		return currentWasmBytes
 	}
 
-	/// Publishes script source when it changes externally (preset selection, fullState restore).
-	public let scriptSourceDidChange = PassthroughSubject<String, Never>()
+	/// Payload for script change notifications.
+	public struct ScriptSourceChange {
+		public let source: String
+		public var processTimeMs: Double?
+		public var budgetMs: Double?
+
+		public init(source: String, processTimeMs: Double? = nil, budgetMs: Double? = nil) {
+			self.source = source
+			self.processTimeMs = processTimeMs
+			self.budgetMs = budgetMs
+		}
+	}
+
+	/// Publishes script source when it changes externally (preset selection, fullState restore, AI compile).
+	public let scriptSourceDidChange = PassthroughSubject<ScriptSourceChange, Never>()
 
 	// Audio busses
 	private var _inputBus: AUAudioUnitBus!
@@ -376,7 +389,7 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			case .python:
 				let result = reloadScript(source: source)
 				if result.success {
-					scriptSourceDidChange.send(source)
+					scriptSourceDidChange.send(ScriptSourceChange(source: source))
 				}
 
 			case .rust:
@@ -387,13 +400,13 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						currentScriptSource = source
 						currentScriptLanguage = .rust
 						currentWasmBytes = wasmBytes
-						scriptSourceDidChange.send(source)
+						scriptSourceDidChange.send(ScriptSourceChange(source: source))
 					}
 				} else {
 					// No cached WASM — just show the source, user must click Run
 					currentScriptSource = source
 					currentScriptLanguage = .rust
-					scriptSourceDidChange.send(source)
+					scriptSourceDidChange.send(ScriptSourceChange(source: source))
 				}
 			}
 
@@ -428,7 +441,7 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		// Always update preset manager and editor so the user can see the script
 		pm.setCurrentPreset(preset, source: source)
-		scriptSourceDidChange.send(source)
+		scriptSourceDidChange.send(ScriptSourceChange(source: source))
 
 		let result = await compileAndRun(source: source)
 
@@ -483,14 +496,14 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				if result.success {
 					currentScriptLanguage = .python
 					currentWasmBytes = nil
-					scriptSourceDidChange.send(source)
+					scriptSourceDidChange.send(ScriptSourceChange(source: source))
 					pluginLog.info("Loaded factory preset: \(entry.name, privacy: .public)")
 				}
 			case .rust:
 				// Show source immediately, then compile async
 				currentScriptSource = source
 				currentScriptLanguage = .rust
-				scriptSourceDidChange.send(source)
+				scriptSourceDidChange.send(ScriptSourceChange(source: source))
 				pluginLog.info("Loaded Rust factory preset: \(entry.name, privacy: .public)")
 				Task {
 					let result = await self.compileAndRun(source: source)
