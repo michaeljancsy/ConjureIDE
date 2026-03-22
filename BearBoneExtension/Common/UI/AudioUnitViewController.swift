@@ -150,8 +150,12 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         let chat = chatService!
         chat.toolExecutor.audioUnit = au
         chat.toolExecutor.presetManager = pm
-        chat.toolExecutor.onScriptChanged = { [weak au] source in
-            au?.scriptSourceDidChange.send(source)
+        chat.toolExecutor.onScriptChanged = { [weak au] source, processTimeMs, budgetMs in
+            au?.scriptSourceDidChange.send(
+                BearBoneExtensionAudioUnit.ScriptSourceChange(
+                    source: source, processTimeMs: processTimeMs, budgetMs: budgetMs
+                )
+            )
         }
 
         if captureManager == nil {
@@ -271,13 +275,13 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             case .python:
                 let result = au.reloadScript(source: source)
                 pm.setCurrentPreset(nil, source: source)
-                au.scriptSourceDidChange.send(source)
+                au.scriptSourceDidChange.send(BearBoneExtensionAudioUnit.ScriptSourceChange(source: source))
                 return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
             case .rust:
                 // Don't compile on New — just show the template
                 au.currentScriptLanguage = .rust
                 pm.setCurrentPreset(nil, source: source)
-                au.scriptSourceDidChange.send(source)
+                au.scriptSourceDidChange.send(BearBoneExtensionAudioUnit.ScriptSourceChange(source: source))
                 return ScriptSaveResult(success: true, error: nil, processTimeMs: nil, budgetMs: nil)
             }
         }

@@ -20,22 +20,15 @@ struct FrequencyAxisView: View {
         20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000,
     ]
 
-    /// Note names with their Hz values (A0 through C8)
+    /// Note names with their Hz values (C1 through C8)
     private static let noteTicks: [(name: String, hz: Float)] = [
-        ("A0", 27.5),
         ("C1", 32.7),
         ("C2", 65.4),
-        ("A2", 110),
         ("C3", 130.8),
-        ("A3", 220),
         ("C4", 261.6),
-        ("A4", 440),
         ("C5", 523.3),
-        ("A5", 880),
         ("C6", 1046.5),
-        ("A6", 1760),
         ("C7", 2093),
-        ("A7", 3520),
         ("C8", 4186),
     ]
 
@@ -98,7 +91,16 @@ struct FrequencyAxisView: View {
             }
         }
 
-        return ticks
+        // Remove labels that are too close together (minimum 14px apart)
+        let minSpacing: Float = 14
+        var filtered: [TickInfo] = []
+        for tick in ticks.sorted(by: { $0.y < $1.y }) {
+            if let last = filtered.last, abs(tick.y - last.y) < minSpacing {
+                continue
+            }
+            filtered.append(tick)
+        }
+        return filtered
     }
 
     private func formatHz(_ hz: Float) -> String {

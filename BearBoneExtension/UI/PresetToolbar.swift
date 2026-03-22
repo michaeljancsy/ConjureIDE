@@ -4,12 +4,56 @@ extension Notification.Name {
     static let openLicenseSettings = Notification.Name("openLicenseSettings")
 }
 
+/// Tooltip that works through the AU ViewBridge (NSView .toolbarTooltip() / .toolTip doesn't).
+/// Shows a floating label below the view after a short hover delay.
+private struct ToolbarTooltip: ViewModifier {
+    let text: String
+    @State private var isHovering = false
+    @State private var showTooltip = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                isHovering = hovering
+                if hovering {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        if isHovering { showTooltip = true }
+                    }
+                } else {
+                    showTooltip = false
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if showTooltip {
+                    Text(text)
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color(nsColor: .windowBackgroundColor))
+                        .cornerRadius(4)
+                        .shadow(radius: 2)
+                        .fixedSize()
+                        .offset(y: 22)
+                        .zIndex(100)
+                        .allowsHitTesting(false)
+                }
+            }
+    }
+}
+
+private extension View {
+    func toolbarTooltip(_ text: String) -> some View {
+        modifier(ToolbarTooltip(text: text))
+    }
+}
+
 /// Toolbar for browsing, running, saving, and deleting presets.
 struct PresetToolbar: View {
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var aiService: AIService
     @ObservedObject var licenseManager: LicenseManager
     var isCompiling: Bool = false
+    var hasUnrunChanges: Bool = false
     @Binding var selectedLanguage: ScriptLanguage
     @Binding var showSpectrogram: Bool
     @Binding var showChat: Bool
@@ -36,14 +80,7 @@ struct PresetToolbar: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // Previous preset
-            Button(action: selectPrevious) {
-                Image(systemName: "chevron.left")
-            }
-            .buttonStyle(.borderless)
-            .disabled(presetManager.presets.isEmpty)
-            .accessibilityIdentifier("prevPresetButton")
-
+            // — Preset zone —
             // Preset picker menu
             Menu {
                 Section("Factory") {
@@ -89,14 +126,6 @@ struct PresetToolbar: View {
             .frame(minWidth: 100, maxWidth: 200)
             .accessibilityIdentifier("presetMenu")
 
-            // Next preset
-            Button(action: selectNext) {
-                Image(systemName: "chevron.right")
-            }
-            .buttonStyle(.borderless)
-            .disabled(presetManager.presets.isEmpty)
-            .accessibilityIdentifier("nextPresetButton")
-
             // Language selector
             Picker("", selection: $selectedLanguage) {
                 Text("Python").tag(ScriptLanguage.python)
@@ -110,27 +139,46 @@ struct PresetToolbar: View {
 
             Spacer()
 
-            // Run (compile if needed, then load into kernel)
-            Button("Run") {
-                onRun()
+            // — Script actions zone —
+            Divider().frame(height: 20)
+
+            // Run
+            Button(action: { onRun() }) {
+                Image(systemName: "play.fill")
+                    .overlay(alignment: .topTrailing) {
+                        if hasUnrunChanges {
+                            Circle()
+                                .fill(.orange)
+                                .frame(width: 6, height: 6)
+                                .offset(x: 3, y: -3)
+                        }
+                    }
             }
+            .buttonStyle(.borderless)
             .disabled(isCompiling)
+            .toolbarTooltip("Run (\u{2318}R)")
             .accessibilityIdentifier("runButton")
 
             // Save (overwrite current user preset)
             if currentIsUserPreset {
-                Button("Save") {
-                    onSave()
+                Button(action: { onSave() }) {
+                    Image(systemName: "square.and.arrow.down")
                 }
+                .buttonStyle(.borderless)
                 .disabled(!presetManager.isModified)
+                .toolbarTooltip("Save (\u{2318}S)")
                 .accessibilityIdentifier("savePresetButton")
             }
 
-            // Save As...
-            Button("Save As\u{2026}") {
+            // Save As
+            Button(action: {
                 saveAsName = presetManager.currentPreset?.name ?? ""
                 showingSaveAs = true
+            }) {
+                Image(systemName: "square.and.arrow.down.on.square")
             }
+            .buttonStyle(.borderless)
+            .toolbarTooltip("Save As\u{2026}")
             .accessibilityIdentifier("saveAsButton")
             .popover(isPresented: $showingSaveAs) {
                 SaveAsPopover(
@@ -145,9 +193,11 @@ struct PresetToolbar: View {
             }
 
             // New script
-            Button("New") {
-                onNew()
+            Button(action: { onNew() }) {
+                Image(systemName: "doc.badge.plus")
             }
+            .buttonStyle(.borderless)
+            .toolbarTooltip("New (\u{2318}N)")
             .accessibilityIdentifier("newScriptButton")
 
             // Delete (user presets only)
@@ -156,6 +206,7 @@ struct PresetToolbar: View {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.borderless)
+                .toolbarTooltip("Delete preset")
                 .accessibilityIdentifier("deletePresetButton")
                 .alert("Delete Preset", isPresented: $showDeleteConfirm) {
                     Button("Delete", role: .destructive) {
@@ -167,6 +218,9 @@ struct PresetToolbar: View {
                 }
             }
 
+            // — Panel toggles zone —
+            Divider().frame(height: 20)
+
             // Export as standalone AU
             Button(action: {
                 exportName = presetManager.currentPreset?.name ?? "My Effect"
@@ -176,12 +230,12 @@ struct PresetToolbar: View {
                     ProgressView()
                         .controlSize(.small)
                 } else {
-                    Image(systemName: "square.and.arrow.up")
+                    Image(systemName: "arrow.up.doc")
                 }
             }
             .buttonStyle(.borderless)
             .disabled(!licenseManager.isLicensed || isExporting || isCompiling)
-            .help(licenseManager.isLicensed ? "Export as standalone AU" : "License required to export")
+            .toolbarTooltip(licenseManager.isLicensed ? "Export as standalone AU" : "License required to export")
             .accessibilityIdentifier("exportButton")
             .popover(isPresented: $showingExport) {
                 ExportPopover(
@@ -201,16 +255,19 @@ struct PresetToolbar: View {
                 Image(systemName: showChat ? "bubble.left.fill" : "bubble.left")
             }
             .buttonStyle(.borderless)
-            .help(showChat ? "Hide AI chat" : "Show AI chat")
+            .toolbarTooltip(showChat ? "Hide AI chat" : "Show AI chat")
             .accessibilityIdentifier("chatToggleButton")
 
             // Spectrogram toggle
             Button(action: { showSpectrogram.toggle() }) {
-                Image(systemName: showSpectrogram ? "chart.bar.xaxis.ascending" : "chart.bar.xaxis")
+                Image(systemName: showSpectrogram ? "waveform.path.ecg.rectangle" : "waveform.path.ecg")
             }
             .buttonStyle(.borderless)
-            .help(showSpectrogram ? "Hide spectrogram" : "Show spectrogram")
+            .toolbarTooltip(showSpectrogram ? "Hide spectrogram" : "Show spectrogram")
             .accessibilityIdentifier("spectrogramToggleButton")
+
+            // — Status/settings zone —
+            Divider().frame(height: 20)
 
             // Demo mode indicator
             if !licenseManager.isLicensed {
@@ -229,6 +286,7 @@ struct PresetToolbar: View {
                 Image(systemName: "gearshape")
             }
             .buttonStyle(.borderless)
+            .toolbarTooltip("Settings")
             .accessibilityIdentifier("settingsButton")
             .popover(isPresented: $showingSettings) {
                 VStack(spacing: 0) {
@@ -241,35 +299,12 @@ struct PresetToolbar: View {
                 }
             }
         }
+        .font(.system(size: 14))
         .padding(.horizontal, 8)
-        .padding(.vertical, 2)
-        .controlSize(.small)
+        .padding(.vertical, 4)
         .onReceive(NotificationCenter.default.publisher(for: .openLicenseSettings)) { _ in
             showingSettings = true
         }
     }
 
-    private func selectPrevious() {
-        let presets = presetManager.presets
-        guard !presets.isEmpty else { return }
-        guard let current = presetManager.currentPreset,
-              let idx = presets.firstIndex(where: { $0.id == current.id }) else {
-            onSelectPreset(presets.last!)
-            return
-        }
-        let prevIdx = idx == presets.startIndex ? presets.index(before: presets.endIndex) : presets.index(before: idx)
-        onSelectPreset(presets[prevIdx])
-    }
-
-    private func selectNext() {
-        let presets = presetManager.presets
-        guard !presets.isEmpty else { return }
-        guard let current = presetManager.currentPreset,
-              let idx = presets.firstIndex(where: { $0.id == current.id }) else {
-            onSelectPreset(presets.first!)
-            return
-        }
-        let nextIdx = presets.index(after: idx)
-        onSelectPreset(nextIdx < presets.endIndex ? presets[nextIdx] : presets.first!)
-    }
 }

@@ -20,7 +20,7 @@ struct BearBoneExtensionMainView: View {
     var defaultScriptSource: String
     var defaultLanguage: ScriptLanguage = .python
     var extensionBundle: Bundle
-    var scriptSourcePublisher: AnyPublisher<String, Never>?
+    var scriptSourcePublisher: AnyPublisher<BearBoneExtensionAudioUnit.ScriptSourceChange, Never>?
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var aiService: AIService
     @ObservedObject var chatService: ChatService
@@ -40,11 +40,12 @@ struct BearBoneExtensionMainView: View {
     @State private var errorMessage: String?
     @State private var showingSaveAs = false
     @State private var saveAsName = ""
-    @State private var showSuccess: Bool = false
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
     @State private var isCompiling: Bool = false
+    @State private var lastRunSource: String = ""
     @State private var showSpectrogram: Bool = false
     @State private var showChat: Bool = false
+    @State private var chatWidth: CGFloat = 280
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
     @State private var showExportAlert: Bool = false
@@ -71,6 +72,7 @@ struct BearBoneExtensionMainView: View {
                 aiService: aiService,
                 licenseManager: licenseManager,
                 isCompiling: isCompiling,
+                hasUnrunChanges: scriptSource != lastRunSource,
                 selectedLanguage: $selectedLanguage,
                 showSpectrogram: $showSpectrogram,
                 showChat: $showChat,
@@ -80,6 +82,7 @@ struct BearBoneExtensionMainView: View {
                         selectedLanguage = preset.language
                         let result = await onSelectPreset(preset)
                         isCompiling = false
+                        if result.success { lastRunSource = scriptSource }
                         handleResult(result)
                     }
                 },
@@ -88,6 +91,7 @@ struct BearBoneExtensionMainView: View {
                         isCompiling = true
                         let result = await onRun(scriptSource)
                         isCompiling = false
+                        if result.success { lastRunSource = scriptSource }
                         handleResult(result)
                     }
                 },
@@ -139,25 +143,29 @@ struct BearBoneExtensionMainView: View {
             // Chat sidebar (collapsible, left side)
             if showChat {
                 ChatSidebarView(chatService: chatService)
-                    .frame(width: 280)
+                    .frame(width: chatWidth)
 
+                // Resizable divider
                 Rectangle()
                     .fill(Color.secondary.opacity(0.2))
                     .frame(width: 4)
                     .contentShape(Rectangle().inset(by: -4))
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                chatWidth = max(200, min(450, chatWidth + value.translation.width))
+                            }
+                    )
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.resizeLeftRight.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
             }
 
-            VStack(spacing: 8) {
-                if buildID != 0 {
-                    Text(verbatim: "Build \(buildID)")
-                        .font(.caption2.monospaced())
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .padding(.horizontal)
-                        .padding(.top, 4)
-                        .accessibilityIdentifier("buildIDLabel")
-                }
-
+            VStack(spacing: 0) {
                 HighlightedTextEditor(
                     text: $scriptSource,
                     colorScheme: colorScheme,
@@ -167,47 +175,50 @@ struct BearBoneExtensionMainView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .border(Color.secondary.opacity(0.3), width: 1)
                 .padding(.horizontal)
-                .padding(.top, buildID != 0 ? 0 : 8)
+                .padding(.top, 8)
 
-                if isCompiling {
-                    HStack(spacing: 4) {
+                // Persistent status bar
+                HStack(spacing: 4) {
+                    if isCompiling {
                         ProgressView()
                             .controlSize(.small)
                         Text("Compiling\u{2026}")
                             .foregroundColor(.secondary)
-                            .font(.caption)
-                    }
-                    .padding(.horizontal)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("compilingStatus")
-                } else if let errorMessage = errorMessage {
-                    Text(errorMessage)
-                        .foregroundColor(.red)
-                        .font(.caption)
-                        .lineLimit(3)
-                        .padding(.horizontal)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityIdentifier("errorStatus")
-                } else if showSuccess {
-                    if let benchmark = lastBenchmark {
-                        Text(String(format: "Script reloaded — %.1fms / %.1fms budget", benchmark.processTimeMs, benchmark.budgetMs))
+                            .accessibilityIdentifier("compilingStatus")
+                    } else if let errorMessage = errorMessage {
+                        Text(errorMessage)
+                            .foregroundColor(.red)
+                            .lineLimit(3)
+                            .accessibilityIdentifier("errorStatus")
+                        Button(action: {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(errorMessage, forType: .string)
+                        }) {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        .buttonStyle(.borderless)
+                    } else if let benchmark = lastBenchmark {
+                        Text(String(format: "%.1fms / %.1fms budget", benchmark.processTimeMs, benchmark.budgetMs))
                             .foregroundColor(benchmarkColor)
-                            .font(.caption)
-                            .padding(.horizontal)
-                            .frame(maxWidth: .infinity, alignment: .leading)
                             .accessibilityIdentifier("successStatus")
                     } else {
-                        Text("Script reloaded successfully")
-                            .foregroundColor(.green)
-                            .font(.caption)
-                            .padding(.horizontal)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityIdentifier("successStatus")
+                        Text("Ready")
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    if buildID != 0 {
+                        Text(verbatim: "Build \(buildID)")
+                            .foregroundColor(.secondary)
+                            .accessibilityIdentifier("buildIDLabel")
                     }
                 }
-
+                .font(.caption.monospaced())
+                .padding(.horizontal)
+                .padding(.vertical, 4)
             }
-            .padding(.bottom, 8)
+            .padding(.bottom, 4)
 
             // Spectrogram side panel (collapsible)
             if showSpectrogram {
@@ -302,11 +313,18 @@ struct BearBoneExtensionMainView: View {
         }
         .onAppear {
             scriptSource = defaultScriptSource
+            lastRunSource = defaultScriptSource
             selectedLanguage = defaultLanguage
         }
-        .onReceive(scriptSourcePublisher ?? Empty().eraseToAnyPublisher()) { newSource in
-            scriptSource = newSource
-            selectedLanguage = ScriptLanguage.detect(from: newSource)
+        .onReceive(scriptSourcePublisher ?? Empty().eraseToAnyPublisher()) { change in
+            scriptSource = change.source
+            lastRunSource = change.source
+            selectedLanguage = ScriptLanguage.detect(from: change.source)
+            // Clear error — this fires after successful compile (preset select, AI fix, fullState restore)
+            errorMessage = nil
+            if let processTimeMs = change.processTimeMs, let budgetMs = change.budgetMs {
+                lastBenchmark = (processTimeMs, budgetMs)
+            }
         }
         .onChange(of: scriptSource) { _, newValue in
             presetManager.scriptDidChange(to: newValue)
@@ -320,10 +338,16 @@ struct BearBoneExtensionMainView: View {
             }
         }
         .background(
-            Button(action: handleCmdS) { EmptyView() }
-                .keyboardShortcut("s", modifiers: .command)
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
+            Group {
+                Button(action: handleCmdS) { EmptyView() }
+                    .keyboardShortcut("s", modifiers: .command)
+                Button(action: handleCmdR) { EmptyView() }
+                    .keyboardShortcut("r", modifiers: .command)
+                Button(action: handleCmdN) { EmptyView() }
+                    .keyboardShortcut("n", modifiers: .command)
+            }
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
         )
     }
 
@@ -343,6 +367,22 @@ struct BearBoneExtensionMainView: View {
         }
     }
 
+    private func handleCmdR() {
+        guard !isCompiling else { return }
+        Task {
+            isCompiling = true
+            let result = await onRun(scriptSource)
+            isCompiling = false
+            if result.success { lastRunSource = scriptSource }
+            handleResult(result)
+        }
+    }
+
+    private func handleCmdN() {
+        let result = onNew(selectedLanguage)
+        handleResult(result)
+    }
+
     private func isDefaultTemplate(_ source: String, for language: ScriptLanguage) -> Bool {
         guard let template = loadTemplate(for: language) else { return false }
         return source.trimmingCharacters(in: .whitespacesAndNewlines) == template.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -358,17 +398,12 @@ struct BearBoneExtensionMainView: View {
     private func handleResult(_ result: ScriptSaveResult) {
         if result.success {
             errorMessage = nil
-            showSuccess = true
             if let processTimeMs = result.processTimeMs, let budgetMs = result.budgetMs {
                 lastBenchmark = (processTimeMs, budgetMs)
             } else {
                 lastBenchmark = nil
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                showSuccess = false
-            }
         } else {
-            showSuccess = false
             lastBenchmark = nil
             errorMessage = result.error ?? "Unknown error"
         }

@@ -15,7 +15,8 @@ final class ToolExecutor {
     var presetManager: PresetManager?
 
     /// Callback to update the editor script source when compile_and_run succeeds.
-    var onScriptChanged: ((String) -> Void)?
+    /// Parameters: (source, processTimeMs, budgetMs)
+    var onScriptChanged: ((String, Double?, Double?) -> Void)?
 
     /// The last error from a script load/compile (tracked separately from AU).
     private(set) var lastError: String?
@@ -64,7 +65,7 @@ final class ToolExecutor {
 
         if result.success {
             lastError = nil
-            onScriptChanged?(source)
+            onScriptChanged?(source, result.processTimeMs, result.budgetMs)
             var response: [String: Any] = ["success": true]
             if let processTimeMs = result.processTimeMs, let budgetMs = result.budgetMs {
                 response["process_time_ms"] = String(format: "%.2f", processTimeMs)
