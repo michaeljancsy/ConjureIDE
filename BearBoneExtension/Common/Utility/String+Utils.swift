@@ -20,18 +20,4 @@ extension String {
         }
         return true
     }
-
-    /// Strips leading markdown code fences (e.g. ```python) and trailing ``` from AI responses.
-    func strippingCodeFences() -> String {
-        var result = self
-        // Strip leading ```<language>\n or ```\n
-        if let range = result.range(of: #"^\s*```\w*\n?"#, options: .regularExpression) {
-            result.removeSubrange(range)
-        }
-        // Strip trailing \n```
-        if let range = result.range(of: #"\n?```\s*$"#, options: .regularExpression) {
-            result.removeSubrange(range)
-        }
-        return result
-    }
 }

@@ -40,6 +40,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 
     private var hostingView: SafeHostingView<BearBoneExtensionMainView>?
     private var aiService: AIService?
+    private var chatService: ChatService?
     private var captureManager: AudioCaptureManager?
     private var parameterState: ParameterState?
     private var licenseManager: LicenseManager?
@@ -142,6 +143,16 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             aiService = AIService()
         }
         let ai = aiService!
+
+        if chatService == nil {
+            chatService = ChatService(aiService: ai)
+        }
+        let chat = chatService!
+        chat.toolExecutor.audioUnit = au
+        chat.toolExecutor.presetManager = pm
+        chat.toolExecutor.onScriptChanged = { [weak au] source in
+            au?.scriptSourceDidChange.send(source)
+        }
 
         if captureManager == nil {
             captureManager = AudioCaptureManager()
@@ -344,6 +355,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             scriptSourcePublisher: scriptPublisher,
             presetManager: pm,
             aiService: ai,
+            chatService: chat,
             captureManager: capture,
             parameterState: ps,
             licenseManager: lm,

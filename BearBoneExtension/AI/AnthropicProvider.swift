@@ -32,6 +32,17 @@ final class AnthropicProvider: AIProvider {
         Real-time safety rules — process() runs in the audio callback, so every allocation, \
         deallocation, or hidden Python overhead causes glitches:
 
+        VECTORIZE EVERYTHING — never use per-sample Python loops:
+        - NEVER use `for i in range(frame_count)` — this is catastrophically slow
+        - ALWAYS use numpy vectorized operations on entire arrays/slices at once
+        - Example: instead of looping to apply gain, do `np.multiply(inputs[ch][:frame_count], gain, out=outputs[ch][:frame_count])`
+        - For LFOs/oscillators: pre-allocate a phase array global, compute all samples with \
+          np.sin(phase_array, out=lfo_buf) in one call, then multiply with audio
+        - For sample-by-sample state (e.g. filters with feedback): use a pre-allocated buffer and \
+          vectorize as much as possible, only falling back to a Python loop for the minimal \
+          feedback path if absolutely necessary
+        - The channel loop `for ch in range(channels)` is fine (only 1-2 iterations)
+
         ALLOCATIONS — never allocate inside process():
         - No new lists, dicts, sets, tuples, or strings
         - No list comprehensions, generator expressions, or range() calls
@@ -107,101 +118,54 @@ final class AnthropicProvider: AIProvider {
         - Constants via const or static
         """
 
-    private static let rustSystemPrompt = """
-        You are a DSP script generator for a real-time audio plugin compiled to WebAssembly. \
-        Generate Rust scripts that define a `process()` function and static buffers.
+    // MARK: - Chat (Multi-turn with Tool Use)
 
-        \(rustApiContract)
+    /// Events streamed from a chat request. The caller assembles these into ContentBlocks.
+    enum ChatEvent {
+        /// A chunk of text from the assistant.
+        case textDelta(String)
+        /// A tool use block has started (provides the tool name and call ID).
+        case toolUseStart(id: String, name: String)
+        /// A chunk of the tool input JSON string.
+        case toolInputDelta(String)
+        /// The current content block has ended.
+        case contentBlockEnd
+        /// The message is complete. Contains the stop reason.
+        case messageStop(stopReason: String?)
+    }
 
-        \(rustRealTimeRules)
+    /// The system prompt for the chat sidebar, which has access to tools.
+    static let chatSystemPrompt = """
+        You are a DSP assistant for BearBone, a real-time audio plugin. You help users create, \
+        modify, and debug audio effect scripts. You can compile and run scripts, read errors, \
+        set parameters, and manage presets.
 
-        Output ONLY the Rust source code. No explanations, no markdown fences, no comments about \
-        what the script does. The script must be complete and immediately compilable.
-        """
+        When the user asks you to create or modify an effect, use the compile_and_run tool \
+        to load it into the audio engine. If compilation fails, read the error and fix the script \
+        automatically. Always compile and run scripts rather than just showing code.
 
-    private static let rustFixSystemPrompt = """
-        You are a DSP script debugger for a real-time audio plugin compiled to WebAssembly. \
-        The user's Rust DSP script has a compilation or runtime error. Fix the script to resolve \
-        the error while preserving the intended behavior.
-
-        \(rustApiContract)
-
-        \(rustRealTimeRules)
-
-        Output ONLY the corrected Rust source code. No explanations, no markdown fences.
-        """
-
-    private static let systemPrompt = """
-        You are a DSP script generator for a real-time audio plugin. Generate Python scripts \
-        that define a `process()` function.
+        When modifying an existing script, use get_script first to read the current source, \
+        then make targeted changes rather than rewriting from scratch.
 
         \(apiContract)
 
         \(realTimeRules)
 
-        Output ONLY the Python script. No explanations, no markdown fences, no comments about what \
-        the script does. The script must be complete and immediately executable.
+        \(rustApiContract)
+
+        \(rustRealTimeRules)
+
+        Keep responses concise. Focus on what you did and any relevant details (timing, \
+        parameter mappings). Don't repeat the full script back unless asked.
         """
 
-    private static let fixSystemPrompt = """
-        You are a DSP script debugger for a real-time audio plugin. The user's Python DSP script has \
-        an error. Fix the script to resolve the error while preserving the intended behavior.
-
-        \(apiContract)
-
-        \(realTimeRules)
-
-        Output ONLY the corrected Python script. No explanations, no markdown fences.
-        """
-
-    func generateScript(
-        prompt: String,
-        existingScript: String?,
-        language: ScriptLanguage,
-        apiKey: String
-    ) -> AsyncThrowingStream<String, Error> {
-        var userContent = prompt
-        if let existingScript, !existingScript.isEmpty {
-            userContent += "\n\nHere is the current script for reference:\n```\n\(existingScript)\n```"
-        }
-
-        let messages: [[String: String]] = [
-            ["role": "user", "content": userContent],
-        ]
-
-        let prompt = language == .rust ? Self.rustSystemPrompt : Self.systemPrompt
-        return streamRequest(messages: messages, systemPrompt: prompt, apiKey: apiKey)
-    }
-
-    func fixScript(
-        script: String,
-        error: String,
-        language: ScriptLanguage,
-        apiKey: String
-    ) -> AsyncThrowingStream<String, Error> {
-        let userContent = """
-            This script produced the following error:
-            \(error)
-
-            Script:
-            ```
-            \(script)
-            ```
-            """
-
-        let messages: [[String: String]] = [
-            ["role": "user", "content": userContent],
-        ]
-
-        let prompt = language == .rust ? Self.rustFixSystemPrompt : Self.fixSystemPrompt
-        return streamRequest(messages: messages, systemPrompt: prompt, apiKey: apiKey)
-    }
-
-    private func streamRequest(
-        messages: [[String: String]],
+    /// Stream a chat request with tool definitions. Returns ChatEvents.
+    func streamChat(
+        messages: [[String: Any]],
+        tools: [[String: Any]],
         systemPrompt: String,
         apiKey: String
-    ) -> AsyncThrowingStream<String, Error> {
+    ) -> AsyncThrowingStream<ChatEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task.detached { [self] in
                 do {
@@ -211,13 +175,16 @@ final class AnthropicProvider: AIProvider {
                     request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
                     request.setValue("application/json", forHTTPHeaderField: "content-type")
 
-                    let body: [String: Any] = [
+                    var body: [String: Any] = [
                         "model": model,
                         "max_tokens": 4096,
                         "stream": true,
                         "system": systemPrompt,
                         "messages": messages,
                     ]
+                    if !tools.isEmpty {
+                        body["tools"] = tools
+                    }
                     request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
                     let (bytes, response) = try await self.session.bytes(for: request)
@@ -226,7 +193,7 @@ final class AnthropicProvider: AIProvider {
                         throw AIProviderError.invalidResponse("Not an HTTP response")
                     }
 
-                    self.log.info("HTTP status: \(httpResponse.statusCode)")
+                    self.log.info("Chat HTTP status: \(httpResponse.statusCode)")
 
                     switch httpResponse.statusCode {
                     case 200:
@@ -238,7 +205,6 @@ final class AnthropicProvider: AIProvider {
                             .flatMap(Int.init)
                         throw AIProviderError.rateLimited(retryAfterSeconds: retryAfter)
                     default:
-                        // Try to read error body
                         var errorBody = ""
                         for try await line in bytes.lines {
                             errorBody += line
@@ -251,35 +217,69 @@ final class AnthropicProvider: AIProvider {
                         )
                     }
 
-                    var chunkCount = 0
+                    var stopReason: String?
+
                     for try await event in SSEParser.events(from: bytes) {
                         if Task.isCancelled { break }
-
                         guard let eventType = event.type else { continue }
 
                         switch eventType {
-                        case "content_block_delta":
-                            if let text = parseContentBlockDelta(event.data) {
-                                chunkCount += 1
-                                continuation.yield(text)
-                            } else {
-                                self.log.warning(
-                                    "Failed to parse content_block_delta: \(event.data.prefix(200))"
-                                )
+                        case "content_block_start":
+                            // Parse tool_use block starts
+                            if let parsed = self.parseJSON(event.data),
+                               let contentBlock = parsed["content_block"] as? [String: Any],
+                               let blockType = contentBlock["type"] as? String,
+                               blockType == "tool_use",
+                               let id = contentBlock["id"] as? String,
+                               let name = contentBlock["name"] as? String
+                            {
+                                continuation.yield(.toolUseStart(id: id, name: name))
                             }
+
+                        case "content_block_delta":
+                            if let parsed = self.parseJSON(event.data),
+                               let delta = parsed["delta"] as? [String: Any],
+                               let deltaType = delta["type"] as? String
+                            {
+                                switch deltaType {
+                                case "text_delta":
+                                    if let text = delta["text"] as? String {
+                                        continuation.yield(.textDelta(text))
+                                    }
+                                case "input_json_delta":
+                                    if let json = delta["partial_json"] as? String {
+                                        continuation.yield(.toolInputDelta(json))
+                                    }
+                                default:
+                                    break
+                                }
+                            }
+
+                        case "content_block_stop":
+                            continuation.yield(.contentBlockEnd)
+
+                        case "message_delta":
+                            if let parsed = self.parseJSON(event.data),
+                               let delta = parsed["delta"] as? [String: Any]
+                            {
+                                stopReason = delta["stop_reason"] as? String
+                            }
+
                         case "message_stop":
-                            self.log.info("Stream complete, yielded \(chunkCount) chunks")
+                            continuation.yield(.messageStop(stopReason: stopReason))
                             continuation.finish()
                             return
+
                         case "error":
                             let message = parseErrorEvent(event.data)
                             throw AIProviderError.invalidResponse(message)
+
                         default:
                             break
                         }
                     }
 
-                    self.log.info("Stream ended (no message_stop), yielded \(chunkCount) chunks")
+                    continuation.yield(.messageStop(stopReason: stopReason))
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish(throwing: AIProviderError.cancelled)
@@ -295,6 +295,8 @@ final class AnthropicProvider: AIProvider {
             }
         }
     }
+
+    // MARK: - Parsing Helpers
 
     /// Parse the text from a content_block_delta SSE event.
     func parseContentBlockDelta(_ json: String) -> String? {
@@ -314,5 +316,13 @@ final class AnthropicProvider: AIProvider {
             let message = error["message"] as? String
         else { return json }
         return message
+    }
+
+    /// Parse a JSON string into a dictionary.
+    private func parseJSON(_ json: String) -> [String: Any]? {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return obj
     }
 }

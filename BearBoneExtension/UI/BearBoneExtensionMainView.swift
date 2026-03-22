@@ -23,6 +23,7 @@ struct BearBoneExtensionMainView: View {
     var scriptSourcePublisher: AnyPublisher<String, Never>?
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var aiService: AIService
+    @ObservedObject var chatService: ChatService
     @ObservedObject var captureManager: AudioCaptureManager
     @ObservedObject var parameterState: ParameterState
     @ObservedObject var licenseManager: LicenseManager
@@ -43,6 +44,7 @@ struct BearBoneExtensionMainView: View {
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
     @State private var isCompiling: Bool = false
     @State private var showSpectrogram: Bool = false
+    @State private var showChat: Bool = false
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
     @State private var showExportAlert: Bool = false
@@ -71,6 +73,7 @@ struct BearBoneExtensionMainView: View {
                 isCompiling: isCompiling,
                 selectedLanguage: $selectedLanguage,
                 showSpectrogram: $showSpectrogram,
+                showChat: $showChat,
                 onSelectPreset: { preset in
                     Task {
                         isCompiling = true
@@ -103,11 +106,6 @@ struct BearBoneExtensionMainView: View {
                     let result = onNew(selectedLanguage)
                     handleResult(result)
                 },
-                onGenerate: { prompt in
-                    aiService.generate(prompt: prompt, existingScript: scriptSource, language: selectedLanguage) { accumulated in
-                        scriptSource = accumulated
-                    }
-                },
                 onExport: { name in
                     Task {
                         isExporting = true
@@ -138,6 +136,17 @@ struct BearBoneExtensionMainView: View {
 
             ZStack {
             HStack(spacing: 0) {
+            // Chat sidebar (collapsible, left side)
+            if showChat {
+                ChatSidebarView(chatService: chatService)
+                    .frame(width: 280)
+
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.2))
+                    .frame(width: 4)
+                    .contentShape(Rectangle().inset(by: -4))
+            }
+
             VStack(spacing: 8) {
                 if buildID != 0 {
                     Text(verbatim: "Build \(buildID)")
@@ -153,13 +162,10 @@ struct BearBoneExtensionMainView: View {
                     text: $scriptSource,
                     colorScheme: colorScheme,
                     language: selectedLanguage,
-                    isEditable: !aiService.isGenerating
+                    isEditable: true
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .border(
-                    aiService.isGenerating ? Color.accentColor : Color.secondary.opacity(0.3),
-                    width: aiService.isGenerating ? 2 : 1
-                )
+                .border(Color.secondary.opacity(0.3), width: 1)
                 .padding(.horizontal)
                 .padding(.top, buildID != 0 ? 0 : 8)
 
@@ -175,26 +181,13 @@ struct BearBoneExtensionMainView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("compilingStatus")
                 } else if let errorMessage = errorMessage {
-                    HStack(spacing: 8) {
-                        Text(errorMessage)
-                            .foregroundColor(.red)
-                            .font(.caption)
-                            .lineLimit(3)
-                            .accessibilityIdentifier("errorStatus")
-
-                        Spacer()
-
-                        Button("Fix with AI") {
-                            aiService.fix(script: scriptSource, error: errorMessage, language: selectedLanguage) { accumulated in
-                                scriptSource = accumulated
-                            }
-                        }
+                    Text(errorMessage)
+                        .foregroundColor(.red)
                         .font(.caption)
-                        .disabled(!aiService.hasAPIKey || aiService.isGenerating)
-                        .accessibilityIdentifier("fixWithAIButton")
-                    }
-                    .padding(.horizontal)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(3)
+                        .padding(.horizontal)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("errorStatus")
                 } else if showSuccess {
                     if let benchmark = lastBenchmark {
                         Text(String(format: "Script reloaded — %.1fms / %.1fms budget", benchmark.processTimeMs, benchmark.budgetMs))
@@ -213,13 +206,6 @@ struct BearBoneExtensionMainView: View {
                     }
                 }
 
-                if case .error(let aiError) = aiService.state {
-                    Text(aiError)
-                        .foregroundColor(.orange)
-                        .font(.caption)
-                        .padding(.horizontal)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
             }
             .padding(.bottom, 8)
 
