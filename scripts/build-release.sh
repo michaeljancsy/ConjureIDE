@@ -22,6 +22,7 @@ xcodebuild archive \
     -scheme BearBone \
     -configuration Release \
     -archivePath "$ARCHIVE_PATH" \
+    -arch arm64 \
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
     | tail -1
 
