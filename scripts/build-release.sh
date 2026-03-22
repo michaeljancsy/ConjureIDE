@@ -23,6 +23,8 @@ xcodebuild archive \
     -configuration Release \
     -archivePath "$ARCHIVE_PATH" \
     -arch arm64 \
+    CODE_SIGN_STYLE=Manual \
+    CODE_SIGN_IDENTITY="Developer ID Application" \
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
     | tail -1
 
