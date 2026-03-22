@@ -30,9 +30,8 @@ struct SpectrogramSidePanel: View {
                     } label: {
                         EmptyView()
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
                     .labelsHidden()
-                    .frame(maxWidth: 160)
 
                     Spacer(minLength: 0)
 
