@@ -11,14 +11,10 @@ struct ParameterSlidersView: View {
     @ObservedObject var parameterState: ParameterState
     @State private var isExpanded: Bool = true
 
-    /// Indices of parameters to display.
-    /// When paramNames is nil, show all 8 (backward compatible).
-    /// When paramNames is set, show only the declared indices.
+    /// Indices of parameters to display, from the declared param names.
     private var visibleIndices: [Int] {
-        if let names = parameterState.paramNames {
-            return Array(names.keys).sorted()
-        }
-        return Array(0..<8)
+        guard let names = parameterState.paramNames else { return [] }
+        return Array(names.keys).sorted()
     }
 
     /// Label for a parameter at the given index.
@@ -27,19 +23,21 @@ struct ParameterSlidersView: View {
     }
 
     var body: some View {
-        DisclosureGroup("Parameters", isExpanded: $isExpanded) {
-            VStack(spacing: 4) {
-                ForEach(visibleIndices, id: \.self) { index in
-                    ParameterSliderRow(
-                        label: label(for: index),
-                        value: parameterState.binding(for: index)
-                    )
+        if !visibleIndices.isEmpty {
+            DisclosureGroup("Parameters", isExpanded: $isExpanded) {
+                VStack(spacing: 4) {
+                    ForEach(visibleIndices, id: \.self) { index in
+                        ParameterSliderRow(
+                            label: label(for: index),
+                            value: parameterState.binding(for: index)
+                        )
+                    }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
+            .padding(.horizontal)
+            .accessibilityIdentifier("parameterSlidersPanel")
         }
-        .padding(.horizontal)
-        .accessibilityIdentifier("parameterSlidersPanel")
     }
 }
 

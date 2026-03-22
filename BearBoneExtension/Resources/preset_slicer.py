@@ -1,7 +1,7 @@
 import numpy as np
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Rate"}
+# Parameters:
+RATE = 0
 
 # Max chunk size in samples (supports 500 ms at 96 kHz)
 MAX_CHUNK = 48000
@@ -28,7 +28,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     """
     global _record_buf, _play_buf, _write_pos, _chunk_size
 
-    chunk_ms = 10.0 + params[0] * 490.0  # 10 to 500 ms
+    chunk_ms = 10.0 + params[RATE] * 490.0  # 10 to 500 ms
 
     n_ch = len(inputs)
     chunk_size = int(chunk_ms * 0.001 * sample_rate)

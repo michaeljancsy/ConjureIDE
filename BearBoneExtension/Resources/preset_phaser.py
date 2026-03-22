@@ -1,8 +1,12 @@
 import numpy as np
 import math
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Rate", 1: "Min Freq", 2: "Max Freq", 3: "Stages", 4: "Mix"}
+# Parameters:
+RATE = 0
+MIN_FREQ = 1
+MAX_FREQ = 2
+STAGES = 3
+MIX = 4
 
 # Maximum number of allpass stages
 MAX_STAGES = 6
@@ -31,11 +35,11 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     """
     global _ap_state, _lfo_phase
 
-    rate_hz = 0.1 + params[0] * 4.9          # 0.1 to 5 Hz
-    min_freq = 50.0 + params[1] * 450.0      # 50 to 500 Hz
-    max_freq = 500.0 + params[2] * 9500.0    # 500 to 10000 Hz
-    stages = int(params[3] * 4) + 2          # 2 to 6
-    mix = params[4]                           # 0 to 1
+    rate_hz = 0.1 + params[RATE] * 4.9          # 0.1 to 5 Hz
+    min_freq = 50.0 + params[MIN_FREQ] * 450.0      # 50 to 500 Hz
+    max_freq = 500.0 + params[MAX_FREQ] * 9500.0    # 500 to 10000 Hz
+    stages = int(params[STAGES] * 4) + 2          # 2 to 6
+    mix = params[MIX]                           # 0 to 1
 
     n_ch = len(inputs)
     two_pi = 2.0 * math.pi

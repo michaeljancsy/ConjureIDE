@@ -1,8 +1,8 @@
 import numpy as np
 import math
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Cutoff"}
+# Parameters:
+CUTOFF = 0
 
 # Persistent state: previous output per channel
 _prev_out = [0.0, 0.0]
@@ -21,7 +21,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     global _prev_out
 
     # Exponential mapping: 20 Hz to 20 kHz
-    cutoff_hz = 20.0 * (1000.0 ** params[0])
+    cutoff_hz = 20.0 * (1000.0 ** params[CUTOFF])
 
     a = math.exp(-2.0 * math.pi * cutoff_hz / sample_rate)
     b = 1.0 - a

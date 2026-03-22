@@ -34,6 +34,7 @@ struct BearBoneExtensionMainView: View {
     var onDeletePreset: () -> Void
     var onNew: (ScriptLanguage) -> ScriptSaveResult
     var onExport: (String) async -> ExportResult
+    var defaultBenchmark: (processTimeMs: Double, budgetMs: Double)?
 
     @State private var scriptSource: String = ""
     @State private var selectedLanguage: ScriptLanguage = .python
@@ -318,6 +319,9 @@ struct BearBoneExtensionMainView: View {
             scriptSource = defaultScriptSource
             lastRunSource = defaultScriptSource
             selectedLanguage = defaultLanguage
+            if let bench = defaultBenchmark {
+                lastBenchmark = bench
+            }
         }
         .onReceive(scriptSourcePublisher ?? Empty().eraseToAnyPublisher()) { change in
             scriptSource = change.source

@@ -1,8 +1,9 @@
 import numpy as np
 import math
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Gain", 1: "Pan"}
+# Parameters:
+GAIN = 0
+PAN = 1
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -15,8 +16,8 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         0 (Gain): Volume — 0.0 = -24 dB, 0.5 = 0 dB, 1.0 = +12 dB
         1 (Pan):  Stereo position — 0.0 = hard left, 0.5 = center, 1.0 = hard right
     """
-    gain_db = -24.0 + params[0] * 36.0   # -24 dB to +12 dB
-    pan = params[1]                        # 0.0 (left) to 1.0 (right)
+    gain_db = -24.0 + params[GAIN] * 36.0   # -24 dB to +12 dB
+    pan = params[PAN]                        # 0.0 (left) to 1.0 (right)
 
     gain = 10.0 ** (gain_db / 20.0)
     n_ch = len(inputs)

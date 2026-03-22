@@ -1,7 +1,7 @@
 import numpy as np
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Frequency"}
+# Parameters:
+FREQUENCY = 0
 
 # Persistent phase across callbacks
 _phase = 0.0
@@ -22,7 +22,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     """
     global _phase
 
-    carrier_hz = 20.0 * (1000.0 ** params[0])  # 20 to 20000 Hz (log)
+    carrier_hz = 20.0 * (1000.0 ** params[FREQUENCY])  # 20 to 20000 Hz (log)
 
     t = np.arange(frame_count, dtype=np.float32) / sample_rate
     carrier = np.sin(2.0 * np.pi * carrier_hz * t + _phase)

@@ -1,8 +1,9 @@
 import numpy as np
 import math
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Cutoff", 1: "Resonance"}
+# Parameters:
+CUTOFF = 0
+RESONANCE = 1
 
 # Mode: "low", "high", "band", "notch"
 MODE = "low"
@@ -26,8 +27,8 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     """
     global _state
 
-    cutoff_hz = 20.0 * (1000.0 ** params[0])       # 20 to 20000 Hz (log)
-    resonance = 0.5 + params[1] * 9.5               # 0.5 to 10
+    cutoff_hz = 20.0 * (1000.0 ** params[CUTOFF])       # 20 to 20000 Hz (log)
+    resonance = 0.5 + params[RESONANCE] * 9.5               # 0.5 to 10
 
     f = 2.0 * math.sin(math.pi * cutoff_hz / sample_rate)
     q = 1.0 / resonance

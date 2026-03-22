@@ -1,7 +1,7 @@
 import numpy as np
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Drive"}
+# Parameters:
+DRIVE = 0
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -16,7 +16,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     Params:
         0 (Drive): Saturation amount — 0.0 = 1x, 1.0 = 15x
     """
-    drive = 1.0 + params[0] * 14.0  # 1 to 15
+    drive = 1.0 + params[DRIVE] * 14.0  # 1 to 15
     norm = 1.0 / np.tanh(drive)
 
     for ch in range(len(inputs)):

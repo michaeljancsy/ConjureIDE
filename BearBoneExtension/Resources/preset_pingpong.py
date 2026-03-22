@@ -1,7 +1,9 @@
 import numpy as np
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Time", 1: "Feedback", 2: "Mix"}
+# Parameters:
+TIME = 0
+FEEDBACK = 1
+MIX = 2
 
 # Max delay in samples (supports 500 ms at 96 kHz)
 MAX_DELAY = 48000
@@ -29,9 +31,9 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     """
     global _left_buf, _right_buf, _write_pos
 
-    delay_ms = 50.0 + params[0] * 450.0    # 50 to 500 ms
-    feedback = params[1] * 0.95            # 0 to 0.95
-    mix = params[2]                        # 0 to 1
+    delay_ms = 50.0 + params[TIME] * 450.0    # 50 to 500 ms
+    feedback = params[FEEDBACK] * 0.95            # 0 to 0.95
+    mix = params[MIX]                        # 0 to 1
 
     n_ch = len(inputs)
 

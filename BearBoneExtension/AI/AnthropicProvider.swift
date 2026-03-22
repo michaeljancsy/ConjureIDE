@@ -28,11 +28,14 @@ final class AnthropicProvider: AIProvider {
         - Must handle both mono (1 channel) and stereo (2 channels)
 
         Parameter names:
-        - Declare a module-level PARAM_NAMES dict to label your parameters and hide unused ones: \
-          PARAM_NAMES = {0: "Rate", 1: "Depth"}
-        - Only params with entries in PARAM_NAMES are shown in the UI; others are hidden
-        - Always declare PARAM_NAMES when your script uses params — it tells the user what each knob does
-        - Keys are integer addresses 0–7, values are short human-readable names
+        - Add a # Parameters: comment followed by named variable declarations: \
+          # Parameters: \
+          RATE = 0 \
+          DEPTH = 1
+        - Use these to read params in process(): params[RATE], params[DEPTH]
+        - Only declared params are shown in the UI; others are hidden
+        - Always declare params when your script uses params
+        - Variable names become UI labels with underscores replaced by spaces (e.g. BIT_DEPTH → "BIT DEPTH")
         """
 
     private static let realTimeRules = """
@@ -106,7 +109,7 @@ final class AnthropicProvider: AIProvider {
         - Use these consts to read params in process(): PARAMS_BUF[RATE], PARAMS_BUF[DEPTH]
         - Only declared params are shown in the UI; others are hidden
         - Always declare params when your script uses PARAMS_BUF
-        - Const names become UI labels (SCREAMING_SNAKE → Title Case, e.g. BIT_DEPTH → "Bit Depth")
+        - Const names become UI labels with underscores replaced by spaces (e.g. BIT_DEPTH → "BIT DEPTH")
         """
 
     private static let rustRealTimeRules = """

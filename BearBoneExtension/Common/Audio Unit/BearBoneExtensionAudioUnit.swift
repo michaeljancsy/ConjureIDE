@@ -136,6 +136,9 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		loadPythonScript()
 	}
 
+	/// Default preset loaded on AU init (before any fullState restore).
+	static let defaultPresetResource = "preset_stereowidth"
+
 	private func loadPythonScript() {
 		let bundle = Bundle(for: type(of: self))
 
@@ -147,8 +150,8 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 		self.pythonHome = pythonHome
 
-		guard let scriptPath = bundle.path(forResource: "process", ofType: "py") else {
-			pluginLog.error("process.py not found in bundle, using Rust fallback DSP")
+		guard let scriptPath = bundle.path(forResource: Self.defaultPresetResource, ofType: "py") else {
+			pluginLog.error("\(Self.defaultPresetResource).py not found in bundle, using Rust fallback DSP")
 			return
 		}
 
@@ -156,7 +159,18 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		let success = dsp_kernel_load_script(kernel, pythonHome, scriptPath)
 		if success {
 			pluginLog.info("Python DSP script loaded successfully")
-			readParamNames()
+
+			// Read source so the UI can display it
+			if let source = try? String(contentsOfFile: scriptPath, encoding: .utf8) {
+				currentScriptSource = source
+				readParamNames()
+				if let names = Self.parsePythonParamNames(fromSource: source) {
+					currentParamNames = names
+					paramNamesDidChange.send(names)
+				}
+			} else {
+				readParamNames()
+			}
 
 			// Warm-start: run process() a few times so any first-call allocations
 			// (e.g. global buffer creation) happen before real audio arrives.
@@ -176,53 +190,69 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
-	/// Parse Rust param names from source text.
+	/// Convert a SCREAMING_SNAKE_CASE name to a display label.
+	/// Replaces underscores with spaces, preserving original capitalization.
+	/// e.g. BIT_DEPTH → "BIT DEPTH", RATE → "RATE"
+	private static func displayLabel(from name: String) -> String {
+		name.replacingOccurrences(of: "_", with: " ")
+	}
+
+	/// Parse param names from source text for either Python or Rust.
 	///
-	/// Looks for a `// Parameters:` marker followed by `const NAME: usize = N;` lines.
-	/// Converts SCREAMING_SNAKE const names to Title Case labels (e.g. BIT_DEPTH → "Bit Depth").
-	/// Returns nil if no `// Parameters:` marker is found.
-	static func parseRustParamNames(fromSource source: String) -> [Int: String]? {
+	/// Looks for a `# Parameters:` (Python) or `// Parameters:` (Rust) marker,
+	/// then reads subsequent declarations:
+	/// - Python: `NAME = N`
+	/// - Rust: `const NAME: usize = N;`
+	///
+	/// Converts SCREAMING_SNAKE names to Title Case labels (e.g. BIT_DEPTH → "Bit Depth").
+	/// Returns nil if no marker is found.
+	static func parseParamNames(fromSource source: String) -> [Int: String]? {
 		let lines = source.components(separatedBy: .newlines)
 
-		// Find the "// Parameters:" marker line
+		// Find the "# Parameters:" or "// Parameters:" marker line
 		guard let markerIndex = lines.firstIndex(where: { line in
 			let trimmed = line.trimmingCharacters(in: .whitespaces)
-			return trimmed.range(of: #"^//\s*Parameters:"#, options: .regularExpression) != nil
+			return trimmed.range(of: #"^(#|//)\s*Parameters:"#, options: .regularExpression) != nil
 		}) else {
 			return nil
 		}
 
-		// Parse subsequent const declarations
-		let constPattern = try! NSRegularExpression(pattern: #"^\s*const\s+(\w+)\s*:\s*usize\s*=\s*(\d+)\s*;"#)
+		// Try both Python (NAME = N) and Rust (const NAME: usize = N;) patterns
+		let pythonPattern = try! NSRegularExpression(pattern: #"^\s*(\w+)\s*=\s*(\d+)\s*$"#)
+		let rustPattern = try! NSRegularExpression(pattern: #"^\s*const\s+(\w+)\s*:\s*usize\s*=\s*(\d+)\s*;"#)
 		var names: [Int: String] = [:]
 
 		for i in (markerIndex + 1)..<lines.count {
 			let line = lines[i]
 			let trimmed = line.trimmingCharacters(in: .whitespaces)
-
-			// Stop at blank line or non-const line (allow empty lines within block)
 			if trimmed.isEmpty { continue }
 
 			let range = NSRange(line.startIndex..., in: line)
-			guard let match = constPattern.firstMatch(in: line, range: range),
+			let match = pythonPattern.firstMatch(in: line, range: range)
+				?? rustPattern.firstMatch(in: line, range: range)
+
+			guard let match,
 				  let nameRange = Range(match.range(at: 1), in: line),
 				  let addrRange = Range(match.range(at: 2), in: line),
 				  let addr = Int(line[addrRange]),
 				  addr >= 0, addr < paramCount else {
-				break  // Stop parsing at first non-matching non-empty line
+				break
 			}
 
-			let constName = String(line[nameRange])
-			let label = constName
-				.split(separator: "_")
-				.map { word in
-					word.prefix(1).uppercased() + word.dropFirst().lowercased()
-				}
-				.joined(separator: " ")
-			names[addr] = label
+			names[addr] = displayLabel(from: String(line[nameRange]))
 		}
 
 		return names.isEmpty ? nil : names
+	}
+
+	/// Parse Rust param names from source text (convenience wrapper).
+	static func parseRustParamNames(fromSource source: String) -> [Int: String]? {
+		parseParamNames(fromSource: source)
+	}
+
+	/// Parse Python param names from source text (convenience wrapper).
+	static func parsePythonParamNames(fromSource source: String) -> [Int: String]? {
+		parseParamNames(fromSource: source)
 	}
 
 	/// Read script-declared parameter names from the Rust kernel via FFI.
@@ -277,6 +307,12 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			currentScriptSource = source
 			pluginLog.info("Python DSP script reloaded successfully")
 			readParamNames()
+
+			// Override param names from source text if available
+			if let names = Self.parsePythonParamNames(fromSource: source) {
+				currentParamNames = names
+				paramNamesDidChange.send(names)
+			}
 
 			// Benchmark the process function
 			let benchmarkSecs = dsp_kernel_benchmark_process(kernel)

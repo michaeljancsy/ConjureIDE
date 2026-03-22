@@ -1,7 +1,7 @@
 import numpy as np
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Width"}
+# Parameters:
+WIDTH = 0
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -17,7 +17,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     Params:
         0 (Width): Stereo width — 0.0 = mono, 0.5 = normal, 1.0 = 2x wide
     """
-    width = params[0] * 2.0  # 0 to 2
+    width = params[WIDTH] * 2.0  # 0 to 2
 
     n_ch = len(inputs)
 

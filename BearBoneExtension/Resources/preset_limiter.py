@@ -1,8 +1,10 @@
 import numpy as np
 import math
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Threshold", 1: "Attack", 2: "Release"}
+# Parameters:
+THRESHOLD = 0
+ATTACK = 1
+RELEASE = 2
 
 # Persistent envelope follower state
 _envelope = 0.0
@@ -26,9 +28,9 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     """
     global _envelope
 
-    threshold_db = -20.0 + params[0] * 20.0     # -20 to 0 dB
-    attack_ms = 0.01 + params[1] * 0.99         # 0.01 to 1 ms
-    release_ms = 10.0 + params[2] * 490.0       # 10 to 500 ms
+    threshold_db = -20.0 + params[THRESHOLD] * 20.0     # -20 to 0 dB
+    attack_ms = 0.01 + params[ATTACK] * 0.99         # 0.01 to 1 ms
+    release_ms = 10.0 + params[RELEASE] * 490.0       # 10 to 500 ms
 
     threshold = 10.0 ** (threshold_db / 20.0)
     attack_coeff = math.exp(-1.0 / (attack_ms * 0.001 * sample_rate))

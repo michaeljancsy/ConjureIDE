@@ -1,7 +1,7 @@
 import numpy as np
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Cutoff"}
+# Parameters:
+CUTOFF = 0
 
 # Persistent state per channel: [prev_x, prev_y]
 _state = [[0.0, 0.0], [0.0, 0.0]]
@@ -22,7 +22,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     global _state
 
     # Inverted: higher param = higher cutoff = lower R
-    r = 0.9995 - params[0] * 0.0095  # 0.9995 to 0.99
+    r = 0.9995 - params[CUTOFF] * 0.0095  # 0.9995 to 0.99
 
     for ch in range(len(inputs)):
         prev_x = _state[ch][0] if ch < len(_state) else 0.0

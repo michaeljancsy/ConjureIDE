@@ -1,7 +1,8 @@
 import numpy as np
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Rate", 1: "Depth"}
+# Parameters:
+RATE = 0
+DEPTH = 1
 
 # Persistent phase across callbacks
 _phase = 0.0
@@ -20,8 +21,8 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     """
     global _phase
 
-    rate_hz = 0.5 + params[0] * 19.5   # 0.5 Hz to 20 Hz
-    depth = params[1]                    # 0.0 to 1.0
+    rate_hz = 0.5 + params[RATE] * 19.5   # 0.5 Hz to 20 Hz
+    depth = params[DEPTH]                    # 0.0 to 1.0
 
     t = np.arange(frame_count, dtype=np.float32) / sample_rate
     lfo = 1.0 - depth * 0.5 * (1.0 + np.sin(2.0 * np.pi * rate_hz * t + _phase))

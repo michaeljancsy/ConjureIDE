@@ -304,20 +304,18 @@ struct BearBoneTests {
 
         #expect(status == noErr)
 
-        // Verify both channels have data (passthrough or processed)
+        // Verify both channels have data (default preset processes audio)
         let outL = outputBuffer.floatChannelData![0]
         let outR = outputBuffer.floatChannelData![1]
         let valL = outL[1]
         let valR = outR[1]
-        let isPassthroughL = abs(valL - inputL[1]) < 1e-6
-        let isHalfGainL = abs(valL - inputL[1] * 0.5) < 1e-6
-        #expect(isPassthroughL || isHalfGainL,
-               "Left channel should be passthrough or 0.5x gain")
-
-        let isPassthroughR = abs(valR - inputR[1]) < 1e-6
-        let isHalfGainR = abs(valR - inputR[1] * 0.5) < 1e-6
-        #expect(isPassthroughR || isHalfGainR,
-               "Right channel should be passthrough or 0.5x gain")
+        // Default preset is stereo width with WIDTH=0.0 → mono collapse:
+        // output = (L+R)/2 for both channels
+        let expectedMid = (inputL[1] + inputR[1]) * 0.5
+        let isMidL = abs(valL - expectedMid) < 1e-5
+        let isMidR = abs(valR - expectedMid) < 1e-5
+        #expect(isMidL, "Left channel should be mid (mono collapse at width=0)")
+        #expect(isMidR, "Right channel should be mid (mono collapse at width=0)")
 
         au.deallocateRenderResources()
     }
@@ -361,14 +359,13 @@ struct BearBoneTests {
         #expect(restoredSource == Self.testScript, "Script should survive full save/restore cycle")
     }
 
-    @Test func fullStateWithoutCustomScript() async throws {
+    @Test func fullStateWithDefaultPreset() async throws {
         let (_, au) = try await Self.instantiateAU()
-        // Fresh AU with no custom script — fullState should still work
+        // Fresh AU loads the default preset — fullState should include its source
         let state = au.fullState
-        #expect(state != nil, "fullState should return a dictionary even without a custom script")
-        // No custom script key should be present
+        #expect(state != nil, "fullState should return a dictionary")
         let scriptData = state?[Self.scriptSourceKey] as? Data
-        #expect(scriptData == nil, "Fresh AU should not have a custom script in fullState")
+        #expect(scriptData != nil, "Fresh AU should have the default preset script in fullState")
     }
 
     @Test func fullStatePreservesBaseState() async throws {

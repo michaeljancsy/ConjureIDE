@@ -1,7 +1,7 @@
 import numpy as np
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Drive"}
+# Parameters:
+DRIVE = 0
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -15,7 +15,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     Params:
         0 (Drive): Pre-clip gain — 0.0 = 1x, 1.0 = 20x
     """
-    drive = 1.0 + params[0] * 19.0  # 1 to 20
+    drive = 1.0 + params[DRIVE] * 19.0  # 1 to 20
 
     for ch in range(len(inputs)):
         outputs[ch][:frame_count] = np.clip(drive * inputs[ch][:frame_count], -1.0, 1.0)

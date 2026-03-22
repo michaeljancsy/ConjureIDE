@@ -1,7 +1,8 @@
 import numpy as np
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Bit Depth", 1: "Downsample"}
+# Parameters:
+BIT_DEPTH = 0
+DOWNSAMPLE = 1
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -18,8 +19,8 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         0 (Bit Depth):  1–16 bits
         1 (Downsample): 1–16x sample rate reduction
     """
-    bit_depth = int(params[0] * 15) + 1   # 1 to 16
-    downsample = int(params[1] * 15) + 1  # 1 to 16
+    bit_depth = int(params[BIT_DEPTH] * 15) + 1   # 1 to 16
+    downsample = int(params[DOWNSAMPLE] * 15) + 1  # 1 to 16
     levels = 2 ** bit_depth
 
     for ch in range(len(inputs)):

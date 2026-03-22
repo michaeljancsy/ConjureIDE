@@ -1,8 +1,12 @@
 import numpy as np
 import math
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Rate", 1: "Depth", 2: "Delay", 3: "Feedback", 4: "Mix"}
+# Parameters:
+RATE = 0
+DEPTH = 1
+DELAY = 2
+FEEDBACK = 3
+MIX = 4
 
 # Max delay in samples (supports up to 96 kHz)
 MAX_DELAY = 1024
@@ -31,11 +35,11 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     """
     global _delay_buf, _write_pos, _lfo_phase
 
-    rate_hz = 0.1 + params[0] * 4.9        # 0.1 to 5 Hz
-    depth_ms = 0.5 + params[1] * 4.5       # 0.5 to 5 ms
-    base_delay_ms = 1.0 + params[2] * 4.0  # 1 to 5 ms
-    feedback = params[3]                    # 0 to 1
-    mix = params[4]                         # 0 to 1
+    rate_hz = 0.1 + params[RATE] * 4.9        # 0.1 to 5 Hz
+    depth_ms = 0.5 + params[DEPTH] * 4.5       # 0.5 to 5 ms
+    base_delay_ms = 1.0 + params[DELAY] * 4.0  # 1 to 5 ms
+    feedback = params[FEEDBACK]                    # 0 to 1
+    mix = params[MIX]                         # 0 to 1
 
     n_ch = len(inputs)
 

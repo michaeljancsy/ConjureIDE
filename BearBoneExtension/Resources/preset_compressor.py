@@ -1,7 +1,11 @@
 import numpy as np
 
-# Script-declared parameter names (shown in UI, used in exported AUs)
-PARAM_NAMES = {0: "Threshold", 1: "Ratio", 2: "Attack", 3: "Release", 4: "Makeup"}
+# Parameters:
+THRESHOLD = 0
+RATIO = 1
+ATTACK = 2
+RELEASE = 3
+MAKEUP = 4
 
 # Persistent envelope follower state
 _envelope = 0.0
@@ -29,11 +33,11 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     """
     global _envelope
 
-    threshold_db = -40.0 + params[0] * 37.0    # -40 to -3 dB
-    ratio = 2.0 + params[1] * 18.0             # 2 to 20
-    attack_ms = 0.5 + params[2] * 49.5         # 0.5 to 50 ms
-    release_ms = 10.0 + params[3] * 490.0      # 10 to 500 ms
-    makeup_db = params[4] * 20.0               # 0 to 20 dB
+    threshold_db = -40.0 + params[THRESHOLD] * 37.0    # -40 to -3 dB
+    ratio = 2.0 + params[RATIO] * 18.0             # 2 to 20
+    attack_ms = 0.5 + params[ATTACK] * 49.5         # 0.5 to 50 ms
+    release_ms = 10.0 + params[RELEASE] * 490.0      # 10 to 500 ms
+    makeup_db = params[MAKEUP] * 20.0               # 0 to 20 dB
 
     threshold = 10.0 ** (threshold_db / 20.0)
     makeup = 10.0 ** (makeup_db / 20.0)
