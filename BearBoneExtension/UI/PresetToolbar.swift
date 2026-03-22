@@ -53,6 +53,7 @@ struct PresetToolbar: View {
     @ObservedObject var aiService: AIService
     @ObservedObject var licenseManager: LicenseManager
     var isCompiling: Bool = false
+    var hasUnrunChanges: Bool = false
     @Binding var selectedLanguage: ScriptLanguage
     @Binding var showSpectrogram: Bool
     @Binding var showChat: Bool
@@ -144,6 +145,14 @@ struct PresetToolbar: View {
             // Run
             Button(action: { onRun() }) {
                 Image(systemName: "play.fill")
+                    .overlay(alignment: .topTrailing) {
+                        if hasUnrunChanges {
+                            Circle()
+                                .fill(.orange)
+                                .frame(width: 6, height: 6)
+                                .offset(x: 3, y: -3)
+                        }
+                    }
             }
             .buttonStyle(.borderless)
             .disabled(isCompiling)

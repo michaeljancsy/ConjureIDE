@@ -43,6 +43,7 @@ struct BearBoneExtensionMainView: View {
     @State private var showSuccess: Bool = false
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
     @State private var isCompiling: Bool = false
+    @State private var lastRunSource: String = ""
     @State private var showSpectrogram: Bool = false
     @State private var showChat: Bool = false
     @State private var chatWidth: CGFloat = 280
@@ -72,6 +73,7 @@ struct BearBoneExtensionMainView: View {
                 aiService: aiService,
                 licenseManager: licenseManager,
                 isCompiling: isCompiling,
+                hasUnrunChanges: scriptSource != lastRunSource,
                 selectedLanguage: $selectedLanguage,
                 showSpectrogram: $showSpectrogram,
                 showChat: $showChat,
@@ -81,6 +83,7 @@ struct BearBoneExtensionMainView: View {
                         selectedLanguage = preset.language
                         let result = await onSelectPreset(preset)
                         isCompiling = false
+                        if result.success { lastRunSource = scriptSource }
                         handleResult(result)
                     }
                 },
@@ -89,6 +92,7 @@ struct BearBoneExtensionMainView: View {
                         isCompiling = true
                         let result = await onRun(scriptSource)
                         isCompiling = false
+                        if result.success { lastRunSource = scriptSource }
                         handleResult(result)
                     }
                 },
@@ -317,10 +321,12 @@ struct BearBoneExtensionMainView: View {
         }
         .onAppear {
             scriptSource = defaultScriptSource
+            lastRunSource = defaultScriptSource
             selectedLanguage = defaultLanguage
         }
         .onReceive(scriptSourcePublisher ?? Empty().eraseToAnyPublisher()) { newSource in
             scriptSource = newSource
+            lastRunSource = newSource
             selectedLanguage = ScriptLanguage.detect(from: newSource)
         }
         .onChange(of: scriptSource) { _, newValue in
@@ -370,6 +376,7 @@ struct BearBoneExtensionMainView: View {
             isCompiling = true
             let result = await onRun(scriptSource)
             isCompiling = false
+            if result.success { lastRunSource = scriptSource }
             handleResult(result)
         }
     }
