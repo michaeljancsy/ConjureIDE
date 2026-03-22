@@ -32,6 +32,17 @@ final class AnthropicProvider: AIProvider {
         Real-time safety rules — process() runs in the audio callback, so every allocation, \
         deallocation, or hidden Python overhead causes glitches:
 
+        VECTORIZE EVERYTHING — never use per-sample Python loops:
+        - NEVER use `for i in range(frame_count)` — this is catastrophically slow
+        - ALWAYS use numpy vectorized operations on entire arrays/slices at once
+        - Example: instead of looping to apply gain, do `np.multiply(inputs[ch][:frame_count], gain, out=outputs[ch][:frame_count])`
+        - For LFOs/oscillators: pre-allocate a phase array global, compute all samples with \
+          np.sin(phase_array, out=lfo_buf) in one call, then multiply with audio
+        - For sample-by-sample state (e.g. filters with feedback): use a pre-allocated buffer and \
+          vectorize as much as possible, only falling back to a Python loop for the minimal \
+          feedback path if absolutely necessary
+        - The channel loop `for ch in range(channels)` is fine (only 1-2 iterations)
+
         ALLOCATIONS — never allocate inside process():
         - No new lists, dicts, sets, tuples, or strings
         - No list comprehensions, generator expressions, or range() calls
@@ -341,6 +352,7 @@ final class AnthropicProvider: AIProvider {
     func streamChat(
         messages: [[String: Any]],
         tools: [[String: Any]],
+        systemPrompt: String,
         apiKey: String
     ) -> AsyncThrowingStream<ChatEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -356,7 +368,7 @@ final class AnthropicProvider: AIProvider {
                         "model": model,
                         "max_tokens": 4096,
                         "stream": true,
-                        "system": Self.chatSystemPrompt,
+                        "system": systemPrompt,
                         "messages": messages,
                     ]
                     if !tools.isEmpty {

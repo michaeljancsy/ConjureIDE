@@ -80,8 +80,27 @@ final class ChatService: ObservableObject {
 
     // MARK: - Agentic Loop
 
+    /// Build the system prompt, including the currently loaded script as context.
+    private func buildSystemPrompt() -> String {
+        var prompt = AnthropicProvider.chatSystemPrompt
+
+        if let au = toolExecutor.audioUnit, let source = au.scriptSource {
+            let language = au.currentScriptLanguage.rawValue
+            prompt += """
+
+                The currently loaded \(language) script is:
+                ```
+                \(source)
+                ```
+                """
+        }
+
+        return prompt
+    }
+
     private func runAgentLoop(apiKey: String) async {
         var toolRounds = 0
+        let systemPrompt = buildSystemPrompt()
 
         while !Task.isCancelled && toolRounds < Self.maxToolRounds {
             // Build API messages from conversation
@@ -91,13 +110,14 @@ final class ChatService: ObservableObject {
             let stream = provider.streamChat(
                 messages: apiMessages,
                 tools: ChatTools.definitions,
+                systemPrompt: systemPrompt,
                 apiKey: apiKey
             )
 
-            // Collect the response
-            let assistantMessage: ChatMessage
+            // Collect the response (streams into messages array live)
+            let messageIndex: Int
             do {
-                assistantMessage = try await collectStreamedResponse(stream)
+                messageIndex = try await collectStreamedResponse(stream)
             } catch is CancellationError {
                 state = .idle
                 return
@@ -112,7 +132,7 @@ final class ChatService: ObservableObject {
                 return
             }
 
-            messages.append(assistantMessage)
+            let assistantMessage = messages[messageIndex]
 
             // If no tool calls, we're done
             let toolUses = assistantMessage.toolUseBlocks
@@ -154,15 +174,22 @@ final class ChatService: ObservableObject {
         activeToolName = nil
     }
 
-    /// Collect a streamed response into a ChatMessage with content blocks.
+    /// Collect a streamed response, updating the messages array live as text arrives.
+    /// Returns the index of the assistant message in the messages array.
     private func collectStreamedResponse(
         _ stream: AsyncThrowingStream<AnthropicProvider.ChatEvent, Error>
-    ) async throws -> ChatMessage {
+    ) async throws -> Int {
         var contentBlocks: [ContentBlock] = []
         var currentText = ""
         var currentToolId: String?
         var currentToolName: String?
         var currentToolInputJSON = ""
+
+        // Create the assistant message upfront so streaming updates it in-place
+        let messageId = UUID()
+        let placeholder = ChatMessage(role: .assistant, content: [], id: messageId)
+        messages.append(placeholder)
+        let messageIndex = messages.count - 1
 
         state = .streaming
 
@@ -172,11 +199,14 @@ final class ChatService: ObservableObject {
             switch event {
             case .textDelta(let text):
                 currentText += text
-                // Update the last message in-place for live streaming UI
-                updateStreamingText(currentText, existingBlocks: contentBlocks)
+                // Update message in-place for live streaming
+                var preview = contentBlocks
+                preview.append(.text(currentText))
+                messages[messageIndex] = ChatMessage(
+                    role: .assistant, content: preview, id: messageId
+                )
 
             case .toolUseStart(let id, let name):
-                // Finalize any pending text block
                 if !currentText.isEmpty {
                     contentBlocks.append(.text(currentText))
                     currentText = ""
@@ -184,14 +214,12 @@ final class ChatService: ObservableObject {
                 currentToolId = id
                 currentToolName = name
                 currentToolInputJSON = ""
-                state = .streaming
 
             case .toolInputDelta(let json):
                 currentToolInputJSON += json
 
             case .contentBlockEnd:
                 if let toolId = currentToolId, let toolName = currentToolName {
-                    // Parse accumulated JSON input
                     let input: [String: Any]
                     if let data = currentToolInputJSON.data(using: .utf8),
                        let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -207,43 +235,28 @@ final class ChatService: ObservableObject {
                     currentToolId = nil
                     currentToolName = nil
                     currentToolInputJSON = ""
+                    // Update message to show tool use block
+                    messages[messageIndex] = ChatMessage(
+                        role: .assistant, content: contentBlocks, id: messageId
+                    )
                 }
 
             case .messageStop:
-                // Finalize any remaining text
                 if !currentText.isEmpty {
                     contentBlocks.append(.text(currentText))
+                    currentText = ""
                 }
             }
         }
 
-        // Handle case where stream ends without messageStop
+        // Finalize
         if !currentText.isEmpty {
             contentBlocks.append(.text(currentText))
         }
+        messages[messageIndex] = ChatMessage(
+            role: .assistant, content: contentBlocks, id: messageId
+        )
 
-        return ChatMessage(role: .assistant, content: contentBlocks)
+        return messageIndex
     }
-
-    /// Update the streaming preview by temporarily appending/updating the last assistant message.
-    private func updateStreamingText(_ text: String, existingBlocks: [ContentBlock]) {
-        // Build the preview content: existing finalized blocks + current streaming text
-        var previewContent = existingBlocks
-        previewContent.append(.text(text))
-
-        // If the last message is already our streaming preview, update it in-place
-        if let lastIndex = messages.indices.last,
-           messages[lastIndex].role == .assistant,
-           messages[lastIndex].id == streamingMessageId
-        {
-            messages[lastIndex].content = previewContent
-        } else {
-            // Create a new streaming preview message
-            let preview = ChatMessage(role: .assistant, content: previewContent, id: streamingMessageId)
-            messages.append(preview)
-        }
-    }
-
-    /// Fixed ID for the streaming preview message so we can update it in-place.
-    private let streamingMessageId = UUID()
 }
