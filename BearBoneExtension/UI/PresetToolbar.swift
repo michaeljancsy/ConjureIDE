@@ -36,14 +36,6 @@ struct PresetToolbar: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // Previous preset
-            Button(action: selectPrevious) {
-                Image(systemName: "chevron.left")
-            }
-            .buttonStyle(.borderless)
-            .disabled(presetManager.presets.isEmpty)
-            .accessibilityIdentifier("prevPresetButton")
-
             // Preset picker menu
             Menu {
                 Section("Factory") {
@@ -88,14 +80,6 @@ struct PresetToolbar: View {
             .menuStyle(.borderlessButton)
             .frame(minWidth: 100, maxWidth: 200)
             .accessibilityIdentifier("presetMenu")
-
-            // Next preset
-            Button(action: selectNext) {
-                Image(systemName: "chevron.right")
-            }
-            .buttonStyle(.borderless)
-            .disabled(presetManager.presets.isEmpty)
-            .accessibilityIdentifier("nextPresetButton")
 
             // Language selector
             Picker("", selection: $selectedLanguage) {
@@ -249,27 +233,4 @@ struct PresetToolbar: View {
         }
     }
 
-    private func selectPrevious() {
-        let presets = presetManager.presets
-        guard !presets.isEmpty else { return }
-        guard let current = presetManager.currentPreset,
-              let idx = presets.firstIndex(where: { $0.id == current.id }) else {
-            onSelectPreset(presets.last!)
-            return
-        }
-        let prevIdx = idx == presets.startIndex ? presets.index(before: presets.endIndex) : presets.index(before: idx)
-        onSelectPreset(presets[prevIdx])
-    }
-
-    private func selectNext() {
-        let presets = presetManager.presets
-        guard !presets.isEmpty else { return }
-        guard let current = presetManager.currentPreset,
-              let idx = presets.firstIndex(where: { $0.id == current.id }) else {
-            onSelectPreset(presets.first!)
-            return
-        }
-        let nextIdx = presets.index(after: idx)
-        onSelectPreset(nextIdx < presets.endIndex ? presets[nextIdx] : presets.first!)
-    }
 }

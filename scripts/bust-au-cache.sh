@@ -17,6 +17,28 @@ fi
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
 APP_PATH="${BUILT_PRODUCTS_DIR:-}/BearBone.app"
 
+# Resolve the real (canonical) path of the current build so we can compare
+# against LaunchServices entries and skip unregistering ourselves.
+REAL_APP_PATH="$(cd "${APP_PATH}" 2>/dev/null && pwd -P)" || REAL_APP_PATH=""
+
+# Unregister all OTHER BearBone debug/release builds from LaunchServices.
+# Without this, PluginKit may serve a stale extension from a different
+# worktree or DerivedData directory that shares the same bundle ID.
+$LSREGISTER -dump | grep -B20 "identifier:.*com\.MichaelJancsy\.BearBone" | grep "path:" | sed 's/.*path:[[:space:]]*//' | sed 's/ (0x.*//' | while read -r registered_path; do
+    # Resolve symlinks for accurate comparison
+    real_registered="$(cd "${registered_path}" 2>/dev/null && pwd -P)" || real_registered=""
+    if [ -n "$REAL_APP_PATH" ] && [ "$real_registered" = "$REAL_APP_PATH" ]; then
+        continue  # Don't unregister the current build
+    fi
+    # Only unregister DerivedData builds (don't touch /Applications or exports)
+    case "$registered_path" in
+        */Library/Developer/Xcode/DerivedData/*)
+            $LSREGISTER -u "$registered_path" 2>/dev/null && \
+                echo "note: Unregistered competing build: ${registered_path}" >&2 || true
+            ;;
+    esac
+done
+
 if [ -d "${APP_PATH}" ]; then
     # Force-register the just-built app with LaunchServices.
     # The -f flag updates even if an entry already exists, ensuring
