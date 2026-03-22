@@ -4,6 +4,11 @@
 
 ## To Do
 
+### Distribution
+- First-time setup: store notarization credentials in Keychain (`xcrun notarytool store-credentials "BearBone-Notarize"`)
+- Run `scripts/release.sh` end-to-end and verify DMG works on a clean machine
+- Auto-update mechanism (Sparkle) for future releases
+
 ### Export Preset as Standalone AUv3
 - Phase 5: Polish & validation (integration tests, edge cases, documentation)
 
@@ -28,6 +33,7 @@
 
 ## Done
 - AI chat sidebar with tool use (2026-03-21): Collapsible chat panel alongside the script editor for conversational AI interaction with the DSP engine. Uses Anthropic Messages API with tool use — the AI can compile and run scripts, read errors, set parameters, manage presets, toggle bypass, and read audio state autonomously within a multi-turn conversation. Architecture: ChatService runs an agentic loop (send message → receive tool_use → execute locally → send results → repeat, up to 10 rounds). ToolExecutor maps 9 tools to existing AU functions. AnthropicProvider extended with streamChat() method handling tool_use SSE events. ChatSidebarView shows message bubbles with tool call indicators. Streaming text updates live in the UI. Toggle via bubble icon in toolbar. New files: ChatMessage.swift (content block types + serializer), ChatTools.swift (tool definitions), ToolExecutor.swift (tool dispatch), ChatService.swift (agentic loop + streaming), ChatSidebarView.swift (UI). Modified: AnthropicProvider.swift, AudioUnitViewController.swift, BearBoneExtensionMainView.swift, PresetToolbar.swift. All 162 unit tests + 11 UI tests pass (2 pre-existing BuildID timing failures unrelated).
+- Release pipeline for direct distribution (2026-03-21): Created scripts for building, notarizing, and packaging BearBone as a signed DMG for distribution outside the App Store. `scripts/release.sh` orchestrates the full pipeline: archive with Developer ID signing → notarize app → create DMG with drag-to-Applications → notarize DMG. Individual scripts (`build-release.sh`, `notarize.sh`, `create-dmg.sh`) can be run standalone. Added `ExportOptions.plist` for Developer ID export. Notarization credentials stored in Keychain via `xcrun notarytool store-credentials`.
 - Strip markdown code fences from AI-generated scripts (2026-03-21): AI-generated scripts that arrived wrapped in markdown code fences (```python ... ```) are now automatically stripped before being inserted into the editor.
 - Improve AU build reliability (2026-03-21): Pre-build cleanup, auto-rebuild export template, fix registration docs.
 - Phase 4: Python export support for standalone AUv3 plugins (2026-03-21): Exported Python presets now bundle the shared Python runtime. Shared runtime installed at `~/Library/Application Support/BearBone/PythonRuntime-3.14/`. Error UI with auto-download when runtime is missing.
