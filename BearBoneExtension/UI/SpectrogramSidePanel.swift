@@ -116,6 +116,12 @@ struct SpectrogramSidePanel: View {
                     channel: channel,
                     frequencyScale: frequencyScale
                 )
+                .overlay(alignment: .leading) {
+                    FrequencyAxisView(
+                        frequencyScale: frequencyScale,
+                        showNoteNames: showNoteNames
+                    )
+                }
                 .frame(maxHeight: .infinity)
             }
         }
