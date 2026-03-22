@@ -15,6 +15,11 @@ struct SpectrogramSidePanel: View {
     @Binding var fftSizeIndex: Int
     @Binding var showNoteNames: Bool
 
+    @State private var showInput = true
+    @State private var showOutput = true
+    @State private var showDifference = false
+    @State private var showNormalizedDiff = false
+
     static let fftSizes = [512, 1024, 2048, 4096]
 
     var body: some View {
@@ -67,75 +72,52 @@ struct SpectrogramSidePanel: View {
 
             Divider()
 
-            // Three stacked spectrograms
+            // Stacked spectrograms (collapsible, expanded sections fill space)
             VStack(spacing: 1) {
-                // Input spectrogram
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Input")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 4)
-                        .padding(.top, 2)
-
-                    SpectrogramView(
-                        captureManager: captureManager,
-                        channel: .input,
-                        frequencyScale: frequencyScale
-                    )
-                }
-
+                spectrogramSection("Input", channel: .input, isExpanded: $showInput)
                 Divider()
-
-                // Output spectrogram
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Output")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 4)
-                        .padding(.top, 2)
-
-                    SpectrogramView(
-                        captureManager: captureManager,
-                        channel: .output,
-                        frequencyScale: frequencyScale
-                    )
-                }
-
+                spectrogramSection("Output", channel: .output, isExpanded: $showOutput)
                 Divider()
-
-                // Difference spectrogram
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Difference")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 4)
-                        .padding(.top, 2)
-
-                    SpectrogramView(
-                        captureManager: captureManager,
-                        channel: .difference,
-                        frequencyScale: frequencyScale
-                    )
-                }
-
+                spectrogramSection("Difference", channel: .difference, isExpanded: $showDifference)
                 Divider()
-
-                // Normalized difference spectrogram
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Normalized Diff")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 4)
-                        .padding(.top, 2)
-
-                    SpectrogramView(
-                        captureManager: captureManager,
-                        channel: .normalizedDifference,
-                        frequencyScale: frequencyScale
-                    )
-                }
+                spectrogramSection("Normalized Diff", channel: .normalizedDifference, isExpanded: $showNormalizedDiff)
             }
         }
         .accessibilityIdentifier("spectrogramSidePanel")
+    }
+
+    @ViewBuilder
+    private func spectrogramSection(_ title: String, channel: SpectrogramChannel, isExpanded: Binding<Bool>) -> some View {
+        VStack(spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.wrappedValue.toggle()
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isExpanded.wrappedValue ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 10)
+                    Text(title)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded.wrappedValue {
+                SpectrogramView(
+                    captureManager: captureManager,
+                    channel: channel,
+                    frequencyScale: frequencyScale
+                )
+                .frame(maxHeight: .infinity)
+            }
+        }
     }
 }
