@@ -296,6 +296,185 @@ final class AnthropicProvider: AIProvider {
         }
     }
 
+    // MARK: - Chat (Multi-turn with Tool Use)
+
+    /// Events streamed from a chat request. The caller assembles these into ContentBlocks.
+    enum ChatEvent {
+        /// A chunk of text from the assistant.
+        case textDelta(String)
+        /// A tool use block has started (provides the tool name and call ID).
+        case toolUseStart(id: String, name: String)
+        /// A chunk of the tool input JSON string.
+        case toolInputDelta(String)
+        /// The current content block has ended.
+        case contentBlockEnd
+        /// The message is complete. Contains the stop reason.
+        case messageStop(stopReason: String?)
+    }
+
+    /// The system prompt for the chat sidebar, which has access to tools.
+    static let chatSystemPrompt = """
+        You are a DSP assistant for BearBone, a real-time audio plugin. You help users create, \
+        modify, and debug audio effect scripts. You can compile and run scripts, read errors, \
+        set parameters, and manage presets.
+
+        When the user asks you to create or modify an effect, use the compile_and_run tool \
+        to load it into the audio engine. If compilation fails, read the error and fix the script \
+        automatically. Always compile and run scripts rather than just showing code.
+
+        When modifying an existing script, use get_script first to read the current source, \
+        then make targeted changes rather than rewriting from scratch.
+
+        \(apiContract)
+
+        \(realTimeRules)
+
+        \(rustApiContract)
+
+        \(rustRealTimeRules)
+
+        Keep responses concise. Focus on what you did and any relevant details (timing, \
+        parameter mappings). Don't repeat the full script back unless asked.
+        """
+
+    /// Stream a chat request with tool definitions. Returns ChatEvents.
+    func streamChat(
+        messages: [[String: Any]],
+        tools: [[String: Any]],
+        apiKey: String
+    ) -> AsyncThrowingStream<ChatEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task.detached { [self] in
+                do {
+                    var request = URLRequest(url: apiURL)
+                    request.httpMethod = "POST"
+                    request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+                    request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+                    request.setValue("application/json", forHTTPHeaderField: "content-type")
+
+                    var body: [String: Any] = [
+                        "model": model,
+                        "max_tokens": 4096,
+                        "stream": true,
+                        "system": Self.chatSystemPrompt,
+                        "messages": messages,
+                    ]
+                    if !tools.isEmpty {
+                        body["tools"] = tools
+                    }
+                    request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+                    let (bytes, response) = try await self.session.bytes(for: request)
+
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        throw AIProviderError.invalidResponse("Not an HTTP response")
+                    }
+
+                    self.log.info("Chat HTTP status: \(httpResponse.statusCode)")
+
+                    switch httpResponse.statusCode {
+                    case 200:
+                        break
+                    case 401:
+                        throw AIProviderError.noAPIKey
+                    case 429:
+                        let retryAfter = httpResponse.value(forHTTPHeaderField: "retry-after")
+                            .flatMap(Int.init)
+                        throw AIProviderError.rateLimited(retryAfterSeconds: retryAfter)
+                    default:
+                        var errorBody = ""
+                        for try await line in bytes.lines {
+                            errorBody += line
+                            if errorBody.count > 500 { break }
+                        }
+                        throw AIProviderError.httpError(
+                            statusCode: httpResponse.statusCode,
+                            message: errorBody.isEmpty
+                                ? "HTTP \(httpResponse.statusCode)" : errorBody
+                        )
+                    }
+
+                    var stopReason: String?
+
+                    for try await event in SSEParser.events(from: bytes) {
+                        if Task.isCancelled { break }
+                        guard let eventType = event.type else { continue }
+
+                        switch eventType {
+                        case "content_block_start":
+                            // Parse tool_use block starts
+                            if let parsed = self.parseJSON(event.data),
+                               let contentBlock = parsed["content_block"] as? [String: Any],
+                               let blockType = contentBlock["type"] as? String,
+                               blockType == "tool_use",
+                               let id = contentBlock["id"] as? String,
+                               let name = contentBlock["name"] as? String
+                            {
+                                continuation.yield(.toolUseStart(id: id, name: name))
+                            }
+
+                        case "content_block_delta":
+                            if let parsed = self.parseJSON(event.data),
+                               let delta = parsed["delta"] as? [String: Any],
+                               let deltaType = delta["type"] as? String
+                            {
+                                switch deltaType {
+                                case "text_delta":
+                                    if let text = delta["text"] as? String {
+                                        continuation.yield(.textDelta(text))
+                                    }
+                                case "input_json_delta":
+                                    if let json = delta["partial_json"] as? String {
+                                        continuation.yield(.toolInputDelta(json))
+                                    }
+                                default:
+                                    break
+                                }
+                            }
+
+                        case "content_block_stop":
+                            continuation.yield(.contentBlockEnd)
+
+                        case "message_delta":
+                            if let parsed = self.parseJSON(event.data),
+                               let delta = parsed["delta"] as? [String: Any]
+                            {
+                                stopReason = delta["stop_reason"] as? String
+                            }
+
+                        case "message_stop":
+                            continuation.yield(.messageStop(stopReason: stopReason))
+                            continuation.finish()
+                            return
+
+                        case "error":
+                            let message = parseErrorEvent(event.data)
+                            throw AIProviderError.invalidResponse(message)
+
+                        default:
+                            break
+                        }
+                    }
+
+                    continuation.yield(.messageStop(stopReason: stopReason))
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: AIProviderError.cancelled)
+                } catch let error as AIProviderError {
+                    continuation.finish(throwing: error)
+                } catch {
+                    continuation.finish(throwing: AIProviderError.networkError(error))
+                }
+            }
+
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    // MARK: - Parsing Helpers
+
     /// Parse the text from a content_block_delta SSE event.
     func parseContentBlockDelta(_ json: String) -> String? {
         guard let data = json.data(using: .utf8),
@@ -314,5 +493,13 @@ final class AnthropicProvider: AIProvider {
             let message = error["message"] as? String
         else { return json }
         return message
+    }
+
+    /// Parse a JSON string into a dictionary.
+    private func parseJSON(_ json: String) -> [String: Any]? {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return obj
     }
 }

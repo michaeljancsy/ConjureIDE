@@ -23,6 +23,7 @@ struct BearBoneExtensionMainView: View {
     var scriptSourcePublisher: AnyPublisher<String, Never>?
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var aiService: AIService
+    @ObservedObject var chatService: ChatService
     @ObservedObject var captureManager: AudioCaptureManager
     @ObservedObject var parameterState: ParameterState
     @ObservedObject var licenseManager: LicenseManager
@@ -43,6 +44,7 @@ struct BearBoneExtensionMainView: View {
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
     @State private var isCompiling: Bool = false
     @State private var showSpectrogram: Bool = false
+    @State private var showChat: Bool = false
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
     @State private var showExportAlert: Bool = false
@@ -71,6 +73,7 @@ struct BearBoneExtensionMainView: View {
                 isCompiling: isCompiling,
                 selectedLanguage: $selectedLanguage,
                 showSpectrogram: $showSpectrogram,
+                showChat: $showChat,
                 onSelectPreset: { preset in
                     Task {
                         isCompiling = true
@@ -138,6 +141,17 @@ struct BearBoneExtensionMainView: View {
 
             ZStack {
             HStack(spacing: 0) {
+            // Chat sidebar (collapsible, left side)
+            if showChat {
+                ChatSidebarView(chatService: chatService)
+                    .frame(width: 280)
+
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.2))
+                    .frame(width: 4)
+                    .contentShape(Rectangle().inset(by: -4))
+            }
+
             VStack(spacing: 8) {
                 if buildID != 0 {
                     Text(verbatim: "Build \(buildID)")

@@ -12,6 +12,7 @@ struct PresetToolbar: View {
     var isCompiling: Bool = false
     @Binding var selectedLanguage: ScriptLanguage
     @Binding var showSpectrogram: Bool
+    @Binding var showChat: Bool
     var onSelectPreset: (Preset) -> Void
     var onRun: () -> Void
     var onSave: () -> Void
@@ -222,6 +223,14 @@ struct PresetToolbar: View {
                     onCancel: { showingExport = false }
                 )
             }
+
+            // Chat sidebar toggle
+            Button(action: { showChat.toggle() }) {
+                Image(systemName: showChat ? "bubble.left.fill" : "bubble.left")
+            }
+            .buttonStyle(.borderless)
+            .help(showChat ? "Hide AI chat" : "Show AI chat")
+            .accessibilityIdentifier("chatToggleButton")
 
             // Spectrogram toggle
             Button(action: { showSpectrogram.toggle() }) {
