@@ -43,6 +43,69 @@ if [ ! -d "$APP_PATH" ]; then
     exit 1
 fi
 
+echo "=== Re-signing bundled components for notarization ==="
+
+SIGN_ID="Developer ID Application"
+APPEX_PATH="$APP_PATH/Contents/PlugIns/BearBoneExtension.appex"
+ENTITLEMENTS_DIR="$PROJECT_DIR/BearBoneExportAUTemplate"
+
+# Re-sign the export template inside the extension Resources
+TEMPLATE_ZIP="$APPEX_PATH/Contents/Resources/ExportTemplate.zip"
+if [ -f "$TEMPLATE_ZIP" ]; then
+    TEMPLATE_TMP="$OUTPUT_DIR/ExportTemplate_tmp"
+    rm -rf "$TEMPLATE_TMP"
+    mkdir -p "$TEMPLATE_TMP"
+    unzip -q "$TEMPLATE_ZIP" -d "$TEMPLATE_TMP"
+
+    TEMPLATE_APP="$TEMPLATE_TMP/BearBoneExportAUTemplate.app"
+    TEMPLATE_APPEX="$TEMPLATE_APP/Contents/PlugIns/BearBoneExportAUTemplateExtension.appex"
+
+    # Sign inside-out: deepest binaries first
+    # 1. Python dylib in extension Frameworks
+    if [ -f "$TEMPLATE_APPEX/Contents/Frameworks/libpython3.14t.dylib" ]; then
+        codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
+            "$TEMPLATE_APPEX/Contents/Frameworks/libpython3.14t.dylib"
+    fi
+    # 2. Extension appex
+    codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
+        --entitlements "$ENTITLEMENTS_DIR/BearBoneExportAUTemplateExtension/BearBoneExportAUTemplateExtension.entitlements" \
+        "$TEMPLATE_APPEX"
+    # 3. Host app dylibs and executables
+    find "$TEMPLATE_APP/Contents/MacOS" -type f \( -name '*.dylib' \) \
+        -exec codesign --force --sign "$SIGN_ID" --options runtime --timestamp {} \;
+    # 4. Host app bundle
+    codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
+        --entitlements "$ENTITLEMENTS_DIR/BearBoneExportAUTemplate/BearBoneExportAUTemplate.entitlements" \
+        "$TEMPLATE_APP"
+
+    # Re-zip
+    rm "$TEMPLATE_ZIP"
+    cd "$TEMPLATE_TMP"
+    zip -qry "$TEMPLATE_ZIP" "BearBoneExportAUTemplate.app"
+    cd "$PROJECT_DIR"
+    rm -rf "$TEMPLATE_TMP"
+    echo "Re-signed ExportTemplate.zip"
+fi
+
+# Re-sign rustc binaries with hardened runtime
+RUSTC_DST="$APPEX_PATH/Contents/Resources/rustc-dist"
+if [ -d "$RUSTC_DST" ]; then
+    codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$RUSTC_DST/bin/rustc"
+    find "$RUSTC_DST/lib" -name '*.dylib' -exec codesign --force --sign "$SIGN_ID" --options runtime --timestamp {} \;
+    codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$RUSTC_DST/lib/rustlib/aarch64-apple-darwin/bin/rust-lld"
+    codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$RUSTC_DST/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/wasm-ld"
+    echo "Re-signed rustc-dist binaries"
+fi
+
+# Re-sign the extension and app after modifying their contents
+EXTENSION_ENTITLEMENTS="$PROJECT_DIR/BearBoneExtension/BearBoneExtension.entitlements"
+APP_ENTITLEMENTS="$PROJECT_DIR/BearBone/BearBone.entitlements"
+codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
+    --entitlements "$EXTENSION_ENTITLEMENTS" "$APPEX_PATH"
+codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
+    --entitlements "$APP_ENTITLEMENTS" "$APP_PATH"
+echo "Re-signed extension and app"
+
 # Read version from the exported app
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
