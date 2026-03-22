@@ -45,6 +45,7 @@ struct BearBoneExtensionMainView: View {
     @State private var isCompiling: Bool = false
     @State private var showSpectrogram: Bool = false
     @State private var showChat: Bool = false
+    @State private var chatWidth: CGFloat = 280
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
     @State private var showExportAlert: Bool = false
@@ -139,12 +140,26 @@ struct BearBoneExtensionMainView: View {
             // Chat sidebar (collapsible, left side)
             if showChat {
                 ChatSidebarView(chatService: chatService)
-                    .frame(width: 280)
+                    .frame(width: chatWidth)
 
+                // Resizable divider
                 Rectangle()
                     .fill(Color.secondary.opacity(0.2))
                     .frame(width: 4)
                     .contentShape(Rectangle().inset(by: -4))
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                chatWidth = max(200, min(450, chatWidth + value.translation.width))
+                            }
+                    )
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.resizeLeftRight.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
             }
 
             VStack(spacing: 8) {
