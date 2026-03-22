@@ -156,6 +156,17 @@ double dsp_kernel_benchmark_process(DSPKernelRef kernel);
 const char *dsp_kernel_last_error(DSPKernelRef kernel);
 
 /**
+ * Returns script-declared parameter names as a null-terminated JSON C string,
+ * e.g. `{"0":"Cutoff","1":"Resonance"}`.
+ * Returns null if the loaded script does not declare parameter names.
+ * The pointer is valid until the next script load or kernel destroy.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+const char *dsp_kernel_param_names_json(DSPKernelRef kernel);
+
+/**
  * Enable or disable audio capture for spectrogram visualization.
  * When disabled, ring buffers are not written to (saves CPU on audio thread).
  *

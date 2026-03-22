@@ -1,11 +1,8 @@
 import numpy as np
 import math
 
-# Chorus parameters
-RATE_HZ = 0.5        # LFO speed in Hz
-DEPTH_MS = 3.0       # LFO modulation depth in ms
-BASE_DELAY_MS = 7.0  # Base delay time in ms
-MIX = 0.5            # Wet/dry mix (0.0 = dry, 1.0 = wet)
+# Script-declared parameter names (shown in UI, used in exported AUs)
+PARAM_NAMES = {0: "Rate", 1: "Depth", 2: "Delay", 3: "Mix"}
 
 # Max delay in samples (supports up to 96 kHz)
 MAX_DELAY = 2048
@@ -25,14 +22,18 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     signal, producing a rich, thickened sound. Linear interpolation is used
     for sub-sample delay accuracy.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Rate):  LFO rate — 0.0 = 0.1 Hz, 1.0 = 2 Hz
+        1 (Depth): LFO depth — 0.0 = 0.5 ms, 1.0 = 15 ms
+        2 (Delay): Base delay — 0.0 = 2 ms, 1.0 = 30 ms
+        3 (Mix):   Wet/dry mix — 0.0 = dry, 1.0 = wet
     """
     global _delay_buf, _write_pos, _lfo_phase
+
+    rate_hz = 0.1 + params[0] * 1.9        # 0.1 to 2 Hz
+    depth_ms = 0.5 + params[1] * 14.5      # 0.5 to 15 ms
+    base_delay_ms = 2.0 + params[2] * 28.0 # 2 to 30 ms
+    mix = params[3]                         # 0 to 1
 
     n_ch = len(inputs)
 
@@ -41,13 +42,13 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         _delay_buf = [np.zeros(MAX_DELAY, dtype=np.float32) for _ in range(n_ch)]
 
     two_pi = 2.0 * math.pi
-    lfo_inc = two_pi * RATE_HZ / sample_rate
+    lfo_inc = two_pi * rate_hz / sample_rate
     phase = _lfo_phase
     wp = _write_pos
 
     for i in range(frame_count):
         # LFO modulates delay time
-        delay_samples = (BASE_DELAY_MS + DEPTH_MS * math.sin(phase)) * sample_rate / 1000.0
+        delay_samples = (base_delay_ms + depth_ms * math.sin(phase)) * sample_rate / 1000.0
 
         for ch in range(n_ch):
             # Write input to delay line
@@ -64,7 +65,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
             delayed = _delay_buf[ch][idx0] * (1.0 - frac) + _delay_buf[ch][idx1] * frac
 
             # Mix dry + wet
-            outputs[ch][i] = inputs[ch][i] * (1.0 - MIX) + delayed * MIX
+            outputs[ch][i] = inputs[ch][i] * (1.0 - mix) + delayed * mix
 
         phase += lfo_inc
         wp = (wp + 1) % MAX_DELAY

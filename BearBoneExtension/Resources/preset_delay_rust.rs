@@ -13,9 +13,10 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const DELAY_MS: f32 = 250.0;
-const FEEDBACK: f32 = 0.5;
-const MIX: f32 = 0.5;
+// Parameters:
+const TIME: usize = 0;
+const FEEDBACK: usize = 1;
+const MIX: usize = 2;
 
 // Persistent state
 static mut DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH];
@@ -46,12 +47,17 @@ pub extern "C" fn process(
 ) {
     let ch = channels as usize;
     let frames = frame_count as usize;
-    let mut delay_samples = (DELAY_MS * 0.001 * sample_rate) as usize;
-    if delay_samples >= MAX_DELAY {
-        delay_samples = MAX_DELAY - 1;
-    }
 
     unsafe {
+        let delay_ms = 10.0 + PARAMS_BUF[TIME] * 490.0;      // 10 to 500 ms
+        let feedback = PARAMS_BUF[FEEDBACK] * 0.95;            // 0.0 to 0.95
+        let mix = PARAMS_BUF[MIX];                              // 0.0 to 1.0
+
+        let mut delay_samples = (delay_ms * 0.001 * sample_rate) as usize;
+        if delay_samples >= MAX_DELAY {
+            delay_samples = MAX_DELAY - 1;
+        }
+
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
         let mut wp = WRITE_POS;
@@ -64,10 +70,10 @@ pub extern "C" fn process(
                 let delayed = DELAY_BUF[c][rp];
 
                 // Write input + feedback to delay line
-                DELAY_BUF[c][wp] = inp[idx] + delayed * FEEDBACK;
+                DELAY_BUF[c][wp] = inp[idx] + delayed * feedback;
 
                 // Mix dry + wet
-                out[idx] = inp[idx] * (1.0 - MIX) + delayed * MIX;
+                out[idx] = inp[idx] * (1.0 - mix) + delayed * mix;
             }
 
             wp = (wp + 1) % MAX_DELAY;

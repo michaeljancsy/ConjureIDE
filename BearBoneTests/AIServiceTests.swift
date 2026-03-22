@@ -603,6 +603,13 @@ private enum TestSystemPrompts {
         - Only numpy is available (imported as np)
         - Global variables persist across callbacks (useful for phase accumulators, delay buffers, etc.)
         - Must handle both mono (1 channel) and stereo (2 channels)
+
+        Parameter names:
+        - Declare a module-level PARAM_NAMES dict to label your parameters and hide unused ones: \
+          PARAM_NAMES = {0: "Rate", 1: "Depth"}
+        - Only params with entries in PARAM_NAMES are shown in the UI; others are hidden
+        - Always declare PARAM_NAMES when your script uses params — it tells the user what each knob does
+        - Keys are integer addresses 0–7, values are short human-readable names
         """
 
     static let rustApiContract = """
@@ -624,6 +631,16 @@ private enum TestSystemPrompts {
         - Use std::slice::from_raw_parts(input, n) and from_raw_parts_mut(output, n) inside unsafe blocks
         - Must handle both mono (1 channel) and stereo (2 channels)
         - For stereo, samples are interleaved: [L0, R0, L1, R1, ...]
+
+        Parameter names:
+        - Add a // Parameters: comment followed by named const declarations to label and expose params: \
+          // Parameters: \
+          const RATE: usize = 0; \
+          const DEPTH: usize = 1;
+        - Use these consts to read params in process(): PARAMS_BUF[RATE], PARAMS_BUF[DEPTH]
+        - Only declared params are shown in the UI; others are hidden
+        - Always declare params when your script uses PARAMS_BUF
+        - Const names become UI labels (SCREAMING_SNAKE → Title Case, e.g. BIT_DEPTH → "Bit Depth")
         """
 
     static let pythonSystemPrompt = """
@@ -704,6 +721,142 @@ struct LanguagePromptTests {
         #expect(contract.contains("frame_count"))
         #expect(contract.contains("sample_rate"))
         #expect(contract.contains("outputs[ch][:frame_count]"))
+    }
+
+    @Test func pythonApiContractDocumentsParamNames() {
+        let contract = TestSystemPrompts.pythonApiContract
+        #expect(contract.contains("PARAM_NAMES"))
+    }
+
+    @Test func rustApiContractDocumentsParamNames() {
+        let contract = TestSystemPrompts.rustApiContract
+        #expect(contract.contains("// Parameters:"))
+        #expect(contract.contains("const RATE: usize = 0"))
+    }
+}
+
+// MARK: - Rust Source Param Name Parser Tests
+
+/// Standalone copy of the parser logic for testing.
+/// This mirrors BearBoneExtensionAudioUnit.parseRustParamNames(fromSource:).
+private func parseRustParamNames(fromSource source: String) -> [Int: String]? {
+    let paramCount = 8
+    let lines = source.components(separatedBy: .newlines)
+
+    guard let markerIndex = lines.firstIndex(where: { line in
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.range(of: #"^//\s*Parameters:"#, options: .regularExpression) != nil
+    }) else {
+        return nil
+    }
+
+    let constPattern = try! NSRegularExpression(pattern: #"^\s*const\s+(\w+)\s*:\s*usize\s*=\s*(\d+)\s*;"#)
+    var names: [Int: String] = [:]
+
+    for i in (markerIndex + 1)..<lines.count {
+        let line = lines[i]
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { continue }
+
+        let range = NSRange(line.startIndex..., in: line)
+        guard let match = constPattern.firstMatch(in: line, range: range),
+              let nameRange = Range(match.range(at: 1), in: line),
+              let addrRange = Range(match.range(at: 2), in: line),
+              let addr = Int(line[addrRange]),
+              addr >= 0, addr < paramCount else {
+            break
+        }
+
+        let constName = String(line[nameRange])
+        let label = constName
+            .split(separator: "_")
+            .map { word in
+                word.prefix(1).uppercased() + word.dropFirst().lowercased()
+            }
+            .joined(separator: " ")
+        names[addr] = label
+    }
+
+    return names.isEmpty ? nil : names
+}
+
+@Suite("Rust Param Name Parser")
+struct RustParamNameParserTests {
+
+    @Test func parsesValidParamBlock() {
+        let source = """
+        const MAX_CH: usize = 2;
+        static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
+
+        // Parameters:
+        const RATE: usize = 0;
+        const DEPTH: usize = 1;
+
+        #[no_mangle]
+        pub extern "C" fn process() {}
+        """
+        let result = parseRustParamNames(fromSource: source)
+        #expect(result == [0: "Rate", 1: "Depth"])
+    }
+
+    @Test func returnsNilWhenNoMarker() {
+        let source = """
+        const MAX_CH: usize = 2;
+        const RATE: usize = 0;
+        """
+        let result = parseRustParamNames(fromSource: source)
+        #expect(result == nil)
+    }
+
+    @Test func handlesExtraWhitespace() {
+        let source = """
+        //   Parameters:
+          const  RATE : usize = 0 ;
+        """
+        let result = parseRustParamNames(fromSource: source)
+        #expect(result == [0: "Rate"])
+    }
+
+    @Test func convertsScreamingSnakeToTitleCase() {
+        let source = """
+        // Parameters:
+        const BIT_DEPTH: usize = 0;
+        const RATE_HZ: usize = 1;
+        const MIX: usize = 2;
+        """
+        let result = parseRustParamNames(fromSource: source)
+        #expect(result == [0: "Bit Depth", 1: "Rate Hz", 2: "Mix"])
+    }
+
+    @Test func filtersKeysOutsideRange() {
+        let source = """
+        // Parameters:
+        const RATE: usize = 0;
+        const BAD: usize = 9;
+        """
+        let result = parseRustParamNames(fromSource: source)
+        #expect(result == [0: "Rate"])
+    }
+
+    @Test func returnsNilForEmptyParamBlock() {
+        let source = """
+        // Parameters:
+
+        #[no_mangle]
+        """
+        let result = parseRustParamNames(fromSource: source)
+        #expect(result == nil)
+    }
+
+    @Test func skipsBlankLinesWithinBlock() {
+        let source = """
+        // Parameters:
+        const RATE: usize = 0;
+
+        const DEPTH: usize = 1;
+        """
+        let result = parseRustParamNames(fromSource: source)
+        #expect(result == [0: "Rate", 1: "Depth"])
     }
 }
 

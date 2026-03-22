@@ -1,7 +1,7 @@
 import numpy as np
 
-# Ring modulator parameters
-CARRIER_HZ = 440.0  # Carrier frequency
+# Script-declared parameter names (shown in UI, used in exported AUs)
+PARAM_NAMES = {0: "Frequency"}
 
 # Persistent phase across callbacks
 _phase = 0.0
@@ -17,20 +17,18 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     amplitude around a bias), ring modulation has no DC offset, so the
     carrier frequency components are always present in the output.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Frequency): Carrier frequency — logarithmic 20 Hz to 20000 Hz
     """
     global _phase
 
+    carrier_hz = 20.0 * (1000.0 ** params[0])  # 20 to 20000 Hz (log)
+
     t = np.arange(frame_count, dtype=np.float32) / sample_rate
-    carrier = np.sin(2.0 * np.pi * CARRIER_HZ * t + _phase)
+    carrier = np.sin(2.0 * np.pi * carrier_hz * t + _phase)
 
     for ch in range(len(inputs)):
         outputs[ch][:frame_count] = inputs[ch][:frame_count] * carrier
 
-    _phase += 2.0 * np.pi * CARRIER_HZ * frame_count / sample_rate
+    _phase += 2.0 * np.pi * carrier_hz * frame_count / sample_rate
     _phase %= 2.0 * np.pi

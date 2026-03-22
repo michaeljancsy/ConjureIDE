@@ -16,12 +16,12 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-// Compressor parameters
-const THRESHOLD_DB: f64 = -20.0; // Level above which compression kicks in
-const RATIO: f64 = 4.0;          // Compression ratio (4:1)
-const ATTACK_MS: f64 = 5.0;      // Attack time in milliseconds
-const RELEASE_MS: f64 = 50.0;    // Release time in milliseconds
-const MAKEUP_DB: f64 = 6.0;      // Makeup gain in dB
+// Parameters:
+const THRESHOLD: usize = 0;
+const RATIO: usize = 1;
+const ATTACK: usize = 2;
+const RELEASE: usize = 3;
+const MAKEUP: usize = 4;
 
 // Persistent envelope follower state
 // Use f64 to match Python's float64 precision in the envelope feedback loop.
@@ -51,12 +51,6 @@ fn lin_to_db(lin: f64) -> f64 {
 }
 
 /// Compressor — dynamic range compression with envelope follower.
-///
-/// Per-sample processing: detects the peak level across all channels, smooths it
-/// with attack/release coefficients, and computes gain reduction when the envelope
-/// exceeds the threshold. The gain curve follows a soft-knee-less ratio (hard knee).
-/// Makeup gain is applied uniformly to compensate for compression. DAW-automatable
-/// parameters are available in PARAMS_BUF[0..8] but unused by this preset.
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
@@ -68,12 +62,18 @@ pub extern "C" fn process(
     let ch = channels as usize;
     let frames = frame_count as usize;
     let sr = sample_rate as f64;
-    let threshold = db_to_lin(THRESHOLD_DB);
-    let makeup = db_to_lin(MAKEUP_DB);
-    let attack_coeff = (-1.0 / (ATTACK_MS * 0.001 * sr)).exp();
-    let release_coeff = (-1.0 / (RELEASE_MS * 0.001 * sr)).exp();
 
     unsafe {
+        let threshold_db = -40.0 + PARAMS_BUF[THRESHOLD] as f64 * 37.0;  // -40 to -3 dB
+        let ratio = 2.0 + PARAMS_BUF[RATIO] as f64 * 18.0;               // 2 to 20
+        let attack_ms = 0.5 + PARAMS_BUF[ATTACK] as f64 * 49.5;           // 0.5 to 50 ms
+        let release_ms = 10.0 + PARAMS_BUF[RELEASE] as f64 * 490.0;       // 10 to 500 ms
+        let makeup_db = PARAMS_BUF[MAKEUP] as f64 * 20.0;                  // 0 to 20 dB
+
+        let threshold = db_to_lin(threshold_db);
+        let makeup = db_to_lin(makeup_db);
+        let attack_coeff = (-1.0 / (attack_ms * 0.001 * sr)).exp();
+        let release_coeff = (-1.0 / (release_ms * 0.001 * sr)).exp();
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
         let mut env = ENVELOPE;
@@ -98,7 +98,7 @@ pub extern "C" fn process(
             // Gain computation
             let gain = if env > threshold {
                 let db_over = lin_to_db(env) - lin_to_db(threshold);
-                let db_reduction = db_over * (1.0 - 1.0 / RATIO);
+                let db_reduction = db_over * (1.0 - 1.0 / ratio);
                 db_to_lin(-db_reduction)
             } else {
                 1.0

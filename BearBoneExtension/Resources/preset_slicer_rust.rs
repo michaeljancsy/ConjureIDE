@@ -14,7 +14,8 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const CHUNK_MS: f32 = 150.0;
+// Parameters:
+const RATE: usize = 0;
 
 // Double buffers for record and playback
 static mut BUF_A: [[f32; MAX_CHUNK]; MAX_CH] = [[0.0; MAX_CHUNK]; MAX_CH];
@@ -47,12 +48,14 @@ pub extern "C" fn process(
 ) {
     let ch = channels as usize;
     let frames = frame_count as usize;
-    let mut chunk_size = (CHUNK_MS * 0.001 * sample_rate) as usize;
-    if chunk_size > MAX_CHUNK {
-        chunk_size = MAX_CHUNK;
-    }
 
     unsafe {
+        let chunk_ms = 10.0 + PARAMS_BUF[RATE] * 490.0; // 10 to 500 ms
+        let mut chunk_size = (chunk_ms * 0.001 * sample_rate) as usize;
+        if chunk_size > MAX_CHUNK {
+            chunk_size = MAX_CHUNK;
+        }
+
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
         let mut wp = WRITE_POS;

@@ -1,7 +1,7 @@
 import numpy as np
 
-# Stereo width parameters
-WIDTH = 1.5  # 0.0 = mono, 1.0 = normal, >1.0 = wider
+# Script-declared parameter names (shown in UI, used in exported AUs)
+PARAM_NAMES = {0: "Width"}
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -10,17 +10,15 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
     Encodes the stereo signal into mid (L+R) and side (L-R) components,
     scales the side component by the width factor, then decodes back to
-    L/R. At WIDTH=0 the output is mono, at WIDTH=1 the signal is
+    L/R. At width=0 the output is mono, at width=1 the signal is
     unchanged, and above 1.0 the stereo image is exaggerated.
     For mono input, the signal passes through unchanged.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Width): Stereo width — 0.0 = mono, 0.5 = normal, 1.0 = 2x wide
     """
+    width = params[0] * 2.0  # 0 to 2
+
     n_ch = len(inputs)
 
     if n_ch < 2:
@@ -36,7 +34,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     side = (left - right) * 0.5
 
     # Scale side component
-    side_scaled = side * WIDTH
+    side_scaled = side * width
 
     # Decode back to L/R
     outputs[0][:frame_count] = mid + side_scaled

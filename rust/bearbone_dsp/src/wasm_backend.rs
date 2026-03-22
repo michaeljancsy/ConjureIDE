@@ -1,5 +1,6 @@
 use crate::backend::Backend;
 use crate::params::PARAM_COUNT;
+use std::collections::HashMap;
 use wasmtime::*;
 
 /// How I/O buffer addresses are determined in WASM memory.
@@ -41,6 +42,7 @@ pub struct WasmBackend {
     max_frames: u32,
     fuel_per_callback: u64,
     last_error: Option<String>,
+    param_names: HashMap<u8, String>,
 }
 
 /// Base offset in WASM linear memory to avoid the null page.
@@ -118,6 +120,45 @@ impl WasmBackend {
             BufferMode::FixedOffset => DEFAULT_FUEL,
         };
 
+        // Extract parameter names if the module exports get_param_names_json() -> (ptr, len)
+        let param_names = if let Ok(get_names_fn) =
+            instance.get_typed_func::<(), (i32, i32)>(&mut store, "get_param_names_json")
+        {
+            let _ = store.set_fuel(COMPILED_FUEL);
+            match get_names_fn.call(&mut store, ()) {
+                Ok((ptr, len)) => {
+                    let data = memory.data(&store);
+                    let start = ptr as usize;
+                    let end = start + len as usize;
+                    if end <= data.len() {
+                        std::str::from_utf8(&data[start..end])
+                            .ok()
+                            .and_then(|s| {
+                                serde_json::from_str::<HashMap<String, String>>(s).ok()
+                            })
+                            .map(|map| {
+                                map.into_iter()
+                                    .filter_map(|(k, v)| {
+                                        let addr = k.parse::<u8>().ok()?;
+                                        if (addr as usize) < PARAM_COUNT {
+                                            Some((addr, v))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        HashMap::new()
+                    }
+                }
+                Err(_) => HashMap::new(),
+            }
+        } else {
+            HashMap::new()
+        };
+
         Ok(Self {
             store,
             memory,
@@ -133,6 +174,7 @@ impl WasmBackend {
             max_frames: 0,
             fuel_per_callback,
             last_error: None,
+            param_names,
         })
     }
 
@@ -477,6 +519,10 @@ impl Backend for WasmBackend {
 
     fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    fn param_names(&self) -> HashMap<u8, String> {
+        self.param_names.clone()
     }
 }
 
@@ -1012,6 +1058,75 @@ mod tests {
         };
         assert!(ok, "Module with buffer getters should process audio");
         assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
+    }
+
+    #[test]
+    fn test_wasm_no_param_names_returns_empty() {
+        let wasm = wat_to_wasm(GAIN_HALF_WAT);
+        let backend = WasmBackend::load(&wasm).unwrap();
+        assert!(backend.param_names().is_empty());
+    }
+
+    /// Helper: build WAT bytes for a JSON data segment in WASM memory.
+    fn json_to_wat_hex(json: &str) -> String {
+        json.bytes().map(|b| format!("\\{:02x}", b)).collect()
+    }
+
+    #[test]
+    fn test_wasm_param_names_from_export() {
+        let json = r#"{"0":"Gain","1":"Mix"}"#;
+        let hex = json_to_wat_hex(json);
+        let wat = format!(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (data (i32.const 1024) "{hex}")
+              (func (export "process")
+                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              )
+              (func (export "get_param_names_json") (result i32 i32)
+                (i32.const 1024)
+                (i32.const {len})
+              )
+            )
+            "#,
+            hex = hex,
+            len = json.len(),
+        );
+        let wasm = wat_to_wasm(&wat);
+        let backend = WasmBackend::load(&wasm).unwrap();
+        let names = backend.param_names();
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[&0], "Gain");
+        assert_eq!(names[&1], "Mix");
+    }
+
+    #[test]
+    fn test_wasm_param_names_invalid_address_filtered() {
+        let json = r#"{"0":"Gain","99":"Invalid"}"#;
+        let hex = json_to_wat_hex(json);
+        let wat = format!(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (data (i32.const 1024) "{hex}")
+              (func (export "process")
+                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              )
+              (func (export "get_param_names_json") (result i32 i32)
+                (i32.const 1024)
+                (i32.const {len})
+              )
+            )
+            "#,
+            hex = hex,
+            len = json.len(),
+        );
+        let wasm = wat_to_wasm(&wat);
+        let backend = WasmBackend::load(&wasm).unwrap();
+        let names = backend.param_names();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[&0], "Gain");
     }
 
     #[test]

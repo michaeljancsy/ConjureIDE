@@ -1,8 +1,7 @@
 import numpy as np
 
-# Bitcrush parameters
-BIT_DEPTH = 8  # Reduce to this many bits (1-16)
-DOWNSAMPLE = 4  # Keep every Nth sample, hold others
+# Script-declared parameter names (shown in UI, used in exported AUs)
+PARAM_NAMES = {0: "Bit Depth", 1: "Downsample"}
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -15,14 +14,13 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     2. Sample rate reduction: holds every Nth sample, discarding the rest,
        which introduces aliasing artifacts and a characteristic stepped sound.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Bit Depth):  1–16 bits
+        1 (Downsample): 1–16x sample rate reduction
     """
-    levels = 2 ** BIT_DEPTH
+    bit_depth = int(params[0] * 15) + 1   # 1 to 16
+    downsample = int(params[1] * 15) + 1  # 1 to 16
+    levels = 2 ** bit_depth
 
     for ch in range(len(inputs)):
         signal = inputs[ch][:frame_count]
@@ -32,6 +30,6 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
         # Sample rate reduction: hold every Nth sample
         for i in range(frame_count):
-            if i % DOWNSAMPLE == 0:
+            if i % downsample == 0:
                 held = crushed[i]
             outputs[ch][i] = held

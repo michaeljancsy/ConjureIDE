@@ -12,7 +12,8 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const DRIVE: f32 = 3.0;
+// Parameters:
+const DRIVE: usize = 0;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -44,16 +45,17 @@ pub extern "C" fn process(
 ) {
     let ch = channels as usize;
     let frames = frame_count as usize;
-    let norm = 1.0 / tanh_f32(DRIVE);
 
     unsafe {
+        let drive = 1.0 + PARAMS_BUF[DRIVE] * 14.0; // 1 to 15
+        let norm = 1.0 / tanh_f32(drive);
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
 
         for c in 0..ch {
             for i in 0..frames {
                 let idx = c * frames + i;
-                out[idx] = tanh_f32(DRIVE * inp[idx]) * norm;
+                out[idx] = tanh_f32(drive * inp[idx]) * norm;
             }
         }
     }

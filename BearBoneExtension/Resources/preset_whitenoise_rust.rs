@@ -12,7 +12,8 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const AMPLITUDE: f32 = 0.3;
+// Parameters:
+const LEVEL: usize = 0;
 
 // LCG random state
 static mut RNG_STATE: u32 = 12345;
@@ -53,8 +54,10 @@ pub extern "C" fn process(
     unsafe {
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
 
+        let amplitude = PARAMS_BUF[LEVEL]; // 0.0 to 1.0
+
         for i in 0..frames {
-            let sample = next_f32() * AMPLITUDE;
+            let sample = next_f32() * amplitude;
             for c in 0..ch {
                 out[c * frames + i] = sample;
             }

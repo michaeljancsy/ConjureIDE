@@ -13,7 +13,8 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const R: f64 = 0.995;
+// Parameters:
+const CUTOFF: usize = 0;
 
 // Persistent state per channel: [prev_x, prev_y]
 // Use f64 to match Python's float64 precision — f32 accumulation
@@ -48,6 +49,7 @@ pub extern "C" fn process(
     let frames = frame_count as usize;
 
     unsafe {
+        let r = 0.9995 - PARAMS_BUF[CUTOFF] as f64 * 0.0095; // R: 0.9995 to 0.99 (inverted)
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
 
@@ -58,7 +60,7 @@ pub extern "C" fn process(
             for i in 0..frames {
                 let idx = c * frames + i;
                 let x = inp[idx] as f64;
-                py = x - px + R * py;
+                py = x - px + r * py;
                 px = x;
                 out[idx] = py as f32;
             }

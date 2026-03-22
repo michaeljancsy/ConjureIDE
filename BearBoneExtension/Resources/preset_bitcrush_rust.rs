@@ -13,9 +13,9 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-// Bitcrush parameters
-const BIT_DEPTH: i32 = 8;   // Reduce to this many bits (1-16)
-const DOWNSAMPLE: usize = 4; // Keep every Nth sample, hold others
+// Parameters:
+const BIT_DEPTH: usize = 0;
+const DOWNSAMPLE: usize = 1;
 
 // Persistent held sample per channel for sample-rate reduction
 static mut HELD: [f32; MAX_CH] = [0.0; MAX_CH];
@@ -36,12 +36,6 @@ pub extern "C" fn get_params_ptr() -> i32 {
 }
 
 /// Bitcrush — bit depth reduction and sample rate reduction.
-///
-/// For each sample: first quantizes the amplitude to 2^BIT_DEPTH discrete levels
-/// (bit crushing), then applies sample-and-hold at a 1/DOWNSAMPLE rate (sample
-/// rate reduction). The held sample state persists across callbacks for seamless
-/// processing. DAW-automatable parameters are available in PARAMS_BUF[0..8] but
-/// unused by this preset.
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
@@ -52,9 +46,12 @@ pub extern "C" fn process(
 ) {
     let ch = channels as usize;
     let frames = frame_count as usize;
-    let levels = (1 << BIT_DEPTH) as f32;
 
     unsafe {
+        let bit_depth = (PARAMS_BUF[BIT_DEPTH] * 15.0) as i32 + 1;    // 1 to 16
+        let downsample = (PARAMS_BUF[DOWNSAMPLE] * 15.0) as usize + 1; // 1 to 16
+        let levels = (1 << bit_depth) as f32;
+
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
 
@@ -64,7 +61,7 @@ pub extern "C" fn process(
                 // Bit depth reduction: quantize to fewer levels
                 let crushed = (inp[idx] * levels).round() / levels;
                 // Sample rate reduction: hold every Nth sample
-                if i % DOWNSAMPLE == 0 {
+                if i % downsample == 0 {
                     HELD[c] = crushed;
                 }
                 out[idx] = HELD[c];

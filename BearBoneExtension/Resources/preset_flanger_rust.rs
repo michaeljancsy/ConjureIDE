@@ -13,11 +13,12 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const RATE_HZ: f64 = 0.3;
-const DEPTH_MS: f64 = 2.0;
-const BASE_DELAY_MS: f64 = 2.0;
-const FEEDBACK: f64 = 0.7;
-const MIX: f64 = 0.5;
+// Parameters:
+const RATE: usize = 0;
+const DEPTH: usize = 1;
+const DELAY: usize = 2;
+const FEEDBACK: usize = 3;
+const MIX: usize = 4;
 
 // Persistent state
 static mut DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH];
@@ -52,16 +53,22 @@ pub extern "C" fn process(
     let frames = frame_count as usize;
     let sr = sample_rate as f64;
     let two_pi = 2.0 * core::f64::consts::PI;
-    let lfo_inc = two_pi * RATE_HZ / sr;
 
     unsafe {
+        let rate_hz = 0.1 + PARAMS_BUF[RATE] as f64 * 4.9;           // 0.1 to 5.0 Hz
+        let depth_ms = 0.5 + PARAMS_BUF[DEPTH] as f64 * 4.5;         // 0.5 to 5.0 ms
+        let base_delay_ms = 1.0 + PARAMS_BUF[DELAY] as f64 * 4.0;    // 1.0 to 5.0 ms
+        let feedback = PARAMS_BUF[FEEDBACK] as f64;                     // 0.0 to 1.0
+        let mix = PARAMS_BUF[MIX] as f64;                               // 0.0 to 1.0
+
+        let lfo_inc = two_pi * rate_hz / sr;
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
         let mut phase = LFO_PHASE;
         let mut wp = WRITE_POS;
 
         for i in 0..frames {
-            let delay_samples = (BASE_DELAY_MS + DEPTH_MS * phase.sin()) * sr / 1000.0;
+            let delay_samples = (base_delay_ms + depth_ms * phase.sin()) * sr / 1000.0;
 
             for c in 0..ch {
                 let idx = c * frames + i;
@@ -78,10 +85,10 @@ pub extern "C" fn process(
                     + DELAY_BUF[c][idx1] as f64 * frac;
 
                 // Write input + feedback to delay line
-                DELAY_BUF[c][wp] = (inp[idx] as f64 + delayed * FEEDBACK) as f32;
+                DELAY_BUF[c][wp] = (inp[idx] as f64 + delayed * feedback) as f32;
 
                 // Mix dry + wet
-                out[idx] = (inp[idx] as f64 * (1.0 - MIX) + delayed * MIX) as f32;
+                out[idx] = (inp[idx] as f64 * (1.0 - mix) + delayed * mix) as f32;
             }
 
             phase += lfo_inc;

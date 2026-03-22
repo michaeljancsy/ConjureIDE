@@ -1,4 +1,5 @@
 use crate::params::PARAM_COUNT;
+use std::collections::HashMap;
 
 /// Trait for pluggable DSP processing backends (Python, WASM, etc.).
 ///
@@ -37,4 +38,10 @@ pub trait Backend {
 
     /// Returns the last error message, if any.
     fn last_error(&self) -> Option<&str>;
+
+    /// Returns script-declared parameter names, keyed by address (0–7).
+    /// Empty map means no names were declared (backward compatible).
+    fn param_names(&self) -> HashMap<u8, String> {
+        HashMap::new()
+    }
 }

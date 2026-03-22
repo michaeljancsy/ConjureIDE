@@ -1,10 +1,8 @@
 import numpy as np
 import math
 
-# Limiter parameters
-THRESHOLD_DB = -3.0    # Ceiling level in dB
-ATTACK_MS = 0.1        # Ultra-fast attack
-RELEASE_MS = 100.0     # Release time in ms
+# Script-declared parameter names (shown in UI, used in exported AUs)
+PARAM_NAMES = {0: "Threshold", 1: "Attack", 2: "Release"}
 
 # Persistent envelope follower state
 _envelope = 0.0
@@ -17,22 +15,24 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     Prevents the signal from exceeding the threshold using a fast-attack
     envelope follower. When the peak level exceeds the threshold, gain
     is reduced so the output stays at the threshold. The ultra-fast attack
-    (0.1 ms) catches transients; the slower release allows natural decay.
+    catches transients; the slower release allows natural decay.
     Unlike a compressor, the ratio is effectively infinite — nothing
     passes above the ceiling.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Threshold): Ceiling level — 0.0 = -20 dB, 1.0 = 0 dB
+        1 (Attack):    Attack time — 0.0 = 0.01 ms, 1.0 = 1 ms
+        2 (Release):   Release time — 0.0 = 10 ms, 1.0 = 500 ms
     """
     global _envelope
 
-    threshold = 10.0 ** (THRESHOLD_DB / 20.0)
-    attack_coeff = math.exp(-1.0 / (ATTACK_MS * 0.001 * sample_rate))
-    release_coeff = math.exp(-1.0 / (RELEASE_MS * 0.001 * sample_rate))
+    threshold_db = -20.0 + params[0] * 20.0     # -20 to 0 dB
+    attack_ms = 0.01 + params[1] * 0.99         # 0.01 to 1 ms
+    release_ms = 10.0 + params[2] * 490.0       # 10 to 500 ms
+
+    threshold = 10.0 ** (threshold_db / 20.0)
+    attack_coeff = math.exp(-1.0 / (attack_ms * 0.001 * sample_rate))
+    release_coeff = math.exp(-1.0 / (release_ms * 0.001 * sample_rate))
 
     gain = np.ones(frame_count, dtype=np.float32)
     env = _envelope

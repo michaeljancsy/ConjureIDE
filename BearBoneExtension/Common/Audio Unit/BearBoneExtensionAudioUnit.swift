@@ -95,6 +95,13 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Publishes script source when it changes externally (preset selection, fullState restore, AI compile).
 	public let scriptSourceDidChange = PassthroughSubject<ScriptSourceChange, Never>()
 
+	/// Script-declared parameter names, keyed by address (0–7).
+	/// nil = no names declared (backward compatible, show all 8 with default labels).
+	private(set) var currentParamNames: [Int: String]? = nil
+
+	/// Fires after every script load with the new param names (or nil).
+	public let paramNamesDidChange = PassthroughSubject<[Int: String]?, Never>()
+
 	// Audio busses
 	private var _inputBus: AUAudioUnitBus!
 	private var _outputBus: AUAudioUnitBus!
@@ -149,6 +156,7 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		let success = dsp_kernel_load_script(kernel, pythonHome, scriptPath)
 		if success {
 			pluginLog.info("Python DSP script loaded successfully")
+			readParamNames()
 
 			// Warm-start: run process() a few times so any first-call allocations
 			// (e.g. global buffer creation) happen before real audio arrives.
@@ -166,6 +174,80 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				pluginLog.error("Failed to load Python DSP script (no error details), using Rust fallback DSP")
 			}
 		}
+	}
+
+	/// Parse Rust param names from source text.
+	///
+	/// Looks for a `// Parameters:` marker followed by `const NAME: usize = N;` lines.
+	/// Converts SCREAMING_SNAKE const names to Title Case labels (e.g. BIT_DEPTH → "Bit Depth").
+	/// Returns nil if no `// Parameters:` marker is found.
+	static func parseRustParamNames(fromSource source: String) -> [Int: String]? {
+		let lines = source.components(separatedBy: .newlines)
+
+		// Find the "// Parameters:" marker line
+		guard let markerIndex = lines.firstIndex(where: { line in
+			let trimmed = line.trimmingCharacters(in: .whitespaces)
+			return trimmed.range(of: #"^//\s*Parameters:"#, options: .regularExpression) != nil
+		}) else {
+			return nil
+		}
+
+		// Parse subsequent const declarations
+		let constPattern = try! NSRegularExpression(pattern: #"^\s*const\s+(\w+)\s*:\s*usize\s*=\s*(\d+)\s*;"#)
+		var names: [Int: String] = [:]
+
+		for i in (markerIndex + 1)..<lines.count {
+			let line = lines[i]
+			let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+			// Stop at blank line or non-const line (allow empty lines within block)
+			if trimmed.isEmpty { continue }
+
+			let range = NSRange(line.startIndex..., in: line)
+			guard let match = constPattern.firstMatch(in: line, range: range),
+				  let nameRange = Range(match.range(at: 1), in: line),
+				  let addrRange = Range(match.range(at: 2), in: line),
+				  let addr = Int(line[addrRange]),
+				  addr >= 0, addr < paramCount else {
+				break  // Stop parsing at first non-matching non-empty line
+			}
+
+			let constName = String(line[nameRange])
+			let label = constName
+				.split(separator: "_")
+				.map { word in
+					word.prefix(1).uppercased() + word.dropFirst().lowercased()
+				}
+				.joined(separator: " ")
+			names[addr] = label
+		}
+
+		return names.isEmpty ? nil : names
+	}
+
+	/// Read script-declared parameter names from the Rust kernel via FFI.
+	/// Called after every successful script/WASM load.
+	private func readParamNames() {
+		guard let ptr = dsp_kernel_param_names_json(kernel) else {
+			currentParamNames = nil
+			paramNamesDidChange.send(nil)
+			return
+		}
+		let json = String(cString: ptr)
+		guard let data = json.data(using: .utf8),
+			  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+			currentParamNames = nil
+			paramNamesDidChange.send(nil)
+			return
+		}
+		var names: [Int: String] = [:]
+		for (key, value) in dict {
+			if let addr = Int(key), addr >= 0, addr < Self.paramCount {
+				names[addr] = value
+			}
+		}
+		currentParamNames = names.isEmpty ? nil : names
+		paramNamesDidChange.send(currentParamNames)
 	}
 
 	/// Hot-reload a Python DSP script from source code.
@@ -194,6 +276,7 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		if success {
 			currentScriptSource = source
 			pluginLog.info("Python DSP script reloaded successfully")
+			readParamNames()
 
 			// Benchmark the process function
 			let benchmarkSecs = dsp_kernel_benchmark_process(kernel)
@@ -230,6 +313,7 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		if success {
 			pluginLog.info("WASM module loaded successfully")
+			readParamNames()
 
 			let benchmarkSecs = dsp_kernel_benchmark_process(kernel)
 			var processTimeMs: Double? = nil
@@ -267,6 +351,9 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			return result
 
 		case .rust:
+			// Parse param names from source (overrides WASM export if present)
+			let sourceParamNames = Self.parseRustParamNames(fromSource: source)
+
 			// Check cache first
 			let cache = WasmCache()
 			if let cachedWasm = cache.cachedWasm(for: source) {
@@ -275,6 +362,10 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					currentScriptSource = source
 					currentScriptLanguage = .rust
 					currentWasmBytes = cachedWasm
+					if let names = sourceParamNames {
+						currentParamNames = names
+						paramNamesDidChange.send(names)
+					}
 				}
 				return result
 			}
@@ -289,6 +380,10 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					currentScriptSource = source
 					currentScriptLanguage = .rust
 					currentWasmBytes = wasmBytes
+					if let names = sourceParamNames {
+						currentParamNames = names
+						paramNamesDidChange.send(names)
+					}
 				}
 				return result
 			} catch {
@@ -400,6 +495,11 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						currentScriptSource = source
 						currentScriptLanguage = .rust
 						currentWasmBytes = wasmBytes
+						// Override param names from source text if available
+						if let names = Self.parseRustParamNames(fromSource: source) {
+							currentParamNames = names
+							paramNamesDidChange.send(names)
+						}
 						scriptSourceDidChange.send(ScriptSourceChange(source: source))
 					}
 				} else {

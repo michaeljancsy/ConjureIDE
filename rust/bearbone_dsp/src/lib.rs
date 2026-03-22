@@ -194,6 +194,18 @@ pub unsafe extern "C" fn dsp_kernel_last_error(kernel: DSPKernelRef) -> *const c
     }
 }
 
+/// Returns script-declared parameter names as a null-terminated JSON C string,
+/// e.g. `{"0":"Cutoff","1":"Resonance"}`.
+/// Returns null if the loaded script does not declare parameter names.
+/// The pointer is valid until the next script load or kernel destroy.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_param_names_json(kernel: DSPKernelRef) -> *const c_char {
+    (*kernel).param_names_json_ptr()
+}
+
 /// Enable or disable audio capture for spectrogram visualization.
 /// When disabled, ring buffers are not written to (saves CPU on audio thread).
 ///
@@ -757,6 +769,78 @@ mod tests {
             // Should have set an error message
             let err = dsp_kernel_last_error(kernel);
             assert!(!err.is_null());
+
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_param_names_json_no_script() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            let ptr = dsp_kernel_param_names_json(kernel);
+            assert!(ptr.is_null(), "No script loaded = no param names");
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_param_names_json_wasm_with_names() {
+        let json = r#"{"0":"Gain"}"#;
+        let hex: String = json.bytes().map(|b| format!("\\{:02x}", b)).collect();
+        let wat = format!(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (data (i32.const 1024) "{hex}")
+              (func (export "process")
+                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              )
+              (func (export "get_param_names_json") (result i32 i32)
+                (i32.const 1024)
+                (i32.const {len})
+              )
+            )
+            "#,
+            hex = hex,
+            len = json.len(),
+        );
+        let wasm = wat::parse_str(&wat).expect("WAT parse failed");
+
+        let kernel = dsp_kernel_create();
+        unsafe {
+            let loaded = dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32);
+            assert!(loaded);
+
+            let ptr = dsp_kernel_param_names_json(kernel);
+            assert!(!ptr.is_null());
+            let json_str = std::ffi::CStr::from_ptr(ptr).to_str().unwrap();
+            assert!(json_str.contains("Gain"));
+
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_param_names_json_wasm_without_names() {
+        // Load a WASM module that does NOT export get_param_names_json
+        let wat = r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "process")
+                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              )
+            )
+        "#;
+        let wasm = wat::parse_str(wat).expect("WAT parse failed");
+
+        let kernel = dsp_kernel_create();
+        unsafe {
+            let loaded = dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32);
+            assert!(loaded);
+
+            let ptr = dsp_kernel_param_names_json(kernel);
+            assert!(ptr.is_null(), "WASM without param names should return null");
 
             dsp_kernel_destroy(kernel);
         }

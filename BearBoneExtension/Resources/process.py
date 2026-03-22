@@ -1,5 +1,10 @@
 import numpy as np
 
+PARAM_NAMES = {
+    0: "Param 0", 1: "Param 1", 2: "Param 2", 3: "Param 3",
+    4: "Param 4", 5: "Param 5", 6: "Param 6", 7: "Param 7",
+}
+
 
 def process(inputs, outputs, frame_count, sample_rate, params):
     """

@@ -15,6 +15,16 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
+// Parameters:
+const PARAM0: usize = 0;
+const PARAM1: usize = 1;
+const PARAM2: usize = 2;
+const PARAM3: usize = 3;
+const PARAM4: usize = 4;
+const PARAM5: usize = 5;
+const PARAM6: usize = 6;
+const PARAM7: usize = 7;
+
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
     unsafe { INPUT_BUF.as_ptr() as i32 }

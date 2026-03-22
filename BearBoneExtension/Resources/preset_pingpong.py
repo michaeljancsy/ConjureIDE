@@ -1,9 +1,7 @@
 import numpy as np
 
-# Ping-pong delay parameters
-DELAY_MS = 375.0   # Delay time per side in ms
-FEEDBACK = 0.4     # Cross-feedback amount (0.0–0.95)
-MIX = 0.5          # Wet/dry mix
+# Script-declared parameter names (shown in UI, used in exported AUs)
+PARAM_NAMES = {0: "Time", 1: "Feedback", 2: "Mix"}
 
 # Max delay in samples (supports 500 ms at 96 kHz)
 MAX_DELAY = 48000
@@ -24,14 +22,16 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     creates a bouncing stereo effect. For mono input, the bouncing still
     occurs across the single delay line with feedback.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Time):     Delay time per side — 0.0 = 50 ms, 1.0 = 500 ms
+        1 (Feedback): Cross-feedback — 0.0 = none, 1.0 = 0.95
+        2 (Mix):      Wet/dry mix — 0.0 = dry, 1.0 = wet
     """
     global _left_buf, _right_buf, _write_pos
+
+    delay_ms = 50.0 + params[0] * 450.0    # 50 to 500 ms
+    feedback = params[1] * 0.95            # 0 to 0.95
+    mix = params[2]                        # 0 to 1
 
     n_ch = len(inputs)
 
@@ -39,7 +39,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         _left_buf = np.zeros(MAX_DELAY, dtype=np.float32)
         _right_buf = np.zeros(MAX_DELAY, dtype=np.float32)
 
-    delay_samples = int(DELAY_MS * 0.001 * sample_rate)
+    delay_samples = int(delay_ms * 0.001 * sample_rate)
     if delay_samples >= MAX_DELAY:
         delay_samples = MAX_DELAY - 1
 
@@ -50,8 +50,8 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         for i in range(frame_count):
             rp = (wp + MAX_DELAY - delay_samples) % MAX_DELAY
             delayed = _left_buf[rp]
-            _left_buf[wp] = inputs[0][i] + delayed * FEEDBACK
-            outputs[0][i] = inputs[0][i] * (1.0 - MIX) + delayed * MIX
+            _left_buf[wp] = inputs[0][i] + delayed * feedback
+            outputs[0][i] = inputs[0][i] * (1.0 - mix) + delayed * mix
             wp = (wp + 1) % MAX_DELAY
     else:
         # Stereo: ping-pong
@@ -63,12 +63,12 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
             # Input goes to left, left feeds right, right feeds back to left
             mono_in = (inputs[0][i] + inputs[1][i]) * 0.5
-            _left_buf[wp] = mono_in + right_delayed * FEEDBACK
-            _right_buf[wp] = left_delayed * FEEDBACK
+            _left_buf[wp] = mono_in + right_delayed * feedback
+            _right_buf[wp] = left_delayed * feedback
 
             # Mix dry + wet
-            outputs[0][i] = inputs[0][i] * (1.0 - MIX) + left_delayed * MIX
-            outputs[1][i] = inputs[1][i] * (1.0 - MIX) + right_delayed * MIX
+            outputs[0][i] = inputs[0][i] * (1.0 - mix) + left_delayed * mix
+            outputs[1][i] = inputs[1][i] * (1.0 - mix) + right_delayed * mix
 
             wp = (wp + 1) % MAX_DELAY
 

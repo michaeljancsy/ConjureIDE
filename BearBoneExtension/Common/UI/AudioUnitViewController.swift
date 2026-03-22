@@ -44,6 +44,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var captureManager: AudioCaptureManager?
     private var parameterState: ParameterState?
     private var licenseManager: LicenseManager?
+    private var paramNamesCancellable: AnyCancellable?
 
 	deinit {
         log.info("deinit called")
@@ -171,6 +172,15 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         let ps = parameterState!
         if let tree = au.parameterTree {
             ps.attach(to: tree)
+        }
+        // Set initial param names from the currently loaded script
+        if let au = au as? BearBoneExtensionAudioUnit {
+            ps.paramNames = au.currentParamNames
+            paramNamesCancellable = au.paramNamesDidChange
+                .receive(on: DispatchQueue.main)
+                .sink { [weak ps] names in
+                    ps?.paramNames = names
+                }
         }
 
         if licenseManager == nil {
@@ -335,7 +345,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                     language: language,
                     templateURL: templateURL,
                     outputDirectory: exportDir,
-                    skipSigning: true
+                    skipSigning: true,
+                    paramNames: au.currentParamNames
                 )
                 log.info("Staged preset '\(name, privacy: .public)' to App Group at \(appURL.path, privacy: .public)")
                 return .success("Exported \"\(name)\"! Open BearBone to install.")

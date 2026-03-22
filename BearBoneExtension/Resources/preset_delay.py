@@ -1,10 +1,8 @@
 import numpy as np
 import math
 
-# Delay parameters
-DELAY_MS = 250.0   # Delay time in ms
-FEEDBACK = 0.5     # Feedback amount (0.0–0.95)
-MIX = 0.5          # Wet/dry mix
+# Script-declared parameter names (shown in UI, used in exported AUs)
+PARAM_NAMES = {0: "Time", 1: "Feedback", 2: "Mix"}
 
 # Max delay in samples (supports 500 ms at 96 kHz)
 MAX_DELAY = 48000
@@ -23,21 +21,23 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     creating a decaying echo. The dry/wet mix controls the balance between
     the original signal and the delayed signal.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Time):     Delay time — 0.0 = 10 ms, 1.0 = 500 ms
+        1 (Feedback): Feedback amount — 0.0 = none, 1.0 = 0.95
+        2 (Mix):      Wet/dry mix — 0.0 = dry, 1.0 = wet
     """
     global _delay_buf, _write_pos
+
+    delay_ms = 10.0 + params[0] * 490.0   # 10 to 500 ms
+    feedback = params[1] * 0.95            # 0 to 0.95
+    mix = params[2]                        # 0 to 1
 
     n_ch = len(inputs)
 
     if _delay_buf is None or len(_delay_buf) != n_ch:
         _delay_buf = [np.zeros(MAX_DELAY, dtype=np.float32) for _ in range(n_ch)]
 
-    delay_samples = int(DELAY_MS * 0.001 * sample_rate)
+    delay_samples = int(delay_ms * 0.001 * sample_rate)
     if delay_samples >= MAX_DELAY:
         delay_samples = MAX_DELAY - 1
 
@@ -50,10 +50,10 @@ def process(inputs, outputs, frame_count, sample_rate, params):
             delayed = _delay_buf[ch][rp]
 
             # Write input + feedback to delay line
-            _delay_buf[ch][wp] = inputs[ch][i] + delayed * FEEDBACK
+            _delay_buf[ch][wp] = inputs[ch][i] + delayed * feedback
 
             # Mix dry + wet
-            outputs[ch][i] = inputs[ch][i] * (1.0 - MIX) + delayed * MIX
+            outputs[ch][i] = inputs[ch][i] * (1.0 - mix) + delayed * mix
 
         wp = (wp + 1) % MAX_DELAY
 

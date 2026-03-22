@@ -1,7 +1,7 @@
 import numpy as np
 
-# Hard clip parameters
-DRIVE = 3.0  # Pre-clip gain multiplier
+# Script-declared parameter names (shown in UI, used in exported AUs)
+PARAM_NAMES = {0: "Drive"}
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -9,15 +9,13 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     Hard Clip — hard clipping distortion.
 
     Amplifies the signal by the drive amount, then clips any values
-    exceeding ±1.0. Produces a harsh, buzzy distortion with odd harmonics.
+    exceeding +/-1.0. Produces a harsh, buzzy distortion with odd harmonics.
     Higher drive values push more of the signal into clipping.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Drive): Pre-clip gain — 0.0 = 1x, 1.0 = 20x
     """
+    drive = 1.0 + params[0] * 19.0  # 1 to 20
+
     for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = np.clip(DRIVE * inputs[ch][:frame_count], -1.0, 1.0)
+        outputs[ch][:frame_count] = np.clip(drive * inputs[ch][:frame_count], -1.0, 1.0)
