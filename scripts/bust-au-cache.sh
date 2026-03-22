@@ -1,8 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-# Post-build: kill AudioComponentRegistrar and re-register the freshly-built
-# app with LaunchServices so PluginKit discovers the embedded extension.
+# Post-build: force-register the freshly-built app with LaunchServices and
+# restart PluginKit + AudioComponentRegistrar so the just-built extension
+# is always the one that gets loaded. This handles switching between
+# worktrees, Debug/Release configurations, and DerivedData rebuilds.
+#
 # Skipped during test actions to avoid interfering with the test runner.
 
 # Detect test actions: ACTION is set by xcodebuild (build, test, etc.)
@@ -11,20 +14,26 @@ if [ "${ACTION:-build}" = "test" ] || [ "${ACTION:-build}" = "build-for-testing"
     exit 0
 fi
 
-# Kill AudioComponentRegistrar so it re-reads AU registrations on next query.
-# The registrar restarts on demand via launchd.
-killall -9 AudioComponentRegistrar 2>/dev/null && \
-    echo "note: Killed AudioComponentRegistrar for cache bust" >&2 || \
-    echo "note: AudioComponentRegistrar not running (nothing to kill)" >&2
-
-# Re-register the freshly-built host app with LaunchServices.
-# This triggers PluginKit to discover the embedded extension, ensuring
-# the DerivedData build is the active registration.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
 APP_PATH="${BUILT_PRODUCTS_DIR:-}/BearBone.app"
+
 if [ -d "${APP_PATH}" ]; then
-    /System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister -f -R -trusted "${APP_PATH}" 2>/dev/null && \
-        echo "note: Re-registered app with LaunchServices: ${APP_PATH}" >&2 || \
+    # Force-register the just-built app with LaunchServices.
+    # The -f flag updates even if an entry already exists, ensuring
+    # PluginKit always discovers THIS build's embedded extension.
+    $LSREGISTER -f -R -trusted "${APP_PATH}" 2>/dev/null && \
+        echo "note: Registered app with LaunchServices: ${APP_PATH}" >&2 || \
         echo "warning: lsregister failed for ${APP_PATH}" >&2
 fi
+
+# Kill AudioComponentRegistrar so it re-reads AU registrations on next query.
+killall -9 AudioComponentRegistrar 2>/dev/null && \
+    echo "note: Killed AudioComponentRegistrar" >&2 || true
+
+# Kill PluginKit daemon so it re-discovers extensions from LaunchServices.
+# Without this, pkd may serve a stale extension from a previous build
+# when switching between worktrees or configurations.
+killall -9 pkd 2>/dev/null && \
+    echo "note: Killed pkd for extension re-discovery" >&2 || true
 
 exit 0
