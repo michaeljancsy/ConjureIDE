@@ -1,10 +1,10 @@
 // Low-Pass Filter — simple 1-pole IIR low-pass.
 //
-// Implements the simplest possible IIR low-pass filter:
-//     y[n] = (1 - a) * x[n] + a * y[n-1]
-// where a = exp(-2 * pi * cutoff / sample_rate).
+// Implements y[n] = (1 - a) * x[n] + a * y[n-1].
 // Rolls off at 6 dB/octave above the cutoff frequency.
-// State is maintained per channel across callbacks.
+//
+// Params:
+//   0 (Cutoff): Cutoff frequency — 0.0 = 20 Hz, 1.0 = 20 kHz (exponential)
 
 const MAX_CH: usize = 2;
 const MAX_FR: usize = 4096;
@@ -13,7 +13,8 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const CUTOFF_HZ: f64 = 800.0;
+// Parameters:
+const CUTOFF: usize = 0;
 
 // Persistent state: previous output per channel
 // Use f64 to match Python's float64 precision in the feedback loop.
@@ -46,10 +47,13 @@ pub extern "C" fn process(
     let frames = frame_count as usize;
     let sr = sample_rate as f64;
     let two_pi = 2.0 * core::f64::consts::PI;
-    let a = (-two_pi * CUTOFF_HZ / sr).exp();
-    let b = 1.0 - a;
 
     unsafe {
+        // Exponential mapping: 20 Hz to 20 kHz
+        let cutoff_hz = 20.0 * (1000.0_f64).powf(PARAMS_BUF[CUTOFF] as f64);
+
+        let a = (-two_pi * cutoff_hz / sr).exp();
+        let b = 1.0 - a;
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
 

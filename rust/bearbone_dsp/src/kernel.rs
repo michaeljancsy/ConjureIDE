@@ -48,6 +48,10 @@ pub struct DSPKernel {
     /// Once this reaches DEMO_LIMIT_SAMPLES, output is silenced.
     /// Incremented on audio thread, read from UI thread — lock-free.
     demo_samples_processed: AtomicU64,
+    /// Cached JSON representation of script-declared parameter names.
+    /// Set after each successful script/WASM load. None means "no names declared."
+    /// Pointer returned by `param_names_json_ptr()` is valid until next script load or destroy.
+    param_names_json: Option<std::ffi::CString>,
 }
 
 impl DSPKernel {
@@ -67,6 +71,7 @@ impl DSPKernel {
             capture_scratch: vec![0.0; 1024],
             licensed: AtomicBool::new(false),
             demo_samples_processed: AtomicU64::new(0),
+            param_names_json: None,
         }
     }
 
@@ -99,10 +104,12 @@ impl DSPKernel {
                 if self.channel_count > 0 {
                     pb.initialize(self.channel_count, self.sample_rate, self.max_frames_to_render);
                 }
+                let names = pb.param_names();
                 // Lock to swap — render thread will passthrough during this brief window
                 if let Ok(mut guard) = self.backend.lock() {
                     *guard = Some(Box::new(pb));
                 }
+                self.update_param_names_cache(names);
                 self.last_error = None;
                 true
             }
@@ -122,10 +129,12 @@ impl DSPKernel {
                 if self.channel_count > 0 {
                     wb.initialize(self.channel_count, self.sample_rate, self.max_frames_to_render);
                 }
+                let names = wb.param_names();
                 // Lock to swap — render thread will passthrough during this brief window
                 if let Ok(mut guard) = self.backend.lock() {
                     *guard = Some(Box::new(wb));
                 }
+                self.update_param_names_cache(names);
                 self.last_error = None;
                 true
             }
@@ -273,6 +282,31 @@ impl DSPKernel {
     /// Returns the last error message, if any.
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    /// Update the cached JSON representation of parameter names.
+    fn update_param_names_cache(&mut self, names: std::collections::HashMap<u8, String>) {
+        if names.is_empty() {
+            self.param_names_json = None;
+        } else {
+            // Use BTreeMap for sorted keys in JSON output
+            let map: std::collections::BTreeMap<String, String> = names
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+            self.param_names_json = serde_json::to_string(&map)
+                .ok()
+                .and_then(|s| std::ffi::CString::new(s).ok());
+        }
+    }
+
+    /// Returns a pointer to the cached parameter names JSON, or null if none declared.
+    /// The pointer is valid until the next script load or kernel destroy.
+    pub fn param_names_json_ptr(&self) -> *const std::os::raw::c_char {
+        match &self.param_names_json {
+            Some(cstr) => cstr.as_ptr(),
+            None => std::ptr::null(),
+        }
     }
 
     /// Capture any backend error into `last_error` so it outlives the mutex guard.
@@ -566,6 +600,7 @@ mod tests {
         assert!(!kernel.is_bypassed());
         assert_eq!(kernel.maximum_frames_to_render(), 1024);
         assert!(kernel.last_error().is_none());
+        assert!(kernel.param_names_json_ptr().is_null());
     }
 
     #[test]
@@ -1533,5 +1568,95 @@ mod tests {
             kernel.process(&ip, &op, 1, frames);
         }
         assert_eq!(output[0], 0.5); // passthrough
+    }
+
+    // --- Param names tests ---
+
+    #[test]
+    fn test_param_names_from_python_script() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: python-dist not found");
+                return;
+            }
+        };
+
+        let script = "PARAM_NAMES = {0: \"Cutoff\", 1: \"Resonance\"}\n\ndef process(inputs, outputs, frame_count, sample_rate, params):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
+        let temp_dir = std::env::temp_dir();
+        let temp_file = temp_dir.join("test_param_names.py");
+        std::fs::write(&temp_file, script).unwrap();
+
+        let mut kernel = DSPKernel::new();
+        let loaded = kernel.load_script(&python_home, temp_file.to_str().unwrap());
+        assert!(loaded);
+
+        let ptr = kernel.param_names_json_ptr();
+        assert!(!ptr.is_null());
+        let json_str = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str().unwrap();
+        let parsed: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(json_str).unwrap();
+        assert_eq!(parsed["0"], "Cutoff");
+        assert_eq!(parsed["1"], "Resonance");
+
+        std::fs::remove_file(&temp_file).ok();
+    }
+
+    #[test]
+    fn test_param_names_none_when_not_declared() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: python-dist not found");
+                return;
+            }
+        };
+
+        let script = "def process(inputs, outputs, frame_count, sample_rate):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
+        let temp_dir = std::env::temp_dir();
+        let temp_file = temp_dir.join("test_no_param_names.py");
+        std::fs::write(&temp_file, script).unwrap();
+
+        let mut kernel = DSPKernel::new();
+        let loaded = kernel.load_script(&python_home, temp_file.to_str().unwrap());
+        assert!(loaded);
+
+        let ptr = kernel.param_names_json_ptr();
+        assert!(ptr.is_null(), "No PARAM_NAMES declared should return null");
+
+        std::fs::remove_file(&temp_file).ok();
+    }
+
+    #[test]
+    fn test_param_names_cleared_on_new_script() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: python-dist not found");
+                return;
+            }
+        };
+
+        let temp_dir = std::env::temp_dir();
+
+        // First: script WITH param names
+        let script1 = "PARAM_NAMES = {0: \"Rate\"}\n\ndef process(inputs, outputs, frame_count, sample_rate, params):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
+        let temp1 = temp_dir.join("test_param_names_1.py");
+        std::fs::write(&temp1, script1).unwrap();
+
+        let mut kernel = DSPKernel::new();
+        kernel.load_script(&python_home, temp1.to_str().unwrap());
+        assert!(!kernel.param_names_json_ptr().is_null());
+
+        // Second: script WITHOUT param names — should clear
+        let script2 = "def process(inputs, outputs, frame_count, sample_rate):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
+        let temp2 = temp_dir.join("test_param_names_2.py");
+        std::fs::write(&temp2, script2).unwrap();
+
+        kernel.load_script(&python_home, temp2.to_str().unwrap());
+        assert!(kernel.param_names_json_ptr().is_null(), "Should be cleared after loading script without PARAM_NAMES");
+
+        std::fs::remove_file(&temp1).ok();
+        std::fs::remove_file(&temp2).ok();
     }
 }

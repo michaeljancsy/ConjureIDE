@@ -1,10 +1,7 @@
 import numpy as np
 
-# Soft clip parameters
-DRIVE = 3.0  # Higher = more saturation
-
-# Normalize so that at drive=1, unity gain is preserved
-NORM = 1.0 / np.tanh(DRIVE)
+# Parameters:
+DRIVE = 0
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -16,12 +13,11 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     the signal is pushed into the nonlinearity. Output is normalized
     so that low-level signals pass through at unity gain.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Drive): Saturation amount — 0.0 = 1x, 1.0 = 15x
     """
+    drive = 1.0 + params[DRIVE] * 14.0  # 1 to 15
+    norm = 1.0 / np.tanh(drive)
+
     for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = np.tanh(DRIVE * inputs[ch][:frame_count]) * NORM
+        outputs[ch][:frame_count] = np.tanh(drive * inputs[ch][:frame_count]) * norm

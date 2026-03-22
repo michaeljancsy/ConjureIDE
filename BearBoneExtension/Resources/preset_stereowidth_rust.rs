@@ -13,7 +13,8 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const WIDTH: f32 = 1.5;
+// Parameters:
+const WIDTH: usize = 0;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -42,6 +43,7 @@ pub extern "C" fn process(
     let frames = frame_count as usize;
 
     unsafe {
+        let width = PARAMS_BUF[WIDTH] * 2.0; // 0.0 to 2.0
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
 
@@ -62,7 +64,7 @@ pub extern "C" fn process(
             let side = (left - right) * 0.5;
 
             // Scale side component
-            let side_scaled = side * WIDTH;
+            let side_scaled = side * width;
 
             // Decode back to L/R
             out[i] = mid + side_scaled;

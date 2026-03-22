@@ -18,6 +18,9 @@ import SwiftUI
 @MainActor
 final class ParameterState: ObservableObject {
     @Published var values: [Float]
+    /// Script-declared parameter names, keyed by address (0–7).
+    /// nil = no names declared (show all 8 with default labels).
+    @Published var paramNames: [Int: String]? = nil
 
     private var parameterTree: AUParameterTree?
     private var observerToken: AUParameterObserverToken?

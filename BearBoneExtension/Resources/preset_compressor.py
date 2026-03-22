@@ -1,11 +1,11 @@
 import numpy as np
 
-# Compressor parameters
-THRESHOLD_DB = -20.0  # Level above which compression kicks in
-RATIO = 4.0           # Compression ratio (4:1)
-ATTACK_MS = 5.0       # Attack time in milliseconds
-RELEASE_MS = 50.0     # Release time in milliseconds
-MAKEUP_DB = 6.0       # Makeup gain in dB
+# Parameters:
+THRESHOLD = 0
+RATIO = 1
+ATTACK = 2
+RELEASE = 3
+MAKEUP = 4
 
 # Persistent envelope follower state
 _envelope = 0.0
@@ -24,19 +24,25 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     The envelope follower operates per-sample across all channels (peak detection),
     so stereo signals are compressed with linked gain to preserve the stereo image.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Threshold): Compression threshold — 0.0 = -40 dB, 1.0 = -3 dB
+        1 (Ratio):     Compression ratio — 0.0 = 2:1, 1.0 = 20:1
+        2 (Attack):    Attack time — 0.0 = 0.5 ms, 1.0 = 50 ms
+        3 (Release):   Release time — 0.0 = 10 ms, 1.0 = 500 ms
+        4 (Makeup):    Makeup gain — 0.0 = 0 dB, 1.0 = 20 dB
     """
     global _envelope
 
-    threshold = 10.0 ** (THRESHOLD_DB / 20.0)
-    makeup = 10.0 ** (MAKEUP_DB / 20.0)
-    attack_coeff = np.exp(-1.0 / (ATTACK_MS * 0.001 * sample_rate))
-    release_coeff = np.exp(-1.0 / (RELEASE_MS * 0.001 * sample_rate))
+    threshold_db = -40.0 + params[THRESHOLD] * 37.0    # -40 to -3 dB
+    ratio = 2.0 + params[RATIO] * 18.0             # 2 to 20
+    attack_ms = 0.5 + params[ATTACK] * 49.5         # 0.5 to 50 ms
+    release_ms = 10.0 + params[RELEASE] * 490.0      # 10 to 500 ms
+    makeup_db = params[MAKEUP] * 20.0               # 0 to 20 dB
+
+    threshold = 10.0 ** (threshold_db / 20.0)
+    makeup = 10.0 ** (makeup_db / 20.0)
+    attack_coeff = np.exp(-1.0 / (attack_ms * 0.001 * sample_rate))
+    release_coeff = np.exp(-1.0 / (release_ms * 0.001 * sample_rate))
 
     # Compute gain reduction per sample using peak envelope across channels
     gain = np.ones(frame_count, dtype=np.float32)
@@ -57,7 +63,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         # Gain computation
         if env > threshold:
             db_over = 20.0 * np.log10(env / threshold + 1e-30)
-            db_reduction = db_over * (1.0 - 1.0 / RATIO)
+            db_reduction = db_over * (1.0 - 1.0 / ratio)
             gain[i] = 10.0 ** (-db_reduction / 20.0)
 
     _envelope = env

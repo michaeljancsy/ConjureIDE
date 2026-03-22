@@ -11,20 +11,33 @@ struct ParameterSlidersView: View {
     @ObservedObject var parameterState: ParameterState
     @State private var isExpanded: Bool = true
 
+    /// Indices of parameters to display, from the declared param names.
+    private var visibleIndices: [Int] {
+        guard let names = parameterState.paramNames else { return [] }
+        return Array(names.keys).sorted()
+    }
+
+    /// Label for a parameter at the given index.
+    private func label(for index: Int) -> String {
+        parameterState.paramNames?[index] ?? "Param \(index)"
+    }
+
     var body: some View {
-        DisclosureGroup("Parameters", isExpanded: $isExpanded) {
-            VStack(spacing: 4) {
-                ForEach(0..<8, id: \.self) { index in
-                    ParameterSliderRow(
-                        label: "Param \(index)",
-                        value: parameterState.binding(for: index)
-                    )
+        if !visibleIndices.isEmpty {
+            DisclosureGroup("Parameters", isExpanded: $isExpanded) {
+                VStack(spacing: 4) {
+                    ForEach(visibleIndices, id: \.self) { index in
+                        ParameterSliderRow(
+                            label: label(for: index),
+                            value: parameterState.binding(for: index)
+                        )
+                    }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
+            .padding(.horizontal)
+            .accessibilityIdentifier("parameterSlidersPanel")
         }
-        .padding(.horizontal)
-        .accessibilityIdentifier("parameterSlidersPanel")
     }
 }
 
@@ -36,7 +49,8 @@ struct ParameterSliderRow: View {
         HStack(spacing: 8) {
             Text(label)
                 .font(.caption)
-                .frame(width: 52, alignment: .leading)
+                .frame(width: 80, alignment: .leading)
+                .lineLimit(1)
 
             Slider(value: $value, in: 0...1)
                 .accessibilityIdentifier("\(label)Slider")

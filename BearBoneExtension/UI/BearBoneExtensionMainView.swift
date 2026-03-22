@@ -34,6 +34,7 @@ struct BearBoneExtensionMainView: View {
     var onDeletePreset: () -> Void
     var onNew: (ScriptLanguage) -> ScriptSaveResult
     var onExport: (String) async -> ExportResult
+    var defaultBenchmark: (processTimeMs: Double, budgetMs: Double)?
 
     @State private var scriptSource: String = ""
     @State private var selectedLanguage: ScriptLanguage = .python
@@ -41,6 +42,7 @@ struct BearBoneExtensionMainView: View {
     @State private var showingSaveAs = false
     @State private var saveAsName = ""
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
+    @State private var showNewScriptDialog: Bool = false
     @State private var isCompiling: Bool = false
     @State private var lastRunSource: String = ""
     @State private var showSpectrogram: Bool = false
@@ -73,9 +75,10 @@ struct BearBoneExtensionMainView: View {
                 licenseManager: licenseManager,
                 isCompiling: isCompiling,
                 hasUnrunChanges: scriptSource != lastRunSource,
-                selectedLanguage: $selectedLanguage,
+                selectedLanguage: selectedLanguage,
                 showSpectrogram: $showSpectrogram,
                 showChat: $showChat,
+                showNewScriptDialog: $showNewScriptDialog,
                 onSelectPreset: { preset in
                     Task {
                         isCompiling = true
@@ -106,8 +109,9 @@ struct BearBoneExtensionMainView: View {
                 onDelete: {
                     onDeletePreset()
                 },
-                onNew: {
-                    let result = onNew(selectedLanguage)
+                onNew: { language in
+                    selectedLanguage = language
+                    let result = onNew(language)
                     handleResult(result)
                 },
                 onExport: { name in
@@ -315,6 +319,9 @@ struct BearBoneExtensionMainView: View {
             scriptSource = defaultScriptSource
             lastRunSource = defaultScriptSource
             selectedLanguage = defaultLanguage
+            if let bench = defaultBenchmark {
+                lastBenchmark = bench
+            }
         }
         .onReceive(scriptSourcePublisher ?? Empty().eraseToAnyPublisher()) { change in
             scriptSource = change.source
@@ -328,14 +335,6 @@ struct BearBoneExtensionMainView: View {
         }
         .onChange(of: scriptSource) { _, newValue in
             presetManager.scriptDidChange(to: newValue)
-        }
-        .onChange(of: selectedLanguage) { oldLang, newLang in
-            // Swap template when switching language on a default/empty script
-            if isDefaultTemplate(scriptSource, for: oldLang) {
-                if let template = loadTemplate(for: newLang) {
-                    scriptSource = template
-                }
-            }
         }
         .background(
             Group {
@@ -379,20 +378,7 @@ struct BearBoneExtensionMainView: View {
     }
 
     private func handleCmdN() {
-        let result = onNew(selectedLanguage)
-        handleResult(result)
-    }
-
-    private func isDefaultTemplate(_ source: String, for language: ScriptLanguage) -> Bool {
-        guard let template = loadTemplate(for: language) else { return false }
-        return source.trimmingCharacters(in: .whitespacesAndNewlines) == template.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func loadTemplate(for language: ScriptLanguage) -> String? {
-        let ext = language == .rust ? "rs" : "py"
-        guard let url = extensionBundle.url(forResource: "process", withExtension: ext),
-              let source = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        return source
+        showNewScriptDialog = true
     }
 
     private func handleResult(_ result: ScriptSaveResult) {

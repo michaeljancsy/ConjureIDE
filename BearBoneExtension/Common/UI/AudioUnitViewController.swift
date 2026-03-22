@@ -44,6 +44,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var captureManager: AudioCaptureManager?
     private var parameterState: ParameterState?
     private var licenseManager: LicenseManager?
+    private var paramNamesCancellable: AnyCancellable?
 
 	deinit {
         log.info("deinit called")
@@ -122,22 +123,40 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             return
         }
 
-        // Use restored script from fullState if available, otherwise fall back to bundled default
+        let pm = au.presetManager
+
+        // Use restored script from fullState if available, otherwise select the default factory preset
         let initialScript: String
         let initialLanguage: ScriptLanguage
+        let initialBenchmark: (processTimeMs: Double, budgetMs: Double)?
         if let restored = au.scriptSource {
             initialScript = restored
             initialLanguage = au.currentScriptLanguage
-        } else if let scriptURL = Bundle(for: type(of: self)).url(forResource: "process", withExtension: "py"),
-                  let source = try? String(contentsOf: scriptURL, encoding: .utf8) {
-            initialScript = source
-            initialLanguage = .python
+            // If no preset is selected yet (fresh launch, not a fullState restore with a preset),
+            // select the default factory preset in the preset manager
+            if pm.currentPreset == nil,
+               let defaultPreset = pm.presets.first(where: { preset in
+                   guard case .factory(let name) = preset.source else { return false }
+                   return name == BearBoneExtensionAudioUnit.defaultPresetResource
+               }) {
+                pm.setCurrentPreset(defaultPreset, source: restored)
+            }
+            // Benchmark the already-loaded script so the UI shows timing
+            let benchSecs = dsp_kernel_benchmark_process(au.kernelReference)
+            if benchSecs >= 0 {
+                let processTimeMs = benchSecs * 1000.0
+                let sampleRate = au.outputBusses[0].format.sampleRate > 0 ? au.outputBusses[0].format.sampleRate : 44100.0
+                let maxFrames = Double(au.maximumFramesToRender > 0 ? au.maximumFramesToRender : 512)
+                let budgetMs = maxFrames / sampleRate * 1000.0
+                initialBenchmark = (processTimeMs, budgetMs)
+            } else {
+                initialBenchmark = nil
+            }
         } else {
-            initialScript = "# process.py not found in bundle\n"
+            initialScript = "# Default preset not found in bundle\n"
             initialLanguage = .python
+            initialBenchmark = nil
         }
-
-        let pm = au.presetManager
 
         if aiService == nil {
             aiService = AIService()
@@ -171,6 +190,15 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         let ps = parameterState!
         if let tree = au.parameterTree {
             ps.attach(to: tree)
+        }
+        // Set initial param names from the currently loaded script
+        if let au = au as? BearBoneExtensionAudioUnit {
+            ps.paramNames = au.currentParamNames
+            paramNamesCancellable = au.paramNamesDidChange
+                .receive(on: DispatchQueue.main)
+                .sink { [weak ps] names in
+                    ps?.paramNames = names
+                }
         }
 
         if licenseManager == nil {
@@ -335,7 +363,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                     language: language,
                     templateURL: templateURL,
                     outputDirectory: exportDir,
-                    skipSigning: true
+                    skipSigning: true,
+                    paramNames: au.currentParamNames
                 )
                 log.info("Staged preset '\(name, privacy: .public)' to App Group at \(appURL.path, privacy: .public)")
                 return .success("Exported \"\(name)\"! Open BearBone to install.")
@@ -369,7 +398,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             onSaveAsPreset: onSaveAsPreset,
             onDeletePreset: onDeletePreset,
             onNew: onNew,
-            onExport: onExport
+            onExport: onExport,
+            defaultBenchmark: initialBenchmark
         )
         let hv = SafeHostingView(rootView: content)
         hv.translatesAutoresizingMaskIntoConstraints = false

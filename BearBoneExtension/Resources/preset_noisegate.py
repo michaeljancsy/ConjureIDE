@@ -1,11 +1,11 @@
 import numpy as np
 import math
 
-# Noise gate parameters
-THRESHOLD_DB = -40.0  # Gate opens above this level
-ATTACK_MS = 0.5       # Gate open speed in ms
-RELEASE_MS = 50.0     # Gate close speed in ms
-HOLD_MS = 20.0        # Hold time before release starts
+# Parameters:
+THRESHOLD = 0
+ATTACK = 1
+RELEASE = 2
+HOLD = 3
 
 # Persistent state
 _envelope = 0.0
@@ -22,19 +22,23 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     opens and closes. The hold time prevents the gate from chattering
     on signals that hover near the threshold.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Threshold): Gate threshold — 0.0 = -80 dB, 1.0 = -20 dB
+        1 (Attack):    Gate open speed — 0.0 = 0.1 ms, 1.0 = 10 ms
+        2 (Release):   Gate close speed — 0.0 = 10 ms, 1.0 = 500 ms
+        3 (Hold):      Hold time — 0.0 = 0 ms, 1.0 = 100 ms
     """
     global _envelope, _hold_counter
 
-    threshold = 10.0 ** (THRESHOLD_DB / 20.0)
-    attack_coeff = math.exp(-1.0 / (ATTACK_MS * 0.001 * sample_rate))
-    release_coeff = math.exp(-1.0 / (RELEASE_MS * 0.001 * sample_rate))
-    hold_samples = int(HOLD_MS * 0.001 * sample_rate)
+    threshold_db = -80.0 + params[THRESHOLD] * 60.0    # -80 to -20 dB
+    attack_ms = 0.1 + params[ATTACK] * 9.9          # 0.1 to 10 ms
+    release_ms = 10.0 + params[RELEASE] * 490.0      # 10 to 500 ms
+    hold_ms = params[HOLD] * 100.0                # 0 to 100 ms
+
+    threshold = 10.0 ** (threshold_db / 20.0)
+    attack_coeff = math.exp(-1.0 / (attack_ms * 0.001 * sample_rate))
+    release_coeff = math.exp(-1.0 / (release_ms * 0.001 * sample_rate))
+    hold_samples = int(hold_ms * 0.001 * sample_rate)
 
     gain = np.ones(frame_count, dtype=np.float32)
     env = _envelope

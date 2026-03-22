@@ -1,5 +1,15 @@
 import numpy as np
 
+# Parameters:
+PARAM0 = 0
+PARAM1 = 1
+PARAM2 = 2
+PARAM3 = 3
+PARAM4 = 4
+PARAM5 = 5
+PARAM6 = 6
+PARAM7 = 7
+
 
 def process(inputs, outputs, frame_count, sample_rate, params):
     """

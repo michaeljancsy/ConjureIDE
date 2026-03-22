@@ -12,8 +12,10 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const CUTOFF_HZ: f64 = 1000.0;
-const RESONANCE: f64 = 2.0;
+// Parameters:
+const CUTOFF: usize = 0;
+const RESONANCE: usize = 1;
+
 const MODE: usize = 0; // 0=LP, 1=HP, 2=BP, 3=Notch
 
 // Persistent state per channel: [low, band]
@@ -47,10 +49,13 @@ pub extern "C" fn process(
     let ch = channels as usize;
     let frames = frame_count as usize;
     let sr = sample_rate as f64;
-    let f = 2.0 * (core::f64::consts::PI * CUTOFF_HZ / sr).sin();
-    let q = 1.0 / RESONANCE;
 
     unsafe {
+        let cutoff_hz = 20.0 * (1000.0_f64).powf(PARAMS_BUF[CUTOFF] as f64); // 20 Hz to 20 kHz (log)
+        let resonance = 0.5 + PARAMS_BUF[RESONANCE] as f64 * 9.5;             // 0.5 to 10.0
+
+        let f = 2.0 * (core::f64::consts::PI * cutoff_hz / sr).sin();
+        let q = 1.0 / resonance;
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
 

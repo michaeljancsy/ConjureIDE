@@ -54,15 +54,16 @@ struct PresetToolbar: View {
     @ObservedObject var licenseManager: LicenseManager
     var isCompiling: Bool = false
     var hasUnrunChanges: Bool = false
-    @Binding var selectedLanguage: ScriptLanguage
+    var selectedLanguage: ScriptLanguage
     @Binding var showSpectrogram: Bool
     @Binding var showChat: Bool
+    @Binding var showNewScriptDialog: Bool
     var onSelectPreset: (Preset) -> Void
     var onRun: () -> Void
     var onSave: () -> Void
     var onSaveAs: (String) -> Void
     var onDelete: () -> Void
-    var onNew: () -> Void
+    var onNew: (ScriptLanguage) -> Void
     var onExport: (String) -> Void
     var isExporting: Bool = false
 
@@ -126,16 +127,13 @@ struct PresetToolbar: View {
             .frame(minWidth: 100, maxWidth: 200)
             .accessibilityIdentifier("presetMenu")
 
-            // Language selector
-            Picker("", selection: $selectedLanguage) {
-                Text("Python").tag(ScriptLanguage.python)
-                Text("Rust").tag(ScriptLanguage.rust)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 110)
-            .controlSize(.small)
-            .accessibilityIdentifier("languagePicker")
+            // Language badge (read-only)
+            Text(selectedLanguage == .python ? "Python" : "Rust")
+                .font(.caption)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.secondary.opacity(0.15))
+                .cornerRadius(4)
 
             Spacer()
 
@@ -193,12 +191,34 @@ struct PresetToolbar: View {
             }
 
             // New script
-            Button(action: { onNew() }) {
+            Button(action: { showNewScriptDialog = true }) {
                 Image(systemName: "doc.badge.plus")
             }
             .buttonStyle(.borderless)
             .toolbarTooltip("New (\u{2318}N)")
             .accessibilityIdentifier("newScriptButton")
+            .popover(isPresented: $showNewScriptDialog) {
+                VStack(spacing: 8) {
+                    Text("New Script")
+                        .font(.headline)
+                    Text("Choose a language:")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 8) {
+                        Button("Python") {
+                            showNewScriptDialog = false
+                            onNew(.python)
+                        }
+                        .controlSize(.large)
+                        Button("Rust") {
+                            showNewScriptDialog = false
+                            onNew(.rust)
+                        }
+                        .controlSize(.large)
+                    }
+                }
+                .padding()
+            }
 
             // Delete (user presets only)
             if currentIsUserPreset {

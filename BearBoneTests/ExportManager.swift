@@ -56,7 +56,8 @@ final class ExportManager {
         language: ScriptLanguage,
         templateURL: URL,
         outputDirectory: URL,
-        skipSigning: Bool = false
+        skipSigning: Bool = false,
+        paramNames: [Int: String]? = nil
     ) throws -> URL {
         guard FileManager.default.fileExists(atPath: templateURL.path) else {
             throw ExportError.templateNotFound
@@ -94,7 +95,7 @@ final class ExportManager {
         }
 
         // 4. Write runtime-config.json
-        let config = makeRuntimeConfig(name: name, language: language)
+        let config = makeRuntimeConfig(name: name, language: language, paramNames: paramNames)
         try config.write(to: appexResourcesURL.appendingPathComponent("runtime-config.json"))
 
         // 5. Patch host app Info.plist
@@ -177,14 +178,23 @@ final class ExportManager {
         }
     }
 
-    private func makeRuntimeConfig(name: String, language: ScriptLanguage) -> Data {
-        let config: [String: Any] = [
+    private func makeRuntimeConfig(name: String, language: ScriptLanguage, paramNames: [Int: String]?) -> Data {
+        var config: [String: Any] = [
             "version": 1,
             "language": language.rawValue,
             "presetName": name,
             "exportDate": ISO8601DateFormatter().string(from: Date()),
             "paramCount": 8,
         ]
+        if let paramNames = paramNames, !paramNames.isEmpty {
+            let maxIndex = paramNames.keys.max() ?? 0
+            var namesArray: [String] = []
+            for i in 0...maxIndex {
+                namesArray.append(paramNames[i] ?? "Param \(i)")
+            }
+            config["paramNames"] = namesArray
+            config["paramCount"] = namesArray.count
+        }
         // swiftlint:disable:next force_try
         return try! JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
     }

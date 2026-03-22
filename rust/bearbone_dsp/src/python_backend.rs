@@ -2,7 +2,8 @@ use crate::backend::Backend;
 use crate::params::PARAM_COUNT;
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyDict, PyList};
+use std::collections::HashMap;
 use std::ffi::CString;
 
 /// Python DSP backend using pyo3 and numpy.
@@ -15,6 +16,7 @@ pub struct PythonBackend {
     py_output_arrays: Vec<Py<PyAny>>,
     py_channel_count: usize,
     last_error: Option<String>,
+    param_names: HashMap<u8, String>,
 }
 
 impl PythonBackend {
@@ -33,7 +35,7 @@ impl PythonBackend {
         // AU bundle's Resources/python-dist/, which corrupts the code signature.
         std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
 
-        let result: Result<Py<PyAny>, PyErr> = Python::with_gil(|py| {
+        let result: Result<(Py<PyAny>, HashMap<u8, String>), PyErr> = Python::with_gil(|py| {
             let code = std::fs::read_to_string(script_path)
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
@@ -44,13 +46,42 @@ impl PythonBackend {
             let module_name = CString::new("dsp_script")
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
+            // Remove any cached module so from_code creates a fresh one.
+            // Without this, attributes from a previous script (like PARAM_NAMES)
+            // persist in the module's __dict__ even if the new script doesn't define them.
+            let sys_modules = py.import("sys")?.getattr("modules")?;
+            let _ = sys_modules.call_method1("pop", ("dsp_script", py.None()));
+
             let module = PyModule::from_code(py, &code_c, &path_c, &module_name)?;
             let process_fn = module.getattr("process")?;
-            Ok(process_fn.unbind())
+
+            // Extract PARAM_NAMES dict if declared (e.g. {0: "Cutoff", 1: "Resonance"})
+            let param_names = match module.getattr("PARAM_NAMES") {
+                Ok(attr) => {
+                    if let Ok(dict) = attr.downcast::<PyDict>() {
+                        dict.iter()
+                            .filter_map(|(k, v)| {
+                                let addr = k.extract::<u8>().ok()?;
+                                let name = v.extract::<String>().ok()?;
+                                if (addr as usize) < PARAM_COUNT {
+                                    Some((addr, name))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    } else {
+                        HashMap::new()
+                    }
+                }
+                Err(_) => HashMap::new(),
+            };
+
+            Ok((process_fn.unbind(), param_names))
         });
 
         match result {
-            Ok(process_fn) => {
+            Ok((process_fn, param_names)) => {
                 eprintln!("BearBone-Rust: Python script loaded successfully");
                 Ok(Self {
                     py_process_fn: process_fn,
@@ -58,6 +89,7 @@ impl PythonBackend {
                     py_output_arrays: Vec::new(),
                     py_channel_count: 0,
                     last_error: None,
+                    param_names,
                 })
             }
             Err(e) => {
@@ -197,5 +229,9 @@ impl Backend for PythonBackend {
 
     fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    fn param_names(&self) -> HashMap<u8, String> {
+        self.param_names.clone()
     }
 }

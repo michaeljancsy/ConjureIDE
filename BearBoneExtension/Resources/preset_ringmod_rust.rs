@@ -13,7 +13,8 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const CARRIER_HZ: f64 = 440.0;
+// Parameters:
+const FREQUENCY: usize = 0;
 
 // Persistent phase across callbacks
 // Use f64 to match Python's float64 precision in the phase accumulator.
@@ -46,9 +47,9 @@ pub extern "C" fn process(
     let frames = frame_count as usize;
     let sr = sample_rate as f64;
     let two_pi = 2.0 * core::f64::consts::PI;
-    let phase_inc = two_pi * CARRIER_HZ / sr;
 
     unsafe {
+        let carrier_hz = 20.0 * (1000.0_f64).powf(PARAMS_BUF[FREQUENCY] as f64); // 20 Hz to 20 kHz (log)
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
         let phase_start = PHASE;
@@ -58,13 +59,13 @@ pub extern "C" fn process(
         // This avoids floating-point drift from per-sample phase addition.
         for i in 0..frames {
             let t = (i as f64) / sr;
-            let carrier = (two_pi * CARRIER_HZ * t + phase_start).sin();
+            let carrier = (two_pi * carrier_hz * t + phase_start).sin();
             for c in 0..ch {
                 let idx = c * frames + i;
                 out[idx] = (inp[idx] as f64 * carrier) as f32;
             }
         }
 
-        PHASE = (phase_start + two_pi * CARRIER_HZ * (frames as f64) / sr) % two_pi;
+        PHASE = (phase_start + two_pi * carrier_hz * (frames as f64) / sr) % two_pi;
     }
 }

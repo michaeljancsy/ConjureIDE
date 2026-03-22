@@ -1,9 +1,10 @@
 import numpy as np
 import math
 
-# State Variable Filter parameters
-CUTOFF_HZ = 1000.0  # Cutoff/center frequency in Hz
-RESONANCE = 2.0      # Resonance (Q); higher = sharper peak
+# Parameters:
+CUTOFF = 0
+RESONANCE = 1
+
 # Mode: "low", "high", "band", "notch"
 MODE = "low"
 
@@ -20,17 +21,17 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     and the MODE constant selects which output is used. Resonance controls
     the sharpness of the peak at the cutoff frequency.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Cutoff):    Cutoff frequency — logarithmic 20 Hz to 20000 Hz
+        1 (Resonance): Resonance (Q) — 0.0 = 0.5, 1.0 = 10
     """
     global _state
 
-    f = 2.0 * math.sin(math.pi * CUTOFF_HZ / sample_rate)
-    q = 1.0 / RESONANCE
+    cutoff_hz = 20.0 * (1000.0 ** params[CUTOFF])       # 20 to 20000 Hz (log)
+    resonance = 0.5 + params[RESONANCE] * 9.5               # 0.5 to 10
+
+    f = 2.0 * math.sin(math.pi * cutoff_hz / sample_rate)
+    q = 1.0 / resonance
 
     for ch in range(len(inputs)):
         low = _state[ch][0] if ch < len(_state) else 0.0

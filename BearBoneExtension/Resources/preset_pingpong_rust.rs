@@ -14,9 +14,10 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const DELAY_MS: f32 = 375.0;
-const FEEDBACK: f32 = 0.4;
-const MIX: f32 = 0.5;
+// Parameters:
+const TIME: usize = 0;
+const FEEDBACK: usize = 1;
+const MIX: usize = 2;
 
 // Persistent state: separate left and right delay lines
 static mut LEFT_BUF: [f32; MAX_DELAY] = [0.0; MAX_DELAY];
@@ -48,12 +49,17 @@ pub extern "C" fn process(
 ) {
     let ch = channels as usize;
     let frames = frame_count as usize;
-    let mut delay_samples = (DELAY_MS * 0.001 * sample_rate) as usize;
-    if delay_samples >= MAX_DELAY {
-        delay_samples = MAX_DELAY - 1;
-    }
 
     unsafe {
+        let delay_ms = 50.0 + PARAMS_BUF[TIME] * 450.0;   // 50 to 500 ms
+        let feedback = PARAMS_BUF[FEEDBACK] * 0.95;         // 0.0 to 0.95
+        let mix = PARAMS_BUF[MIX];                           // 0.0 to 1.0
+
+        let mut delay_samples = (delay_ms * 0.001 * sample_rate) as usize;
+        if delay_samples >= MAX_DELAY {
+            delay_samples = MAX_DELAY - 1;
+        }
+
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
         let mut wp = WRITE_POS;
@@ -63,8 +69,8 @@ pub extern "C" fn process(
             for i in 0..frames {
                 let rp = (wp + MAX_DELAY - delay_samples) % MAX_DELAY;
                 let delayed = LEFT_BUF[rp];
-                LEFT_BUF[wp] = inp[i] + delayed * FEEDBACK;
-                out[i] = inp[i] * (1.0 - MIX) + delayed * MIX;
+                LEFT_BUF[wp] = inp[i] + delayed * feedback;
+                out[i] = inp[i] * (1.0 - mix) + delayed * mix;
                 wp = (wp + 1) % MAX_DELAY;
             }
         } else {
@@ -77,12 +83,12 @@ pub extern "C" fn process(
 
                 // Input goes to left, left feeds right, right feeds back to left
                 let mono_in = (inp[i] + inp[frames + i]) * 0.5;
-                LEFT_BUF[wp] = mono_in + right_delayed * FEEDBACK;
-                RIGHT_BUF[wp] = left_delayed * FEEDBACK;
+                LEFT_BUF[wp] = mono_in + right_delayed * feedback;
+                RIGHT_BUF[wp] = left_delayed * feedback;
 
                 // Mix dry + wet
-                out[i] = inp[i] * (1.0 - MIX) + left_delayed * MIX;
-                out[frames + i] = inp[frames + i] * (1.0 - MIX) + right_delayed * MIX;
+                out[i] = inp[i] * (1.0 - mix) + left_delayed * mix;
+                out[frames + i] = inp[frames + i] * (1.0 - mix) + right_delayed * mix;
 
                 wp = (wp + 1) % MAX_DELAY;
             }

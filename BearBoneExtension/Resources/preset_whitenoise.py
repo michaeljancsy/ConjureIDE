@@ -1,7 +1,7 @@
 import numpy as np
 
-# White noise parameters
-AMPLITUDE = 0.3  # Output level (0.0–1.0)
+# Parameters:
+LEVEL = 0
 
 # LCG random state (matches Rust implementation for deterministic output)
 _rng_state = np.uint32(12345)
@@ -23,14 +23,12 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     across callbacks for a continuous noise stream. Both Python and Rust
     implementations use the same LCG constants for identical output.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Level): Output level — 0.0 = silence, 1.0 = full level
     """
+    amplitude = params[LEVEL]  # 0 to 1
+
     for i in range(frame_count):
-        sample = _next_f32() * AMPLITUDE
+        sample = _next_f32() * amplitude
         for ch in range(len(outputs)):
             outputs[ch][i] = sample

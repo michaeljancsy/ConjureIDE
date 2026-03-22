@@ -26,6 +26,16 @@ final class AnthropicProvider: AIProvider {
         - Only numpy is available (imported as np)
         - Global variables persist across callbacks (useful for phase accumulators, delay buffers, etc.)
         - Must handle both mono (1 channel) and stereo (2 channels)
+
+        Parameter names:
+        - Add a # Parameters: comment followed by named variable declarations: \
+          # Parameters: \
+          RATE = 0 \
+          DEPTH = 1
+        - Use these to read params in process(): params[RATE], params[DEPTH]
+        - Only declared params are shown in the UI; others are hidden
+        - Always declare params when your script uses params
+        - Variable names become UI labels with underscores replaced by spaces (e.g. BIT_DEPTH → "BIT DEPTH")
         """
 
     private static let realTimeRules = """
@@ -90,6 +100,16 @@ final class AnthropicProvider: AIProvider {
         - Use std::slice::from_raw_parts(input, n) and from_raw_parts_mut(output, n) inside unsafe blocks
         - Must handle both mono (1 channel) and stereo (2 channels)
         - For stereo, samples are interleaved: [L0, R0, L1, R1, ...]
+
+        Parameter names:
+        - Add a // Parameters: comment followed by named const declarations to label and expose params: \
+          // Parameters: \
+          const RATE: usize = 0; \
+          const DEPTH: usize = 1;
+        - Use these consts to read params in process(): PARAMS_BUF[RATE], PARAMS_BUF[DEPTH]
+        - Only declared params are shown in the UI; others are hidden
+        - Always declare params when your script uses PARAMS_BUF
+        - Const names become UI labels with underscores replaced by spaces (e.g. BIT_DEPTH → "BIT DEPTH")
         """
 
     private static let rustRealTimeRules = """

@@ -95,6 +95,13 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Publishes script source when it changes externally (preset selection, fullState restore, AI compile).
 	public let scriptSourceDidChange = PassthroughSubject<ScriptSourceChange, Never>()
 
+	/// Script-declared parameter names, keyed by address (0–7).
+	/// nil = no names declared (backward compatible, show all 8 with default labels).
+	private(set) var currentParamNames: [Int: String]? = nil
+
+	/// Fires after every script load with the new param names (or nil).
+	public let paramNamesDidChange = PassthroughSubject<[Int: String]?, Never>()
+
 	// Audio busses
 	private var _inputBus: AUAudioUnitBus!
 	private var _outputBus: AUAudioUnitBus!
@@ -129,6 +136,9 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		loadPythonScript()
 	}
 
+	/// Default preset loaded on AU init (before any fullState restore).
+	static let defaultPresetResource = "preset_stereowidth"
+
 	private func loadPythonScript() {
 		let bundle = Bundle(for: type(of: self))
 
@@ -140,8 +150,8 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 		self.pythonHome = pythonHome
 
-		guard let scriptPath = bundle.path(forResource: "process", ofType: "py") else {
-			pluginLog.error("process.py not found in bundle, using Rust fallback DSP")
+		guard let scriptPath = bundle.path(forResource: Self.defaultPresetResource, ofType: "py") else {
+			pluginLog.error("\(Self.defaultPresetResource).py not found in bundle, using Rust fallback DSP")
 			return
 		}
 
@@ -149,6 +159,18 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		let success = dsp_kernel_load_script(kernel, pythonHome, scriptPath)
 		if success {
 			pluginLog.info("Python DSP script loaded successfully")
+
+			// Read source so the UI can display it
+			if let source = try? String(contentsOfFile: scriptPath, encoding: .utf8) {
+				currentScriptSource = source
+				readParamNames()
+				if let names = Self.parsePythonParamNames(fromSource: source) {
+					currentParamNames = names
+					paramNamesDidChange.send(names)
+				}
+			} else {
+				readParamNames()
+			}
 
 			// Warm-start: run process() a few times so any first-call allocations
 			// (e.g. global buffer creation) happen before real audio arrives.
@@ -166,6 +188,96 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				pluginLog.error("Failed to load Python DSP script (no error details), using Rust fallback DSP")
 			}
 		}
+	}
+
+	/// Convert a SCREAMING_SNAKE_CASE name to a display label.
+	/// Replaces underscores with spaces, preserving original capitalization.
+	/// e.g. BIT_DEPTH → "BIT DEPTH", RATE → "RATE"
+	private static func displayLabel(from name: String) -> String {
+		name.replacingOccurrences(of: "_", with: " ")
+	}
+
+	/// Parse param names from source text for either Python or Rust.
+	///
+	/// Looks for a `# Parameters:` (Python) or `// Parameters:` (Rust) marker,
+	/// then reads subsequent declarations:
+	/// - Python: `NAME = N`
+	/// - Rust: `const NAME: usize = N;`
+	///
+	/// Converts SCREAMING_SNAKE names to Title Case labels (e.g. BIT_DEPTH → "Bit Depth").
+	/// Returns nil if no marker is found.
+	static func parseParamNames(fromSource source: String) -> [Int: String]? {
+		let lines = source.components(separatedBy: .newlines)
+
+		// Find the "# Parameters:" or "// Parameters:" marker line
+		guard let markerIndex = lines.firstIndex(where: { line in
+			let trimmed = line.trimmingCharacters(in: .whitespaces)
+			return trimmed.range(of: #"^(#|//)\s*Parameters:"#, options: .regularExpression) != nil
+		}) else {
+			return nil
+		}
+
+		// Try both Python (NAME = N) and Rust (const NAME: usize = N;) patterns
+		let pythonPattern = try! NSRegularExpression(pattern: #"^\s*(\w+)\s*=\s*(\d+)\s*$"#)
+		let rustPattern = try! NSRegularExpression(pattern: #"^\s*const\s+(\w+)\s*:\s*usize\s*=\s*(\d+)\s*;"#)
+		var names: [Int: String] = [:]
+
+		for i in (markerIndex + 1)..<lines.count {
+			let line = lines[i]
+			let trimmed = line.trimmingCharacters(in: .whitespaces)
+			if trimmed.isEmpty { continue }
+
+			let range = NSRange(line.startIndex..., in: line)
+			let match = pythonPattern.firstMatch(in: line, range: range)
+				?? rustPattern.firstMatch(in: line, range: range)
+
+			guard let match,
+				  let nameRange = Range(match.range(at: 1), in: line),
+				  let addrRange = Range(match.range(at: 2), in: line),
+				  let addr = Int(line[addrRange]),
+				  addr >= 0, addr < paramCount else {
+				break
+			}
+
+			names[addr] = displayLabel(from: String(line[nameRange]))
+		}
+
+		return names.isEmpty ? nil : names
+	}
+
+	/// Parse Rust param names from source text (convenience wrapper).
+	static func parseRustParamNames(fromSource source: String) -> [Int: String]? {
+		parseParamNames(fromSource: source)
+	}
+
+	/// Parse Python param names from source text (convenience wrapper).
+	static func parsePythonParamNames(fromSource source: String) -> [Int: String]? {
+		parseParamNames(fromSource: source)
+	}
+
+	/// Read script-declared parameter names from the Rust kernel via FFI.
+	/// Called after every successful script/WASM load.
+	private func readParamNames() {
+		guard let ptr = dsp_kernel_param_names_json(kernel) else {
+			currentParamNames = nil
+			paramNamesDidChange.send(nil)
+			return
+		}
+		let json = String(cString: ptr)
+		guard let data = json.data(using: .utf8),
+			  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+			currentParamNames = nil
+			paramNamesDidChange.send(nil)
+			return
+		}
+		var names: [Int: String] = [:]
+		for (key, value) in dict {
+			if let addr = Int(key), addr >= 0, addr < Self.paramCount {
+				names[addr] = value
+			}
+		}
+		currentParamNames = names.isEmpty ? nil : names
+		paramNamesDidChange.send(currentParamNames)
 	}
 
 	/// Hot-reload a Python DSP script from source code.
@@ -194,6 +306,13 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		if success {
 			currentScriptSource = source
 			pluginLog.info("Python DSP script reloaded successfully")
+			readParamNames()
+
+			// Override param names from source text if available
+			if let names = Self.parsePythonParamNames(fromSource: source) {
+				currentParamNames = names
+				paramNamesDidChange.send(names)
+			}
 
 			// Benchmark the process function
 			let benchmarkSecs = dsp_kernel_benchmark_process(kernel)
@@ -230,6 +349,7 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		if success {
 			pluginLog.info("WASM module loaded successfully")
+			readParamNames()
 
 			let benchmarkSecs = dsp_kernel_benchmark_process(kernel)
 			var processTimeMs: Double? = nil
@@ -267,6 +387,9 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			return result
 
 		case .rust:
+			// Parse param names from source (overrides WASM export if present)
+			let sourceParamNames = Self.parseRustParamNames(fromSource: source)
+
 			// Check cache first
 			let cache = WasmCache()
 			if let cachedWasm = cache.cachedWasm(for: source) {
@@ -275,6 +398,10 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					currentScriptSource = source
 					currentScriptLanguage = .rust
 					currentWasmBytes = cachedWasm
+					if let names = sourceParamNames {
+						currentParamNames = names
+						paramNamesDidChange.send(names)
+					}
 				}
 				return result
 			}
@@ -289,6 +416,10 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					currentScriptSource = source
 					currentScriptLanguage = .rust
 					currentWasmBytes = wasmBytes
+					if let names = sourceParamNames {
+						currentParamNames = names
+						paramNamesDidChange.send(names)
+					}
 				}
 				return result
 			} catch {
@@ -400,6 +531,11 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						currentScriptSource = source
 						currentScriptLanguage = .rust
 						currentWasmBytes = wasmBytes
+						// Override param names from source text if available
+						if let names = Self.parseRustParamNames(fromSource: source) {
+							currentParamNames = names
+							paramNamesDidChange.send(names)
+						}
 						scriptSourceDidChange.send(ScriptSourceChange(source: source))
 					}
 				} else {

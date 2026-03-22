@@ -1,12 +1,12 @@
 import numpy as np
 import math
 
-# Flanger parameters
-RATE_HZ = 0.3        # LFO speed in Hz
-DEPTH_MS = 2.0       # LFO modulation depth in ms
-BASE_DELAY_MS = 2.0  # Base delay time in ms
-FEEDBACK = 0.7       # Feedback amount (-1.0 to 1.0)
-MIX = 0.5            # Wet/dry mix
+# Parameters:
+RATE = 0
+DEPTH = 1
+DELAY = 2
+FEEDBACK = 3
+MIX = 4
 
 # Max delay in samples (supports up to 96 kHz)
 MAX_DELAY = 1024
@@ -21,19 +21,25 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     """
     Flanger — short modulated delay with feedback.
 
-    Similar to chorus but with a much shorter delay (0–4 ms) and feedback.
+    Similar to chorus but with a much shorter delay (0-4 ms) and feedback.
     The short delay creates comb-filter effects, and the LFO sweeps the
     comb filter notches up and down, producing the characteristic flanging
     jet-plane sweep. Higher feedback intensifies the comb-filter peaks.
 
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+    Params:
+        0 (Rate):     LFO rate — 0.0 = 0.1 Hz, 1.0 = 5 Hz
+        1 (Depth):    LFO depth — 0.0 = 0.5 ms, 1.0 = 5 ms
+        2 (Delay):    Base delay — 0.0 = 1 ms, 1.0 = 5 ms
+        3 (Feedback): Feedback amount — 0.0 = none, 1.0 = full
+        4 (Mix):      Wet/dry mix — 0.0 = dry, 1.0 = wet
     """
     global _delay_buf, _write_pos, _lfo_phase
+
+    rate_hz = 0.1 + params[RATE] * 4.9        # 0.1 to 5 Hz
+    depth_ms = 0.5 + params[DEPTH] * 4.5       # 0.5 to 5 ms
+    base_delay_ms = 1.0 + params[DELAY] * 4.0  # 1 to 5 ms
+    feedback = params[FEEDBACK]                    # 0 to 1
+    mix = params[MIX]                         # 0 to 1
 
     n_ch = len(inputs)
 
@@ -41,12 +47,12 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         _delay_buf = [np.zeros(MAX_DELAY, dtype=np.float32) for _ in range(n_ch)]
 
     two_pi = 2.0 * math.pi
-    lfo_inc = two_pi * RATE_HZ / sample_rate
+    lfo_inc = two_pi * rate_hz / sample_rate
     phase = _lfo_phase
     wp = _write_pos
 
     for i in range(frame_count):
-        delay_samples = (BASE_DELAY_MS + DEPTH_MS * math.sin(phase)) * sample_rate / 1000.0
+        delay_samples = (base_delay_ms + depth_ms * math.sin(phase)) * sample_rate / 1000.0
 
         for ch in range(n_ch):
             # Read with linear interpolation
@@ -59,10 +65,10 @@ def process(inputs, outputs, frame_count, sample_rate, params):
             delayed = _delay_buf[ch][idx0] * (1.0 - frac) + _delay_buf[ch][idx1] * frac
 
             # Write input + feedback to delay line
-            _delay_buf[ch][wp] = inputs[ch][i] + delayed * FEEDBACK
+            _delay_buf[ch][wp] = inputs[ch][i] + delayed * feedback
 
             # Mix dry + wet
-            outputs[ch][i] = inputs[ch][i] * (1.0 - MIX) + delayed * MIX
+            outputs[ch][i] = inputs[ch][i] * (1.0 - mix) + delayed * mix
 
         phase += lfo_inc
         wp = (wp + 1) % MAX_DELAY

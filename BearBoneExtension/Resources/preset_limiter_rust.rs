@@ -14,9 +14,10 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
 
-const THRESHOLD_DB: f64 = -3.0;
-const ATTACK_MS: f64 = 0.1;
-const RELEASE_MS: f64 = 100.0;
+// Parameters:
+const THRESHOLD: usize = 0;
+const ATTACK: usize = 1;
+const RELEASE: usize = 2;
 
 // Persistent envelope follower state
 // Use f64 to match Python's float64 precision in the envelope feedback loop.
@@ -48,11 +49,16 @@ pub extern "C" fn process(
     let ch = channels as usize;
     let frames = frame_count as usize;
     let sr = sample_rate as f64;
-    let threshold = (10.0_f64).powf(THRESHOLD_DB / 20.0);
-    let attack_coeff = (-1.0 / (ATTACK_MS * 0.001 * sr)).exp();
-    let release_coeff = (-1.0 / (RELEASE_MS * 0.001 * sr)).exp();
 
     unsafe {
+        let threshold_db = -20.0 + PARAMS_BUF[THRESHOLD] as f64 * 20.0;   // -20 to 0 dB
+        let attack_ms = 0.01 + PARAMS_BUF[ATTACK] as f64 * 0.99;          // 0.01 to 1.0 ms
+        let release_ms = 10.0 + PARAMS_BUF[RELEASE] as f64 * 490.0;       // 10 to 500 ms
+
+        let threshold = (10.0_f64).powf(threshold_db / 20.0);
+        let attack_coeff = (-1.0 / (attack_ms * 0.001 * sr)).exp();
+        let release_coeff = (-1.0 / (release_ms * 0.001 * sr)).exp();
+
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
         let mut env = ENVELOPE;
