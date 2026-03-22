@@ -23,6 +23,7 @@ xcodebuild archive \
     -configuration Release \
     -archivePath "$ARCHIVE_PATH" \
     -arch arm64 \
+    ARCHS=arm64 \
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
     | tail -1
 
