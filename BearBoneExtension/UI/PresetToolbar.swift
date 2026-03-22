@@ -19,14 +19,12 @@ struct PresetToolbar: View {
     var onSaveAs: (String) -> Void
     var onDelete: () -> Void
     var onNew: () -> Void
-    var onGenerate: (String) -> Void
     var onExport: (String) -> Void
     var isExporting: Bool = false
 
     @Binding var showingSaveAs: Bool
     @Binding var saveAsName: String
     @State private var showDeleteConfirm = false
-    @State private var showingGenerate = false
     @State private var showingSettings = false
     @State private var showingExport = false
     @State private var exportName = ""
@@ -112,37 +110,11 @@ struct PresetToolbar: View {
 
             Spacer()
 
-            // Generate with AI
-            Button(action: { showingGenerate = true }) {
-                Image(systemName: "sparkles")
-            }
-            .buttonStyle(.borderless)
-            .disabled(aiService.isGenerating)
-            .accessibilityIdentifier("generateButton")
-            .popover(isPresented: $showingGenerate) {
-                GeneratePopover(
-                    aiService: aiService,
-                    language: selectedLanguage,
-                    isPresented: $showingGenerate,
-                    onGenerate: onGenerate
-                )
-            }
-
-            // Cancel generation (visible during streaming)
-            if aiService.isGenerating {
-                Button(action: { aiService.cancel() }) {
-                    Image(systemName: "stop.circle")
-                }
-                .buttonStyle(.borderless)
-                .foregroundColor(.red)
-                .accessibilityIdentifier("cancelGenerateButton")
-            }
-
             // Run (compile if needed, then load into kernel)
             Button("Run") {
                 onRun()
             }
-            .disabled(aiService.isGenerating || isCompiling)
+            .disabled(isCompiling)
             .accessibilityIdentifier("runButton")
 
             // Save (overwrite current user preset)
