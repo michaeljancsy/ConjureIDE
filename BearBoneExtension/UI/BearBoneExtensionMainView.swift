@@ -320,10 +320,16 @@ struct BearBoneExtensionMainView: View {
             }
         }
         .background(
-            Button(action: handleCmdS) { EmptyView() }
-                .keyboardShortcut("s", modifiers: .command)
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
+            Group {
+                Button(action: handleCmdS) { EmptyView() }
+                    .keyboardShortcut("s", modifiers: .command)
+                Button(action: handleCmdR) { EmptyView() }
+                    .keyboardShortcut("r", modifiers: .command)
+                Button(action: handleCmdN) { EmptyView() }
+                    .keyboardShortcut("n", modifiers: .command)
+            }
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
         )
     }
 
@@ -341,6 +347,21 @@ struct BearBoneExtensionMainView: View {
             saveAsName = presetManager.currentPreset?.name ?? ""
             showingSaveAs = true
         }
+    }
+
+    private func handleCmdR() {
+        guard !isCompiling else { return }
+        Task {
+            isCompiling = true
+            let result = await onRun(scriptSource)
+            isCompiling = false
+            handleResult(result)
+        }
+    }
+
+    private func handleCmdN() {
+        let result = onNew(selectedLanguage)
+        handleResult(result)
     }
 
     private func isDefaultTemplate(_ source: String, for language: ScriptLanguage) -> Bool {
