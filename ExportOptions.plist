@@ -10,5 +10,12 @@
 	<string>manual</string>
 	<key>signingCertificate</key>
 	<string>Developer ID Application</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>com.MichaelJancsy.BearBone</key>
+		<string>com.MichaelJancsy.BearBone Provisioning Profile</string>
+		<key>com.MichaelJancsy.BearBone.BearBoneExtension</key>
+		<string>com.MichaelJancsy.BearBone.BearBoneExtension</string>
+	</dict>
 </dict>
 </plist>
