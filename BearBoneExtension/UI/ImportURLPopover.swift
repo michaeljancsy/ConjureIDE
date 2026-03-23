@@ -1,0 +1,133 @@
+import SwiftUI
+
+/// Import a preset from any HTTPS URL (GitHub raw, Gist raw, etc.).
+struct ImportURLPopover: View {
+    let presetManager: PresetManager
+    let client: GitHubClient
+    let onImported: (Preset) -> Void
+    let onCancel: () -> Void
+
+    @State private var urlString = ""
+    @State private var previewSource: String?
+    @State private var detectedName = ""
+    @State private var detectedLanguage: ScriptLanguage = .python
+    @State private var isLoading = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Import from URL")
+                .font(.headline)
+
+            // URL input
+            HStack {
+                TextField("https://\u{2026}", text: $urlString)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { fetchPreview() }
+
+                Button("Fetch") { fetchPreview() }
+                    .disabled(urlString.isEmpty || isLoading)
+            }
+
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+
+            // Preview
+            if isLoading {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Fetching\u{2026}")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            } else if let source = previewSource {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        TextField("Preset name", text: $detectedName)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 180)
+                        Text(detectedLanguage == .rust ? "Rust" : "Python")
+                            .font(.caption)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.secondary.opacity(0.15))
+                            .cornerRadius(4)
+                    }
+
+                    ScrollView {
+                        Text(source)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(6)
+                    }
+                    .frame(height: 160)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .cornerRadius(4)
+                }
+            }
+
+            // Actions
+            HStack {
+                Spacer()
+                Button("Cancel") { onCancel() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Import") { importPreset() }
+                    .disabled(previewSource == nil || detectedName.isEmpty)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding()
+        .frame(width: 420)
+    }
+
+    // MARK: - Actions
+
+    private func fetchPreview() {
+        guard let url = URL(string: urlString), url.scheme == "https" || url.scheme == "http" else {
+            error = "Enter a valid URL"
+            return
+        }
+
+        error = nil
+        previewSource = nil
+        isLoading = true
+
+        // Derive name and language from URL path
+        let filename = url.lastPathComponent
+        let ext = url.pathExtension.lowercased()
+        detectedLanguage = ext == "rs" ? .rust : .python
+        detectedName = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
+        if detectedName.isEmpty || detectedName == "/" {
+            detectedName = "Imported"
+        }
+
+        Task {
+            do {
+                let source = try await client.fetchURL(url)
+                previewSource = source
+            } catch {
+                self.error = error.localizedDescription
+            }
+            isLoading = false
+        }
+    }
+
+    private func importPreset() {
+        guard let source = previewSource, !detectedName.isEmpty else { return }
+        let name = presetManager.uniqueName(baseName: detectedName)
+        do {
+            let preset = try presetManager.saveUserPreset(
+                name: name,
+                source: source,
+                language: detectedLanguage
+            )
+            onImported(preset)
+        } catch {
+            self.error = "Failed to save: \(error.localizedDescription)"
+        }
+    }
+}

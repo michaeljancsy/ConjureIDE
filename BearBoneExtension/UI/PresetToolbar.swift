@@ -52,6 +52,7 @@ struct PresetToolbar: View {
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var aiService: AIService
     @ObservedObject var licenseManager: LicenseManager
+    @ObservedObject var gitHubService: GitHubService
     var isCompiling: Bool = false
     var hasUnrunChanges: Bool = false
     var selectedLanguage: ScriptLanguage
@@ -72,6 +73,9 @@ struct PresetToolbar: View {
     @State private var showDeleteConfirm = false
     @State private var showingSettings = false
     @State private var showingExport = false
+    @State private var showingCommunityBrowser = false
+    @State private var showingImportURL = false
+    @State private var showingSync = false
     @State private var exportName = ""
 
     private var currentIsUserPreset: Bool {
@@ -108,6 +112,13 @@ struct PresetToolbar: View {
                             }
                         }
                     }
+                }
+                Divider()
+                Button(action: { showingCommunityBrowser = true }) {
+                    Label("Browse Community\u{2026}", systemImage: "globe")
+                }
+                Button(action: { showingImportURL = true }) {
+                    Label("Import from URL\u{2026}", systemImage: "link")
                 }
             } label: {
                 HStack(spacing: 2) {
@@ -270,6 +281,28 @@ struct PresetToolbar: View {
                 )
             }
 
+            // Sync presets with personal repo
+            if gitHubService.hasPersonalRepo && gitHubService.hasToken {
+                Button(action: { showingSync = true }) {
+                    if gitHubService.personalSync.isSyncing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(gitHubService.personalSync.isSyncing)
+                .toolbarTooltip("Sync with GitHub")
+                .accessibilityIdentifier("syncButton")
+                .popover(isPresented: $showingSync) {
+                    SyncStatusView(
+                        gitHubService: gitHubService,
+                        presetManager: presetManager,
+                        onPresetInstalled: { preset in onSelectPreset(preset) }
+                    )
+                }
+            }
+
             // Chat sidebar toggle
             Button(action: { showChat.toggle() }) {
                 Image(systemName: showChat ? "bubble.left.fill" : "bubble.left")
@@ -316,6 +349,11 @@ struct PresetToolbar: View {
                         aiService: aiService,
                         onDone: { showingSettings = false }
                     )
+                    Divider()
+                    GitHubSettingsView(
+                        gitHubService: gitHubService,
+                        onDone: { showingSettings = false }
+                    )
                 }
             }
         }
@@ -324,6 +362,28 @@ struct PresetToolbar: View {
         .padding(.vertical, 4)
         .onReceive(NotificationCenter.default.publisher(for: .openLicenseSettings)) { _ in
             showingSettings = true
+        }
+        .popover(isPresented: $showingCommunityBrowser) {
+            CommunityBrowserView(
+                store: gitHubService.communityStore,
+                presetManager: presetManager,
+                onInstalled: { preset in
+                    showingCommunityBrowser = false
+                    onSelectPreset(preset)
+                },
+                onDismiss: { showingCommunityBrowser = false }
+            )
+        }
+        .popover(isPresented: $showingImportURL) {
+            ImportURLPopover(
+                presetManager: presetManager,
+                client: gitHubService.client,
+                onImported: { preset in
+                    showingImportURL = false
+                    onSelectPreset(preset)
+                },
+                onCancel: { showingImportURL = false }
+            )
         }
     }
 

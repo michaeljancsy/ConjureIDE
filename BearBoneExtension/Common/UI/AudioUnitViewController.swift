@@ -46,6 +46,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var captureManager: AudioCaptureManager?
     private var parameterState: ParameterState?
     private var licenseManager: LicenseManager?
+    private var gitHubService: GitHubService?
     private var paramNamesCancellable: AnyCancellable?
     private var paramMetadataCancellable: AnyCancellable?
 
@@ -224,6 +225,11 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             licenseManager = LicenseManager()
         }
         let lm = licenseManager!
+
+        if gitHubService == nil {
+            gitHubService = GitHubService()
+        }
+        let gh = gitHubService!
         lm.verifyWithKernel = { [weak au] serial in
             au?.verifyLicense(serial) ?? false
         }
@@ -445,6 +451,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             captureManager: capture,
             parameterState: ps,
             licenseManager: lm,
+            gitHubService: gh,
             onRun: onRun,
             onSelectPreset: onSelectPreset,
             onSavePreset: onSavePreset,

@@ -27,6 +27,7 @@ struct BearBoneExtensionMainView: View {
     @ObservedObject var captureManager: AudioCaptureManager
     @ObservedObject var parameterState: ParameterState
     @ObservedObject var licenseManager: LicenseManager
+    @ObservedObject var gitHubService: GitHubService
     var onRun: (String) async -> ScriptSaveResult
     var onSelectPreset: (Preset) async -> ScriptSaveResult
     var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
@@ -73,6 +74,7 @@ struct BearBoneExtensionMainView: View {
                 presetManager: presetManager,
                 aiService: aiService,
                 licenseManager: licenseManager,
+                gitHubService: gitHubService,
                 isCompiling: isCompiling,
                 hasUnrunChanges: scriptSource != lastRunSource,
                 selectedLanguage: selectedLanguage,
