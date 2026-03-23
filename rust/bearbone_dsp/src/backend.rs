@@ -1,4 +1,4 @@
-use crate::params::PARAM_COUNT;
+use crate::params::{ParamMetadata, PARAM_COUNT};
 use std::collections::HashMap;
 
 /// Trait for pluggable DSP processing backends (Python, WASM, etc.).
@@ -16,7 +16,7 @@ pub trait Backend {
 
     /// Process audio. Returns true on success, false to trigger passthrough fallback.
     ///
-    /// `params` contains the 8 DAW-automatable parameter values (0.0–1.0),
+    /// `params` contains the DAW-automatable parameter values (0.0–1.0),
     /// snapshotted once per audio callback from atomic storage.
     ///
     /// Takes `&mut self` because some backends (e.g. wasmtime) require mutable
@@ -39,9 +39,16 @@ pub trait Backend {
     /// Returns the last error message, if any.
     fn last_error(&self) -> Option<&str>;
 
-    /// Returns script-declared parameter names, keyed by address (0–7).
+    /// Returns script-declared parameter names, keyed by address (0–15).
     /// Empty map means no names were declared (backward compatible).
     fn param_names(&self) -> HashMap<u8, String> {
         HashMap::new()
+    }
+
+    /// Returns rich parameter metadata if the script declares a `PARAMS` dict.
+    /// When present, the kernel denormalizes 0–1 values to actual ranges before
+    /// passing to the backend (Python only; WASM receives raw 0–1).
+    fn param_metadata(&self) -> Option<&[ParamMetadata]> {
+        None
     }
 }

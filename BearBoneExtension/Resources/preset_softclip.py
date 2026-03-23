@@ -1,7 +1,8 @@
 import numpy as np
 
-# Parameters:
-DRIVE = 0
+PARAMS = {
+    "drive": {"min": 1.0, "max": 15.0, "unit": "x", "default": 3.0},
+}
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -14,9 +15,9 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     so that low-level signals pass through at unity gain.
 
     Params:
-        0 (Drive): Saturation amount — 0.0 = 1x, 1.0 = 15x
+        drive: Saturation amount (1–15x)
     """
-    drive = 1.0 + params[DRIVE] * 14.0  # 1 to 15
+    drive = params["drive"]
     norm = 1.0 / np.tanh(drive)
 
     for ch in range(len(inputs)):

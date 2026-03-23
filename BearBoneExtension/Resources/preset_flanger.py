@@ -1,12 +1,13 @@
 import numpy as np
 import math
 
-# Parameters:
-RATE = 0
-DEPTH = 1
-DELAY = 2
-FEEDBACK = 3
-MIX = 4
+PARAMS = {
+    "rate":     {"min": 0.1, "max": 5.0, "unit": "Hz", "default": 0.5},
+    "depth":    {"min": 0.5, "max": 5.0, "unit": "ms", "default": 2.0},
+    "delay":    {"min": 1.0, "max": 5.0, "unit": "ms", "default": 2.0},
+    "feedback": {"min": 0.0, "max": 1.0, "unit": "",   "default": 0.5},
+    "mix":      {"min": 0.0, "max": 1.0, "unit": "",   "default": 0.5},
+}
 
 # Max delay in samples (supports up to 96 kHz)
 MAX_DELAY = 1024
@@ -27,19 +28,19 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     jet-plane sweep. Higher feedback intensifies the comb-filter peaks.
 
     Params:
-        0 (Rate):     LFO rate — 0.0 = 0.1 Hz, 1.0 = 5 Hz
-        1 (Depth):    LFO depth — 0.0 = 0.5 ms, 1.0 = 5 ms
-        2 (Delay):    Base delay — 0.0 = 1 ms, 1.0 = 5 ms
-        3 (Feedback): Feedback amount — 0.0 = none, 1.0 = full
-        4 (Mix):      Wet/dry mix — 0.0 = dry, 1.0 = wet
+        rate:     LFO rate (0.1–5 Hz)
+        depth:    LFO depth (0.5–5 ms)
+        delay:    Base delay (1–5 ms)
+        feedback: Feedback amount (0.0–1.0)
+        mix:      Wet/dry mix (0.0 = dry, 1.0 = wet)
     """
     global _delay_buf, _write_pos, _lfo_phase
 
-    rate_hz = 0.1 + params[RATE] * 4.9        # 0.1 to 5 Hz
-    depth_ms = 0.5 + params[DEPTH] * 4.5       # 0.5 to 5 ms
-    base_delay_ms = 1.0 + params[DELAY] * 4.0  # 1 to 5 ms
-    feedback = params[FEEDBACK]                    # 0 to 1
-    mix = params[MIX]                         # 0 to 1
+    rate_hz = params["rate"]
+    depth_ms = params["depth"]
+    base_delay_ms = params["delay"]
+    feedback = params["feedback"]
+    mix = params["mix"]
 
     n_ch = len(inputs)
 

@@ -5,9 +5,9 @@
 #include <stdbool.h>
 
 /**
- * Number of fixed generic parameters exposed to the DAW.
+ * Maximum number of parameters exposed to the DAW.
  */
-#define PARAM_COUNT 8
+#define PARAM_COUNT 16
 
 /**
  * Default capacity: 8192 samples (~185ms at 44.1kHz).
@@ -165,6 +165,17 @@ const char *dsp_kernel_last_error(DSPKernelRef kernel);
  * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
  */
 const char *dsp_kernel_param_names_json(DSPKernelRef kernel);
+
+/**
+ * Returns rich parameter metadata as a null-terminated JSON array string,
+ * e.g. `[{"name":"Threshold","min":-40,"max":-3,"unit":"dB","default":-20}, ...]`.
+ * Returns null if the loaded script does not declare a `PARAMS` dict.
+ * The pointer is valid until the next script load or kernel destroy.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+const char *dsp_kernel_param_metadata_json(DSPKernelRef kernel);
 
 /**
  * Enable or disable audio capture for spectrogram visualization.

@@ -1,7 +1,8 @@
 import numpy as np
 
-# Parameters:
-WIDTH = 0
+PARAMS = {
+    "width": {"min": 0.0, "max": 2.0, "unit": "x", "default": 1.0},
+}
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -15,9 +16,9 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     For mono input, the signal passes through unchanged.
 
     Params:
-        0 (Width): Stereo width — 0.0 = mono, 0.5 = normal, 1.0 = 2x wide
+        width: Stereo width (0.0 = mono, 1.0 = normal, 2.0 = extra wide)
     """
-    width = params[WIDTH] * 2.0  # 0 to 2
+    width = params["width"]
 
     n_ch = len(inputs)
 

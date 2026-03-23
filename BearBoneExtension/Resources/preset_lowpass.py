@@ -1,8 +1,9 @@
 import numpy as np
 import math
 
-# Parameters:
-CUTOFF = 0
+PARAMS = {
+    "cutoff": {"min": 20.0, "max": 20000.0, "unit": "Hz", "default": 1000.0},
+}
 
 # Persistent state: previous output per channel
 _prev_out = [0.0, 0.0]
@@ -16,12 +17,11 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     Rolls off at 6 dB/octave above the cutoff frequency.
 
     Params:
-        0 (Cutoff): Cutoff frequency — 0.0 = 20 Hz, 1.0 = 20 kHz (exponential)
+        cutoff: Cutoff frequency (20–20000 Hz)
     """
     global _prev_out
 
-    # Exponential mapping: 20 Hz to 20 kHz
-    cutoff_hz = 20.0 * (1000.0 ** params[CUTOFF])
+    cutoff_hz = params["cutoff"]
 
     a = math.exp(-2.0 * math.pi * cutoff_hz / sample_rate)
     b = 1.0 - a

@@ -28,7 +28,7 @@ pub struct DSPKernel {
     channel_count: usize,
     backend: Mutex<Option<Box<dyn Backend>>>,
     pub(crate) last_error: Option<String>,
-    /// 8 generic parameters (0.0–1.0), stored as AtomicU32 via f32::to_bits/from_bits.
+    /// 16 generic parameters (0.0–1.0), stored as AtomicU32 via f32::to_bits/from_bits.
     /// Main thread writes (DAW automation), audio thread reads — lock-free via Relaxed ordering.
     params: [AtomicU32; PARAM_COUNT],
     /// Lock-free ring buffers for spectrogram visualization.
@@ -52,6 +52,10 @@ pub struct DSPKernel {
     /// Set after each successful script/WASM load. None means "no names declared."
     /// Pointer returned by `param_names_json_ptr()` is valid until next script load or destroy.
     param_names_json: Option<std::ffi::CString>,
+    /// Cached JSON representation of rich parameter metadata (name, min, max, unit, default).
+    /// Set after each successful script/WASM load that declares a `PARAMS` dict.
+    /// None means "no rich metadata" (backward-compatible mode).
+    param_metadata_json: Option<std::ffi::CString>,
 }
 
 impl DSPKernel {
@@ -72,6 +76,7 @@ impl DSPKernel {
             licensed: AtomicBool::new(false),
             demo_samples_processed: AtomicU64::new(0),
             param_names_json: None,
+            param_metadata_json: None,
         }
     }
 
@@ -105,11 +110,13 @@ impl DSPKernel {
                     pb.initialize(self.channel_count, self.sample_rate, self.max_frames_to_render);
                 }
                 let names = pb.param_names();
+                let metadata = pb.param_metadata().map(|m| m.to_vec());
                 // Lock to swap — render thread will passthrough during this brief window
                 if let Ok(mut guard) = self.backend.lock() {
                     *guard = Some(Box::new(pb));
                 }
                 self.update_param_names_cache(names);
+                self.update_param_metadata_cache(metadata);
                 self.last_error = None;
                 true
             }
@@ -130,11 +137,13 @@ impl DSPKernel {
                     wb.initialize(self.channel_count, self.sample_rate, self.max_frames_to_render);
                 }
                 let names = wb.param_names();
+                let metadata = wb.param_metadata().map(|m| m.to_vec());
                 // Lock to swap — render thread will passthrough during this brief window
                 if let Ok(mut guard) = self.backend.lock() {
                     *guard = Some(Box::new(wb));
                 }
                 self.update_param_names_cache(names);
+                self.update_param_metadata_cache(metadata);
                 self.last_error = None;
                 true
             }
@@ -304,6 +313,37 @@ impl DSPKernel {
     /// The pointer is valid until the next script load or kernel destroy.
     pub fn param_names_json_ptr(&self) -> *const std::os::raw::c_char {
         match &self.param_names_json {
+            Some(cstr) => cstr.as_ptr(),
+            None => std::ptr::null(),
+        }
+    }
+
+    /// Update the cached JSON for rich parameter metadata.
+    /// Also sets kernel parameter defaults from the metadata.
+    fn update_param_metadata_cache(&mut self, metadata: Option<Vec<crate::params::ParamMetadata>>) {
+        match metadata {
+            Some(meta) if !meta.is_empty() => {
+                // Set default values in the kernel (normalized 0–1)
+                for (i, m) in meta.iter().enumerate() {
+                    if i < PARAM_COUNT {
+                        let normalized = m.normalize(m.default);
+                        self.params[i].store(normalized.to_bits(), Ordering::Relaxed);
+                    }
+                }
+                self.param_metadata_json = serde_json::to_string(&meta)
+                    .ok()
+                    .and_then(|s| std::ffi::CString::new(s).ok());
+            }
+            _ => {
+                self.param_metadata_json = None;
+            }
+        }
+    }
+
+    /// Returns a pointer to the cached parameter metadata JSON, or null if none declared.
+    /// The pointer is valid until the next script load or kernel destroy.
+    pub fn param_metadata_json_ptr(&self) -> *const std::os::raw::c_char {
+        match &self.param_metadata_json {
             Some(cstr) => cstr.as_ptr(),
             None => std::ptr::null(),
         }

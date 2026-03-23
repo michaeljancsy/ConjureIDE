@@ -597,22 +597,26 @@ private enum TestSystemPrompts {
         - outputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
         - frame_count: number of valid samples this callback (may be less than array length)
         - sample_rate: current sample rate (e.g. 44100.0)
-        - params: list of 8 floats (0.0–1.0), DAW-automatable parameter values (Param 0–7). \
-          Use these to make your effect controllable in real time from the host DAW.
+        - params: dict of parameter values keyed by name (if PARAMS is declared), \
+          or list of floats 0–1 (legacy). Use these to make your effect controllable from the DAW.
         - Write processed audio into outputs[ch][:frame_count]
         - Only numpy is available (imported as np)
         - Global variables persist across callbacks (useful for phase accumulators, delay buffers, etc.)
         - Must handle both mono (1 channel) and stereo (2 channels)
 
-        Parameter names:
-        - Add a # Parameters: comment followed by named variable declarations: \
-          # Parameters: \
-          RATE = 0 \
-          DEPTH = 1
-        - Use these to read params in process(): params[RATE], params[DEPTH]
-        - Only declared params are shown in the UI; others are hidden
-        - Always declare params when your script uses params
-        - Variable names become UI labels with underscores replaced by spaces (e.g. BIT_DEPTH → "BIT DEPTH")
+        Parameters — declare a PARAMS dict at module level to define named parameters with metadata:
+        PARAMS = {
+            "rate":  {"min": 0.5, "max": 20.0, "unit": "Hz", "default": 5.0},
+            "depth": {"min": 0.0, "max": 1.0,  "unit": "",   "default": 0.5},
+        }
+        - Each entry maps a lowercase snake_case name to min, max, unit, and default.
+        - params is a dict with these names as keys and actual (denormalized) values: \
+          rate_hz = params["rate"]  # already 0.5–20.0 Hz, no manual mapping needed
+        - The DAW/UI shows sliders with real ranges and formatted values (e.g. "5.2 Hz", "-21.5 dB").
+        - Common units: "dB", "Hz", "ms", "%", ":1", "" (dimensionless).
+        - Up to 16 parameters can be declared.
+        - ALWAYS use PARAMS when your effect has controllable parameters.
+        - Dict key order determines AU parameter address (first = 0, second = 1, etc.).
         """
 
     static let rustApiContract = """
@@ -728,8 +732,8 @@ struct LanguagePromptTests {
 
     @Test func pythonApiContractDocumentsParamNames() {
         let contract = TestSystemPrompts.pythonApiContract
-        #expect(contract.contains("# Parameters:"))
-        #expect(contract.contains("RATE = 0"))
+        #expect(contract.contains("PARAMS"))
+        #expect(contract.contains("\"rate\""))
     }
 
     @Test func rustApiContractDocumentsParamNames() {

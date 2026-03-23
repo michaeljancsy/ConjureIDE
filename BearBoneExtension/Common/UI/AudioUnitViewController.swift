@@ -47,6 +47,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var parameterState: ParameterState?
     private var licenseManager: LicenseManager?
     private var paramNamesCancellable: AnyCancellable?
+    private var paramMetadataCancellable: AnyCancellable?
 
 	deinit {
         log.info("deinit called")
@@ -199,13 +200,23 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         if let tree = au.parameterTree {
             ps.attach(to: tree)
         }
-        // Set initial param names from the currently loaded script
+        // Set initial param names and metadata from the currently loaded script
         if let au = au as? BearBoneExtensionAudioUnit {
             ps.paramNames = au.currentParamNames
+            ps.paramMetadata = au.currentParamMetadata
             paramNamesCancellable = au.paramNamesDidChange
                 .receive(on: DispatchQueue.main)
                 .sink { [weak ps] names in
                     ps?.paramNames = names
+                }
+            paramMetadataCancellable = au.paramMetadataDidChange
+                .receive(on: DispatchQueue.main)
+                .sink { [weak ps, weak au] metadata in
+                    ps?.paramMetadata = metadata
+                    // Re-attach to the parameter tree since it was rebuilt
+                    if let tree = au?.parameterTree {
+                        ps?.attach(to: tree)
+                    }
                 }
         }
 
@@ -393,7 +404,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                     templateURL: templateURL,
                     outputDirectory: exportDir,
                     skipSigning: true,
-                    paramNames: au.currentParamNames
+                    paramNames: au.currentParamNames,
+                    paramMetadata: au.currentParamMetadata
                 )
                 log.info("Staged preset '\(name, privacy: .public)' to App Group at \(appURL.path, privacy: .public)")
                 Analytics.track(.export, properties: [

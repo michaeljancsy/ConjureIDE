@@ -1,15 +1,5 @@
 import numpy as np
 
-# Parameters:
-PARAM0 = 0
-PARAM1 = 1
-PARAM2 = 2
-PARAM3 = 3
-PARAM4 = 4
-PARAM5 = 5
-PARAM6 = 6
-PARAM7 = 7
-
 
 def process(inputs, outputs, frame_count, sample_rate, params):
     """
@@ -25,8 +15,10 @@ def process(inputs, outputs, frame_count, sample_rate, params):
                      write results into [:frame_count])
         frame_count: number of valid samples this callback (may be < array length)
         sample_rate: current sample rate in Hz (e.g. 44100.0)
-        params:      list of 8 floats (0.0–1.0), the DAW-automatable parameter
-                     values (Param 0–7). Use these to control your DSP in real time.
+        params:      dict of parameter values, keyed by name (if PARAMS is declared),
+                     or list of 8 floats 0–1 (legacy mode).
+                     Declare a PARAMS dict at module level to define parameters:
+                     PARAMS = {"gain": {"min": -24, "max": 12, "unit": "dB", "default": 0}}
     """
     for ch in range(len(inputs)):
         # Example: apply 0.5x gain (halve the volume)

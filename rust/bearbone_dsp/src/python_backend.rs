@@ -1,5 +1,5 @@
 use crate::backend::Backend;
-use crate::params::PARAM_COUNT;
+use crate::params::{ParamMetadata, PARAM_COUNT};
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -17,6 +17,9 @@ pub struct PythonBackend {
     py_channel_count: usize,
     last_error: Option<String>,
     param_names: HashMap<u8, String>,
+    /// Rich parameter metadata from `PARAMS` dict. When present, process()
+    /// passes a dict of denormalized values instead of a list of 0–1 floats.
+    param_metadata: Option<Vec<ParamMetadata>>,
 }
 
 impl PythonBackend {
@@ -35,53 +38,37 @@ impl PythonBackend {
         // AU bundle's Resources/python-dist/, which corrupts the code signature.
         std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
 
-        let result: Result<(Py<PyAny>, HashMap<u8, String>), PyErr> = Python::with_gil(|py| {
-            let code = std::fs::read_to_string(script_path)
-                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>), PyErr> =
+            Python::with_gil(|py| {
+                let code = std::fs::read_to_string(script_path)
+                    .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
-            let code_c = CString::new(code)
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-            let path_c = CString::new(script_path)
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-            let module_name = CString::new("dsp_script")
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+                let code_c = CString::new(code)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+                let path_c = CString::new(script_path)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+                let module_name = CString::new("dsp_script")
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
-            // Remove any cached module so from_code creates a fresh one.
-            // Without this, attributes from a previous script (like PARAM_NAMES)
-            // persist in the module's __dict__ even if the new script doesn't define them.
-            let sys_modules = py.import("sys")?.getattr("modules")?;
-            let _ = sys_modules.call_method1("pop", ("dsp_script", py.None()));
+                // Remove any cached module so from_code creates a fresh one.
+                // Without this, attributes from a previous script (like PARAM_NAMES or PARAMS)
+                // persist in the module's __dict__ even if the new script doesn't define them.
+                let sys_modules = py.import("sys")?.getattr("modules")?;
+                let _ = sys_modules.call_method1("pop", ("dsp_script", py.None()));
 
-            let module = PyModule::from_code(py, &code_c, &path_c, &module_name)?;
-            let process_fn = module.getattr("process")?;
+                let module = PyModule::from_code(py, &code_c, &path_c, &module_name)?;
+                let process_fn = module.getattr("process")?;
 
-            // Extract PARAM_NAMES dict if declared (e.g. {0: "Cutoff", 1: "Resonance"})
-            let param_names = match module.getattr("PARAM_NAMES") {
-                Ok(attr) => {
-                    if let Ok(dict) = attr.downcast::<PyDict>() {
-                        dict.iter()
-                            .filter_map(|(k, v)| {
-                                let addr = k.extract::<u8>().ok()?;
-                                let name = v.extract::<String>().ok()?;
-                                if (addr as usize) < PARAM_COUNT {
-                                    Some((addr, name))
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect()
-                    } else {
-                        HashMap::new()
-                    }
-                }
-                Err(_) => HashMap::new(),
-            };
+                // Try PARAMS dict first (rich metadata):
+                //   PARAMS = {"threshold": {"min": -40, "max": -3, "unit": "dB", "default": -20}, ...}
+                let (param_names, param_metadata) =
+                    Self::extract_params(py, &module);
 
-            Ok((process_fn.unbind(), param_names))
-        });
+                Ok((process_fn.unbind(), param_names, param_metadata))
+            });
 
         match result {
-            Ok((process_fn, param_names)) => {
+            Ok((process_fn, param_names, param_metadata)) => {
                 eprintln!("BearBone-Rust: Python script loaded successfully");
                 Ok(Self {
                     py_process_fn: process_fn,
@@ -90,6 +77,7 @@ impl PythonBackend {
                     py_channel_count: 0,
                     last_error: None,
                     param_names,
+                    param_metadata,
                 })
             }
             Err(e) => {
@@ -101,6 +89,113 @@ impl PythonBackend {
                 Err(err_msg)
             }
         }
+    }
+
+    /// Extract parameter metadata from the Python module.
+    /// Tries `PARAMS` dict first (rich metadata), falls back to `PARAM_NAMES` (names only).
+    fn extract_params(
+        py: Python<'_>,
+        module: &Bound<'_, PyModule>,
+    ) -> (HashMap<u8, String>, Option<Vec<ParamMetadata>>) {
+        // Try PARAMS dict first: {"threshold": {"min": -40, "max": -3, "unit": "dB", "default": -20}}
+        if let Ok(attr) = module.getattr("PARAMS") {
+            if let Ok(dict) = attr.downcast::<PyDict>() {
+                let mut metadata = Vec::new();
+                let mut names = HashMap::new();
+                // Python 3.7+ dicts preserve insertion order
+                for (i, (key, val)) in dict.iter().enumerate() {
+                    if i >= PARAM_COUNT {
+                        break;
+                    }
+                    let name = match key.extract::<String>() {
+                        Ok(n) => n,
+                        Err(_) => continue,
+                    };
+                    if let Ok(spec) = val.downcast::<PyDict>() {
+                        let min = spec
+                            .get_item("min")
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v.extract::<f32>().ok())
+                            .unwrap_or(0.0);
+                        let max = spec
+                            .get_item("max")
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v.extract::<f32>().ok())
+                            .unwrap_or(1.0);
+                        let default = spec
+                            .get_item("default")
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v.extract::<f32>().ok())
+                            .unwrap_or(min);
+                        let unit = spec
+                            .get_item("unit")
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v.extract::<String>().ok())
+                            .unwrap_or_default();
+                        // Title-case the name for display, keep original as key
+                        let display_name = Self::to_title_case(&name);
+                        names.insert(i as u8, display_name.clone());
+                        metadata.push(ParamMetadata {
+                            name: display_name,
+                            key: name,
+                            min,
+                            max,
+                            default: default.clamp(min.min(max), min.max(max)),
+                            unit,
+                        });
+                    }
+                }
+                if !metadata.is_empty() {
+                    return (names, Some(metadata));
+                }
+            }
+        }
+
+        // Fall back to PARAM_NAMES dict: {0: "Cutoff", 1: "Resonance"}
+        let param_names = match module.getattr("PARAM_NAMES") {
+            Ok(attr) => {
+                if let Ok(dict) = attr.downcast::<PyDict>() {
+                    dict.iter()
+                        .filter_map(|(k, v)| {
+                            let addr = k.extract::<u8>().ok()?;
+                            let name = v.extract::<String>().ok()?;
+                            if (addr as usize) < PARAM_COUNT {
+                                Some((addr, name))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                } else {
+                    HashMap::new()
+                }
+            }
+            Err(_) => HashMap::new(),
+        };
+
+        (param_names, None)
+    }
+
+    /// Convert snake_case or lowercase name to Title Case for display.
+    fn to_title_case(s: &str) -> String {
+        s.split('_')
+            .filter(|w| !w.is_empty())
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(c) => {
+                        let upper: String = c.to_uppercase().collect();
+                        upper + &chars.as_str().to_lowercase()
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// Allocate numpy arrays for the given channel count, sized to max_frames.
@@ -152,13 +247,23 @@ impl PythonBackend {
             let output_list =
                 PyList::new(py, self.py_output_arrays.iter().map(|a| a.bind(py)))?;
 
-            // Build params list (8 floats)
-            let params_list = PyList::new(py, params.iter())?;
+            // Build params: dict with actual values (if PARAMS metadata present)
+            // or list of raw 0–1 floats (backward compat).
+            let params_obj: Bound<'_, PyAny> = if let Some(ref metadata) = self.param_metadata {
+                let dict = PyDict::new(py);
+                for (i, meta) in metadata.iter().enumerate() {
+                    let actual = meta.denormalize(params[i]);
+                    dict.set_item(&meta.key, actual)?;
+                }
+                dict.into_any()
+            } else {
+                PyList::new(py, params.iter())?.into_any()
+            };
 
             // Try 5-arg call first: process(inputs, outputs, frame_count, sample_rate, params)
             // Fall back to 4-arg call for backward compatibility with old scripts.
             let call_result = self.py_process_fn
-                .call1(py, (input_list.clone(), output_list.clone(), frame_count as u32, sample_rate, params_list));
+                .call1(py, (input_list.clone(), output_list.clone(), frame_count as u32, sample_rate, params_obj));
 
             match call_result {
                 Ok(_) => {}
@@ -233,5 +338,9 @@ impl Backend for PythonBackend {
 
     fn param_names(&self) -> HashMap<u8, String> {
         self.param_names.clone()
+    }
+
+    fn param_metadata(&self) -> Option<&[ParamMetadata]> {
+        self.param_metadata.as_deref()
     }
 }

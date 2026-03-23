@@ -18,24 +18,33 @@ import SwiftUI
 @MainActor
 final class ParameterState: ObservableObject {
     @Published var values: [Float]
-    /// Script-declared parameter names, keyed by address (0–7).
-    /// nil = no names declared (show all 8 with default labels).
+    /// Script-declared parameter names, keyed by address (0–15).
+    /// nil = no names declared (show all params with default labels).
     @Published var paramNames: [Int: String]? = nil
+    /// Rich parameter metadata from `PARAMS` dict. When present, sliders
+    /// use actual ranges and values are displayed with units.
+    @Published var paramMetadata: [BearBoneExtensionAudioUnit.ParamMetadata]? = nil
 
     private var parameterTree: AUParameterTree?
     private var observerToken: AUParameterObserverToken?
 
     init() {
-        self.values = Array(repeating: 0.0, count: 8)
+        self.values = Array(repeating: 0.0, count: BearBoneExtensionAudioUnit.paramCount)
     }
 
     func attach(to parameterTree: AUParameterTree) {
         detach()
 
         self.parameterTree = parameterTree
+        let paramCount = BearBoneExtensionAudioUnit.paramCount
+
+        // Resize values array to match current param count
+        if values.count != paramCount {
+            values = Array(repeating: 0.0, count: paramCount)
+        }
 
         // Read current values from the tree
-        for i in 0..<8 {
+        for i in 0..<paramCount {
             if let param = parameterTree.parameter(withAddress: AUParameterAddress(i)) {
                 values[i] = param.value
             }
@@ -44,7 +53,7 @@ final class ParameterState: ObservableObject {
         // Observe changes from ANY source (DAW automation, MIDI learn, etc.)
         // The callback fires on an arbitrary thread, so dispatch to main for SwiftUI.
         observerToken = parameterTree.token(byAddingParameterObserver: { [weak self] address, value in
-            guard address < 8 else { return }
+            guard Int(address) < paramCount else { return }
             DispatchQueue.main.async {
                 self?.values[Int(address)] = value
             }

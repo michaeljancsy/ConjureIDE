@@ -1,7 +1,8 @@
 import numpy as np
 
-# Parameters:
-FREQUENCY = 0
+PARAMS = {
+    "frequency": {"min": 20.0, "max": 20000.0, "unit": "Hz", "default": 440.0},
+}
 
 # Persistent phase across callbacks
 _phase = 0.0
@@ -18,11 +19,11 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     carrier frequency components are always present in the output.
 
     Params:
-        0 (Frequency): Carrier frequency — logarithmic 20 Hz to 20000 Hz
+        frequency: Carrier frequency (20–20000 Hz)
     """
     global _phase
 
-    carrier_hz = 20.0 * (1000.0 ** params[FREQUENCY])  # 20 to 20000 Hz (log)
+    carrier_hz = params["frequency"]
 
     t = np.arange(frame_count, dtype=np.float32) / sample_rate
     carrier = np.sin(2.0 * np.pi * carrier_hz * t + _phase)

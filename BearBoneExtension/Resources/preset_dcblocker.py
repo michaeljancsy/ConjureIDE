@@ -1,7 +1,8 @@
 import numpy as np
 
-# Parameters:
-CUTOFF = 0
+PARAMS = {
+    "cutoff": {"min": 0.99, "max": 0.9995, "unit": "R", "default": 0.995},
+}
 
 # Persistent state per channel: [prev_x, prev_y]
 _state = [[0.0, 0.0], [0.0, 0.0]]
@@ -16,13 +17,11 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     where R controls the cutoff frequency (closer to 1.0 = lower cutoff).
 
     Params:
-        0 (Cutoff): Higher values = higher cutoff frequency.
-                    0.0 = R=0.9995 (~1 Hz), 1.0 = R=0.99 (~160 Hz)
+        cutoff: Filter coefficient R (0.99–0.9995, higher = lower cutoff)
     """
     global _state
 
-    # Inverted: higher param = higher cutoff = lower R
-    r = 0.9995 - params[CUTOFF] * 0.0095  # 0.9995 to 0.99
+    r = params["cutoff"]
 
     for ch in range(len(inputs)):
         prev_x = _state[ch][0] if ch < len(_state) else 0.0

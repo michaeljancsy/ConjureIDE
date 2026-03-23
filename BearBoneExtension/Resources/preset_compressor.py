@@ -1,11 +1,12 @@
 import numpy as np
 
-# Parameters:
-THRESHOLD = 0
-RATIO = 1
-ATTACK = 2
-RELEASE = 3
-MAKEUP = 4
+PARAMS = {
+    "threshold": {"min": -40.0, "max": -3.0,  "unit": "dB", "default": -20.0},
+    "ratio":     {"min": 2.0,   "max": 20.0,  "unit": ":1", "default": 4.0},
+    "attack":    {"min": 0.5,   "max": 50.0,  "unit": "ms", "default": 5.0},
+    "release":   {"min": 10.0,  "max": 500.0, "unit": "ms", "default": 50.0},
+    "makeup":    {"min": 0.0,   "max": 20.0,  "unit": "dB", "default": 0.0},
+}
 
 # Persistent envelope follower state
 _envelope = 0.0
@@ -25,19 +26,19 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     so stereo signals are compressed with linked gain to preserve the stereo image.
 
     Params:
-        0 (Threshold): Compression threshold — 0.0 = -40 dB, 1.0 = -3 dB
-        1 (Ratio):     Compression ratio — 0.0 = 2:1, 1.0 = 20:1
-        2 (Attack):    Attack time — 0.0 = 0.5 ms, 1.0 = 50 ms
-        3 (Release):   Release time — 0.0 = 10 ms, 1.0 = 500 ms
-        4 (Makeup):    Makeup gain — 0.0 = 0 dB, 1.0 = 20 dB
+        threshold: Compression threshold (-40 to -3 dB)
+        ratio:     Compression ratio (2:1 to 20:1)
+        attack:    Attack time (0.5 to 50 ms)
+        release:   Release time (10 to 500 ms)
+        makeup:    Makeup gain (0 to 20 dB)
     """
     global _envelope
 
-    threshold_db = -40.0 + params[THRESHOLD] * 37.0    # -40 to -3 dB
-    ratio = 2.0 + params[RATIO] * 18.0             # 2 to 20
-    attack_ms = 0.5 + params[ATTACK] * 49.5         # 0.5 to 50 ms
-    release_ms = 10.0 + params[RELEASE] * 490.0      # 10 to 500 ms
-    makeup_db = params[MAKEUP] * 20.0               # 0 to 20 dB
+    threshold_db = params["threshold"]
+    ratio = params["ratio"]
+    attack_ms = params["attack"]
+    release_ms = params["release"]
+    makeup_db = params["makeup"]
 
     threshold = 10.0 ** (threshold_db / 20.0)
     makeup = 10.0 ** (makeup_db / 20.0)

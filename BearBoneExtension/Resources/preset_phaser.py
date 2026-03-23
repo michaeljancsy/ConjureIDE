@@ -1,12 +1,13 @@
 import numpy as np
 import math
 
-# Parameters:
-RATE = 0
-MIN_FREQ = 1
-MAX_FREQ = 2
-STAGES = 3
-MIX = 4
+PARAMS = {
+    "rate":     {"min": 0.1,   "max": 5.0,     "unit": "Hz", "default": 0.5},
+    "min_freq": {"min": 50.0,  "max": 500.0,   "unit": "Hz", "default": 200.0},
+    "max_freq": {"min": 500.0, "max": 10000.0, "unit": "Hz", "default": 4000.0},
+    "stages":   {"min": 2,     "max": 6,       "unit": "",   "default": 4},
+    "mix":      {"min": 0.0,   "max": 1.0,     "unit": "",   "default": 0.5},
+}
 
 # Maximum number of allpass stages
 MAX_STAGES = 6
@@ -27,19 +28,19 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     the spectrum. The number of stages determines how many notches appear.
 
     Params:
-        0 (Rate):     LFO rate — 0.0 = 0.1 Hz, 1.0 = 5 Hz
-        1 (Min Freq): Minimum allpass freq — 0.0 = 50 Hz, 1.0 = 500 Hz
-        2 (Max Freq): Maximum allpass freq — 0.0 = 500 Hz, 1.0 = 10000 Hz
-        3 (Stages):   Number of allpass stages — 2 to 6 (discrete)
-        4 (Mix):      Wet/dry mix — 0.0 = dry, 1.0 = wet
+        rate:     LFO rate (0.1–5 Hz)
+        min_freq: Minimum allpass frequency (50–500 Hz)
+        max_freq: Maximum allpass frequency (500–10000 Hz)
+        stages:   Number of allpass stages (2–6)
+        mix:      Wet/dry mix (0.0 = dry, 1.0 = wet)
     """
     global _ap_state, _lfo_phase
 
-    rate_hz = 0.1 + params[RATE] * 4.9          # 0.1 to 5 Hz
-    min_freq = 50.0 + params[MIN_FREQ] * 450.0      # 50 to 500 Hz
-    max_freq = 500.0 + params[MAX_FREQ] * 9500.0    # 500 to 10000 Hz
-    stages = int(params[STAGES] * 4) + 2          # 2 to 6
-    mix = params[MIX]                           # 0 to 1
+    rate_hz = params["rate"]
+    min_freq = params["min_freq"]
+    max_freq = params["max_freq"]
+    stages = int(params["stages"])
+    mix = params["mix"]
 
     n_ch = len(inputs)
     two_pi = 2.0 * math.pi

@@ -43,6 +43,11 @@ pub struct WasmBackend {
     fuel_per_callback: u64,
     last_error: Option<String>,
     param_names: HashMap<u8, String>,
+    param_metadata: Option<Vec<crate::params::ParamMetadata>>,
+    /// How many params to write to WASM memory. Defaults to 8 for backward compat
+    /// with existing modules that allocate `[f32; 8]`. Modules with rich metadata
+    /// may declare more.
+    param_write_count: usize,
 }
 
 /// Base offset in WASM linear memory to avoid the null page.
@@ -120,14 +125,89 @@ impl WasmBackend {
             BufferMode::FixedOffset => DEFAULT_FUEL,
         };
 
-        // Extract parameter names if the module exports get_param_names_json() -> (ptr, len)
-        let param_names = if let Ok(get_names_fn) =
-            instance.get_typed_func::<(), (i32, i32)>(&mut store, "get_param_names_json")
+        // Try get_param_metadata_json first (rich metadata), then fall back to get_param_names_json
+        let (param_names, param_metadata) = Self::extract_params(
+            &instance,
+            &mut store,
+            &memory,
+        );
+
+        // Determine how many params to write: metadata count, or 8 for backward compat
+        let param_write_count = param_metadata
+            .as_ref()
+            .map(|m| m.len().min(PARAM_COUNT))
+            .or_else(|| {
+                if param_names.is_empty() {
+                    None
+                } else {
+                    Some((*param_names.keys().max().unwrap_or(&0) as usize + 1).min(PARAM_COUNT))
+                }
+            })
+            .unwrap_or(8); // Legacy default for old modules
+
+        Ok(Self {
+            store,
+            memory,
+            process_fn,
+            get_input_ptr_fn,
+            get_output_ptr_fn,
+            get_params_ptr_fn,
+            buffer_mode,
+            input_offset: 0,
+            output_offset: 0,
+            params_offset: 0,
+            channel_count: 0,
+            max_frames: 0,
+            fuel_per_callback,
+            last_error: None,
+            param_names,
+            param_metadata,
+            param_write_count,
+        })
+    }
+
+    /// Extract parameter names and metadata from WASM module exports.
+    fn extract_params(
+        instance: &Instance,
+        store: &mut Store<()>,
+        memory: &Memory,
+    ) -> (HashMap<u8, String>, Option<Vec<crate::params::ParamMetadata>>) {
+        // Try get_param_metadata_json first (rich metadata)
+        if let Ok(get_meta_fn) =
+            instance.get_typed_func::<(), (i32, i32)>(&mut *store, "get_param_metadata_json")
         {
             let _ = store.set_fuel(COMPILED_FUEL);
-            match get_names_fn.call(&mut store, ()) {
+            if let Ok((ptr, len)) = get_meta_fn.call(&mut *store, ()) {
+                let data = memory.data(&*store);
+                let start = ptr as usize;
+                let end = start + len as usize;
+                if end <= data.len() {
+                    if let Ok(json_str) = std::str::from_utf8(&data[start..end]) {
+                        if let Ok(metadata) =
+                            serde_json::from_str::<Vec<crate::params::ParamMetadata>>(json_str)
+                        {
+                            if !metadata.is_empty() {
+                                let names: HashMap<u8, String> = metadata
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, m)| (i as u8, m.name.clone()))
+                                    .collect();
+                                return (names, Some(metadata));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fall back to get_param_names_json
+        let param_names = if let Ok(get_names_fn) =
+            instance.get_typed_func::<(), (i32, i32)>(&mut *store, "get_param_names_json")
+        {
+            let _ = store.set_fuel(COMPILED_FUEL);
+            match get_names_fn.call(&mut *store, ()) {
                 Ok((ptr, len)) => {
-                    let data = memory.data(&store);
+                    let data = memory.data(&*store);
                     let start = ptr as usize;
                     let end = start + len as usize;
                     if end <= data.len() {
@@ -159,23 +239,7 @@ impl WasmBackend {
             HashMap::new()
         };
 
-        Ok(Self {
-            store,
-            memory,
-            process_fn,
-            get_input_ptr_fn,
-            get_output_ptr_fn,
-            get_params_ptr_fn,
-            buffer_mode,
-            input_offset: 0,
-            output_offset: 0,
-            params_offset: 0,
-            channel_count: 0,
-            max_frames: 0,
-            fuel_per_callback,
-            last_error: None,
-            param_names,
-        })
+        (param_names, None)
     }
 
     /// Register minimal WASI preview1 stubs so compiled modules can instantiate.
@@ -468,14 +532,16 @@ impl Backend for WasmBackend {
             }
         }
 
-        // Write params into WASM memory if the module exports get_params_ptr
+        // Write params into WASM memory if the module exports get_params_ptr.
+        // Only write param_write_count entries to avoid overflowing the module's buffer.
         if self.params_offset != 0 {
             let params_byte_offset = self.params_offset as usize;
-            let params_end = params_byte_offset + PARAM_COUNT * 4;
+            let write_count = self.param_write_count.min(params.len());
+            let params_end = params_byte_offset + write_count * 4;
             if params_end <= mem_data.len() {
-                for (i, &val) in params.iter().enumerate() {
+                for i in 0..write_count {
                     let offset = params_byte_offset + i * 4;
-                    mem_data[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
+                    mem_data[offset..offset + 4].copy_from_slice(&params[i].to_le_bytes());
                 }
             }
         }
@@ -523,6 +589,10 @@ impl Backend for WasmBackend {
 
     fn param_names(&self) -> HashMap<u8, String> {
         self.param_names.clone()
+    }
+
+    fn param_metadata(&self) -> Option<&[crate::params::ParamMetadata]> {
+        self.param_metadata.as_deref()
     }
 }
 

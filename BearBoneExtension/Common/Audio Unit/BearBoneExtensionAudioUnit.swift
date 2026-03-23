@@ -20,9 +20,25 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Only used by AudioCaptureManager on the UI thread.
 	var kernelReference: DSPKernelRef? { kernel }
 
-	// MARK: - Parameter Tree (8 fixed generic parameters, range 0–1)
+	// MARK: - Parameter Tree (up to 16 parameters, with optional rich metadata)
 
-	static let paramCount = 8
+	static let paramCount = 16
+
+	/// Rich metadata for a parameter, declared by scripts via `PARAMS` dict.
+	public struct ParamMetadata: Codable {
+		public let name: String
+		public let key: String?
+		public let min: Float
+		public let max: Float
+		public let `default`: Float
+		public let unit: String
+	}
+
+	/// Current rich parameter metadata (nil = legacy 0–1 mode).
+	private(set) var currentParamMetadata: [ParamMetadata]? = nil
+
+	/// Fires after every script load with the new param metadata (or nil).
+	public let paramMetadataDidChange = PassthroughSubject<[ParamMetadata]?, Never>()
 
 	private func buildParameterTree() {
 		var params: [AUParameter] = []
@@ -55,6 +71,100 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			return String(format: "%.3f", value)
 		}
 		self.parameterTree = tree
+	}
+
+	/// Rebuild the parameter tree with rich metadata (real ranges, units, defaults).
+	/// The kernel still stores normalized 0–1 values — we normalize on write and denormalize on read.
+	private func rebuildParameterTree(metadata: [ParamMetadata]) {
+		let count = min(metadata.count, Self.paramCount)
+		var params: [AUParameter] = []
+		let metadataRef = metadata
+
+		for i in 0..<count {
+			let meta = metadataRef[i]
+			let param = AUParameterTree.createParameter(
+				withIdentifier: "param\(i)",
+				name: meta.name,
+				address: AUParameterAddress(i),
+				min: meta.min,
+				max: meta.max,
+				unit: .generic,
+				unitName: nil,
+				flags: [.flag_IsReadable, .flag_IsWritable],
+				valueStrings: nil,
+				dependentParameters: nil
+			)
+			param.value = meta.default
+			params.append(param)
+		}
+
+		let tree = AUParameterTree.createTree(withChildren: params)
+		let kernelRef = self.kernel!
+
+		// Normalize actual value → 0–1 for kernel storage
+		tree.implementorValueObserver = { param, value in
+			let idx = Int(param.address)
+			if idx < metadataRef.count {
+				let meta = metadataRef[idx]
+				let range = meta.max - meta.min
+				let normalized: Float = range > 0 ? Swift.min(Swift.max((value - meta.min) / range, 0), 1) : 0
+				dsp_kernel_set_parameter(kernelRef, param.address, normalized)
+			} else {
+				dsp_kernel_set_parameter(kernelRef, param.address, value)
+			}
+		}
+
+		// Denormalize 0–1 from kernel → actual value for DAW
+		tree.implementorValueProvider = { param in
+			let normalized = dsp_kernel_get_parameter(kernelRef, param.address)
+			let idx = Int(param.address)
+			if idx < metadataRef.count {
+				let meta = metadataRef[idx]
+				return meta.min + normalized * (meta.max - meta.min)
+			}
+			return normalized
+		}
+
+		// Format with units
+		tree.implementorStringFromValueCallback = { param, valuePtr in
+			let value = valuePtr?.pointee ?? param.value
+			let idx = Int(param.address)
+			if idx < metadataRef.count {
+				return Self.formatParamValue(value, unit: metadataRef[idx].unit)
+			}
+			return String(format: "%.3f", value)
+		}
+
+		self.parameterTree = tree
+
+		// Set kernel defaults (normalized)
+		for (i, meta) in metadataRef.prefix(count).enumerated() {
+			let range = meta.max - meta.min
+			let normalized: Float = range > 0 ? Swift.min(Swift.max((meta.default - meta.min) / range, 0), 1) : 0
+			dsp_kernel_set_parameter(kernelRef, UInt64(i), normalized)
+		}
+	}
+
+	/// Format a parameter value with its unit string.
+	static func formatParamValue(_ value: Float, unit: String) -> String {
+		switch unit {
+		case "dB":
+			return String(format: "%.1f dB", value)
+		case "Hz":
+			if value >= 1000 { return String(format: "%.2f kHz", value / 1000) }
+			return String(format: "%.1f Hz", value)
+		case "ms":
+			if value >= 1000 { return String(format: "%.2f s", value / 1000) }
+			return String(format: "%.1f ms", value)
+		case "%":
+			return String(format: "%.0f%%", value)
+		case ":1":
+			return String(format: "%.1f:1", value)
+		case "":
+			return String(format: "%.3f", value)
+		default:
+			return String(format: "%.2f %@", value, unit)
+		}
 	}
 
 	// Cached path to bundled Python runtime for script reloads
@@ -164,7 +274,9 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			if let source = try? String(contentsOfFile: scriptPath, encoding: .utf8) {
 				currentScriptSource = source
 				readParamNames()
-				if let names = Self.parsePythonParamNames(fromSource: source) {
+				// Override param names from source text only if no rich metadata
+				if currentParamMetadata == nil,
+				   let names = Self.parsePythonParamNames(fromSource: source) {
 					currentParamNames = names
 					paramNamesDidChange.send(names)
 				}
@@ -255,9 +367,37 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		parseParamNames(fromSource: source)
 	}
 
-	/// Read script-declared parameter names from the Rust kernel via FFI.
+	/// Read script-declared parameter metadata and names from the Rust kernel via FFI.
 	/// Called after every successful script/WASM load.
+	/// When rich metadata is present, rebuilds the parameter tree with real ranges.
 	private func readParamNames() {
+		// Try rich metadata first
+		if let metaPtr = dsp_kernel_param_metadata_json(kernel) {
+			let metaJson = String(cString: metaPtr)
+			if let data = metaJson.data(using: .utf8),
+			   let metadata = try? JSONDecoder().decode([ParamMetadata].self, from: data),
+			   !metadata.isEmpty {
+				currentParamMetadata = metadata
+				paramMetadataDidChange.send(metadata)
+
+				// Derive param names from metadata
+				var names: [Int: String] = [:]
+				for (i, meta) in metadata.enumerated() {
+					names[i] = meta.name
+				}
+				currentParamNames = names
+				paramNamesDidChange.send(names)
+
+				// Rebuild parameter tree with real ranges
+				rebuildParameterTree(metadata: metadata)
+				return
+			}
+		}
+
+		// No rich metadata — clear it and fall back to names-only.
+		currentParamMetadata = nil
+		paramMetadataDidChange.send(nil)
+
 		guard let ptr = dsp_kernel_param_names_json(kernel) else {
 			currentParamNames = nil
 			paramNamesDidChange.send(nil)
@@ -308,8 +448,9 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			pluginLog.info("Python DSP script reloaded successfully")
 			readParamNames()
 
-			// Override param names from source text if available
-			if let names = Self.parsePythonParamNames(fromSource: source) {
+			// Override param names from source text only if no rich metadata
+			if currentParamMetadata == nil,
+			   let names = Self.parsePythonParamNames(fromSource: source) {
 				currentParamNames = names
 				paramNamesDidChange.send(names)
 			}

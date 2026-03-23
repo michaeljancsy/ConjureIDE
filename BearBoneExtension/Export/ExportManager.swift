@@ -57,7 +57,8 @@ final class ExportManager {
         templateURL: URL,
         outputDirectory: URL,
         skipSigning: Bool = false,
-        paramNames: [Int: String]? = nil
+        paramNames: [Int: String]? = nil,
+        paramMetadata: [BearBoneExtensionAudioUnit.ParamMetadata]? = nil
     ) throws -> URL {
         guard FileManager.default.fileExists(atPath: templateURL.path) else {
             throw ExportError.templateNotFound
@@ -95,7 +96,7 @@ final class ExportManager {
         }
 
         // 4. Write runtime-config.json
-        let config = makeRuntimeConfig(name: name, language: language, paramNames: paramNames)
+        let config = makeRuntimeConfig(name: name, language: language, paramNames: paramNames, paramMetadata: paramMetadata)
         try config.write(to: appexResourcesURL.appendingPathComponent("runtime-config.json"))
 
         // 5. Patch host app Info.plist
@@ -178,15 +179,38 @@ final class ExportManager {
         }
     }
 
-    private func makeRuntimeConfig(name: String, language: ScriptLanguage, paramNames: [Int: String]?) -> Data {
+    private func makeRuntimeConfig(
+        name: String,
+        language: ScriptLanguage,
+        paramNames: [Int: String]?,
+        paramMetadata: [BearBoneExtensionAudioUnit.ParamMetadata]? = nil
+    ) -> Data {
         var config: [String: Any] = [
             "version": 1,
             "language": language.rawValue,
             "presetName": name,
             "exportDate": ISO8601DateFormatter().string(from: Date()),
-            "paramCount": 8,
+            "paramCount": 16,
         ]
-        if let paramNames = paramNames, !paramNames.isEmpty {
+
+        // Include rich metadata if available (v2 format)
+        if let metadata = paramMetadata, !metadata.isEmpty {
+            let metaArray: [[String: Any]] = metadata.map { m in
+                var dict: [String: Any] = [
+                    "name": m.name,
+                    "min": m.min,
+                    "max": m.max,
+                    "default": m.default,
+                    "unit": m.unit,
+                ]
+                if let key = m.key { dict["key"] = key }
+                return dict
+            }
+            config["paramMetadata"] = metaArray
+            config["paramCount"] = metadata.count
+            // Also include paramNames for backward compat with older exported AU templates
+            config["paramNames"] = metadata.map { $0.name }
+        } else if let paramNames = paramNames, !paramNames.isEmpty {
             let maxIndex = paramNames.keys.max() ?? 0
             var namesArray: [String] = []
             for i in 0...maxIndex {
@@ -195,6 +219,7 @@ final class ExportManager {
             config["paramNames"] = namesArray
             config["paramCount"] = namesArray.count
         }
+
         // swiftlint:disable:next force_try
         return try! JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
     }

@@ -1,10 +1,11 @@
 import numpy as np
 import math
 
-# Parameters:
-TIME = 0
-FEEDBACK = 1
-MIX = 2
+PARAMS = {
+    "time":     {"min": 10.0,  "max": 500.0, "unit": "ms", "default": 250.0},
+    "feedback": {"min": 0.0,   "max": 0.95,  "unit": "",   "default": 0.4},
+    "mix":      {"min": 0.0,   "max": 1.0,   "unit": "",   "default": 0.5},
+}
 
 # Max delay in samples (supports 500 ms at 96 kHz)
 MAX_DELAY = 48000
@@ -24,15 +25,15 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     the original signal and the delayed signal.
 
     Params:
-        0 (Time):     Delay time — 0.0 = 10 ms, 1.0 = 500 ms
-        1 (Feedback): Feedback amount — 0.0 = none, 1.0 = 0.95
-        2 (Mix):      Wet/dry mix — 0.0 = dry, 1.0 = wet
+        time:     Delay time (10–500 ms)
+        feedback: Feedback amount (0.0–0.95)
+        mix:      Wet/dry mix (0.0 = dry, 1.0 = wet)
     """
     global _delay_buf, _write_pos
 
-    delay_ms = 10.0 + params[TIME] * 490.0   # 10 to 500 ms
-    feedback = params[FEEDBACK] * 0.95            # 0 to 0.95
-    mix = params[MIX]                        # 0 to 1
+    delay_ms = params["time"]
+    feedback = params["feedback"]
+    mix = params["mix"]
 
     n_ch = len(inputs)
 

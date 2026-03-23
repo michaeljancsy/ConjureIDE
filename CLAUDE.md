@@ -52,7 +52,7 @@ Note: `--test-threads=1` is required because Python tests share a single interpr
 1. On AU init, Swift calls `dsp_kernel_load_script()` with the bundled `process.py` path and Python home
 2. Rust sets `PYTHONHOME`, initializes the free-threaded Python 3.14 interpreter via pyo3, and caches the script's `process()` function
 3. On `allocateRenderResources()`, Rust pre-allocates numpy float32 arrays (one per channel, sized to `maximumFramesToRender`)
-4. Each render callback: Rust copies input audio into numpy arrays, calls `process(inputs, outputs, frame_count, sample_rate)`, copies output back
+4. Each render callback: Rust copies input audio into numpy arrays, calls `process(inputs, outputs, frame_count, sample_rate, params)`, copies output back. If PARAMS metadata exists, params is a dict of denormalized values; otherwise a list of 0–1 floats.
 5. If Python fails to load or errors at runtime, Rust falls back to passthrough (copies input to output)
 
 ## Project Structure
@@ -85,15 +85,33 @@ BearBoneUITests/           UI tests (XCUITest)
 
 ## Parameter System
 
-8 fixed generic parameters (Param 0–7, range 0–1, unit `.generic`) are created dynamically in `buildParameterTree()`. Parameter definitions live in:
+Up to 16 parameters, with optional rich metadata declared via `PARAMS` dict. Two modes:
 
-1. **Swift** (`BearBoneExtensionAudioUnit.swift`) — `buildParameterTree()` loop creates 8 `AUParameter`s with addresses 0–7
-2. **Rust** (`rust/bearbone_dsp/src/params.rs`) — `PARAM_COUNT = 8`
-3. **Rust kernel** (`rust/bearbone_dsp/src/kernel.rs`) — `AtomicU32` array, lock-free `set_parameter`/`get_parameter`
+**Rich metadata mode** (new): Scripts declare a `PARAMS` dict with per-parameter name, min, max, unit, default. The AU parameter tree is rebuilt with real ranges. Python scripts receive a dict of actual values (`params["threshold"]` = -21.5 dB). DAW/UI shows meaningful values with units.
 
-Parameters are passed to Python scripts as an optional 5th argument and to WASM modules via `get_params_ptr()`.
+```python
+PARAMS = {
+    "threshold": {"min": -40, "max": -3, "unit": "dB", "default": -20},
+    "ratio":     {"min": 2,   "max": 20, "unit": ":1", "default": 4},
+}
+def process(inputs, outputs, frame_count, sample_rate, params):
+    threshold_db = params["threshold"]  # already -40 to -3, no mapping needed
+```
 
-**Known Logic Pro quirk:** On the master channel strip, Logic's "Automatic Smart Controls" layout has fewer knob slots than on regular channel strips, so only 7 of 8 parameters get mapped to knobs. All 8 parameters are still registered and automatable — this is a Logic Smart Controls grid limitation, not an AU bug.
+**Legacy mode**: Scripts without `PARAMS` get a list of 0–1 floats and generic AU parameters (backward compatible).
+
+Implementation across layers:
+
+1. **Rust** (`params.rs`) — `ParamMetadata` struct (name, key, min, max, default, unit), `PARAM_COUNT = 16`
+2. **Rust** (`python_backend.rs`) — Extracts `PARAMS` dict from Python module, builds `PyDict` with denormalized values for `process()`. Falls back to `PARAM_NAMES` dict or `PyList` of 0–1 floats.
+3. **Rust** (`kernel.rs`) — Stores normalized 0–1 via `AtomicU32` array. Caches metadata as JSON. Sets defaults from metadata on script load.
+4. **Rust** (`lib.rs`) — `dsp_kernel_param_metadata_json()` FFI returns metadata JSON to Swift.
+5. **Swift** (`BearBoneExtensionAudioUnit.swift`) — `rebuildParameterTree(metadata:)` creates `AUParameter`s with real ranges. `implementorValueObserver` normalizes actual → 0–1 for kernel. `implementorValueProvider` denormalizes 0–1 → actual for DAW. `formatParamValue` displays values with units.
+6. **WASM** (`wasm_backend.rs`) — Extracts metadata from `get_param_metadata_json` WASM export. WASM scripts still receive raw 0–1 in `PARAMS_BUF` (mapping compiled in).
+
+Parameters are passed to Python scripts as a 5th argument (dict or list) and to WASM modules via `get_params_ptr()`.
+
+**Known Logic Pro quirk:** On the master channel strip, Logic's "Automatic Smart Controls" layout has fewer knob slots than on regular channel strips, so some parameters may not get mapped to knobs. All parameters are still registered and automatable — this is a Logic Smart Controls grid limitation, not an AU bug.
 
 ## DSP Conventions
 
