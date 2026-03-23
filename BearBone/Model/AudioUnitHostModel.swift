@@ -32,12 +32,16 @@ class AudioUnitHostModel {
     let wantsMIDI: Bool
     let isFreeRunning: Bool
 
+    #if DEBUG
     let auValString: String
-    
+    #endif
+
     private let instanceInvalidationNotifcation = Notification.Name(String(kAudioComponentInstanceInvalidationNotification))
 
+    #if DEBUG
     var validationResult: AudioComponentValidationResult?
     var currentValidationData: String?
+    #endif
     
     /// Reads the AU identity from the embedded extension's Info.plist.
     /// This is reliable regardless of what's registered system-wide (avoids stale pluginkit registrations).
@@ -92,7 +96,9 @@ class AudioUnitHostModel {
         type.fourCharCode == kAudioUnitType_Generator
         self.isFreeRunning = isFreeRunning
 
+        #if DEBUG
         auValString = "\(type) \(subType) \(manufacturer)"
+        #endif
 
         setupNotifications()
 
@@ -112,6 +118,7 @@ class AudioUnitHostModel {
             let viewController = await playEngine.initComponent(type: type, subType: subType, manufacturer: manufacturer)
 
             if let audioUnit = playEngine.avAudioUnit {
+                #if DEBUG
                 Task { @MainActor in
                     let (validationResult, validationData) = await validateAU(audioUnit: audioUnit)
                     self.validationResult = validationResult
@@ -122,16 +129,31 @@ class AudioUnitHostModel {
                                                     title: self.auValString,
                                                     message: "Successfully loaded (\(self.auValString))",
                                                     viewController: viewController)
+                #else
+                self.viewModel = AudioUnitViewModel(showAudioControls: self.wantsAudio,
+                                                    showMIDIContols: self.wantsMIDI,
+                                                    title: "",
+                                                    message: "",
+                                                    viewController: viewController)
+                #endif
 
                 if self.isFreeRunning {
                     self.playEngine.startPlaying()
                 }
             } else {
+                #if DEBUG
                 self.viewModel = AudioUnitViewModel(showAudioControls: false,
                                                     showMIDIContols: false,
                                                     title: self.auValString,
                                                     message: "Failed to find Audio Unit component (\(self.auValString)). Try relaunching the app.",
                                                     viewController: nil)
+                #else
+                self.viewModel = AudioUnitViewModel(showAudioControls: false,
+                                                    showMIDIContols: false,
+                                                    title: "",
+                                                    message: "Failed to load Audio Unit. Try relaunching the app.",
+                                                    viewController: nil)
+                #endif
             }
         }
     }
@@ -148,6 +170,7 @@ class AudioUnitHostModel {
         }
     }
     
+    #if DEBUG
     private func validateAU(audioUnit: AVAudioUnit) async -> (AudioComponentValidationResult, String) {
         await withCheckedContinuation { continuation in
             let validationParameters: [String: Any] = ["ForceValidation": true]
@@ -163,11 +186,12 @@ class AudioUnitHostModel {
                 }
 
                 print(formattedOutput)
-                
+
                 continuation.resume(returning: (result, formattedOutput))
             }
         }
     }
+    #endif
     
     deinit {
         NotificationCenter.default.removeObserver(self, name: instanceInvalidationNotifcation, object: nil)

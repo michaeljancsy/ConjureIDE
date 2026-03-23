@@ -11,7 +11,9 @@ import SwiftUI
 struct ContentView: View {
     let hostModel: AudioUnitHostModel
     @ObservedObject var exportHandler: PendingExportHandler
+    #if DEBUG
     @State private var isSheetPresented = false
+    #endif
     
     var margin = 10.0
     var doubleMargin: Double {
@@ -21,6 +23,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             if hostModel.audioUnitCrashed {
+                #if DEBUG
                 HStack(spacing: 2) {
                     Text("(\(hostModel.viewModel.title))")
                         .textSelection(.enabled)
@@ -28,7 +31,9 @@ struct ContentView: View {
                 }
                 .padding(.top, margin)
                 ValidationView(hostModel: hostModel, isSheetPresented: $isSheetPresented)
+                #endif
             } else {
+                #if DEBUG
                 HStack(spacing: 8) {
                     Text("\(hostModel.viewModel.title)")
                         .textSelection(.enabled)
@@ -36,6 +41,7 @@ struct ContentView: View {
                     ValidationView(hostModel: hostModel, isSheetPresented: $isSheetPresented)
                 }
                 .padding(.vertical, 4)
+                #endif
 
                 if let viewController = hostModel.viewModel.viewController {
                     AUViewControllerUI(viewController: viewController)
