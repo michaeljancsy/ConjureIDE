@@ -76,7 +76,7 @@ class AudioUnitHostModel {
         } else {
             self.type = "aufx"
             self.subType = "????"
-            self.manufacturer = "A000"
+            self.manufacturer = "BEAR"
         }
 
         let wantsAudio = type.fourCharCode == kAudioUnitType_MusicEffect || type.fourCharCode == kAudioUnitType_Effect

@@ -113,7 +113,7 @@ No xcodebuild at export time — template is pre-built.
 
 ### Q18. Manufacturer code?
 
-**Answer:** `A000` (same as BearBone). Identifies exported AUs as BearBone family.
+**Answer:** `BEAR` (same as BearBone). Identifies exported AUs as BearBone family.
 
 ### Q19. What if the user exports the same preset twice?
 

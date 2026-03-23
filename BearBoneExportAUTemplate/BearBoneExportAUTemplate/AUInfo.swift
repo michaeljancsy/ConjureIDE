@@ -15,7 +15,7 @@ struct AUInfo {
     static let placeholder = AUInfo(
         name: "Export Template",
         subtype: "TMPL",
-        manufacturer: "A000",
+        manufacturer: "BEAR",
         version: 1
     )
 
