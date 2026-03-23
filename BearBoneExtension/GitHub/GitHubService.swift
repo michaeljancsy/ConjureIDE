@@ -65,9 +65,11 @@ final class GitHubService: ObservableObject {
         guard hasPersonalRepo, let token else { return }
         let ext = language == .rust ? "rs" : "py"
         let subdir = language == .rust ? "rust" : "python"
+        let metadata = PresetMetadata(name: name)
         personalSync.backgroundPush(
             filename: "\(subdir)/\(name).\(ext)",
             source: source,
+            metadata: metadata,
             owner: personalRepoOwner,
             repo: personalRepoName,
             token: token
@@ -183,7 +185,7 @@ final class GitHubService: ObservableObject {
             let subdir = preset.language == .rust ? "rust" : "python"
             let remotePath = "\(subdir)/\(preset.name).\(preset.fileExtension)"
 
-            // Push to GitHub first
+            // Push script + metadata to GitHub
             do {
                 _ = try await client.putFile(
                     owner: personalRepoOwner,
@@ -193,6 +195,20 @@ final class GitHubService: ObservableObject {
                     message: "Add \(preset.name)",
                     token: token
                 )
+                // Push sidecar metadata
+                let metadata = PresetMetadata(name: preset.name)
+                if let jsonData = try? metadata.jsonData(),
+                   let jsonString = String(data: jsonData, encoding: .utf8) {
+                    let metadataFilename = PresetMetadata.metadataFilename(forScript: "\(preset.name).\(preset.fileExtension)")
+                    _ = try await client.putFile(
+                        owner: personalRepoOwner,
+                        repo: personalRepoName,
+                        path: "\(subdir)/\(metadataFilename)",
+                        content: jsonString,
+                        message: "Add metadata for \(preset.name)",
+                        token: token
+                    )
+                }
             } catch {
                 log.error("Failed to push \(remotePath, privacy: .public) during migration: \(error.localizedDescription, privacy: .public)")
                 continue

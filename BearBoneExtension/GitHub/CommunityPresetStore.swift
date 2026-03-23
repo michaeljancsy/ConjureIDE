@@ -2,10 +2,12 @@ import Combine
 import Foundation
 import os
 
-/// Fetches, caches, and provides the community preset catalog from a public GitHub repo.
+/// Fetches, caches, and provides community presets from a public GitHub repo.
+/// Discovers presets by listing python/ and rust/ subdirectories and reading
+/// sidecar _metadata.json files for each script.
 @MainActor
 class CommunityPresetStore: ObservableObject {
-    @Published private(set) var catalog: [CommunityPresetEntry] = []
+    @Published private(set) var catalog: [RepoPresetEntry] = []
     @Published private(set) var isLoading = false
     @Published var error: String?
 
@@ -15,7 +17,7 @@ class CommunityPresetStore: ObservableObject {
     private let branch: String
     private let log = Logger(subsystem: "com.MichaelJancsy.BearBone", category: "CommunityPresets")
 
-    /// How long a cached manifest stays valid.
+    /// How long a cached catalog stays valid.
     private let cacheTTL: TimeInterval = 3600 // 1 hour
 
     private var cacheDirectory: URL {
@@ -26,8 +28,8 @@ class CommunityPresetStore: ObservableObject {
             .appendingPathComponent("community-cache", isDirectory: true)
     }
 
-    private var cachedManifestURL: URL {
-        cacheDirectory.appendingPathComponent("index.json")
+    private var cachedCatalogURL: URL {
+        cacheDirectory.appendingPathComponent("catalog.json")
     }
 
     init(
@@ -47,8 +49,8 @@ class CommunityPresetStore: ObservableObject {
     /// Load the community preset catalog. Shows cached data immediately, refreshes in background.
     func loadCatalog() async {
         // Load from cache first
-        if catalog.isEmpty, let cached = loadCachedManifest() {
-            catalog = cached.presets
+        if catalog.isEmpty, let cached = loadCachedCatalog() {
+            catalog = cached
         }
 
         // Fetch fresh from GitHub
@@ -56,16 +58,12 @@ class CommunityPresetStore: ObservableObject {
         error = nil
 
         do {
-            let json = try await client.fetchRawFile(
-                owner: owner, repo: repo, branch: branch, path: "index.json"
-            )
-            let manifest = try decodeManifest(json)
-            catalog = manifest.presets
-            saveCachedManifest(json)
-            log.info("Loaded \(manifest.presets.count) community presets")
+            let entries = try await discoverPresets()
+            catalog = entries
+            saveCachedCatalog(entries)
+            log.info("Loaded \(entries.count) community presets")
         } catch {
             log.error("Failed to fetch community catalog: \(error.localizedDescription, privacy: .public)")
-            // Only show error if we have nothing cached
             if catalog.isEmpty {
                 self.error = error.localizedDescription
             }
@@ -74,67 +72,135 @@ class CommunityPresetStore: ObservableObject {
         isLoading = false
     }
 
+    // MARK: - Discovery
+
+    /// Discover all presets by listing python/ and rust/ directories and fetching metadata.
+    private func discoverPresets() async throws -> [RepoPresetEntry] {
+        var entries: [RepoPresetEntry] = []
+
+        for (subdir, ext, language) in [("python", "py", ScriptLanguage.python), ("rust", "rs", ScriptLanguage.rust)] {
+            let files: [GitHubContentsResponse]
+            do {
+                files = try await client.listContents(owner: owner, repo: repo, path: subdir, token: "")
+            } catch {
+                continue // Subdirectory may not exist
+            }
+
+            let scriptFiles = files.filter { $0.type == "file" && $0.name.hasSuffix(".\(ext)") }
+
+            for file in scriptFiles {
+                let stem = (file.name as NSString).deletingPathExtension
+                let metadataFilename = PresetMetadata.metadataFilename(forScript: file.name)
+                let metadataPath = "\(subdir)/\(metadataFilename)"
+
+                // Try to fetch sidecar metadata
+                var metadata: PresetMetadata
+                do {
+                    let json = try await client.fetchRawFile(owner: owner, repo: repo, branch: branch, path: metadataPath)
+                    if let data = json.data(using: .utf8) {
+                        metadata = try JSONDecoder().decode(PresetMetadata.self, from: data)
+                    } else {
+                        metadata = PresetMetadata(name: stem)
+                    }
+                } catch {
+                    // No metadata file — use filename as name
+                    metadata = PresetMetadata(name: stem)
+                }
+
+                entries.append(RepoPresetEntry(
+                    scriptFilename: file.name,
+                    remotePath: "\(subdir)/\(file.name)",
+                    language: language,
+                    metadata: metadata
+                ))
+            }
+        }
+
+        return entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     // MARK: - Fetch Preset Source
 
     /// Download the source code for a community preset.
-    func fetchPresetSource(for entry: CommunityPresetEntry) async throws -> String {
-        try await client.fetchRawFile(
-            owner: owner, repo: repo, branch: branch, path: entry.filename
-        )
+    func fetchPresetSource(for entry: RepoPresetEntry) async throws -> String {
+        try await client.fetchRawFile(owner: owner, repo: repo, branch: branch, path: entry.remotePath)
     }
 
     // MARK: - Install
 
     /// Download and install a community preset into the user's local presets.
-    func installPreset(_ entry: CommunityPresetEntry, into presetManager: PresetManager) async throws -> Preset {
+    func installPreset(_ entry: RepoPresetEntry, into presetManager: PresetManager) async throws -> Preset {
         let source = try await fetchPresetSource(for: entry)
         let name = presetManager.uniqueName(baseName: entry.name)
         return try presetManager.saveUserPreset(
             name: name,
             source: source,
-            language: entry.scriptLanguage
+            language: entry.language
         )
     }
 
     // MARK: - Cache
 
-    private func loadCachedManifest() -> CommunityManifest? {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: cachedManifestURL.path) else { return nil }
+    /// Cached catalog entry for JSON serialization.
+    private struct CachedEntry: Codable {
+        let scriptFilename: String
+        let remotePath: String
+        let language: String
+        let name: String
+        let category: String?
+        let author: String?
+        let description: String?
+    }
 
-        // Check TTL
-        if let attrs = try? fm.attributesOfItem(atPath: cachedManifestURL.path),
+    private func loadCachedCatalog() -> [RepoPresetEntry]? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: cachedCatalogURL.path) else { return nil }
+
+        if let attrs = try? fm.attributesOfItem(atPath: cachedCatalogURL.path),
            let modified = attrs[.modificationDate] as? Date,
            Date().timeIntervalSince(modified) > cacheTTL
         {
             return nil
         }
 
-        guard let data = try? Data(contentsOf: cachedManifestURL),
-              let json = String(data: data, encoding: .utf8)
+        guard let data = try? Data(contentsOf: cachedCatalogURL),
+              let cached = try? JSONDecoder().decode([CachedEntry].self, from: data)
         else { return nil }
 
-        return try? decodeManifest(json)
+        return cached.map { entry in
+            RepoPresetEntry(
+                scriptFilename: entry.scriptFilename,
+                remotePath: entry.remotePath,
+                language: entry.language == "rust" ? .rust : .python,
+                metadata: PresetMetadata(
+                    name: entry.name,
+                    category: entry.category,
+                    author: entry.author,
+                    description: entry.description
+                )
+            )
+        }
     }
 
-    private func saveCachedManifest(_ json: String) {
+    private func saveCachedCatalog(_ entries: [RepoPresetEntry]) {
         let fm = FileManager.default
+        let cached = entries.map { entry in
+            CachedEntry(
+                scriptFilename: entry.scriptFilename,
+                remotePath: entry.remotePath,
+                language: entry.language == .rust ? "rust" : "python",
+                name: entry.name,
+                category: entry.metadata.category,
+                author: entry.metadata.author,
+                description: entry.metadata.description
+            )
+        }
         do {
             try fm.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-            try json.write(to: cachedManifestURL, atomically: true, encoding: .utf8)
+            let data = try JSONEncoder().encode(cached)
+            try data.write(to: cachedCatalogURL, options: .atomic)
         } catch {
-            log.warning("Failed to cache community manifest: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    private func decodeManifest(_ json: String) throws -> CommunityManifest {
-        guard let data = json.data(using: .utf8) else {
-            throw GitHubError.decodingError("Invalid UTF-8 in manifest")
-        }
-        do {
-            return try JSONDecoder().decode(CommunityManifest.self, from: data)
-        } catch {
-            throw GitHubError.decodingError(error.localizedDescription)
+            log.warning("Failed to cache community catalog: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

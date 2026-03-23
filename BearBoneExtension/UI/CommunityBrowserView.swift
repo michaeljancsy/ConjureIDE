@@ -8,25 +8,25 @@ struct CommunityBrowserView: View {
     let onDismiss: () -> Void
 
     @State private var searchText = ""
-    @State private var previewEntry: CommunityPresetEntry?
+    @State private var previewEntry: RepoPresetEntry?
     @State private var previewSource: String?
     @State private var isLoadingPreview = false
     @State private var installingEntryID: String?
     @State private var installError: String?
 
-    private var filteredPresets: [CommunityPresetEntry] {
+    private var filteredPresets: [RepoPresetEntry] {
         if searchText.isEmpty { return store.catalog }
         let query = searchText.lowercased()
         return store.catalog.filter {
             $0.name.lowercased().contains(query)
-                || $0.category.lowercased().contains(query)
-                || $0.author.lowercased().contains(query)
-                || $0.description.lowercased().contains(query)
+                || ($0.metadata.category?.lowercased().contains(query) ?? false)
+                || ($0.metadata.author?.lowercased().contains(query) ?? false)
+                || ($0.metadata.description?.lowercased().contains(query) ?? false)
         }
     }
 
-    private var groupedPresets: [(category: String, presets: [CommunityPresetEntry])] {
-        let grouped = Dictionary(grouping: filteredPresets, by: \.category)
+    private var groupedPresets: [(category: String, presets: [RepoPresetEntry])] {
+        let grouped = Dictionary(grouping: filteredPresets, by: { $0.metadata.category ?? "Other" })
         return grouped.keys.sorted().map { (category: $0, presets: grouped[$0]!) }
     }
 
@@ -140,25 +140,27 @@ struct CommunityBrowserView: View {
     }
 
     @ViewBuilder
-    private func presetRow(_ entry: CommunityPresetEntry) -> some View {
+    private func presetRow(_ entry: RepoPresetEntry) -> some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(entry.name)
                         .font(.system(size: 13, weight: .medium))
-                    Text(entry.language == "rust" ? "Rust" : "Python")
+                    Text(entry.language == .rust ? "Rust" : "Python")
                         .font(.caption2)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
                         .background(Color.secondary.opacity(0.15))
                         .cornerRadius(3)
                 }
-                Text(entry.description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(2)
-                if !entry.author.isEmpty {
-                    Text("by \(entry.author)")
+                if let desc = entry.metadata.description, !desc.isEmpty {
+                    Text(desc)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+                if let author = entry.metadata.author, !author.isEmpty {
+                    Text("by \(author)")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -204,7 +206,7 @@ struct CommunityBrowserView: View {
     }
 
     @ViewBuilder
-    private func previewPopover(_ entry: CommunityPresetEntry) -> some View {
+    private func previewPopover(_ entry: RepoPresetEntry) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(entry.name)
@@ -234,7 +236,7 @@ struct CommunityBrowserView: View {
 
     // MARK: - Actions
 
-    private func loadPreview(_ entry: CommunityPresetEntry) {
+    private func loadPreview(_ entry: RepoPresetEntry) {
         previewEntry = entry
         previewSource = nil
         isLoadingPreview = true
@@ -249,7 +251,7 @@ struct CommunityBrowserView: View {
         }
     }
 
-    private func installPreset(_ entry: CommunityPresetEntry) {
+    private func installPreset(_ entry: RepoPresetEntry) {
         installingEntryID = entry.id
         installError = nil
         Task {

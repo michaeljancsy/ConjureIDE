@@ -15,26 +15,42 @@ struct BearBoneRepoMarker: Codable {
     }
 }
 
-// MARK: - Community Manifest
+// MARK: - Preset Metadata
 
-struct CommunityManifest: Codable {
-    let version: Int
-    let presets: [CommunityPresetEntry]
+/// Sidecar metadata file stored next to each preset script.
+/// e.g. `python/slicer_metadata.json` accompanies `python/slicer.py`.
+/// Used by both community and personal repos.
+struct PresetMetadata: Codable, Identifiable {
+    let name: String
+    var category: String?
+    var author: String?
+    var description: String?
+
+    var id: String { name }
+
+    /// Filename for the metadata sidecar: `<script_stem>_metadata.json`
+    static func metadataFilename(forScript scriptFilename: String) -> String {
+        let stem = (scriptFilename as NSString).deletingPathExtension
+        return "\(stem)_metadata.json"
+    }
+
+    /// Encode to pretty-printed JSON Data.
+    func jsonData() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(self)
+    }
 }
 
-struct CommunityPresetEntry: Codable, Identifiable {
-    let name: String
-    let filename: String
-    let language: String
-    let category: String
-    let author: String
-    let description: String
+/// A discovered preset from a repo: the script file info + its metadata.
+struct RepoPresetEntry: Identifiable {
+    let scriptFilename: String
+    let remotePath: String
+    let language: ScriptLanguage
+    let metadata: PresetMetadata
 
-    var id: String { filename }
-
-    var scriptLanguage: ScriptLanguage {
-        language == "rust" ? .rust : .python
-    }
+    var id: String { remotePath }
+    var name: String { metadata.name }
 }
 
 // MARK: - GitHub API Responses

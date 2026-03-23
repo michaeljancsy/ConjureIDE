@@ -216,15 +216,18 @@ class PersonalRepoSync: ObservableObject {
 
     // MARK: - Background Push (fire-and-forget after save)
 
+    /// Push a preset script and its sidecar metadata file to the repo.
     func backgroundPush(
         filename: String,
         source: String,
+        metadata: PresetMetadata?,
         owner: String,
         repo: String,
         token: String
     ) {
         Task.detached { [client, log] in
             do {
+                // Push the script file
                 let sha = await MainActor.run { self.remoteSHAs[filename] }
                 let response = try await client.putFile(
                     owner: owner, repo: repo, path: filename,
@@ -236,6 +239,26 @@ class PersonalRepoSync: ObservableObject {
                     self.hasPendingChanges = false
                 }
                 log.info("Background push: \(filename, privacy: .public)")
+
+                // Push sidecar metadata if provided
+                if let metadata {
+                    let scriptName = (filename as NSString).lastPathComponent
+                    let metadataName = PresetMetadata.metadataFilename(forScript: scriptName)
+                    let dir = (filename as NSString).deletingLastPathComponent
+                    let metadataPath = dir.isEmpty ? metadataName : "\(dir)/\(metadataName)"
+                    if let jsonData = try? metadata.jsonData(),
+                       let jsonString = String(data: jsonData, encoding: .utf8) {
+                        let metaSHA = await MainActor.run { self.remoteSHAs[metadataPath] }
+                        let metaResponse = try await client.putFile(
+                            owner: owner, repo: repo, path: metadataPath,
+                            content: jsonString, message: "Update metadata for \(scriptName)",
+                            sha: metaSHA, token: token
+                        )
+                        await MainActor.run {
+                            self.remoteSHAs[metadataPath] = metaResponse.content.sha
+                        }
+                    }
+                }
             } catch {
                 log.error("Background push failed for \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 await MainActor.run { self.hasPendingChanges = true }
@@ -245,6 +268,7 @@ class PersonalRepoSync: ObservableObject {
 
     // MARK: - Background Delete (fire-and-forget after delete)
 
+    /// Delete a preset script and its sidecar metadata file from the repo.
     func backgroundDelete(
         filename: String,
         owner: String,
@@ -252,6 +276,7 @@ class PersonalRepoSync: ObservableObject {
         token: String
     ) {
         Task.detached { [client, log] in
+            // Delete the script file
             do {
                 guard let sha = await MainActor.run(body: { self.remoteSHAs[filename] }) else {
                     log.warning("No SHA for \(filename, privacy: .public), fetching...")
@@ -272,6 +297,23 @@ class PersonalRepoSync: ObservableObject {
             } catch {
                 log.error("Background delete failed for \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 await MainActor.run { self.hasPendingChanges = true }
+            }
+
+            // Also delete sidecar metadata
+            let scriptName = (filename as NSString).lastPathComponent
+            let metadataName = PresetMetadata.metadataFilename(forScript: scriptName)
+            let dir = (filename as NSString).deletingLastPathComponent
+            let metadataPath = dir.isEmpty ? metadataName : "\(dir)/\(metadataName)"
+            do {
+                if let metaSHA = await MainActor.run(body: { self.remoteSHAs[metadataPath] }) {
+                    try await client.deleteFile(
+                        owner: owner, repo: repo, path: metadataPath,
+                        sha: metaSHA, message: "Delete metadata for \(scriptName)", token: token
+                    )
+                    await MainActor.run { self.remoteSHAs.removeValue(forKey: metadataPath) }
+                }
+            } catch {
+                // Metadata file may not exist — that's fine
             }
         }
     }
