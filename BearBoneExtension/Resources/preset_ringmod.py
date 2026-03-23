@@ -1,7 +1,7 @@
 import numpy as np
 
 PARAMS = {
-    "frequency": {"min": 20.0, "max": 20000.0, "unit": "Hz", "default": 440.0},
+    "frequency": {"min": 20.0, "max": 20000.0, "unit": "Hz", "default": 440.0, "curve": "log"},
 }
 
 # Persistent phase across callbacks

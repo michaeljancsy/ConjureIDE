@@ -32,6 +32,30 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		public let max: Float
 		public let `default`: Float
 		public let unit: String
+		/// Mapping curve: "linear" (default) or "log" (exponential/logarithmic).
+		public let curve: String?
+
+		/// Denormalize a 0–1 value to the actual parameter range.
+		func denormalize(_ normalized: Float) -> Float {
+			let n = Swift.min(Swift.max(normalized, 0), 1)
+			if curve == "log", min > 0, max > 0 {
+				return min * powf(max / min, n)
+			}
+			return min + n * (max - min)
+		}
+
+		/// Normalize an actual value to 0–1.
+		func normalize(_ actual: Float) -> Float {
+			if curve == "log", min > 0, max > 0 {
+				let ratio = Swift.max(actual / min, Float.ulpOfOne)
+				let range = logf(max / min)
+				guard range.magnitude > Float.ulpOfOne else { return 0 }
+				return Swift.min(Swift.max(logf(ratio) / range, 0), 1)
+			}
+			let range = max - min
+			guard range.magnitude > Float.ulpOfOne else { return 0 }
+			return Swift.min(Swift.max((actual - min) / range, 0), 1)
+		}
 	}
 
 	/// Current rich parameter metadata (nil = legacy 0–1 mode).
@@ -101,26 +125,23 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		let tree = AUParameterTree.createTree(withChildren: params)
 		let kernelRef = self.kernel!
 
-		// Normalize actual value → 0–1 for kernel storage
+		// Normalize actual value → 0–1 for kernel storage (respects curve type)
 		tree.implementorValueObserver = { param, value in
 			let idx = Int(param.address)
 			if idx < metadataRef.count {
-				let meta = metadataRef[idx]
-				let range = meta.max - meta.min
-				let normalized: Float = range > 0 ? Swift.min(Swift.max((value - meta.min) / range, 0), 1) : 0
+				let normalized = metadataRef[idx].normalize(value)
 				dsp_kernel_set_parameter(kernelRef, param.address, normalized)
 			} else {
 				dsp_kernel_set_parameter(kernelRef, param.address, value)
 			}
 		}
 
-		// Denormalize 0–1 from kernel → actual value for DAW
+		// Denormalize 0–1 from kernel → actual value for DAW (respects curve type)
 		tree.implementorValueProvider = { param in
 			let normalized = dsp_kernel_get_parameter(kernelRef, param.address)
 			let idx = Int(param.address)
 			if idx < metadataRef.count {
-				let meta = metadataRef[idx]
-				return meta.min + normalized * (meta.max - meta.min)
+				return metadataRef[idx].denormalize(normalized)
 			}
 			return normalized
 		}
@@ -137,10 +158,9 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		self.parameterTree = tree
 
-		// Set kernel defaults (normalized)
+		// Set kernel defaults (normalized, respects curve type)
 		for (i, meta) in metadataRef.prefix(count).enumerated() {
-			let range = meta.max - meta.min
-			let normalized: Float = range > 0 ? Swift.min(Swift.max((meta.default - meta.min) / range, 0), 1) : 0
+			let normalized = meta.normalize(meta.default)
 			dsp_kernel_set_parameter(kernelRef, UInt64(i), normalized)
 		}
 	}

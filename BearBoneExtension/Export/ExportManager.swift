@@ -204,6 +204,7 @@ final class ExportManager {
                     "unit": m.unit,
                 ]
                 if let key = m.key { dict["key"] = key }
+                if let curve = m.curve, curve != "linear" { dict["curve"] = curve }
                 return dict
             }
             config["paramMetadata"] = metaArray

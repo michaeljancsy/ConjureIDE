@@ -53,7 +53,10 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
         let bundle = Bundle(for: type(of: self))
         let config = RuntimeConfig.load(from: bundle)
 
-        let ps = ExportParameterState(paramCount: config?.effectiveParamCount ?? 8)
+        let ps = ExportParameterState(
+            paramCount: config?.effectiveParamCount ?? 8,
+            paramMetadata: config?.paramMetadata
+        )
         self.parameterState = ps
         if let tree = au.parameterTree {
             ps.attach(to: tree)

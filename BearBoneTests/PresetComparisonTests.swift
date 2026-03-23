@@ -340,17 +340,12 @@ struct PresetComparisonTests {
 
     // MARK: - Tests
 
-    /// Presets where Python uses linear PARAMS ranges but Rust WASM uses exponential mapping.
-    /// These will match once Rust presets are migrated to `get_param_metadata_json` or
-    /// log/exp curve types are added to the PARAMS system.
-    static let exponentialMappingPresets: Set<String> = ["lowpass", "ringmod", "svf"]
-
     @Test("All presets produce matching Python/Rust output for A440 sine")
     func allPresetsParitySine() throws {
         let (inputL, inputR) = Self.generateSineSignal()
         var failures: [String] = []
 
-        for presetName in Self.presetNames where !Self.exponentialMappingPresets.contains(presetName) {
+        for presetName in Self.presetNames {
             let (pyOutL, pyOutR) = try Self.renderWithPython(
                 presetName: presetName, inputL: inputL, inputR: inputR)
             let (rsOutL, rsOutR) = try Self.renderWithRust(
@@ -374,7 +369,7 @@ struct PresetComparisonTests {
         let (inputL, inputR) = Self.generateNoiseSignal()
         var failures: [String] = []
 
-        for presetName in Self.presetNames where !Self.exponentialMappingPresets.contains(presetName) {
+        for presetName in Self.presetNames {
             let (pyOutL, pyOutR) = try Self.renderWithPython(
                 presetName: presetName, inputL: inputL, inputR: inputR)
             let (rsOutL, rsOutR) = try Self.renderWithRust(

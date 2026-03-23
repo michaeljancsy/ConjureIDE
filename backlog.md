@@ -1,7 +1,6 @@
 # Project Backlog
 
 ## In Progress
-- Rich parameter system: AI prompt updates (generate scripts with PARAMS format), export pipeline updates (paramMetadata in runtime-config.json)
 
 ## To Do
 
@@ -14,9 +13,8 @@
 - Phase 5: Polish & validation (integration tests, edge cases, documentation)
 
 ### Other
-- Parameter curve types (log/exp): Add `"curve": "log"` support to PARAMS for frequency and time parameters — linear sliders for 20-20000 Hz are usable but not ideal
-- Rust WASM preset metadata migration: Add `get_param_metadata_json` exports to the 22 Rust preset files so they participate in the rich parameter system (currently skipped in comparison tests: lowpass, ringmod, svf)
-- Export pipeline: Extend runtime-config.json with paramMetadata for exported AUs
+- ~~Parameter curve types~~ (done, see Done section)
+- ~~Export template rich parameters~~ (done, see Done section)
 - Preset comparison tests: tighten tolerance — current 1e-4 tolerance accommodates WASM libm vs native libm differences at non-zero parameter values; investigate using native Rust compilation (non-WASM) to eliminate math library differences
 - Make scrolling smoother
 - ~~Normalized difference spectrogram~~ (done, see Done section)
@@ -36,6 +34,7 @@
 
 
 ## Done
+- Log curve mapping + export template rich parameters (2026-03-23): Added `"curve": "log"` support to PARAMS for logarithmic parameter mapping. Log curve uses `min * (max/min)^normalized` — maps 0→min, 0.5→geometric midpoint, 1→max. Applied to frequency params in lowpass, svf, and ringmod presets (20-20000 Hz). Updated `ParamMetadata.denormalize()`/`normalize()` in both Rust and Swift to apply curve transform. Export template AU now consumes rich `paramMetadata` from `runtime-config.json`: builds parameter tree with real ranges, normalize/denormalize with curve support, formatted value display with units. Export template files updated: RuntimeConfig.swift (ExportParamMetadata struct), ExportAUAudioUnit.swift (buildRichParameterTree), ExportParameterState.swift (metadata for slider ranges), ExportAUMainView.swift (real slider ranges + formatted values). All 170 BearBone tests pass, export template builds successfully.
 - Rich parameter system with named access (2026-03-23): Scripts declare a `PARAMS` dict with per-parameter metadata (name, min, max, unit, default). Python scripts receive params as a dict with string keys and actual values (`params["threshold"]` = -21.5 dB) instead of raw 0-1 floats. Kernel stores normalized 0-1 internally; Swift normalizes on write and denormalizes on read. AU parameter tree rebuilt with real ranges/units on script load — DAW automation and UI show meaningful values (e.g., "-21.5 dB", "5.2 Hz"). Max param count increased from 8 to 16. Backward compatible: scripts without PARAMS still work with 0-1 lists. All 21 Python factory presets migrated to PARAMS format. WASM metadata extraction via `get_param_metadata_json` export supported. Rust changes: `ParamMetadata` struct in params.rs, PARAMS dict extraction in python_backend.rs, metadata JSON caching in kernel.rs, `dsp_kernel_param_metadata_json` FFI. Swift changes: `rebuildParameterTree(metadata:)`, normalize/denormalize in value observer/provider, `formatParamValue` for unit display. UI: `ParameterState.paramMetadata`, slider ranges from metadata, value text with units. 123 Rust tests + 169/170 Swift tests pass (1 pre-existing BuildID timing failure).
 - Parametric factory presets — all 18 remaining presets (2026-03-22): Updated bitcrush, chorus, compressor, dcblocker, delay, flanger, hardclip, limiter, noisegate, phaser, pingpong, ringmod, slicer, softclip, stereowidth, svf, wavefolder, and whitenoise Python presets to read from `params[]` instead of hardcoded constants. Each preset now has a `PARAM_NAMES` dict for UI labels. Param reads happen inside `process()` (not at module level) so DAW automation works per-callback. Existing DSP algorithms unchanged. Passthrough, gainpan, lowpass, and tremolo were already parametric.
 - Script-declared parameter names (2026-03-22): Scripts can declare parameter names that the UI displays instead of generic "Param 0"–"Param 7" labels. Python scripts use `PARAM_NAMES = {0: "Rate", 1: "Depth"}` module-level dict; WASM/Rust modules export `get_param_names_json() -> (ptr, len)` returning JSON like `{"0":"Rate","1":"Depth"}`. Rust extracts names during script load (PythonBackend via pyo3 dict introspection, WasmBackend by calling the export and parsing JSON from linear memory). Names cached as CString on DSPKernel, exposed via `dsp_kernel_param_names_json()` FFI. Swift AU reads names after each load, publishes via Combine. ParameterSlidersView shows only declared params with custom labels (hides unused), falls back to all 8 generic when no names declared. Export pipeline populates `paramNames`/`paramCount` in runtime-config.json — exported AUs show correct names in DAW parameter lists. Fixed Python module attribute leakage bug (old PARAM_NAMES persisting across script reloads due to sys.modules caching). Updated tremolo, gainpan, and lowpass presets (Python + Rust) to use params instead of hardcoded values, with PARAM_NAMES declarations. Label width widened from 52pt to 80pt. 123 Rust tests (8 new: 3 WASM param names, 3 kernel param names, 2 FFI param names) + all Swift tests pass. 2 pre-existing BuildID timing failures unrelated.
