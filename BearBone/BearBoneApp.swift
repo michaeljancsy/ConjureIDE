@@ -12,6 +12,10 @@ struct BearBoneApp: App {
     private let hostModel = AudioUnitHostModel()
     @StateObject private var exportHandler = PendingExportHandler()
 
+    init() {
+        SentrySetup.start()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView(hostModel: hostModel, exportHandler: exportHandler)
