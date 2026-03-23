@@ -1,5 +1,20 @@
 import Foundation
 
+// MARK: - Repo Marker
+
+/// Marker file at the root of a BearBone preset repo.
+/// Presence of `bearbone.json` identifies a repo as a BearBone preset repo.
+struct BearBoneRepoMarker: Codable {
+    let version: Int
+    let type: String  // "presets"
+
+    static let filename = "bearbone.json"
+
+    static func create() -> BearBoneRepoMarker {
+        BearBoneRepoMarker(version: 1, type: "presets")
+    }
+}
+
 // MARK: - Community Manifest
 
 struct CommunityManifest: Codable {
@@ -46,6 +61,20 @@ struct GitHubCommitResponse: Codable {
     struct CommitInfo: Codable {
         let sha: String
         let message: String
+    }
+}
+
+struct CreateRepoResponse: Codable {
+    let name: String
+    let fullName: String
+    let htmlURL: String
+    let cloneURL: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case fullName = "full_name"
+        case htmlURL = "html_url"
+        case cloneURL = "clone_url"
     }
 }
 

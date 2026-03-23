@@ -119,6 +119,35 @@ final class GitHubClient: Sendable {
         return try decode(GitHubCommitResponse.self, from: data)
     }
 
+    // MARK: - Repo Management
+
+    /// Create a new GitHub repository for the authenticated user.
+    func createRepo(name: String, description: String, isPrivate: Bool, token: String) async throws -> CreateRepoResponse {
+        let url = apiURL(path: "/user/repos")
+        var request = apiRequest(url: url, method: "POST", token: token)
+        let body: [String: Any] = [
+            "name": name,
+            "description": description,
+            "private": isPrivate,
+            "auto_init": true,
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, _) = try await perform(request)
+        return try decode(CreateRepoResponse.self, from: data)
+    }
+
+    /// Delete a file from a repo. Requires the file's current SHA.
+    func deleteFile(owner: String, repo: String, path: String, sha: String, message: String, token: String) async throws {
+        let url = apiURL(path: "/repos/\(owner)/\(repo)/contents/\(path)")
+        var request = apiRequest(url: url, method: "DELETE", token: token)
+        let body: [String: Any] = [
+            "message": message,
+            "sha": sha,
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        _ = try await perform(request)
+    }
+
     // MARK: - Helpers
 
     private func apiURL(path: String) -> URL {

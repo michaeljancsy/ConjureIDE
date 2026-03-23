@@ -78,9 +78,9 @@ struct PresetToolbar: View {
     @State private var showingSync = false
     @State private var exportName = ""
 
-    private var currentIsUserPreset: Bool {
+    private var currentIsMutable: Bool {
         guard let current = presetManager.currentPreset else { return false }
-        return !current.isFactory
+        return current.isUser || current.isRepo
     }
 
     var body: some View {
@@ -99,7 +99,24 @@ struct PresetToolbar: View {
                         }
                     }
                 }
-                let userPresets = presetManager.presets.filter { !$0.isFactory }
+                let repoPresets = presetManager.presets.filter(\.isRepo)
+                if !repoPresets.isEmpty {
+                    Section(gitHubService.hasPersonalRepo
+                        ? "\(gitHubService.personalRepoOwner)/\(gitHubService.personalRepoName)"
+                        : "Repo"
+                    ) {
+                        ForEach(repoPresets) { preset in
+                            Button(action: { onSelectPreset(preset) }) {
+                                if presetManager.currentPreset?.id == preset.id {
+                                    Label(preset.name, systemImage: "checkmark")
+                                } else {
+                                    Text(preset.name)
+                                }
+                            }
+                        }
+                    }
+                }
+                let userPresets = presetManager.presets.filter(\.isUser)
                 if !userPresets.isEmpty {
                     Section("User") {
                         ForEach(userPresets) { preset in
@@ -169,7 +186,7 @@ struct PresetToolbar: View {
             .accessibilityIdentifier("runButton")
 
             // Save (overwrite current user preset)
-            if currentIsUserPreset {
+            if currentIsMutable {
                 Button(action: { onSave() }) {
                     Image(systemName: "square.and.arrow.down")
                 }
@@ -232,7 +249,7 @@ struct PresetToolbar: View {
             }
 
             // Delete (user presets only)
-            if currentIsUserPreset {
+            if currentIsMutable {
                 Button(action: { showDeleteConfirm = true }) {
                     Image(systemName: "trash")
                 }
@@ -288,6 +305,15 @@ struct PresetToolbar: View {
                         ProgressView().controlSize(.small)
                     } else {
                         Image(systemName: "arrow.triangle.2.circlepath")
+                            .overlay(alignment: .topTrailing) {
+                                if gitHubService.personalSync.hasPendingChanges
+                                    || !gitHubService.personalSync.pendingConflicts.isEmpty {
+                                    Circle()
+                                        .fill(.orange)
+                                        .frame(width: 6, height: 6)
+                                        .offset(x: 3, y: -3)
+                                }
+                            }
                     }
                 }
                 .buttonStyle(.borderless)
@@ -352,6 +378,7 @@ struct PresetToolbar: View {
                     Divider()
                     GitHubSettingsView(
                         gitHubService: gitHubService,
+                        presetManager: presetManager,
                         onDone: { showingSettings = false }
                     )
                 }

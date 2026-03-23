@@ -1,13 +1,14 @@
 import Foundation
 
-/// A named DSP script preset — either bundled with the plugin (factory) or saved by the user.
+/// A named DSP script preset — bundled (factory), local (user), or synced from a GitHub repo.
 struct Preset: Identifiable, Hashable {
     enum Source: Hashable {
         case factory(resourceName: String)
         case user(url: URL)
+        case repo(url: URL)
     }
 
-    /// Unique key: "factory:Passthrough" or "user:My Filter.py"
+    /// Unique key: "factory:Passthrough", "user:My Filter.py", or "repo:My Filter.py"
     let id: String
     let name: String
     let source: Source
@@ -17,6 +18,16 @@ struct Preset: Identifiable, Hashable {
 
     var isFactory: Bool {
         if case .factory = source { return true }
+        return false
+    }
+
+    var isRepo: Bool {
+        if case .repo = source { return true }
+        return false
+    }
+
+    var isUser: Bool {
+        if case .user = source { return true }
         return false
     }
 
