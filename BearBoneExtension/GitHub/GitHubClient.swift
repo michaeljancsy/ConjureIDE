@@ -185,7 +185,16 @@ final class GitHubClient: Sendable {
             return (data, httpResponse)
         case 404:
             throw GitHubError.notFound
-        case 403, 429:
+        case 403:
+            // Distinguish rate limiting from permission errors
+            let remaining = httpResponse.value(forHTTPHeaderField: "x-ratelimit-remaining")
+            if remaining == "0" {
+                let retryAfter = httpResponse.value(forHTTPHeaderField: "retry-after").flatMap(Int.init)
+                throw GitHubError.rateLimited(retryAfterSeconds: retryAfter)
+            }
+            let message = String(data: data.prefix(500), encoding: .utf8) ?? "Forbidden"
+            throw GitHubError.permissionDenied(message: message)
+        case 429:
             let retryAfter = httpResponse.value(forHTTPHeaderField: "retry-after").flatMap(Int.init)
             throw GitHubError.rateLimited(retryAfterSeconds: retryAfter)
         default:

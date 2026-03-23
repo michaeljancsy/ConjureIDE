@@ -1,4 +1,5 @@
 import Combine
+import CommonCrypto
 import Foundation
 import os
 
@@ -73,6 +74,7 @@ class PersonalRepoSync: ObservableObject {
 
         // Fetch remote files from both language subdirectories
         var remotePresets: [(name: String, remotePath: String, sha: String)] = []
+        var allRemoteSHAs: [String: String] = [:]
         for (subdir, ext) in [("python", "py"), ("rust", "rs")] {
             let files: [GitHubContentsResponse]
             do {
@@ -81,13 +83,16 @@ class PersonalRepoSync: ObservableObject {
                 // Subdirectory may not exist yet — that's fine
                 continue
             }
-            for file in files where file.type == "file" && file.name.hasSuffix(".\(ext)") {
-                remotePresets.append((name: file.name, remotePath: "\(subdir)/\(file.name)", sha: file.sha))
+            // Cache SHAs for ALL files (scripts + metadata) so background ops can update them
+            for file in files where file.type == "file" {
+                allRemoteSHAs["\(subdir)/\(file.name)"] = file.sha
+                if file.name.hasSuffix(".\(ext)") {
+                    remotePresets.append((name: file.name, remotePath: "\(subdir)/\(file.name)", sha: file.sha))
+                }
             }
         }
 
-        // Cache remote SHAs keyed by remote path (e.g. "python/my-filter.py")
-        remoteSHAs = Dictionary(uniqueKeysWithValues: remotePresets.map { ($0.remotePath, $0.sha) })
+        remoteSHAs = allRemoteSHAs
 
         // Build local file map (filename → URL)
         let localFiles = discoverLocalFiles(in: presetManager.repoPresetsURL)
@@ -217,6 +222,7 @@ class PersonalRepoSync: ObservableObject {
     // MARK: - Background Push (fire-and-forget after save)
 
     /// Push a preset script and its sidecar metadata file to the repo.
+    /// Skips the write if the remote SHA matches the local content (git blob SHA).
     func backgroundPush(
         filename: String,
         source: String,
@@ -227,18 +233,24 @@ class PersonalRepoSync: ObservableObject {
     ) {
         Task.detached { [client, log] in
             do {
-                // Push the script file
-                let sha = await MainActor.run { self.remoteSHAs[filename] }
-                let response = try await client.putFile(
-                    owner: owner, repo: repo, path: filename,
-                    content: source, message: "Update \(filename)",
-                    sha: sha, token: token
-                )
-                await MainActor.run {
-                    self.remoteSHAs[filename] = response.content.sha
-                    self.hasPendingChanges = false
+                // Compare local content SHA with cached remote SHA to skip unnecessary writes
+                let remoteSHA = await MainActor.run { self.remoteSHAs[filename] }
+                let localSHA = Self.gitBlobSHA(for: source)
+                if let remoteSHA, localSHA == remoteSHA {
+                    log.info("Background push skipped (unchanged): \(filename, privacy: .public)")
+                    await MainActor.run { self.hasPendingChanges = false }
+                } else {
+                    let response = try await client.putFile(
+                        owner: owner, repo: repo, path: filename,
+                        content: source, message: "Update \(filename)",
+                        sha: remoteSHA, token: token
+                    )
+                    await MainActor.run {
+                        self.remoteSHAs[filename] = response.content.sha
+                        self.hasPendingChanges = false
+                    }
+                    log.info("Background push: \(filename, privacy: .public)")
                 }
-                log.info("Background push: \(filename, privacy: .public)")
 
                 // Push sidecar metadata if provided
                 if let metadata {
@@ -278,15 +290,13 @@ class PersonalRepoSync: ObservableObject {
         Task.detached { [client, log] in
             // Delete the script file
             do {
-                guard let sha = await MainActor.run(body: { self.remoteSHAs[filename] }) else {
+                let sha: String
+                if let cached = await MainActor.run(body: { self.remoteSHAs[filename] }) {
+                    sha = cached
+                } else {
                     log.warning("No SHA for \(filename, privacy: .public), fetching...")
                     let file = try await client.getFile(owner: owner, repo: repo, path: filename, token: token)
-                    try await client.deleteFile(
-                        owner: owner, repo: repo, path: filename,
-                        sha: file.sha, message: "Delete \(filename)", token: token
-                    )
-                    await MainActor.run { self.remoteSHAs.removeValue(forKey: filename) }
-                    return
+                    sha = file.sha
                 }
                 try await client.deleteFile(
                     owner: owner, repo: repo, path: filename,
@@ -305,13 +315,18 @@ class PersonalRepoSync: ObservableObject {
             let dir = (filename as NSString).deletingLastPathComponent
             let metadataPath = dir.isEmpty ? metadataName : "\(dir)/\(metadataName)"
             do {
-                if let metaSHA = await MainActor.run(body: { self.remoteSHAs[metadataPath] }) {
-                    try await client.deleteFile(
-                        owner: owner, repo: repo, path: metadataPath,
-                        sha: metaSHA, message: "Delete metadata for \(scriptName)", token: token
-                    )
-                    await MainActor.run { self.remoteSHAs.removeValue(forKey: metadataPath) }
+                let metaSHA: String
+                if let cached = await MainActor.run(body: { self.remoteSHAs[metadataPath] }) {
+                    metaSHA = cached
+                } else {
+                    let file = try await client.getFile(owner: owner, repo: repo, path: metadataPath, token: token)
+                    metaSHA = file.sha
                 }
+                try await client.deleteFile(
+                    owner: owner, repo: repo, path: metadataPath,
+                    sha: metaSHA, message: "Delete metadata for \(scriptName)", token: token
+                )
+                await MainActor.run { self.remoteSHAs.removeValue(forKey: metadataPath) }
             } catch {
                 // Metadata file may not exist — that's fine
             }
@@ -319,6 +334,22 @@ class PersonalRepoSync: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    /// Compute the git blob SHA1 for a string: SHA1("blob <size>\0<content>").
+    /// This matches the SHA that GitHub reports for file contents.
+    nonisolated static func gitBlobSHA(for content: String) -> String {
+        let data = Data(content.utf8)
+        let header = "blob \(data.count)\0"
+        var blob = Data(header.utf8)
+        blob.append(data)
+
+        // CC_SHA1 via CommonCrypto (available on all Apple platforms)
+        var digest = [UInt8](repeating: 0, count: 20)
+        blob.withUnsafeBytes { buffer in
+            _ = CC_SHA1(buffer.baseAddress, CC_LONG(buffer.count), &digest)
+        }
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
 
     private func discoverLocalFiles(in directory: URL) -> [String: URL] {
         let supportedExts: Set<String> = ["py", "rs"]

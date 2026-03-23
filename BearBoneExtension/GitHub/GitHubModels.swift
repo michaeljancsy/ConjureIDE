@@ -102,6 +102,7 @@ enum GitHubError: LocalizedError {
     case rateLimited(retryAfterSeconds: Int?)
     case notFound
     case decodingError(String)
+    case permissionDenied(message: String)
     case networkError(Error)
     case noToken
 
@@ -116,6 +117,8 @@ enum GitHubError: LocalizedError {
                 return "Rate limited — retry after \(s)s"
             }
             return "Rate limited — try again later"
+        case .permissionDenied:
+            return "Permission denied — check your token has the required scopes"
         case .notFound:
             return "Not found"
         case .decodingError(let detail):

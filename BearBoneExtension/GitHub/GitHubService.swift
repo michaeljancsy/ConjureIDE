@@ -109,15 +109,16 @@ final class GitHubService: ObservableObject {
     /// Validate that a repo is a BearBone preset repo by checking for bearbone.json.
     func validateRepo(owner: String, repo: String) async throws {
         guard let token else { throw GitHubError.noToken }
+        let json: String
         do {
-            let json = try await client.fetchRawFile(owner: owner, repo: repo, path: BearBoneRepoMarker.filename)
-            guard let data = json.data(using: .utf8),
-                  let marker = try? JSONDecoder().decode(BearBoneRepoMarker.self, from: data),
-                  marker.type == "presets" else {
-                throw GitHubError.httpError(statusCode: 0, message: "Invalid bearbone.json — not a BearBone preset repo")
-            }
-        } catch is GitHubError {
+            json = try await client.fetchRawFile(owner: owner, repo: repo, path: BearBoneRepoMarker.filename)
+        } catch {
             throw GitHubError.httpError(statusCode: 0, message: "Not a BearBone preset repo (missing bearbone.json)")
+        }
+        guard let data = json.data(using: .utf8),
+              let marker = try? JSONDecoder().decode(BearBoneRepoMarker.self, from: data),
+              marker.type == "presets" else {
+            throw GitHubError.httpError(statusCode: 0, message: "Invalid bearbone.json — not a BearBone preset repo")
         }
     }
 
@@ -214,9 +215,9 @@ final class GitHubService: ObservableObject {
                 continue
             }
 
-            // Move local file from Presets/ to RepoPresets/
+            // Move local file from Presets/ to RepoPresets/ (already pushed above, skip sync)
             do {
-                try presetManager.migrateUserPresetToRepo(preset)
+                try presetManager.migrateUserPresetToRepo(preset, triggerSync: false)
                 migrated += 1
             } catch {
                 log.error("Failed to migrate \(preset.name, privacy: .public): \(error.localizedDescription, privacy: .public)")

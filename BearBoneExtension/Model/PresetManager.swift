@@ -235,8 +235,9 @@ class PresetManager: ObservableObject {
     // MARK: - Migration
 
     /// Move a user preset to the repo cache. Returns the new repo Preset.
+    /// Set `triggerSync: false` when the caller has already pushed to GitHub (e.g. during migration).
     @discardableResult
-    func migrateUserPresetToRepo(_ preset: Preset) throws -> Preset {
+    func migrateUserPresetToRepo(_ preset: Preset, triggerSync: Bool = true) throws -> Preset {
         guard case .user(let sourceURL) = preset.source else {
             throw PresetManagerError.saveFailed
         }
@@ -244,8 +245,7 @@ class PresetManager: ObservableObject {
         try fileManager.moveItem(at: sourceURL, to: destURL)
         log.info("Migrated preset to repo: \(preset.name, privacy: .public)")
 
-        // Trigger sync for the migrated preset
-        if let source = try? String(contentsOf: destURL, encoding: .utf8) {
+        if triggerSync, let source = try? String(contentsOf: destURL, encoding: .utf8) {
             onRepoPresetSaved?(preset.name, source, preset.language)
         }
 
