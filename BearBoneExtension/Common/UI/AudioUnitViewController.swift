@@ -122,6 +122,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 
     private func configureSwiftUIView(audioUnit: AUAudioUnit) {
         log.info("configureSwiftUIView called")
+        Analytics.initialize()
 
         hostingView?.removeFromSuperview()
 
@@ -229,6 +230,10 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
             let result = await au.compileAndRun(source: source)
+            Analytics.track(.scriptRun, properties: [
+                "language": ScriptLanguage.detect(from: source).rawValue,
+                "success": result.success,
+            ])
             return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
         }
 
@@ -237,7 +242,13 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             guard let au else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
-            return await au.selectPreset(preset)
+            let result = await au.selectPreset(preset)
+            Analytics.track(.presetLoad, properties: [
+                "preset_name": preset.name,
+                "preset_type": preset.isFactory ? "factory" : "user",
+                "language": preset.language.rawValue,
+            ])
+            return result
         }
 
         // Save: overwrite current user preset + hot-reload
@@ -250,13 +261,18 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             }
             do {
                 let saved = try pm.saveUserPreset(name: current.name, source: source, language: language)
+                Analytics.track(.presetSave, properties: [
+                    "preset_name": current.name,
+                    "is_new": false,
+                    "language": language.rawValue,
+                ])
+                Analytics.flush()
                 switch language {
                 case .python:
                     let result = au.reloadScript(source: source)
                     pm.setCurrentPreset(saved, source: source)
                     return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
                 case .rust:
-                    // Rust saves persist source only — user clicks Run to compile
                     au.currentScriptLanguage = .rust
                     pm.setCurrentPreset(saved, source: source)
                     return ScriptSaveResult(success: true, error: nil, processTimeMs: nil, budgetMs: nil)
@@ -273,6 +289,12 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             }
             do {
                 let saved = try pm.saveUserPreset(name: name, source: source, language: language)
+                Analytics.track(.presetSave, properties: [
+                    "preset_name": name,
+                    "is_new": true,
+                    "language": language.rawValue,
+                ])
+                Analytics.flush()
                 switch language {
                 case .python:
                     let result = au.reloadScript(source: source)
@@ -374,9 +396,21 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                     paramNames: au.currentParamNames
                 )
                 log.info("Staged preset '\(name, privacy: .public)' to App Group at \(appURL.path, privacy: .public)")
+                Analytics.track(.export, properties: [
+                    "name": name,
+                    "language": language.rawValue,
+                    "success": true,
+                ])
+                Analytics.flush()
                 return .success("Exported \"\(name)\"! Open BearBone to install.")
             } catch {
                 log.error("Export failed: \(error.localizedDescription, privacy: .public)")
+                Analytics.track(.export, properties: [
+                    "name": name,
+                    "language": language.rawValue,
+                    "success": false,
+                ])
+                Analytics.flush()
                 return .error(error.localizedDescription)
             }
         }

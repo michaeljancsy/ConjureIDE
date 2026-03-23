@@ -20,6 +20,9 @@ struct BearBoneApp: App {
         WindowGroup {
             ContentView(hostModel: hostModel, exportHandler: exportHandler)
                 .onAppear {
+                    Analytics.initialize()
+                    Analytics.track(.appOpen)
+                    Analytics.flush()
                     exportHandler.checkForPendingExports()
                     DispatchQueue.global(qos: .utility).async {
                         SharedPythonRuntimeInstaller.installIfNeeded()

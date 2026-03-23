@@ -62,6 +62,11 @@ final class ToolExecutor {
         }
 
         let result = await au.compileAndRun(source: source)
+        Analytics.track(.aiGenerate, properties: [
+            "language": ScriptLanguage.detect(from: source).rawValue,
+            "success": result.success,
+        ])
+        Analytics.flush()
 
         if result.success {
             lastError = nil

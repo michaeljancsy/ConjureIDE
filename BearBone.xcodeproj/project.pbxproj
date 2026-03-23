@@ -17,6 +17,9 @@
 		25BC19452F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		AA5E00012F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00022F5013850036AAB6 /* Sentry */; };
 		AA5E00032F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00042F5013850036AAB6 /* Sentry */; };
+		AA11000100000001MIXPANEL /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000200000001MIXPANEL /* Mixpanel */; };
+		AA11000300000001MIXPANEL /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000400000001MIXPANEL /* Mixpanel */; };
+		AA11000600000001MIXPANEL /* Analytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000700000001MIXPANEL /* Analytics.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -67,6 +70,7 @@
 		2579117E2F5013850036AAB6 /* BearBoneExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BearBoneExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		25BC19412F563DB20009EA0D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = BearBone/Assets.xcassets; sourceTree = "<group>"; };
 		AABB00022F5013850036AAB6 /* rust */ = {isa = PBXFileReference; lastKnownFileType = folder; path = rust; sourceTree = "<group>"; };
+		AA11000700000001MIXPANEL /* Analytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Analytics.swift; path = BearBoneExtension/Analytics.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -111,6 +115,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA5E00012F5013850036AAB6 /* Sentry in Frameworks */,
+				AA11000100000001MIXPANEL /* Mixpanel in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -133,6 +138,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA5E00032F5013850036AAB6 /* Sentry in Frameworks */,
+				AA11000300000001MIXPANEL /* Mixpanel in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -192,6 +198,7 @@
 			name = BearBone;
 			packageProductDependencies = (
 				AA5E00022F5013850036AAB6 /* Sentry */,
+				AA11000200000001MIXPANEL /* Mixpanel */,
 			);
 			productName = BearBone;
 			productReference = 257911402F5013840036AAB6 /* BearBone.app */;
@@ -267,6 +274,7 @@
 			name = BearBoneExtension;
 			packageProductDependencies = (
 				AA5E00042F5013850036AAB6 /* Sentry */,
+				AA11000400000001MIXPANEL /* Mixpanel */,
 			);
 			productName = BearBoneExtension;
 			productReference = 2579117E2F5013850036AAB6 /* BearBoneExtension.appex */;
@@ -307,10 +315,11 @@
 			);
 			mainGroup = 257911372F5013840036AAB6;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
 			packageReferences = (
 				AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
+				AA11000500000001MIXPANEL /* XCRemoteSwiftPackageReference "mixpanel-swift" */,
 			);
+			preferredProjectObjectVersion = 77;
 			productRefGroup = 257911412F5013840036AAB6 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -548,6 +557,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA11000600000001MIXPANEL /* Analytics.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1120,6 +1130,14 @@
 				minimumVersion = 9.0.0;
 			};
 		};
+		AA11000500000001MIXPANEL /* XCRemoteSwiftPackageReference "mixpanel-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mixpanel/mixpanel-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.3.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1132,6 +1150,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
 			productName = Sentry;
+		};
+		AA11000200000001MIXPANEL /* Mixpanel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA11000500000001MIXPANEL /* XCRemoteSwiftPackageReference "mixpanel-swift" */;
+			productName = Mixpanel;
+		};
+		AA11000400000001MIXPANEL /* Mixpanel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA11000500000001MIXPANEL /* XCRemoteSwiftPackageReference "mixpanel-swift" */;
+			productName = Mixpanel;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
