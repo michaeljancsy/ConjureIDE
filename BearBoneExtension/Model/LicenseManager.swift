@@ -9,6 +9,7 @@
 //
 
 import Combine
+import CryptoKit
 import Foundation
 import os.log
 
@@ -73,15 +74,20 @@ class LicenseManager: ObservableObject {
     func activate(serial: String) -> Bool {
         let valid = verifyWithKernel?(serial) ?? false
         isLicensed = valid
+        Analytics.track(.licenseActivate, properties: ["success": valid])
         if valid {
             do {
                 try saveLicense(serial)
                 log.info("License activated and saved")
                 stopDemoTimer()
+                let hash = SHA256.hash(data: Data(serial.utf8))
+                let hashString = hash.map { String(format: "%02x", $0) }.joined()
+                Analytics.identify(licenseHash: hashString)
             } catch {
                 log.error("Failed to save license: \(error.localizedDescription, privacy: .public)")
             }
         }
+        Analytics.flush()
         return valid
     }
 
