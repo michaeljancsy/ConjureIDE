@@ -35,6 +35,6 @@ if [ -z "${DSYM_DIR:-}" ]; then
     exit 0
 fi
 
-echo "Uploading dSYMs from ${DSYM_DIR}..." >&2
-sentry-cli debug-files upload --include-sources "${DSYM_DIR}" 2>&1 | head -20 >&2
-echo "dSYM upload complete" >&2
+echo "Uploading debug files..." >&2
+sentry-cli debug-files upload --include-sources "${DSYM_DIR}" "${BUILT_PRODUCTS_DIR}" 2>&1 | head -20 >&2
+echo "Debug file upload complete" >&2
