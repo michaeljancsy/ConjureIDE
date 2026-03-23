@@ -5,6 +5,7 @@
 //  Created by Michael Jancsy on 2/25/26.
 //
 
+#if DEBUG
 import SwiftUI
 import AudioToolbox
 
@@ -59,3 +60,4 @@ struct ValidationView: View {
         }
     }
 }
+#endif
