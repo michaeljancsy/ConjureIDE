@@ -22,10 +22,15 @@ fi
 
 TEMPLATE_CONFIG="${CONFIGURATION:-Release}"
 
-# Build the export template (incremental — fast no-op if nothing changed)
+# Build the export template (incremental — fast no-op if nothing changed).
+# Use env -i to prevent the parent build's environment (extension build settings)
+# from leaking into the template build. Without this, inherited env vars cause
+# the Swift compiler to generate an extension entry point (_NSExtensionMain)
+# instead of the app's _main, crashing the exported app on launch.
 if [ -f "${TEMPLATE_PROJECT}/project.pbxproj" ]; then
     echo "Building export template (${TEMPLATE_CONFIG})..."
-    xcodebuild -project "${TEMPLATE_PROJECT}" \
+    env -i HOME="$HOME" PATH="$PATH" DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}" \
+        xcodebuild -project "${TEMPLATE_PROJECT}" \
         -scheme BearBoneExportAUTemplate \
         -configuration "${TEMPLATE_CONFIG}" \
         -arch arm64 \

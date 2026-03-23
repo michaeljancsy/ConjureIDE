@@ -5,7 +5,6 @@
 
 import SwiftUI
 
-@main
 struct BearBoneExportAUTemplateApp: App {
     var body: some Scene {
         WindowGroup {
