@@ -113,6 +113,10 @@ struct BearBoneExtensionMainView: View {
                     selectedLanguage = language
                     let result = onNew(language)
                     handleResult(result)
+                    chatService.clearConversation()
+                    if language == .rust && result.success {
+                        handleCmdR()
+                    }
                 },
                 onExport: { name in
                     Task {
