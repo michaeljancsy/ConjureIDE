@@ -202,8 +202,8 @@ This resets ALL LaunchServices registrations system-wide. Apps will re-register 
 
 - `pluginkit -mv -p com.apple.AudioUnit-UI` — list registered AU extensions with paths (look for `+` prefix = elected)
 - `pluginkit -m | grep BearBone` — search all protocols (not just AU)
-- `auval -v aufx 0001 A000` — validate the Release AU component
-- `auval -v aufx DBG1 A000` — validate the Debug AU component
+- `auval -v aufx 0001 BEAR` — validate the Release AU component
+- `auval -v aufx DBG1 BEAR` — validate the Debug AU component
 - `codesign -v -vvv <path-to-app>` — verify code signing is valid
 - `codesign -d --entitlements - <path-to-appex>` — inspect extension entitlements
 
@@ -222,7 +222,7 @@ Bundled runtimes require proper code signing for the hardened runtime:
 ## Plugin Identity
 
 - Type: `aufx` (effect)
-- Manufacturer: `A000`
+- Manufacturer: `BEAR`
 - Subtype: `0001` (Release) / `DBG1` (Debug)
 
 Debug and Release builds use different AU identities and bundle IDs so they can coexist without interfering:

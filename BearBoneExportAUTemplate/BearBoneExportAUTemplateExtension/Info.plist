@@ -32,7 +32,7 @@
 					<key>factoryFunction</key>
 					<string>$(PRODUCT_MODULE_NAME).ExportAUViewController</string>
 					<key>manufacturer</key>
-					<string>A000</string>
+					<string>BEAR</string>
 					<key>name</key>
 					<string>BearBone: ExportTemplate</string>
 					<key>sandboxSafe</key>

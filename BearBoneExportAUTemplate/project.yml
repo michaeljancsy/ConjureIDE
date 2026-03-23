@@ -51,7 +51,7 @@ targets:
             AudioComponents:
               - description: BearBone Export
                 factoryFunction: $(PRODUCT_MODULE_NAME).ExportAUViewController
-                manufacturer: A000
+                manufacturer: BEAR
                 name: "BearBone: ExportTemplate"
                 sandboxSafe: true
                 subtype: TMPL

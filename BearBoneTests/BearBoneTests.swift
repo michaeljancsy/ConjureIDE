@@ -87,7 +87,7 @@ struct BearBoneTests {
         )
         let au = avAudioUnit.auAudioUnit
         #expect(au.componentDescription.componentType == kAudioUnitType_Effect)
-        #expect(au.componentDescription.componentManufacturer == Self.fourCharCode("A000"))
+        #expect(au.componentDescription.componentManufacturer == Self.fourCharCode("BEAR"))
     }
 
     // MARK: - Basic Properties

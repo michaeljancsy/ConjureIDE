@@ -16,7 +16,7 @@ Export a BearBone preset (Python or Rust) as a standalone AUv3 plugin that the u
 | Shared Python runtime | `~/Library/Application Support/BearBone/PythonRuntime-3.14/` |
 | Python runtime install | Auto-installed on first BearBone launch |
 | Missing runtime UX | SwiftUI error view with download button that auto-installs |
-| AU manufacturer code | `A000` (same as BearBone) |
+| AU manufacturer code | `BEAR` (same as BearBone) |
 | AU subtype | Hash of preset name → 4 chars, collision check against local registry |
 | Exported AU UI | Minimal generic UI (labeled sliders). Error UI for missing Python runtime |
 | Exported AU licensing | None — exports run freely. Only licensed BearBone users can export |
@@ -98,7 +98,7 @@ When runtime is not found:
 ### AU Identity
 
 - **Type:** `aufx` (effect) — same as BearBone
-- **Manufacturer:** `A000` — same as BearBone, identifies as BearBone family
+- **Manufacturer:** `BEAR` — same as BearBone, identifies as BearBone family
 - **Subtype:** 4-char code derived from hash of preset name
   - Hash preset name → take first 4 bytes → map to printable ASCII
   - Check against local export registry (`~/Library/Application Support/BearBone/export-registry.json`)
@@ -201,7 +201,7 @@ The player AU reads this at init to determine which backend to use and how to co
 - XcodeGen `schemes:` section needed to include test target in Cmd+U
 
 **Placeholder AU identity (patched at export time):**
-- Type: `aufx`, Subtype: `TMPL`, Manufacturer: `A000`, Name: `BearBone: ExportTemplate`
+- Type: `aufx`, Subtype: `TMPL`, Manufacturer: `BEAR`, Name: `BearBone: ExportTemplate`
 
 ### Phase 2: Export Pipeline ✅ COMPLETE (2026-03-05)
 

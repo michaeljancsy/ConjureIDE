@@ -36,11 +36,11 @@ struct InfoView: View {
                     .font(.caption.bold())
                     .padding(.top, 4)
 
-                Text("Logic Pro: Channel strip > Audio FX slot > Audio Units > A000")
+                Text("Logic Pro: Channel strip > Audio FX slot > Audio Units > BEAR")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Text("Ableton Live: Audio Effects > Audio Units > A000")
+                Text("Ableton Live: Audio Effects > Audio Units > BEAR")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

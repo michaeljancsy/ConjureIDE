@@ -207,7 +207,7 @@ struct ExportManagerTests {
                         "name": "BearBone: ExportTemplate",
                         "type": "aufx",
                         "subtype": "TMPL",
-                        "manufacturer": "A000",
+                        "manufacturer": "BEAR",
                         "description": "BearBone Export",
                         "sandboxSafe": true,
                         "version": 1,
@@ -673,7 +673,7 @@ struct ExportIntegrationTests {
         let components = attrs["AudioComponents"] as! [[String: Any]]
         #expect(components[0]["name"] as? String == "BearBone: \(presetName)")
         #expect(components[0]["type"] as? String == "aufx")
-        #expect(components[0]["manufacturer"] as? String == "A000")
+        #expect(components[0]["manufacturer"] as? String == "BEAR")
 
         // 7. Verify registry was updated
         #expect(registry.entries.count == 1)
