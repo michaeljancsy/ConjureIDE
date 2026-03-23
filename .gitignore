@@ -18,6 +18,9 @@ tools/generate-license/keypair.bin
 build/
 DerivedData/
 
+# Sentry CLI config (contains auth token)
+.sentryclirc
+
 # Xcode user-specific files
 *.xcuserstate
 xcuserdata/

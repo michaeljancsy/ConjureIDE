@@ -15,6 +15,8 @@
 		25BC19432F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		25BC19442F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		25BC19452F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
+		AA5E00012F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00022F5013850036AAB6 /* Sentry */; };
+		AA5E00032F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00042F5013850036AAB6 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -108,6 +110,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA5E00012F5013850036AAB6 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -129,6 +132,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA5E00032F5013850036AAB6 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -175,6 +179,7 @@
 				2579113E2F5013840036AAB6 /* Resources */,
 				257911B02F5013850036AAB6 /* Embed Foundation Extensions */,
 				AABB000F2F5013850036AAB6 /* Bust AU Cache */,
+				AABB00132F5013850036AAB6 /* Upload dSYMs to Sentry */,
 			);
 			buildRules = (
 			);
@@ -186,6 +191,7 @@
 			);
 			name = BearBone;
 			packageProductDependencies = (
+				AA5E00022F5013850036AAB6 /* Sentry */,
 			);
 			productName = BearBone;
 			productReference = 257911402F5013840036AAB6 /* BearBone.app */;
@@ -260,6 +266,7 @@
 			);
 			name = BearBoneExtension;
 			packageProductDependencies = (
+				AA5E00042F5013850036AAB6 /* Sentry */,
 			);
 			productName = BearBoneExtension;
 			productReference = 2579117E2F5013850036AAB6 /* BearBoneExtension.appex */;
@@ -301,6 +308,9 @@
 			mainGroup = 257911372F5013840036AAB6;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
+			packageReferences = (
+				AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
+			);
 			productRefGroup = 257911412F5013840036AAB6 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -510,6 +520,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "\"${SRCROOT}/scripts/bust-au-cache.sh\"\n";
+		};
+		AABB00132F5013850036AAB6 /* Upload dSYMs to Sentry */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/upload-dsyms.sh",
+				"$(SRCROOT)/.sentryclirc",
+			);
+			name = "Upload dSYMs to Sentry";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/scripts/upload-dsyms.sh\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1080,6 +1110,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA5E00022F5013850036AAB6 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
+		AA5E00042F5013850036AAB6 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 257911382F5013840036AAB6 /* Project object */;
 }

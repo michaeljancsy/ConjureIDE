@@ -32,6 +32,8 @@ private class SafeHostingView<Content: View>: NSHostingView<Content> {
 
 @MainActor
 public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
+    private static var sentryStarted = false
+
     var audioUnit: AUAudioUnit? {
         didSet {
             log.info("audioUnit didSet, isViewLoaded=\(self.isViewLoaded, privacy: .public)")
@@ -63,6 +65,11 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     }
 
     public override func loadView() {
+        if !Self.sentryStarted {
+            SentrySetup.start()
+            Self.sentryStarted = true
+        }
+
         let screen = NSScreen.main ?? NSScreen.screens.first
         let defaultSize: NSSize
         if let screenFrame = screen?.visibleFrame {
