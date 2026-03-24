@@ -233,8 +233,7 @@ struct BearBoneExtensionMainView: View {
                     text: $scriptSource,
                     colorScheme: colorScheme,
                     language: selectedLanguage,
-                    isEditable: true,
-                    extensionBundle: extensionBundle
+                    isEditable: true
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .border(Color.secondary.opacity(0.3), width: 1)

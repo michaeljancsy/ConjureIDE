@@ -9,7 +9,6 @@ struct MonacoEditorView: NSViewRepresentable {
     var colorScheme: ColorScheme
     var language: ScriptLanguage = .python
     var isEditable: Bool = true
-    var extensionBundle: Bundle
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -30,13 +29,14 @@ struct MonacoEditorView: NSViewRepresentable {
 
         webView.setAccessibilityIdentifier("scriptEditor")
 
-        // Load Monaco HTML from the extension bundle
-        if let monacoDir = extensionBundle.url(forResource: "monaco", withExtension: nil),
-           let monacoURL = extensionBundle.url(forResource: "index", withExtension: "html", subdirectory: "monaco") {
+        // Load Monaco HTML from extension bundle (not Bundle.main, which may be the host app)
+        let bundle = Bundle(for: Coordinator.self)
+        if let monacoDir = bundle.url(forResource: "monaco", withExtension: nil),
+           let monacoURL = bundle.url(forResource: "index", withExtension: "html", subdirectory: "monaco") {
             log.info("Loading Monaco from \(monacoURL.path, privacy: .public)")
             webView.loadFileURL(monacoURL, allowingReadAccessTo: monacoDir)
         } else {
-            log.error("Monaco resources not found in bundle \(extensionBundle.bundlePath, privacy: .public)")
+            log.error("Monaco resources not found in bundle \(bundle.bundlePath, privacy: .public)")
         }
 
         return webView
