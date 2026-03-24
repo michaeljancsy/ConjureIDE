@@ -78,6 +78,8 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				Resources/monaco/index.html,
+				Resources/monaco/editor-bridge.js,
 			);
 			target = 2579117D2F5013850036AAB6 /* BearBoneExtension */;
 		};
@@ -260,6 +262,7 @@
 				2579117C2F5013850036AAB6 /* Resources */,
 				AABB00032F5013850036AAB6 /* Copy Python Runtime */,
 				AABB00092F5013850036AAB6 /* Copy Rust Compiler */,
+				AABB0010000000MONACO0001 /* Copy Monaco Editor */,
 				AABB00072F5013850036AAB6 /* Stamp Build ID */,
 				AABB000B2F5013850036AAB6 /* Copy Export Template */,
 				AABB000D2F5013850036AAB6 /* Generate Test Serial */,
@@ -453,6 +456,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "# Copy bundled Rust compiler into the extension bundle for sandbox-safe compilation\nRUSTC_SRC=\"${SRCROOT}/rustc-dist\"\n\nif [ ! -d \"${RUSTC_SRC}\" ]; then\n    # Check if we're in a worktree and can symlink from main\n    MAIN_WORKTREE=$(git -C \"${SRCROOT}\" worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //')\n    if [ -n \"${MAIN_WORKTREE}\" ] && [ \"${MAIN_WORKTREE}\" != \"${SRCROOT}\" ] && [ -d \"${MAIN_WORKTREE}/rustc-dist\" ]; then\n        echo \"note: Symlinking rustc-dist from main worktree\" >&2\n        ln -s \"${MAIN_WORKTREE}/rustc-dist\" \"${RUSTC_SRC}\"\n    else\n        echo \"warning: Bundled Rust compiler not found at ${RUSTC_SRC}. Run scripts/setup-rustc.sh first.\" >&2\n        echo \"warning: Rust compilation will only work with user-installed rustc (not in sandboxed DAWs).\" >&2\n        exit 0\n    fi\nfi\n\nRUSTC_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/rustc-dist\"\n\n# Copy the sysroot\nmkdir -p \"${RUSTC_DST}\"\nrsync -a --delete \"${RUSTC_SRC}/\" \"${RUSTC_DST}/\"\n\n# Code-sign all executables and dylibs\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${RUSTC_DST}/bin/rustc\"\nfind \"${RUSTC_DST}/lib\" -name '*.dylib' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp {} \\;\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/rust-lld\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/wasm-ld\"\n";
+		};
+		AABB0010000000MONACO0001 /* Copy Monaco Editor */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/BearBoneExtension/Resources/monaco/index.html",
+			);
+			name = "Copy Monaco Editor";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/monaco/index.html",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# Copy Monaco Editor resources into the extension bundle\nMONACO_SRC=\"${SRCROOT}/BearBoneExtension/Resources/monaco\"\nMONACO_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/monaco\"\n\nif [ ! -d \"${MONACO_SRC}/vs\" ]; then\n    echo \"warning: Monaco Editor not found at ${MONACO_SRC}/vs. Run scripts/setup-monaco.sh first.\" >&2\n    # Still copy index.html and editor-bridge.js so the build doesn't fail\n    mkdir -p \"${MONACO_DST}\"\n    cp -f \"${MONACO_SRC}/index.html\" \"${MONACO_DST}/\" 2>/dev/null || true\n    cp -f \"${MONACO_SRC}/editor-bridge.js\" \"${MONACO_DST}/\" 2>/dev/null || true\n    exit 0\nfi\n\nmkdir -p \"${MONACO_DST}\"\nrsync -a --delete \"${MONACO_SRC}/\" \"${MONACO_DST}/\"\n";
 		};
 		AABB000B2F5013850036AAB6 /* Copy Export Template */ = {
 			isa = PBXShellScriptBuildPhase;

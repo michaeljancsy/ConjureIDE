@@ -17,6 +17,7 @@ xcodebuild -project BearBone.xcodeproj -scheme BearBone test   # runs unit + UI 
 - `cbindgen` (`cargo install cbindgen`)
 - Bundled Python runtime (one-time setup): `cd rust && ./setup-python.sh`
 - Bundled Rust compiler (one-time setup): `./scripts/setup-rustc.sh`
+- Monaco Editor (one-time setup): `./scripts/setup-monaco.sh`
 
 Deployment targets: macOS 26.2+.
 
@@ -142,7 +143,7 @@ Parameters are passed to Python scripts as a 5th argument (dict or list) and to 
 
 ## Worktrees
 
-Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/` and `rustc-dist/` since they're gitignored. The `build-rust.sh` script auto-symlinks `python-dist/` from the main worktree, and the "Copy Rust Compiler" build phase auto-symlinks `rustc-dist/` from the main worktree. So `xcodebuild build` and `xcodebuild test` work automatically. For standalone `cargo test`, run the Xcode build first (to create the symlink) or manually: `ln -s /path/to/main/repo/rust/python-dist rust/python-dist`.
+Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/`, `rustc-dist/`, and `BearBoneExtension/Resources/monaco/vs/` since they're gitignored. The `build-rust.sh` script auto-symlinks `python-dist/` from the main worktree, and the "Copy Rust Compiler" build phase auto-symlinks `rustc-dist/` from the main worktree. Monaco must be set up independently in each worktree: `./scripts/setup-monaco.sh`. So `xcodebuild build` and `xcodebuild test` work automatically (after Monaco setup). For standalone `cargo test`, run the Xcode build first (to create the symlink) or manually: `ln -s /path/to/main/repo/rust/python-dist rust/python-dist`.
 
 Debug and Release builds use different AU identities (see Plugin Identity section), so worktree builds in Debug configuration automatically get the debug identity without any special handling. The host app and tests read AU identity from the embedded extension's Info.plist at runtime.
 

@@ -10,6 +10,12 @@
 ### Python Package Management
 - Python package management: Phase 2 (bundle uv + host-app package install UI) and Phase 3 (per-preset requirements.txt files). Design doc at `docs/python-package-management.md`.
 
+### Monaco Editor Integration
+- Replaced NSTextView-based code editor with Monaco Editor (VS Code's editor component) in a WKWebView
+- Adds: syntax highlighting, autocomplete (DSP-specific snippets), minimap, multi-cursor, bracket matching, code folding, find/replace
+- Setup: `./scripts/setup-monaco.sh` downloads pre-built Monaco v0.52.2 (~13 MB)
+- Still to do: inline error markers from compilation errors, more autocomplete (numpy/scipy API), custom color themes, memory profiling with multiple instances
+
 ## To Do
 
 ### Distribution
