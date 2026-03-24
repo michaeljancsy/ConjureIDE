@@ -36,6 +36,13 @@ struct MonacoEditorView: NSViewRepresentable {
         return webView
     }
 
+    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+        let controller = webView.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: "contentChanged")
+        controller.removeScriptMessageHandler(forName: "editorReady")
+        coordinator.webView = nil
+    }
+
     func updateNSView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
 
