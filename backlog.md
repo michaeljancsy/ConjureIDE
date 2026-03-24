@@ -25,12 +25,15 @@
 - Host app DAW controls: Add preset selection and a bypass button to the BearBone host app, like a DAW would provide
 - Audio visualization polish: Persist spectrogram preferences (panel visibility, width, FFT size, frequency scale, note names) in UserDefaults. Add spectrogram to host app. Performance optimization if needed.
 - AI chat sidebar polish: ~~Add resizable divider~~, markdown rendering in messages, code block copy/insert buttons, conversation persistence, keyboard shortcut to toggle panel
-- Latency reporting and adjustment: Report latency frames to the host/DAW and allow the user to adjust the latency value
+- Latency reporting: Measure actual processing latency and report it via AUAudioUnit.latency so the DAW can compensate
 - GitHub: Set up public GitHub repository
 - ~~Script reload indicator~~ (done, see Done section)
 - ~~Script-declared parameter names~~ (done, see Done section)
 - Fix flaky `extensionPlistContainsBuildID` test: Fails intermittently depending on build phase timing — the "Stamp Build ID" phase may not have written BuildID to the plist before the test reads it
 - Autocomplete: Basic autocomplete (keywords, builtins, identifiers from current script) and AI-powered autocomplete (context-aware suggestions via LLM)
+- AI Python quality: Make sure AI-generated Python scripts never iterate over individual samples — must use numpy vectorized operations (the prompt says this, but verify the AI actually follows it)
+- 3-band EQ factory preset for both Python and Rust
+
 - Full-screen text editor: Expand the script editor to a full-screen/maximized view for more editing space
 
 
