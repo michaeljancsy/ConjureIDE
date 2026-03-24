@@ -114,27 +114,40 @@ final class ToolExecutor {
         guard let value = (input["value"] as? Double) ?? (input["value"] as? Int).map({ Double($0) }) else {
             return (jsonString(["error": "Missing required parameter: value"]), true)
         }
-        guard (0..<8).contains(index) else {
-            return (jsonString(["error": "Parameter index must be 0-7, got \(index)"]), true)
+        guard (0..<16).contains(index) else {
+            return (jsonString(["error": "Parameter index must be 0-15, got \(index)"]), true)
         }
-        let clampedValue = min(1.0, max(0.0, value))
 
-        // Set via the parameter tree so DAW automation stays in sync
+        // Set via the parameter tree so DAW automation stays in sync.
+        // Pass the actual value — the AU parameter tree clamps to min/max
+        // and the implementorValueObserver normalizes for the kernel.
         if let param = au.parameterTree?.parameter(withAddress: AUParameterAddress(index)) {
-            param.value = Float(clampedValue)
+            param.value = Float(value)
+            return (jsonString(["success": true, "index": index, "value": Double(param.value)]), false)
         }
 
-        return (jsonString(["success": true, "index": index, "value": clampedValue]), false)
+        return (jsonString(["error": "Parameter \(index) not found"]), true)
     }
 
     private func executeGetParameters() -> (content: String, isError: Bool) {
         guard let au = audioUnit else {
             return (jsonString(["error": "Audio unit not available"]), true)
         }
+        let metadata = au.currentParamMetadata
         var params: [[String: Any]] = []
-        for i in 0..<8 {
+        for i in 0..<16 {
             if let param = au.parameterTree?.parameter(withAddress: AUParameterAddress(i)) {
-                params.append(["index": i, "value": Double(param.value)])
+                var entry: [String: Any] = [
+                    "index": i,
+                    "name": param.displayName,
+                    "value": Double(param.value),
+                    "min": Double(param.minValue),
+                    "max": Double(param.maxValue),
+                ]
+                if let meta = metadata, i < meta.count {
+                    entry["unit"] = meta[i].unit
+                }
+                params.append(entry)
             }
         }
         return (jsonString(["parameters": params]), false)

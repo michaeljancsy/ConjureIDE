@@ -82,13 +82,20 @@ final class ChatService: ObservableObject {
 
     /// Build the system prompt, including the currently loaded script as context.
     private func buildSystemPrompt() -> String {
-        var prompt = AnthropicProvider.chatSystemPrompt
+        // Detect language from the actual source to avoid stale currentScriptLanguage
+        let language: ScriptLanguage
+        if let source = toolExecutor.audioUnit?.scriptSource {
+            language = ScriptLanguage.detect(from: source)
+        } else {
+            language = .python
+        }
 
-        if let au = toolExecutor.audioUnit, let source = au.scriptSource {
-            let language = au.currentScriptLanguage.rawValue
+        var prompt = AnthropicProvider.chatSystemPrompt(for: language)
+
+        if let source = toolExecutor.audioUnit?.scriptSource {
             prompt += """
 
-                The currently loaded \(language) script is:
+                The currently loaded \(language.rawValue) script is:
                 ```
                 \(source)
                 ```

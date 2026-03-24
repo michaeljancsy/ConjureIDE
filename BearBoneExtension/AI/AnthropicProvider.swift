@@ -13,15 +13,17 @@ final class AnthropicProvider: AIProvider {
         self.session = session
     }
 
-    private static let apiContract = """
-        API contract:
+    // MARK: - Python Prompts
+
+    static let pythonApiContract = """
+        API contract (Python):
         - Function signature: def process(inputs, outputs, frame_count, sample_rate, params)
         - inputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
         - outputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
         - frame_count: number of valid samples this callback (may be less than array length)
         - sample_rate: current sample rate (e.g. 44100.0)
-        - params: dict of parameter values keyed by name (if PARAMS is declared), \
-          or list of floats 0–1 (legacy). Use these to make your effect controllable from the DAW.
+        - params: dict of parameter values keyed by name (when PARAMS is declared), \
+          or list of floats 0–1 (legacy without PARAMS). Use these for DAW-controllable parameters.
         - Write processed audio into outputs[ch][:frame_count]
         - Only numpy is available (imported as np)
         - Global variables persist across callbacks (useful for phase accumulators, delay buffers, etc.)
@@ -43,39 +45,46 @@ final class AnthropicProvider: AIProvider {
         - Up to 16 parameters can be declared.
         - ALWAYS use PARAMS when your effect has controllable parameters.
         - Dict key order determines AU parameter address (first = 0, second = 1, etc.).
+
+        Complete example — a gain effect:
+        ```
+        import numpy as np
+
+        PARAMS = {
+            "gain": {"min": -60.0, "max": 12.0, "unit": "dB", "default": 0.0},
+        }
+
+        def process(inputs, outputs, frame_count, sample_rate, params):
+            gain_lin = 10.0 ** (params["gain"] / 20.0)
+            for ch in range(len(inputs)):
+                np.multiply(inputs[ch][:frame_count], gain_lin, out=outputs[ch][:frame_count])
+        ```
         """
 
-    private static let realTimeRules = """
-        Real-time safety rules — process() runs in the audio callback, so every allocation, \
-        deallocation, or hidden Python overhead causes glitches:
+    static let pythonRealTimeRules = """
+        Real-time safety rules — process() runs in the audio callback. Allocations cause glitches.
 
-        VECTORIZE EVERYTHING — never use per-sample Python loops:
-        - NEVER use `for i in range(frame_count)` — this is catastrophically slow
-        - ALWAYS use numpy vectorized operations on entire arrays/slices at once
-        - Example: instead of looping to apply gain, do `np.multiply(inputs[ch][:frame_count], gain, out=outputs[ch][:frame_count])`
+        VECTORIZE WHEN POSSIBLE:
+        - Use numpy vectorized operations on entire slices: \
+          np.multiply(inputs[ch][:frame_count], gain, out=outputs[ch][:frame_count])
         - For LFOs/oscillators: pre-allocate a phase array global, compute all samples with \
           np.sin(phase_array, out=lfo_buf) in one call, then multiply with audio
-        - For sample-by-sample state (e.g. filters with feedback): use a pre-allocated buffer and \
-          vectorize as much as possible, only falling back to a Python loop for the minimal \
-          feedback path if absolutely necessary
-        - The channel loop `for ch in range(channels)` is fine (only 1-2 iterations)
+        - Use per-sample loops ONLY for feedback paths that can't be vectorized \
+          (e.g. IIR filters, compressor envelope followers). Keep the loop body minimal.
+        - The channel loop `for ch in range(len(inputs))` is fine (only 1-2 iterations)
 
-        ALLOCATIONS — never allocate inside process():
+        NEVER ALLOCATE INSIDE process():
         - No new lists, dicts, sets, tuples, or strings
-        - No list comprehensions, generator expressions, or range() calls
-        - No NumPy operations that return new arrays — use slice assignment and the out= parameter \
-          (e.g. np.multiply(a, b, out=output) instead of output = a * b)
-        - Pre-allocate ALL buffers as globals on first call using a guard like: \
+        - No list comprehensions or generator expressions
+        - CRITICAL: numpy operators like `a * b`, `a + b`, `a ** 2` create NEW arrays — \
+          this is a hidden allocation! Always use ufuncs with out=: \
+          np.multiply(a, b, out=result) instead of result = a * b
+        - Pre-allocate ALL buffers as globals on first call: \
           global _buf; if '_buf' not in dir(): _buf = np.zeros(max_len, dtype=np.float32)
 
-        DEALLOCATIONS — never drop the last reference to an object:
-        - Don't create temporary objects that go out of scope (this triggers deallocation)
-        - Don't use del statements
-
-        HIDDEN OVERHEAD — avoid Python features with non-obvious cost:
-        - No try/except blocks (frame setup cost; exceptions allocate tracebacks)
+        AVOID HIDDEN OVERHEAD:
+        - Avoid try/except in the hot path (tracebacks allocate on exception)
         - No function calls that internally allocate (prefer numpy ufuncs with out=)
-        - Cache attribute lookups as local variables outside process() or as globals
         - No import statements inside process()
         - No closures or lambdas created inside process()
 
@@ -84,11 +93,15 @@ final class AnthropicProvider: AIProvider {
         - Pattern: global _buf; if '_buf' not in dir(): _buf = np.zeros(...)
         - This runs during warm-up, NOT on the first real audio callback
         - All subsequent calls must be allocation-free
+
+        DSP TIPS:
+        - Smooth parameters with a one-pole filter to avoid zipper noise: \
+          smooth = smooth + 0.001 * (target - smooth) each callback
         """
 
     // MARK: - Rust Prompts
 
-    private static let rustApiContract = """
+    static let rustApiContract = """
         API contract (Rust compiled to WebAssembly):
         - The script is compiled to wasm32-wasip1 and runs in a WASM sandbox
         - Must define four #[no_mangle] pub extern "C" functions:
@@ -100,10 +113,10 @@ final class AnthropicProvider: AIProvider {
           static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
           static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
           static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
+        - Access static mut buffers inside unsafe {} blocks (safe in single-threaded WASM)
         - Audio is interleaved: total samples = channels * frame_count
-        - Use std::slice::from_raw_parts(input, n) and from_raw_parts_mut(output, n) inside unsafe blocks
-        - Must handle both mono (1 channel) and stereo (2 channels)
         - For stereo, samples are interleaved: [L0, R0, L1, R1, ...]
+        - Must handle both mono (1 channel) and stereo (2 channels)
 
         Rich parameters (recommended) — declare metadata so the host denormalizes values for you:
         - Export get_param_metadata_ptr() and get_param_metadata_len() pointing to a static JSON string:
@@ -111,11 +124,11 @@ final class AnthropicProvider: AIProvider {
               {"name":"Rate","min":0.5,"max":20.0,"unit":"Hz","default":5.0},
               {"name":"Depth","min":0.0,"max":1.0,"unit":"","default":0.5}
           ]"#;
-          #[no_mangle]
+          #[unsafe(no_mangle)]
           pub extern "C" fn get_param_metadata_ptr() -> i32 {
               METADATA.as_ptr() as i32
           }
-          #[no_mangle]
+          #[unsafe(no_mangle)]
           pub extern "C" fn get_param_metadata_len() -> i32 {
               METADATA.len() as i32
           }
@@ -124,20 +137,56 @@ final class AnthropicProvider: AIProvider {
         - Add "curve":"log" for frequency and time params (exponential slider distribution):
           {"name":"Cutoff","min":20.0,"max":20000.0,"unit":"Hz","default":1000.0,"curve":"log"}
           Default curve is "linear". Use "log" when the range spans orders of magnitude.
-        - The DAW/UI shows sliders with real ranges and formatted values (e.g. "5.2 Hz", "-21.5 dB").
         - Common units: "dB", "Hz", "ms", "%", ":1", "" (dimensionless).
         - Up to 16 parameters. JSON array order determines parameter index (first = 0, second = 1, etc.).
         - ALWAYS use rich parameters when your effect has controllable params.
+
+        Complete example — a gain effect:
+        ```
+        const MAX_CH: usize = 2;
+        const MAX_FR: usize = 4096;
+        static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
+        static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
+        static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
+
+        static METADATA: &str = r#"[{"name":"Gain","min":-60.0,"max":12.0,"unit":"dB","default":0.0}]"#;
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn get_input_ptr() -> i32 { unsafe { INPUT_BUF.as_ptr() as i32 } }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn get_output_ptr() -> i32 { unsafe { OUTPUT_BUF.as_mut_ptr() as i32 } }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn get_params_ptr() -> i32 { unsafe { PARAMS_BUF.as_mut_ptr() as i32 } }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn get_param_metadata_ptr() -> i32 { METADATA.as_ptr() as i32 }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn get_param_metadata_len() -> i32 { METADATA.len() as i32 }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn process(
+            input: *const f32, output: *mut f32,
+            channels: i32, frame_count: i32, _sample_rate: f32,
+        ) {
+            let n = (channels as usize) * (frame_count as usize);
+            let inp = unsafe { std::slice::from_raw_parts(input, n) };
+            let out = unsafe { std::slice::from_raw_parts_mut(output, n) };
+            let gain_db = unsafe { PARAMS_BUF[0] };
+            let gain_lin = (10.0_f32).powf(gain_db / 20.0);
+            for i in 0..n {
+                out[i] = inp[i] * gain_lin;
+            }
+        }
+        ```
         """
 
-    private static let rustRealTimeRules = """
+    static let rustRealTimeRules = """
         Real-time safety rules — process() runs in the audio callback inside a WASM sandbox:
 
         NO HEAP ALLOCATIONS:
         - No Box, Vec, String, format!, or any heap-allocating types
         - No std::collections (HashMap, BTreeMap, etc.)
         - No dynamic dispatch (Box<dyn Trait>)
-        - All state must be in static mut globals (safe in single-threaded WASM)
+        - All state must be in static mut globals, accessed inside unsafe {} blocks
 
         NO PANICS:
         - Use wrapping arithmetic or manual bounds checks instead of indexing that could panic
@@ -151,9 +200,17 @@ final class AnthropicProvider: AIProvider {
 
         SAFE PATTERNS:
         - State persistence via static mut globals (WASM is single-threaded, so this is safe)
-        - Direct pointer arithmetic with std::slice::from_raw_parts / from_raw_parts_mut
+        - Access all static mut inside unsafe {} blocks: \
+          let val = unsafe { PARAMS_BUF[0] };
+        - Pointer to slice: let inp = unsafe { std::slice::from_raw_parts(input, n) };
         - Inline math (f32 operations: sin, cos, etc. via f32 methods)
         - Constants via const or static
+
+        DSP TIPS:
+        - Use f64 for filter state variables (accumulators, feedback paths) to maintain precision \
+          in long-running feedback loops. Convert to f32 only at output.
+        - Smooth parameters with a one-pole filter to avoid zipper noise: \
+          smooth = smooth + 0.001 * (target - smooth)
         """
 
     // MARK: - Chat (Multi-turn with Tool Use)
@@ -172,30 +229,46 @@ final class AnthropicProvider: AIProvider {
         case messageStop(stopReason: String?)
     }
 
-    /// The system prompt for the chat sidebar, which has access to tools.
-    static let chatSystemPrompt = """
-        You are a DSP assistant for BearBone, a real-time audio plugin. You help users create, \
-        modify, and debug audio effect scripts. You can compile and run scripts, read errors, \
-        set parameters, and manage presets.
+    /// Build the system prompt for the chat sidebar, scoped to the active script language.
+    static func chatSystemPrompt(for language: ScriptLanguage) -> String {
+        let languageContract: String
+        let languageRules: String
+        let otherLanguageNote: String
 
-        When the user asks you to create or modify an effect, use the compile_and_run tool \
-        to load it into the audio engine. If compilation fails, read the error and fix the script \
-        automatically. Always compile and run scripts rather than just showing code.
+        switch language {
+        case .python:
+            languageContract = pythonApiContract
+            languageRules = pythonRealTimeRules
+            otherLanguageNote = "Rust/WASM scripts are also supported — if the user asks, you can write Rust instead."
+        case .rust:
+            languageContract = rustApiContract
+            languageRules = rustRealTimeRules
+            otherLanguageNote = "Python scripts are also supported — if the user asks, you can write Python instead."
+        }
 
-        When modifying an existing script, use get_script first to read the current source, \
-        then make targeted changes rather than rewriting from scratch.
+        return """
+            You are a DSP assistant for BearBone, a real-time audio plugin. You help users create, \
+            modify, and debug audio effect scripts. You can compile and run scripts, read errors, \
+            set parameters, and manage presets.
 
-        \(apiContract)
+            When the user asks you to create or modify an effect, use the compile_and_run tool \
+            to load it into the audio engine. If compilation fails, read the error and fix the script \
+            automatically. Always compile and run scripts rather than just showing code.
 
-        \(realTimeRules)
+            When modifying an existing script, use get_script first to read the current source, \
+            then make targeted changes rather than rewriting from scratch.
 
-        \(rustApiContract)
+            Write scripts in the current language (\(language.rawValue)) unless the user asks otherwise. \
+            \(otherLanguageNote)
 
-        \(rustRealTimeRules)
+            \(languageContract)
 
-        Keep responses concise. Focus on what you did and any relevant details (timing, \
-        parameter mappings). Don't repeat the full script back unless asked.
-        """
+            \(languageRules)
+
+            Keep responses concise. Focus on what you did and any relevant details (timing, \
+            parameter mappings). Don't repeat the full script back unless asked.
+            """
+    }
 
     /// Stream a chat request with tool definitions. Returns ChatEvents.
     func streamChat(

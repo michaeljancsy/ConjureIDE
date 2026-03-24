@@ -37,21 +37,19 @@ enum ChatTools {
         ] as [String: Any],
         [
             "name": "set_parameter",
-            "description": "Set a DAW-automatable parameter value. There are 8 parameters (indices 0-7), each ranging from 0.0 to 1.0.",
+            "description": "Set a DAW-automatable parameter value. Up to 16 parameters (indices 0-15). Pass the actual value in the parameter's declared range (e.g., 1000.0 for a cutoff in Hz). The AU parameter tree clamps to min/max automatically. Use get_parameters first to see available parameters and their ranges.",
             "input_schema": [
                 "type": "object",
                 "properties": [
                     "index": [
                         "type": "integer",
-                        "description": "Parameter index (0-7).",
+                        "description": "Parameter index (0-15).",
                         "minimum": 0,
-                        "maximum": 7,
+                        "maximum": 15,
                     ] as [String: Any],
                     "value": [
                         "type": "number",
-                        "description": "Parameter value (0.0 to 1.0).",
-                        "minimum": 0.0,
-                        "maximum": 1.0,
+                        "description": "Parameter value in the declared range (e.g., 1000.0 for Hz, -12.0 for dB).",
                     ] as [String: Any],
                 ] as [String: Any],
                 "required": ["index", "value"],
@@ -59,7 +57,7 @@ enum ChatTools {
         ] as [String: Any],
         [
             "name": "get_parameters",
-            "description": "Read all 8 parameter values.",
+            "description": "Read all active parameter values with names, ranges, and units.",
             "input_schema": [
                 "type": "object",
                 "properties": [:] as [String: Any],
