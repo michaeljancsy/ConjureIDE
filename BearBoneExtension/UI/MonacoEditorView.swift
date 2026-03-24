@@ -43,6 +43,7 @@ struct MonacoEditorView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+        log.info("dismantleNSView called (isEditorReady=\(coordinator.isEditorReady))")
         let controller = webView.configuration.userContentController
         controller.removeScriptMessageHandler(forName: "contentChanged")
         controller.removeScriptMessageHandler(forName: "editorReady")
@@ -155,14 +156,28 @@ struct MonacoEditorView: NSViewRepresentable {
             let content = (pendingContent ?? text.wrappedValue).jsEscaped
 
             let initScript = """
-                bridge.init({
-                    content: "\(content)",
-                    language: "\(lang)",
-                    theme: "\(theme)",
-                    readOnly: \(pendingReadOnly)
-                });
+                try {
+                    bridge.init({
+                        content: "\(content)",
+                        language: "\(lang)",
+                        theme: "\(theme)",
+                        readOnly: \(pendingReadOnly)
+                    });
+                    'ok';
+                } catch(e) {
+                    'ERROR: ' + e.message + ' | ' + e.stack;
+                }
             """
-            webView.evaluateJavaScript(initScript) { _, _ in }
+            log.info("Calling bridge.init (content length=\(content.count), lang=\(lang, privacy: .public))")
+            webView.evaluateJavaScript(initScript) { result, error in
+                if let error {
+                    log.error("bridge.init JS error: \(error.localizedDescription, privacy: .public)")
+                } else if let result = result as? String, result.hasPrefix("ERROR:") {
+                    log.error("bridge.init threw: \(result, privacy: .public)")
+                } else {
+                    log.info("bridge.init JS succeeded")
+                }
+            }
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

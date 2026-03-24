@@ -15,11 +15,11 @@
 		25BC19432F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		25BC19442F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		25BC19452F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
-		AA5E00012F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00022F5013850036AAB6 /* Sentry */; };
-		AA5E00032F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00042F5013850036AAB6 /* Sentry */; };
 		AA11000100000001MIXPANEL /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000200000001MIXPANEL /* Mixpanel */; };
 		AA11000300000001MIXPANEL /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000400000001MIXPANEL /* Mixpanel */; };
 		AA11000600000001MIXPANEL /* Analytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000700000001MIXPANEL /* Analytics.swift */; };
+		AA5E00012F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00022F5013850036AAB6 /* Sentry */; };
+		AA5E00032F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00042F5013850036AAB6 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,8 +69,8 @@
 		257911722F5013850036AAB6 /* BearBoneUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BearBoneUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2579117E2F5013850036AAB6 /* BearBoneExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BearBoneExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		25BC19412F563DB20009EA0D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = BearBone/Assets.xcassets; sourceTree = "<group>"; };
-		AABB00022F5013850036AAB6 /* rust */ = {isa = PBXFileReference; lastKnownFileType = folder; path = rust; sourceTree = "<group>"; };
 		AA11000700000001MIXPANEL /* Analytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Analytics.swift; path = BearBoneExtension/Analytics.swift; sourceTree = "<group>"; };
+		AABB00022F5013850036AAB6 /* rust */ = {isa = PBXFileReference; lastKnownFileType = folder; path = rust; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -78,8 +78,8 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				"Resources/monaco/editor-bridge.js",
 				Resources/monaco/index.html,
-				Resources/monaco/editor-bridge.js,
 			);
 			target = 2579117D2F5013850036AAB6 /* BearBoneExtension */;
 		};
@@ -147,6 +147,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		2508E2602F733DDE008A4516 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				AA11000700000001MIXPANEL /* Analytics.swift */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		257911372F5013840036AAB6 = {
 			isa = PBXGroup;
 			children = (
@@ -160,6 +168,7 @@
 				AABB00022F5013850036AAB6 /* rust */,
 				257911412F5013840036AAB6 /* Products */,
 				25BC19412F563DB20009EA0D /* Assets.xcassets */,
+				2508E2602F733DDE008A4516 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -457,26 +466,6 @@
 			shellPath = /bin/bash;
 			shellScript = "# Copy bundled Rust compiler into the extension bundle for sandbox-safe compilation\nRUSTC_SRC=\"${SRCROOT}/rustc-dist\"\n\nif [ ! -d \"${RUSTC_SRC}\" ]; then\n    # Check if we're in a worktree and can symlink from main\n    MAIN_WORKTREE=$(git -C \"${SRCROOT}\" worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //')\n    if [ -n \"${MAIN_WORKTREE}\" ] && [ \"${MAIN_WORKTREE}\" != \"${SRCROOT}\" ] && [ -d \"${MAIN_WORKTREE}/rustc-dist\" ]; then\n        echo \"note: Symlinking rustc-dist from main worktree\" >&2\n        ln -s \"${MAIN_WORKTREE}/rustc-dist\" \"${RUSTC_SRC}\"\n    else\n        echo \"warning: Bundled Rust compiler not found at ${RUSTC_SRC}. Run scripts/setup-rustc.sh first.\" >&2\n        echo \"warning: Rust compilation will only work with user-installed rustc (not in sandboxed DAWs).\" >&2\n        exit 0\n    fi\nfi\n\nRUSTC_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/rustc-dist\"\n\n# Copy the sysroot\nmkdir -p \"${RUSTC_DST}\"\nrsync -a --delete \"${RUSTC_SRC}/\" \"${RUSTC_DST}/\"\n\n# Code-sign all executables and dylibs\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${RUSTC_DST}/bin/rustc\"\nfind \"${RUSTC_DST}/lib\" -name '*.dylib' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp {} \\;\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/rust-lld\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/wasm-ld\"\n";
 		};
-		AABB0010000000MONACO0001 /* Copy Monaco Editor */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/BearBoneExtension/Resources/monaco/index.html",
-			);
-			name = "Copy Monaco Editor";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/monaco/index.html",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "# Copy Monaco Editor resources into the extension bundle\nMONACO_SRC=\"${SRCROOT}/BearBoneExtension/Resources/monaco\"\nMONACO_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/monaco\"\n\nif [ ! -d \"${MONACO_SRC}/vs\" ]; then\n    echo \"warning: Monaco Editor not found at ${MONACO_SRC}/vs. Run scripts/setup-monaco.sh first.\" >&2\n    # Still copy index.html and editor-bridge.js so the build doesn't fail\n    mkdir -p \"${MONACO_DST}\"\n    cp -f \"${MONACO_SRC}/index.html\" \"${MONACO_DST}/\" 2>/dev/null || true\n    cp -f \"${MONACO_SRC}/editor-bridge.js\" \"${MONACO_DST}/\" 2>/dev/null || true\n    exit 0\nfi\n\nmkdir -p \"${MONACO_DST}\"\nrsync -a --delete \"${MONACO_SRC}/\" \"${MONACO_DST}/\"\n";
-		};
 		AABB000B2F5013850036AAB6 /* Copy Export Template */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -515,25 +504,6 @@
 			shellPath = /bin/bash;
 			shellScript = "\"${SRCROOT}/scripts/generate-test-serial.sh\"\n";
 		};
-		AABB00112F5013850036AAB6 /* Pre-Build Clean */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/scripts/pre-build-clean.sh",
-			);
-			name = "Pre-Build Clean";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "\"${SRCROOT}/scripts/pre-build-clean.sh\"\n";
-		};
 		AABB000F2F5013850036AAB6 /* Bust AU Cache */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -552,6 +522,45 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "\"${SRCROOT}/scripts/bust-au-cache.sh\"\n";
+		};
+		AABB0010000000MONACO0001 /* Copy Monaco Editor */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/BearBoneExtension/Resources/monaco/index.html",
+			);
+			name = "Copy Monaco Editor";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/monaco/index.html",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# Copy Monaco Editor resources into the extension bundle\nMONACO_SRC=\"${SRCROOT}/BearBoneExtension/Resources/monaco\"\nMONACO_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/monaco\"\n\nif [ ! -d \"${MONACO_SRC}/vs\" ]; then\n    echo \"warning: Monaco Editor not found at ${MONACO_SRC}/vs. Run scripts/setup-monaco.sh first.\" >&2\n    # Still copy index.html and editor-bridge.js so the build doesn't fail\n    mkdir -p \"${MONACO_DST}\"\n    cp -f \"${MONACO_SRC}/index.html\" \"${MONACO_DST}/\" 2>/dev/null || true\n    cp -f \"${MONACO_SRC}/editor-bridge.js\" \"${MONACO_DST}/\" 2>/dev/null || true\n    exit 0\nfi\n\nmkdir -p \"${MONACO_DST}\"\nrsync -a --delete \"${MONACO_SRC}/\" \"${MONACO_DST}/\"\n";
+		};
+		AABB00112F5013850036AAB6 /* Pre-Build Clean */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/pre-build-clean.sh",
+			);
+			name = "Pre-Build Clean";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/scripts/pre-build-clean.sh\"\n";
 		};
 		AABB00132F5013850036AAB6 /* Upload dSYMs to Sentry */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -1145,14 +1154,6 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 9.0.0;
-			};
-		};
 		AA11000500000001MIXPANEL /* XCRemoteSwiftPackageReference "mixpanel-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/mixpanel/mixpanel-swift";
@@ -1161,19 +1162,17 @@
 				minimumVersion = 4.3.0;
 			};
 		};
+		AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		AA5E00022F5013850036AAB6 /* Sentry */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
-			productName = Sentry;
-		};
-		AA5E00042F5013850036AAB6 /* Sentry */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
-			productName = Sentry;
-		};
 		AA11000200000001MIXPANEL /* Mixpanel */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = AA11000500000001MIXPANEL /* XCRemoteSwiftPackageReference "mixpanel-swift" */;
@@ -1183,6 +1182,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA11000500000001MIXPANEL /* XCRemoteSwiftPackageReference "mixpanel-swift" */;
 			productName = Mixpanel;
+		};
+		AA5E00022F5013850036AAB6 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
+		AA5E00042F5013850036AAB6 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
