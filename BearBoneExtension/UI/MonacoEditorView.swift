@@ -208,11 +208,14 @@ struct MonacoEditorView: NSViewRepresentable {
             lastReadOnly = pendingReadOnly
             webView.evaluateJavaScript("bridge.setReadOnly(\(pendingReadOnly))") { _, _ in }
 
-            let content = pendingContent ?? text.wrappedValue
-            lastContent = content
-            let escaped = content.jsEscaped
-            webView.evaluateJavaScript("bridge.setContent(\"\(escaped)\")") { _, _ in }
-            pendingContent = nil
+            if let content = pendingContent {
+                lastContent = content
+                let escaped = content.jsEscaped
+                webView.evaluateJavaScript("bridge.setContent(\"\(escaped)\")") { _, _ in }
+                pendingContent = nil
+            } else {
+                lastContent = text.wrappedValue
+            }
         }
     }
 }
