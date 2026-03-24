@@ -48,7 +48,8 @@ final class GitHubClient: Sendable {
             let repo = pathComponents[1]
             let branch = pathComponents[3]
             let filePath = pathComponents.dropFirst(4).joined(separator: "/")
-            if let rawURL = URL(string: "https://raw.githubusercontent.com/\(owner)/\(repo)/\(branch)/\(filePath)") {
+            let encodedFilePath = filePath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? filePath
+            if let rawURL = URL(string: "https://raw.githubusercontent.com/\(owner)/\(repo)/\(branch)/\(encodedFilePath)") {
                 return rawURL
             }
         }
@@ -71,7 +72,8 @@ final class GitHubClient: Sendable {
 
     /// Fetch a raw file from a public GitHub repo via raw.githubusercontent.com.
     func fetchRawFile(owner: String, repo: String, branch: String = "main", path: String) async throws -> String {
-        guard let url = URL(string: "https://raw.githubusercontent.com/\(owner)/\(repo)/\(branch)/\(path)") else {
+        let encodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+        guard let url = URL(string: "https://raw.githubusercontent.com/\(owner)/\(repo)/\(branch)/\(encodedPath)") else {
             throw GitHubError.invalidURL
         }
         return try await fetchURL(url)
@@ -174,7 +176,8 @@ final class GitHubClient: Sendable {
     // MARK: - Helpers
 
     private func apiURL(path: String) -> URL {
-        URL(string: "https://api.github.com\(path)")!
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+        return URL(string: "https://api.github.com\(encoded)")!
     }
 
     private func apiRequest(url: URL, method: String, token: String?) -> URLRequest {
