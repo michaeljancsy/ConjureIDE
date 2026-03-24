@@ -5,20 +5,25 @@
 // bell-like, or robotic timbres. Unlike tremolo (which modulates
 // amplitude around a bias), ring modulation has no DC offset, so the
 // carrier frequency components are always present in the output.
+//
+// Params:
+//   0 (Frequency): Carrier frequency — 20 to 20000 Hz (log)
 
 const MAX_CH: usize = 2;
 const MAX_FR: usize = 4096;
 
 static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
+static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
 
-// Parameters:
-const FREQUENCY: usize = 0;
+// Parameter indices
+const FREQUENCY: usize = 0; // 20–20000 Hz
 
 // Persistent phase across callbacks
 // Use f64 to match Python's float64 precision in the phase accumulator.
 static mut PHASE: f64 = 0.0;
+
+static METADATA: &str = r#"[{"name":"Frequency","min":20.0,"max":20000.0,"unit":"Hz","default":440.0,"curve":"log"}]"#;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -36,6 +41,16 @@ pub extern "C" fn get_params_ptr() -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn get_param_metadata_ptr() -> i32 {
+    METADATA.as_ptr() as i32
+}
+
+#[no_mangle]
+pub extern "C" fn get_param_metadata_len() -> i32 {
+    METADATA.len() as i32
+}
+
+#[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
     output: *mut f32,
@@ -49,7 +64,7 @@ pub extern "C" fn process(
     let two_pi = 2.0 * core::f64::consts::PI;
 
     unsafe {
-        let carrier_hz = 20.0 * (1000.0_f64).powf(PARAMS_BUF[FREQUENCY] as f64); // 20 Hz to 20 kHz (log)
+        let carrier_hz = PARAMS_BUF[FREQUENCY] as f64;
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
         let phase_start = PHASE;

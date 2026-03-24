@@ -36,6 +36,9 @@ final class AnthropicProvider: AIProvider {
         - params is a dict with these names as keys and actual (denormalized) values: \
           rate_hz = params["rate"]  # already 0.5–20.0 Hz, no manual mapping needed
         - The DAW/UI shows sliders with real ranges and formatted values (e.g. "5.2 Hz", "-21.5 dB").
+        - Add "curve": "log" for frequency and time params (exponential slider distribution):
+          "cutoff": {"min": 20.0, "max": 20000.0, "unit": "Hz", "default": 1000.0, "curve": "log"},
+          Default curve is "linear". Use "log" when the range spans orders of magnitude.
         - Common units: "dB", "Hz", "ms", "%", ":1", "" (dimensionless).
         - Up to 16 parameters can be declared.
         - ALWAYS use PARAMS when your effect has controllable parameters.
@@ -96,26 +99,35 @@ final class AnthropicProvider: AIProvider {
         - Static buffers: define MAX_CH (2) and MAX_FR (4096) constants, then:
           static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
           static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-          static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
-        - The host writes up to 16 DAW-automatable parameter values (0.0–1.0) into PARAMS_BUF \
-          before each process() call. Read PARAMS_BUF[0]–PARAMS_BUF[N] to access params and make \
-          your effect controllable in real time from the host DAW.
+          static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
         - Audio is interleaved: total samples = channels * frame_count
         - Use std::slice::from_raw_parts(input, n) and from_raw_parts_mut(output, n) inside unsafe blocks
         - Must handle both mono (1 channel) and stereo (2 channels)
         - For stereo, samples are interleaved: [L0, R0, L1, R1, ...]
 
-        Parameter names:
-        - Add a // Parameters: comment followed by named const declarations to label and expose params: \
-          // Parameters: \
-          const RATE: usize = 0; \
-          const DEPTH: usize = 1;
-        - Use these consts to read params in process(): PARAMS_BUF[RATE], PARAMS_BUF[DEPTH]
-        - Only declared params are shown in the UI; others are hidden
-        - Always declare params when your script uses PARAMS_BUF
-        - Const names become UI labels with underscores replaced by spaces (e.g. BIT_DEPTH → "BIT DEPTH")
-        - Map raw 0–1 values to meaningful ranges inside process() (e.g. \
-          let freq = 20.0 + PARAMS_BUF[CUTOFF] * 19980.0)
+        Rich parameters (recommended) — declare metadata so the host denormalizes values for you:
+        - Export get_param_metadata_ptr() and get_param_metadata_len() pointing to a static JSON string:
+          static METADATA: &str = r#"[
+              {"name":"Rate","min":0.5,"max":20.0,"unit":"Hz","default":5.0},
+              {"name":"Depth","min":0.0,"max":1.0,"unit":"","default":0.5}
+          ]"#;
+          #[no_mangle]
+          pub extern "C" fn get_param_metadata_ptr() -> i32 {
+              METADATA.as_ptr() as i32
+          }
+          #[no_mangle]
+          pub extern "C" fn get_param_metadata_len() -> i32 {
+              METADATA.len() as i32
+          }
+        - With metadata, PARAMS_BUF receives actual denormalized values (not 0–1):
+          let rate_hz = unsafe { PARAMS_BUF[0] }; // already 0.5–20.0 Hz, no mapping needed
+        - Add "curve":"log" for frequency and time params (exponential slider distribution):
+          {"name":"Cutoff","min":20.0,"max":20000.0,"unit":"Hz","default":1000.0,"curve":"log"}
+          Default curve is "linear". Use "log" when the range spans orders of magnitude.
+        - The DAW/UI shows sliders with real ranges and formatted values (e.g. "5.2 Hz", "-21.5 dB").
+        - Common units: "dB", "Hz", "ms", "%", ":1", "" (dimensionless).
+        - Up to 16 parameters. JSON array order determines parameter index (first = 0, second = 1, etc.).
+        - ALWAYS use rich parameters when your effect has controllable params.
         """
 
     private static let rustRealTimeRules = """

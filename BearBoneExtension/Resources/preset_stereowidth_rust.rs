@@ -5,16 +5,21 @@
 // L/R. At WIDTH=0 the output is mono, at WIDTH=1 the signal is
 // unchanged, and above 1.0 the stereo image is exaggerated.
 // For mono input, the signal passes through unchanged.
+//
+// Params:
+//   0 (Width): Stereo width — 0.0 to 2.0
 
 const MAX_CH: usize = 2;
 const MAX_FR: usize = 4096;
 
 static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
+static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
 
-// Parameters:
-const WIDTH: usize = 0;
+// Parameter indices
+const WIDTH: usize = 0; // 0.0–2.0
+
+static METADATA: &str = r#"[{"name":"Width","min":0.0,"max":2.0,"unit":"","default":1.0}]"#;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -32,6 +37,16 @@ pub extern "C" fn get_params_ptr() -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn get_param_metadata_ptr() -> i32 {
+    METADATA.as_ptr() as i32
+}
+
+#[no_mangle]
+pub extern "C" fn get_param_metadata_len() -> i32 {
+    METADATA.len() as i32
+}
+
+#[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
     output: *mut f32,
@@ -43,7 +58,7 @@ pub extern "C" fn process(
     let frames = frame_count as usize;
 
     unsafe {
-        let width = PARAMS_BUF[WIDTH] * 2.0; // 0.0 to 2.0
+        let width = PARAMS_BUF[WIDTH];
         let inp = std::slice::from_raw_parts(input, ch * frames);
         let out = std::slice::from_raw_parts_mut(output, ch * frames);
 

@@ -5,20 +5,26 @@
 //    producing a gritty, digital distortion.
 // 2. Sample rate reduction: holds every Nth sample, discarding the rest,
 //    which introduces aliasing artifacts and a characteristic stepped sound.
+//
+// Params:
+//   0 (Bit Depth):  Quantization depth — 1 to 16 bits
+//   1 (Downsample): Sample rate reduction factor — 1x to 16x
 
 const MAX_CH: usize = 2;
 const MAX_FR: usize = 4096;
 
 static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
+static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
 
-// Parameters:
-const BIT_DEPTH: usize = 0;
-const DOWNSAMPLE: usize = 1;
+// Parameter indices
+const BIT_DEPTH: usize = 0;  // 1–16 bits
+const DOWNSAMPLE: usize = 1; // 1–16x
 
 // Persistent held sample per channel for sample-rate reduction
 static mut HELD: [f32; MAX_CH] = [0.0; MAX_CH];
+
+static METADATA: &str = r#"[{"name":"Bit Depth","min":1.0,"max":16.0,"unit":"bits","default":16.0},{"name":"Downsample","min":1.0,"max":16.0,"unit":"x","default":1.0}]"#;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -35,6 +41,16 @@ pub extern "C" fn get_params_ptr() -> i32 {
     unsafe { PARAMS_BUF.as_ptr() as i32 }
 }
 
+#[no_mangle]
+pub extern "C" fn get_param_metadata_ptr() -> i32 {
+    METADATA.as_ptr() as i32
+}
+
+#[no_mangle]
+pub extern "C" fn get_param_metadata_len() -> i32 {
+    METADATA.len() as i32
+}
+
 /// Bitcrush — bit depth reduction and sample rate reduction.
 #[no_mangle]
 pub extern "C" fn process(
@@ -48,8 +64,8 @@ pub extern "C" fn process(
     let frames = frame_count as usize;
 
     unsafe {
-        let bit_depth = (PARAMS_BUF[BIT_DEPTH] * 15.0) as i32 + 1;    // 1 to 16
-        let downsample = (PARAMS_BUF[DOWNSAMPLE] * 15.0) as usize + 1; // 1 to 16
+        let bit_depth = PARAMS_BUF[BIT_DEPTH] as i32;       // truncate to match Python's int()
+        let downsample = PARAMS_BUF[DOWNSAMPLE] as usize;  // truncate to match Python's int()
         let levels = (1 << bit_depth) as f32;
 
         let inp = std::slice::from_raw_parts(input, ch * frames);

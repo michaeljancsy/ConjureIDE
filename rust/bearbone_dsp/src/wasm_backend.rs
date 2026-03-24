@@ -125,7 +125,7 @@ impl WasmBackend {
             BufferMode::FixedOffset => DEFAULT_FUEL,
         };
 
-        // Try get_param_metadata_json first (rich metadata), then fall back to get_param_names_json
+        // Try get_param_metadata_ptr/len first (rich metadata), then fall back to get_param_names_json
         let (param_names, param_metadata) = Self::extract_params(
             &instance,
             &mut store,
@@ -172,12 +172,18 @@ impl WasmBackend {
         store: &mut Store<()>,
         memory: &Memory,
     ) -> (HashMap<u8, String>, Option<Vec<crate::params::ParamMetadata>>) {
-        // Try get_param_metadata_json first (rich metadata)
-        if let Ok(get_meta_fn) =
-            instance.get_typed_func::<(), (i32, i32)>(&mut *store, "get_param_metadata_json")
-        {
+        // Try get_param_metadata_ptr/len first (rich metadata).
+        // Uses two separate functions to avoid WASM multi-value return ABI issues
+        // (Rust's extern "C" on wasm32 doesn't reliably produce multi-value returns).
+        if let (Ok(get_ptr_fn), Ok(get_len_fn)) = (
+            instance.get_typed_func::<(), i32>(&mut *store, "get_param_metadata_ptr"),
+            instance.get_typed_func::<(), i32>(&mut *store, "get_param_metadata_len"),
+        ) {
             let _ = store.set_fuel(COMPILED_FUEL);
-            if let Ok((ptr, len)) = get_meta_fn.call(&mut *store, ()) {
+            let ptr_result = get_ptr_fn.call(&mut *store, ());
+            let _ = store.set_fuel(COMPILED_FUEL);
+            let len_result = get_len_fn.call(&mut *store, ());
+            if let (Ok(ptr), Ok(len)) = (ptr_result, len_result) {
                 let data = memory.data(&*store);
                 let start = ptr as usize;
                 let end = start + len as usize;
@@ -534,14 +540,24 @@ impl Backend for WasmBackend {
 
         // Write params into WASM memory if the module exports get_params_ptr.
         // Only write param_write_count entries to avoid overflowing the module's buffer.
+        // If metadata exists, denormalize 0–1 to actual values (same as Python backend).
         if self.params_offset != 0 {
             let params_byte_offset = self.params_offset as usize;
             let write_count = self.param_write_count.min(params.len());
             let params_end = params_byte_offset + write_count * 4;
             if params_end <= mem_data.len() {
                 for i in 0..write_count {
+                    let val = if let Some(ref meta) = self.param_metadata {
+                        if i < meta.len() {
+                            meta[i].denormalize(params[i])
+                        } else {
+                            params[i]
+                        }
+                    } else {
+                        params[i]
+                    };
                     let offset = params_byte_offset + i * 4;
-                    mem_data[offset..offset + 4].copy_from_slice(&params[i].to_le_bytes());
+                    mem_data[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
                 }
             }
         }
@@ -1197,6 +1213,41 @@ mod tests {
         let names = backend.param_names();
         assert_eq!(names.len(), 1);
         assert_eq!(names[&0], "Gain");
+    }
+
+    #[test]
+    fn test_wasm_param_metadata_from_export() {
+        let json = r#"[{"name":"Rate","key":"rate","min":0.5,"max":20.0,"default":5.0,"unit":"Hz","curve":"linear"}]"#;
+        let hex = json_to_wat_hex(json);
+        let wat = format!(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (data (i32.const 1024) "{hex}")
+              (func (export "process")
+                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              )
+              (func (export "get_param_metadata_ptr") (result i32)
+                (i32.const 1024)
+              )
+              (func (export "get_param_metadata_len") (result i32)
+                (i32.const {len})
+              )
+            )
+            "#,
+            hex = hex,
+            len = json.len(),
+        );
+        let wasm = wat_to_wasm(&wat);
+        let backend = WasmBackend::load(&wasm).unwrap();
+        let names = backend.param_names();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[&0], "Rate");
+        let metadata = backend.param_metadata().expect("Should have metadata");
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata[0].name, "Rate");
+        assert!((metadata[0].min - 0.5).abs() < 1e-6);
+        assert!((metadata[0].max - 20.0).abs() < 1e-6);
     }
 
     #[test]

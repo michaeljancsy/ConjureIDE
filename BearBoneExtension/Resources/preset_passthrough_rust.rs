@@ -8,7 +8,7 @@ const MAX_FR: usize = 4096;
 
 static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
+static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -27,9 +27,9 @@ pub extern "C" fn get_params_ptr() -> i32 {
 
 /// Passthrough — copies input to output unchanged.
 ///
-/// Iterates over all channel-sequential samples (channels × frames) and copies each
+/// Iterates over all channel-sequential samples (channels x frames) and copies each
 /// input sample directly to the output buffer. DAW-automatable parameters are
-/// available in PARAMS_BUF[0..8] but unused by this preset.
+/// available in PARAMS_BUF[0..16] but unused by this preset.
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
