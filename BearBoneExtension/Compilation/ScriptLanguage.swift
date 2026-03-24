@@ -1,6 +1,6 @@
 import Foundation
 
-enum ScriptLanguage: String {
+enum ScriptLanguage: String, CaseIterable {
     case python
     case rust
 
