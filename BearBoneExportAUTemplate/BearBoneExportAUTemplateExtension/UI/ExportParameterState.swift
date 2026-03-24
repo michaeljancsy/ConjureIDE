@@ -16,12 +16,15 @@ import SwiftUI
 final class ExportParameterState: ObservableObject {
     @Published var values: [Float]
     let paramCount: Int
+    /// Rich parameter metadata for slider ranges and value formatting.
+    let paramMetadata: [ExportParamMetadata]?
 
     private var parameterTree: AUParameterTree?
     private var observerToken: AUParameterObserverToken?
 
-    init(paramCount: Int = 8) {
+    init(paramCount: Int = 8, paramMetadata: [ExportParamMetadata]? = nil) {
         self.paramCount = paramCount
+        self.paramMetadata = paramMetadata
         self.values = Array(repeating: 0.0, count: paramCount)
     }
 
@@ -40,7 +43,7 @@ final class ExportParameterState: ObservableObject {
         // Observe changes from ANY source (DAW automation, MIDI learn, etc.)
         let count = paramCount
         observerToken = parameterTree.token(byAddingParameterObserver: { [weak self] address, value in
-            guard address < count else { return }
+            guard Int(address) < count else { return }
             DispatchQueue.main.async {
                 self?.values[Int(address)] = value
             }
@@ -70,5 +73,11 @@ final class ExportParameterState: ObservableObject {
                 }
             }
         )
+    }
+
+    /// Metadata for a specific parameter (nil for legacy 0–1 params).
+    func metadata(for index: Int) -> ExportParamMetadata? {
+        guard let meta = paramMetadata, index < meta.count else { return nil }
+        return meta[index]
     }
 }

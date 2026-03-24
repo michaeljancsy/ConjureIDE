@@ -1,7 +1,8 @@
 import numpy as np
 
-# Parameters:
-DRIVE = 0
+PARAMS = {
+    "drive": {"min": 1.0, "max": 20.0, "unit": "x", "default": 5.0},
+}
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -15,9 +16,9 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     metallic/buzzy timbre popular in modular synthesis.
 
     Params:
-        0 (Drive): Fold intensity — 0.0 = 1x, 1.0 = 20x
+        drive: Fold intensity (1–20x)
     """
-    drive = 1.0 + params[DRIVE] * 19.0  # 1 to 20
+    drive = params["drive"]
 
     for ch in range(len(inputs)):
         x = inputs[ch][:frame_count] * drive

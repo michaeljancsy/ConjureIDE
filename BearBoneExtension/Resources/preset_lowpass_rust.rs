@@ -4,21 +4,23 @@
 // Rolls off at 6 dB/octave above the cutoff frequency.
 //
 // Params:
-//   0 (Cutoff): Cutoff frequency — 0.0 = 20 Hz, 1.0 = 20 kHz (exponential)
+//   0 (Cutoff): Cutoff frequency — 20 to 20000 Hz (log curve)
 
 const MAX_CH: usize = 2;
 const MAX_FR: usize = 4096;
 
 static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
+static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
 
-// Parameters:
-const CUTOFF: usize = 0;
+// Parameter indices
+const CUTOFF: usize = 0; // 20–20000 Hz (log curve)
 
 // Persistent state: previous output per channel
 // Use f64 to match Python's float64 precision in the feedback loop.
 static mut PREV_OUT: [f64; MAX_CH] = [0.0; MAX_CH];
+
+static METADATA: &str = r#"[{"name":"Cutoff","min":20.0,"max":20000.0,"unit":"Hz","default":1000.0,"curve":"log"}]"#;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -36,6 +38,16 @@ pub extern "C" fn get_params_ptr() -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn get_param_metadata_ptr() -> i32 {
+    METADATA.as_ptr() as i32
+}
+
+#[no_mangle]
+pub extern "C" fn get_param_metadata_len() -> i32 {
+    METADATA.len() as i32
+}
+
+#[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
     output: *mut f32,
@@ -49,8 +61,7 @@ pub extern "C" fn process(
     let two_pi = 2.0 * core::f64::consts::PI;
 
     unsafe {
-        // Exponential mapping: 20 Hz to 20 kHz
-        let cutoff_hz = 20.0 * (1000.0_f64).powf(PARAMS_BUF[CUTOFF] as f64);
+        let cutoff_hz = PARAMS_BUF[CUTOFF] as f64;
 
         let a = (-two_pi * cutoff_hz / sr).exp();
         let b = 1.0 - a;

@@ -304,18 +304,17 @@ struct BearBoneTests {
 
         #expect(status == noErr)
 
-        // Verify both channels have data (default preset processes audio)
+        // Verify both channels have data (default preset is stereo width at width=1.0 → passthrough)
         let outL = outputBuffer.floatChannelData![0]
         let outR = outputBuffer.floatChannelData![1]
         let valL = outL[1]
         let valR = outR[1]
-        // Default preset is stereo width with WIDTH=0.0 → mono collapse:
-        // output = (L+R)/2 for both channels
-        let expectedMid = (inputL[1] + inputR[1]) * 0.5
-        let isMidL = abs(valL - expectedMid) < 1e-5
-        let isMidR = abs(valR - expectedMid) < 1e-5
-        #expect(isMidL, "Left channel should be mid (mono collapse at width=0)")
-        #expect(isMidR, "Right channel should be mid (mono collapse at width=0)")
+        // Default preset is stereo width with default width=1.0 → passthrough:
+        // output should match input
+        let isPassL = abs(valL - inputL[1]) < 1e-4
+        let isPassR = abs(valR - inputR[1]) < 1e-4
+        #expect(isPassL, "Left channel should pass through at width=1.0")
+        #expect(isPassR, "Right channel should pass through at width=1.0")
 
         au.deallocateRenderResources()
     }
@@ -327,7 +326,7 @@ struct BearBoneTests {
     private static let testScript = """
         import numpy as np
 
-        def process(inputs, outputs, frame_count, sample_rate):
+        def process(inputs, outputs, frame_count, sample_rate, params):
             for ch in range(len(inputs)):
                 outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25
         """
@@ -353,9 +352,9 @@ struct BearBoneTests {
         let (_, au2) = try await Self.instantiateAU()
         au2.fullState = savedState
         let restoredState = au2.fullState
-        let restoredData = restoredState?[Self.scriptSourceKey] as? Data
-        #expect(restoredData != nil, "Restored AU should have script in fullState")
-        let restoredSource = String(data: restoredData!, encoding: .utf8)
+        let restoredData = try #require(restoredState?[Self.scriptSourceKey] as? Data,
+                                         "Restored AU should have script in fullState")
+        let restoredSource = String(data: restoredData, encoding: .utf8)
         #expect(restoredSource == Self.testScript, "Script should survive full save/restore cycle")
     }
 
@@ -703,15 +702,15 @@ struct BearBoneTests {
 
     // MARK: - Parameter Tree
 
-    @Test func parameterTreeHasEightParameters() async throws {
+    @Test func parameterTreeMatchesLoadedScript() async throws {
         let (_, au) = try await Self.instantiateAU()
         let tree = try #require(au.parameterTree, "Parameter tree should exist")
         let params = tree.allParameters
-        #expect(params.count == 8, "Should have 8 parameters")
-        for i in 0..<8 {
-            let param = tree.parameter(withAddress: AUParameterAddress(i))
-            #expect(param != nil, "Parameter at address \(i) should exist")
-        }
+        // Default preset (stereo width) declares 1 parameter via PARAMS dict.
+        // The tree is rebuilt to match the script's declared parameters.
+        #expect(params.count >= 1, "Should have at least 1 parameter")
+        let param0 = tree.parameter(withAddress: AUParameterAddress(0))
+        #expect(param0 != nil, "Parameter at address 0 should exist")
     }
 
     @Test func parameterUIPathMatchesDAWPath() async throws {
@@ -720,13 +719,14 @@ struct BearBoneTests {
         // readable back via implementorValueProvider → dsp_kernel_get_parameter().
         let (_, au) = try await Self.instantiateAU()
         let tree = try #require(au.parameterTree)
+        let params = tree.allParameters
 
-        for i in 0..<8 {
-            let param = try #require(tree.parameter(withAddress: AUParameterAddress(i)))
-            let testValue = Float(i + 1) / 10.0  // 0.1, 0.2, ..., 0.8
+        for param in params {
+            // Use a value within the parameter's range
+            let testValue = param.minValue + (param.maxValue - param.minValue) * 0.42
             param.value = testValue
-            #expect(abs(param.value - testValue) < 1e-6,
-                   "Param \(i): value set via AUParameter.value should round-trip through Rust kernel")
+            #expect(abs(param.value - testValue) < 0.01,
+                   "Param \(param.displayName): value set via AUParameter.value should round-trip through Rust kernel")
         }
     }
 
@@ -753,7 +753,8 @@ struct BearBoneTests {
             fired.pointee = true
         })
 
-        param.value = 0.42
+        let testValue = param.minValue + (param.maxValue - param.minValue) * 0.42
+        param.value = testValue
 
         // Observer may fire on an arbitrary thread; wait briefly
         for _ in 0..<100 {
@@ -763,7 +764,7 @@ struct BearBoneTests {
 
         #expect(fired.pointee, "Observer should have fired")
         #expect(observedAddress.pointee == 0, "Observer should fire with address 0")
-        #expect(abs(observedValue.pointee - 0.42) < 1e-6, "Observer should receive the set value")
+        #expect(abs(observedValue.pointee - testValue) < 0.01, "Observer should receive the set value")
 
         tree.removeParameterObserver(token)
     }
@@ -771,19 +772,21 @@ struct BearBoneTests {
     @Test func parameterValueRoundTrip() async throws {
         let (_, au) = try await Self.instantiateAU()
         let tree = try #require(au.parameterTree)
+        let params = tree.allParameters
 
-        // Set all 8 params to distinct values
-        let testValues: [Float] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 1.0]
-        for i in 0..<8 {
-            let param = try #require(tree.parameter(withAddress: AUParameterAddress(i)))
-            param.value = testValues[i]
+        // Set each param to a value within its range, then read back
+        for (i, param) in params.enumerated() {
+            let fraction = Float(i + 1) / Float(params.count + 1)
+            let testValue = param.minValue + (param.maxValue - param.minValue) * fraction
+            param.value = testValue
         }
 
         // Read all back and verify
-        for i in 0..<8 {
-            let param = try #require(tree.parameter(withAddress: AUParameterAddress(i)))
-            #expect(abs(param.value - testValues[i]) < 1e-6,
-                   "Param \(i): expected \(testValues[i]), got \(param.value)")
+        for (i, param) in params.enumerated() {
+            let fraction = Float(i + 1) / Float(params.count + 1)
+            let expected = param.minValue + (param.maxValue - param.minValue) * fraction
+            #expect(abs(param.value - expected) < 0.01,
+                   "Param \(param.displayName): expected \(expected), got \(param.value)")
         }
     }
 }

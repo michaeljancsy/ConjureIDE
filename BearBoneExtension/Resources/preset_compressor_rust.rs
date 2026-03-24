@@ -8,24 +8,33 @@
 //
 // The envelope follower operates per-sample across all channels (peak detection),
 // so stereo signals are compressed with linked gain to preserve the stereo image.
+//
+// Params:
+//   0 (Threshold): Compression threshold — -40 to -3 dB
+//   1 (Ratio):     Compression ratio — 2:1 to 20:1
+//   2 (Attack):    Attack time — 0.5 to 50 ms
+//   3 (Release):   Release time — 10 to 500 ms
+//   4 (Makeup):    Makeup gain — 0 to 20 dB
 
 const MAX_CH: usize = 2;
 const MAX_FR: usize = 4096;
 
 static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
+static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
 
-// Parameters:
-const THRESHOLD: usize = 0;
-const RATIO: usize = 1;
-const ATTACK: usize = 2;
-const RELEASE: usize = 3;
-const MAKEUP: usize = 4;
+// Parameter indices
+const THRESHOLD: usize = 0; // -40 to -3 dB
+const RATIO: usize = 1;     // 2:1 to 20:1
+const ATTACK: usize = 2;    // 0.5–50 ms
+const RELEASE: usize = 3;   // 10–500 ms
+const MAKEUP: usize = 4;    // 0–20 dB
 
 // Persistent envelope follower state
 // Use f64 to match Python's float64 precision in the envelope feedback loop.
 static mut ENVELOPE: f64 = 0.0;
+
+static METADATA: &str = r#"[{"name":"Threshold","min":-40.0,"max":-3.0,"unit":"dB","default":-20.0},{"name":"Ratio","min":2.0,"max":20.0,"unit":":1","default":4.0},{"name":"Attack","min":0.5,"max":50.0,"unit":"ms","default":5.0},{"name":"Release","min":10.0,"max":500.0,"unit":"ms","default":50.0},{"name":"Makeup","min":0.0,"max":20.0,"unit":"dB","default":0.0}]"#;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -40,6 +49,16 @@ pub extern "C" fn get_output_ptr() -> i32 {
 #[no_mangle]
 pub extern "C" fn get_params_ptr() -> i32 {
     unsafe { PARAMS_BUF.as_ptr() as i32 }
+}
+
+#[no_mangle]
+pub extern "C" fn get_param_metadata_ptr() -> i32 {
+    METADATA.as_ptr() as i32
+}
+
+#[no_mangle]
+pub extern "C" fn get_param_metadata_len() -> i32 {
+    METADATA.len() as i32
 }
 
 fn db_to_lin(db: f64) -> f64 {
@@ -64,11 +83,11 @@ pub extern "C" fn process(
     let sr = sample_rate as f64;
 
     unsafe {
-        let threshold_db = -40.0 + PARAMS_BUF[THRESHOLD] as f64 * 37.0;  // -40 to -3 dB
-        let ratio = 2.0 + PARAMS_BUF[RATIO] as f64 * 18.0;               // 2 to 20
-        let attack_ms = 0.5 + PARAMS_BUF[ATTACK] as f64 * 49.5;           // 0.5 to 50 ms
-        let release_ms = 10.0 + PARAMS_BUF[RELEASE] as f64 * 490.0;       // 10 to 500 ms
-        let makeup_db = PARAMS_BUF[MAKEUP] as f64 * 20.0;                  // 0 to 20 dB
+        let threshold_db = PARAMS_BUF[THRESHOLD] as f64;
+        let ratio = PARAMS_BUF[RATIO] as f64;
+        let attack_ms = PARAMS_BUF[ATTACK] as f64;
+        let release_ms = PARAMS_BUF[RELEASE] as f64;
+        let makeup_db = PARAMS_BUF[MAKEUP] as f64;
 
         let threshold = db_to_lin(threshold_db);
         let makeup = db_to_lin(makeup_db);

@@ -1,10 +1,11 @@
 import numpy as np
 import math
 
-# Parameters:
-THRESHOLD = 0
-ATTACK = 1
-RELEASE = 2
+PARAMS = {
+    "threshold": {"min": -20.0, "max": 0.0,   "unit": "dB", "default": -6.0},
+    "attack":    {"min": 0.01,  "max": 1.0,   "unit": "ms", "default": 0.1},
+    "release":   {"min": 10.0,  "max": 500.0, "unit": "ms", "default": 100.0},
+}
 
 # Persistent envelope follower state
 _envelope = 0.0
@@ -22,15 +23,15 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     passes above the ceiling.
 
     Params:
-        0 (Threshold): Ceiling level — 0.0 = -20 dB, 1.0 = 0 dB
-        1 (Attack):    Attack time — 0.0 = 0.01 ms, 1.0 = 1 ms
-        2 (Release):   Release time — 0.0 = 10 ms, 1.0 = 500 ms
+        threshold: Ceiling level (-20 to 0 dB)
+        attack:    Attack time (0.01–1 ms)
+        release:   Release time (10–500 ms)
     """
     global _envelope
 
-    threshold_db = -20.0 + params[THRESHOLD] * 20.0     # -20 to 0 dB
-    attack_ms = 0.01 + params[ATTACK] * 0.99         # 0.01 to 1 ms
-    release_ms = 10.0 + params[RELEASE] * 490.0       # 10 to 500 ms
+    threshold_db = params["threshold"]
+    attack_ms = params["attack"]
+    release_ms = params["release"]
 
     threshold = 10.0 ** (threshold_db / 20.0)
     attack_coeff = math.exp(-1.0 / (attack_ms * 0.001 * sample_rate))

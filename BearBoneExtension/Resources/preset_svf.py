@@ -1,9 +1,10 @@
 import numpy as np
 import math
 
-# Parameters:
-CUTOFF = 0
-RESONANCE = 1
+PARAMS = {
+    "cutoff":    {"min": 20.0, "max": 20000.0, "unit": "Hz", "default": 1000.0, "curve": "log"},
+    "resonance": {"min": 0.5,  "max": 10.0,    "unit": "Q",  "default": 1.0},
+}
 
 # Mode: "low", "high", "band", "notch"
 MODE = "low"
@@ -22,13 +23,13 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     the sharpness of the peak at the cutoff frequency.
 
     Params:
-        0 (Cutoff):    Cutoff frequency — logarithmic 20 Hz to 20000 Hz
-        1 (Resonance): Resonance (Q) — 0.0 = 0.5, 1.0 = 10
+        cutoff:    Cutoff frequency (20–20000 Hz)
+        resonance: Resonance Q (0.5–10)
     """
     global _state
 
-    cutoff_hz = 20.0 * (1000.0 ** params[CUTOFF])       # 20 to 20000 Hz (log)
-    resonance = 0.5 + params[RESONANCE] * 9.5               # 0.5 to 10
+    cutoff_hz = params["cutoff"]
+    resonance = params["resonance"]
 
     f = 2.0 * math.sin(math.pi * cutoff_hz / sample_rate)
     q = 1.0 / resonance

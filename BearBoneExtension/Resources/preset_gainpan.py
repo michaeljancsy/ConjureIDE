@@ -1,9 +1,10 @@
 import numpy as np
 import math
 
-# Parameters:
-GAIN = 0
-PAN = 1
+PARAMS = {
+    "gain": {"min": -24.0, "max": 12.0, "unit": "dB", "default": 0.0},
+    "pan":  {"min": 0.0,   "max": 1.0,  "unit": "",   "default": 0.5},
+}
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -13,11 +14,11 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     Applies gain and constant-power panning to the signal.
 
     Params:
-        0 (Gain): Volume — 0.0 = -24 dB, 0.5 = 0 dB, 1.0 = +12 dB
-        1 (Pan):  Stereo position — 0.0 = hard left, 0.5 = center, 1.0 = hard right
+        gain: Volume (-24 to +12 dB)
+        pan:  Stereo position (0.0 = hard left, 0.5 = center, 1.0 = hard right)
     """
-    gain_db = -24.0 + params[GAIN] * 36.0   # -24 dB to +12 dB
-    pan = params[PAN]                        # 0.0 (left) to 1.0 (right)
+    gain_db = params["gain"]
+    pan = params["pan"]
 
     gain = 10.0 ** (gain_db / 20.0)
     n_ch = len(inputs)

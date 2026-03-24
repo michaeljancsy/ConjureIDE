@@ -3,8 +3,8 @@
 // This script is compiled to WebAssembly and runs in the audio render callback.
 // The `process` function is called once per audio buffer.
 //
-// Parameters: The host writes 8 floats (0.0–1.0) into PARAMS_BUF before each
-// `process()` call. Read PARAMS_BUF[0]–PARAMS_BUF[7] to access Param 0–7.
+// Rich parameters: Declare metadata so the host shows real ranges and units.
+// PARAMS_BUF receives actual denormalized values (not 0–1).
 //
 // Safety: avoid allocations, I/O, or panics in `process()`.
 
@@ -13,17 +13,12 @@ const MAX_FR: usize = 4096;
 
 static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
+static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
 
-// Parameters:
-const PARAM0: usize = 0;
-const PARAM1: usize = 1;
-const PARAM2: usize = 2;
-const PARAM3: usize = 3;
-const PARAM4: usize = 4;
-const PARAM5: usize = 5;
-const PARAM6: usize = 6;
-const PARAM7: usize = 7;
+// Parameter indices
+const GAIN: usize = 0; // -24 to +12 dB
+
+static METADATA: &str = r#"[{"name":"Gain","min":-24.0,"max":12.0,"unit":"dB","default":0.0}]"#;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -40,12 +35,21 @@ pub extern "C" fn get_params_ptr() -> i32 {
     unsafe { PARAMS_BUF.as_ptr() as i32 }
 }
 
+#[no_mangle]
+pub extern "C" fn get_param_metadata_ptr() -> i32 {
+    METADATA.as_ptr() as i32
+}
+
+#[no_mangle]
+pub extern "C" fn get_param_metadata_len() -> i32 {
+    METADATA.len() as i32
+}
+
 /// Process audio buffers.
 ///
-/// Called once per audio render callback. Input samples are in the interleaved
-/// INPUT_BUF (channels × frame_count), and results should be written to
-/// OUTPUT_BUF in the same layout. DAW-automatable parameters are available
-/// in PARAMS_BUF[0..8] (Param 0–7, each 0.0–1.0).
+/// Called once per audio render callback. Input samples are channel-sequential
+/// in INPUT_BUF (channels × frame_count). Results go to OUTPUT_BUF in the same
+/// layout. Parameters in PARAMS_BUF are actual values (e.g. dB, Hz, ms).
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
@@ -54,12 +58,18 @@ pub extern "C" fn process(
     frame_count: i32,
     _sample_rate: f32,
 ) {
-    let n = (channels * frame_count) as usize;
+    let ch = channels as usize;
+    let frames = frame_count as usize;
+
     unsafe {
-        let inp = std::slice::from_raw_parts(input, n);
-        let out = std::slice::from_raw_parts_mut(output, n);
-        for i in 0..n {
-            out[i] = inp[i]; // passthrough — replace with your DSP
+        let gain_db = PARAMS_BUF[GAIN];
+        let gain = (10.0_f32).powf(gain_db / 20.0);
+
+        let inp = std::slice::from_raw_parts(input, ch * frames);
+        let out = std::slice::from_raw_parts_mut(output, ch * frames);
+
+        for i in 0..(ch * frames) {
+            out[i] = inp[i] * gain;
         }
     }
 }

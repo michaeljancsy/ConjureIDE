@@ -1,14 +1,8 @@
 import numpy as np
 
-# Parameters:
-PARAM0 = 0
-PARAM1 = 1
-PARAM2 = 2
-PARAM3 = 3
-PARAM4 = 4
-PARAM5 = 5
-PARAM6 = 6
-PARAM7 = 7
+PARAMS = {
+    "gain": {"min": -24.0, "max": 12.0, "unit": "dB", "default": 0.0},
+}
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -19,15 +13,14 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     Write your processed audio into outputs[ch][:frame_count].
 
     Args:
-        inputs:      list of numpy.float32 arrays, one per channel (pre-allocated,
-                     may be longer than frame_count — only [:frame_count] is valid)
-        outputs:     list of numpy.float32 arrays, one per channel (pre-allocated,
-                     write results into [:frame_count])
-        frame_count: number of valid samples this callback (may be < array length)
+        inputs:      list of numpy.float32 arrays, one per channel
+        outputs:     list of numpy.float32 arrays, one per channel
+        frame_count: number of valid samples this callback
         sample_rate: current sample rate in Hz (e.g. 44100.0)
-        params:      list of 8 floats (0.0–1.0), the DAW-automatable parameter
-                     values (Param 0–7). Use these to control your DSP in real time.
+        params:      dict of actual parameter values keyed by PARAMS name
     """
+    gain_db = params["gain"]
+    gain = 10.0 ** (gain_db / 20.0)
+
     for ch in range(len(inputs)):
-        # Example: apply 0.5x gain (halve the volume)
-        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5
+        np.multiply(inputs[ch][:frame_count], gain, out=outputs[ch][:frame_count])

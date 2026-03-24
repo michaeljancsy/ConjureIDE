@@ -1,9 +1,16 @@
 // Flanger — short modulated delay with feedback.
 //
-// Similar to chorus but with a much shorter delay (0–4 ms) and feedback.
+// Similar to chorus but with a much shorter delay (0–5 ms) and feedback.
 // The short delay creates comb-filter effects, and the LFO sweeps the
 // comb filter notches up and down, producing the characteristic flanging
 // jet-plane sweep. Higher feedback intensifies the comb-filter peaks.
+//
+// Params:
+//   0 (Rate):     LFO rate — 0.1 to 5.0 Hz
+//   1 (Depth):    Modulation depth — 0.5 to 5.0 ms
+//   2 (Delay):    Base delay — 1.0 to 5.0 ms
+//   3 (Feedback): Feedback amount — 0.0 to 1.0
+//   4 (Mix):      Dry/wet mix — 0.0 to 1.0
 
 const MAX_CH: usize = 2;
 const MAX_FR: usize = 4096;
@@ -11,20 +18,22 @@ const MAX_DELAY: usize = 1024;
 
 static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
+static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
 
-// Parameters:
-const RATE: usize = 0;
-const DEPTH: usize = 1;
-const DELAY: usize = 2;
-const FEEDBACK: usize = 3;
-const MIX: usize = 4;
+// Parameter indices
+const RATE: usize = 0;     // 0.1–5.0 Hz
+const DEPTH: usize = 1;    // 0.5–5.0 ms
+const DELAY: usize = 2;    // 1.0–5.0 ms
+const FEEDBACK: usize = 3; // 0.0–1.0
+const MIX: usize = 4;      // 0.0–1.0
 
 // Persistent state
 static mut DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH];
 static mut WRITE_POS: usize = 0;
 // Use f64 to match Python's float64 precision in the phase accumulator.
 static mut LFO_PHASE: f64 = 0.0;
+
+static METADATA: &str = r#"[{"name":"Rate","min":0.1,"max":5.0,"unit":"Hz","default":1.0},{"name":"Depth","min":0.5,"max":5.0,"unit":"ms","default":2.0},{"name":"Delay","min":1.0,"max":5.0,"unit":"ms","default":2.0},{"name":"Feedback","min":0.0,"max":1.0,"unit":"","default":0.5},{"name":"Mix","min":0.0,"max":1.0,"unit":"","default":0.5}]"#;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -42,6 +51,16 @@ pub extern "C" fn get_params_ptr() -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn get_param_metadata_ptr() -> i32 {
+    METADATA.as_ptr() as i32
+}
+
+#[no_mangle]
+pub extern "C" fn get_param_metadata_len() -> i32 {
+    METADATA.len() as i32
+}
+
+#[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
     output: *mut f32,
@@ -55,11 +74,11 @@ pub extern "C" fn process(
     let two_pi = 2.0 * core::f64::consts::PI;
 
     unsafe {
-        let rate_hz = 0.1 + PARAMS_BUF[RATE] as f64 * 4.9;           // 0.1 to 5.0 Hz
-        let depth_ms = 0.5 + PARAMS_BUF[DEPTH] as f64 * 4.5;         // 0.5 to 5.0 ms
-        let base_delay_ms = 1.0 + PARAMS_BUF[DELAY] as f64 * 4.0;    // 1.0 to 5.0 ms
-        let feedback = PARAMS_BUF[FEEDBACK] as f64;                     // 0.0 to 1.0
-        let mix = PARAMS_BUF[MIX] as f64;                               // 0.0 to 1.0
+        let rate_hz = PARAMS_BUF[RATE] as f64;
+        let depth_ms = PARAMS_BUF[DEPTH] as f64;
+        let base_delay_ms = PARAMS_BUF[DELAY] as f64;
+        let feedback = PARAMS_BUF[FEEDBACK] as f64;
+        let mix = PARAMS_BUF[MIX] as f64;
 
         let lfo_inc = two_pi * rate_hz / sr;
         let inp = std::slice::from_raw_parts(input, ch * frames);

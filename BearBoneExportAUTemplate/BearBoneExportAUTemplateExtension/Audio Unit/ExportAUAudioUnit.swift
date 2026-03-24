@@ -80,6 +80,80 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     // MARK: - Parameter Tree
 
     private func buildParameterTree() {
+        // Use rich metadata if available, otherwise fall back to generic 0–1 params
+        if let metadata = config?.paramMetadata, !metadata.isEmpty {
+            buildRichParameterTree(metadata: metadata)
+        } else {
+            buildGenericParameterTree()
+        }
+    }
+
+    /// Build parameter tree with real ranges, units, and curve-aware normalize/denormalize.
+    private func buildRichParameterTree(metadata: [ExportParamMetadata]) {
+        let count = min(metadata.count, 16)
+        var params: [AUParameter] = []
+        let metadataRef = metadata
+
+        for i in 0..<count {
+            let meta = metadataRef[i]
+            let param = AUParameterTree.createParameter(
+                withIdentifier: "param\(i)",
+                name: meta.name,
+                address: AUParameterAddress(i),
+                min: meta.min,
+                max: meta.max,
+                unit: .generic,
+                unitName: nil,
+                flags: [.flag_IsReadable, .flag_IsWritable],
+                valueStrings: nil,
+                dependentParameters: nil
+            )
+            param.value = meta.default
+            params.append(param)
+        }
+
+        let tree = AUParameterTree.createTree(withChildren: params)
+        let kernelRef = self.kernel!
+
+        tree.implementorValueObserver = { param, value in
+            let idx = Int(param.address)
+            if idx < metadataRef.count {
+                let normalized = metadataRef[idx].normalize(value)
+                dsp_kernel_set_parameter(kernelRef, param.address, normalized)
+            } else {
+                dsp_kernel_set_parameter(kernelRef, param.address, value)
+            }
+        }
+
+        tree.implementorValueProvider = { param in
+            let normalized = dsp_kernel_get_parameter(kernelRef, param.address)
+            let idx = Int(param.address)
+            if idx < metadataRef.count {
+                return metadataRef[idx].denormalize(normalized)
+            }
+            return normalized
+        }
+
+        tree.implementorStringFromValueCallback = { param, valuePtr in
+            let value = valuePtr?.pointee ?? param.value
+            let idx = Int(param.address)
+            if idx < metadataRef.count {
+                return Self.formatParamValue(value, unit: metadataRef[idx].unit)
+            }
+            return String(format: "%.3f", value)
+        }
+
+        self.parameterTree = tree
+
+        // Set kernel defaults (normalized, respects curve type)
+        for (i, meta) in metadataRef.prefix(count).enumerated() {
+            let normalized = meta.normalize(meta.default)
+            dsp_kernel_set_parameter(kernelRef, UInt64(i), normalized)
+        }
+    }
+
+    /// Build generic parameter tree with 0–1 range (legacy config without paramMetadata).
+    private func buildGenericParameterTree() {
         let count = config?.effectiveParamCount ?? 8
         var params: [AUParameter] = []
         for i in 0..<count {
@@ -112,6 +186,28 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
             return String(format: "%.3f", value)
         }
         self.parameterTree = tree
+    }
+
+    /// Format a parameter value with its unit string.
+    static func formatParamValue(_ value: Float, unit: String) -> String {
+        switch unit {
+        case "dB":
+            return String(format: "%.1f dB", value)
+        case "Hz":
+            if value >= 1000 { return String(format: "%.2f kHz", value / 1000) }
+            return String(format: "%.1f Hz", value)
+        case "ms":
+            if value >= 1000 { return String(format: "%.2f s", value / 1000) }
+            return String(format: "%.1f ms", value)
+        case "%":
+            return String(format: "%.0f%%", value)
+        case ":1":
+            return String(format: "%.1f:1", value)
+        case "":
+            return String(format: "%.3f", value)
+        default:
+            return String(format: "%.2f %@", value, unit)
+        }
     }
 
     // MARK: - Preset Loading

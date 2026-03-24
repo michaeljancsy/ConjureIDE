@@ -206,6 +206,18 @@ pub unsafe extern "C" fn dsp_kernel_param_names_json(kernel: DSPKernelRef) -> *c
     (*kernel).param_names_json_ptr()
 }
 
+/// Returns rich parameter metadata as a null-terminated JSON array string,
+/// e.g. `[{"name":"Threshold","min":-40,"max":-3,"unit":"dB","default":-20}, ...]`.
+/// Returns null if the loaded script does not declare a `PARAMS` dict.
+/// The pointer is valid until the next script load or kernel destroy.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_param_metadata_json(kernel: DSPKernelRef) -> *const c_char {
+    (*kernel).param_metadata_json_ptr()
+}
+
 /// Enable or disable audio capture for spectrogram visualization.
 /// When disabled, ring buffers are not written to (saves CPU on audio thread).
 ///
@@ -399,19 +411,19 @@ mod tests {
             dsp_kernel_set_parameter(kernel, 0, 0.75);
             assert_eq!(dsp_kernel_get_parameter(kernel, 0), 0.75);
 
-            // All 8 parameters
-            for addr in 0..8u64 {
-                dsp_kernel_set_parameter(kernel, addr, (addr + 1) as f32 * 0.1);
+            // All 16 parameters
+            for addr in 0..16u64 {
+                dsp_kernel_set_parameter(kernel, addr, (addr + 1) as f32 * 0.05);
             }
-            for addr in 0..8u64 {
-                let expected = (addr + 1) as f32 * 0.1;
+            for addr in 0..16u64 {
+                let expected = (addr + 1) as f32 * 0.05;
                 let actual = dsp_kernel_get_parameter(kernel, addr);
                 assert!((actual - expected).abs() < 1e-6, "addr={} expected={} got={}", addr, expected, actual);
             }
 
             // Out-of-range address returns 0.0
-            assert_eq!(dsp_kernel_get_parameter(kernel, 8), 0.0);
-            assert_eq!(dsp_kernel_get_parameter(kernel, 9), 0.0);
+            assert_eq!(dsp_kernel_get_parameter(kernel, 16), 0.0);
+            assert_eq!(dsp_kernel_get_parameter(kernel, 17), 0.0);
             assert_eq!(dsp_kernel_get_parameter(kernel, 999), 0.0);
 
             dsp_kernel_destroy(kernel);

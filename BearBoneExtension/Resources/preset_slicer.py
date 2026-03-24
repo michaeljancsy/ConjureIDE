@@ -1,7 +1,8 @@
 import numpy as np
 
-# Parameters:
-RATE = 0
+PARAMS = {
+    "rate": {"min": 10.0, "max": 500.0, "unit": "ms", "default": 100.0},
+}
 
 # Max chunk size in samples (supports 500 ms at 96 kHz)
 MAX_CHUNK = 48000
@@ -24,11 +25,11 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     the other plays back reversed.
 
     Params:
-        0 (Rate): Chunk size — 0.0 = 10 ms, 1.0 = 500 ms
+        rate: Chunk size (10–500 ms)
     """
     global _record_buf, _play_buf, _write_pos, _chunk_size
 
-    chunk_ms = 10.0 + params[RATE] * 490.0  # 10 to 500 ms
+    chunk_ms = params["rate"]
 
     n_ch = len(inputs)
     chunk_size = int(chunk_ms * 0.001 * sample_rate)

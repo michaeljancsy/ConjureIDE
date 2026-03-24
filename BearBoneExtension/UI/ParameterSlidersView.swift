@@ -22,6 +22,12 @@ struct ParameterSlidersView: View {
         parameterState.paramNames?[index] ?? "Param \(index)"
     }
 
+    /// Metadata for a parameter at the given index (nil for legacy 0–1 params).
+    private func metadata(for index: Int) -> BearBoneExtensionAudioUnit.ParamMetadata? {
+        guard let meta = parameterState.paramMetadata, index < meta.count else { return nil }
+        return meta[index]
+    }
+
     var body: some View {
         if !visibleIndices.isEmpty {
             DisclosureGroup("Parameters", isExpanded: $isExpanded) {
@@ -29,7 +35,8 @@ struct ParameterSlidersView: View {
                     ForEach(visibleIndices, id: \.self) { index in
                         ParameterSliderRow(
                             label: label(for: index),
-                            value: parameterState.binding(for: index)
+                            value: parameterState.binding(for: index),
+                            metadata: metadata(for: index)
                         )
                     }
                 }
@@ -44,6 +51,7 @@ struct ParameterSlidersView: View {
 struct ParameterSliderRow: View {
     let label: String
     @Binding var value: Float
+    let metadata: BearBoneExtensionAudioUnit.ParamMetadata?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -52,13 +60,25 @@ struct ParameterSliderRow: View {
                 .frame(width: 80, alignment: .leading)
                 .lineLimit(1)
 
-            Slider(value: $value, in: 0...1)
-                .accessibilityIdentifier("\(label)Slider")
+            if let meta = metadata {
+                Slider(value: $value, in: meta.min...meta.max)
+                    .accessibilityIdentifier("\(label)Slider")
+            } else {
+                Slider(value: $value, in: 0...1)
+                    .accessibilityIdentifier("\(label)Slider")
+            }
 
-            Text(String(format: "%.3f", value))
+            Text(formattedValue)
                 .font(.caption.monospaced())
-                .frame(width: 44, alignment: .trailing)
+                .frame(width: 64, alignment: .trailing)
                 .accessibilityIdentifier("\(label)Value")
         }
+    }
+
+    private var formattedValue: String {
+        guard let meta = metadata else {
+            return String(format: "%.3f", value)
+        }
+        return BearBoneExtensionAudioUnit.formatParamValue(value, unit: meta.unit)
     }
 }

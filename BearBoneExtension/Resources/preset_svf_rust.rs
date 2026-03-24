@@ -4,17 +4,21 @@
 // The filter computes low-pass, high-pass, and band-pass simultaneously.
 // Resonance controls the sharpness of the peak at the cutoff frequency.
 // Change MODE constant to select output: 0=LP, 1=HP, 2=BP, 3=Notch.
+//
+// Params:
+//   0 (Cutoff):    Filter cutoff — 20 to 20000 Hz (log)
+//   1 (Resonance): Resonance Q — 0.5 to 10.0
 
 const MAX_CH: usize = 2;
 const MAX_FR: usize = 4096;
 
 static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 8] = [0.0; 8];
+static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
 
-// Parameters:
-const CUTOFF: usize = 0;
-const RESONANCE: usize = 1;
+// Parameter indices
+const CUTOFF: usize = 0;    // 20–20000 Hz
+const RESONANCE: usize = 1; // 0.5–10.0
 
 const MODE: usize = 0; // 0=LP, 1=HP, 2=BP, 3=Notch
 
@@ -22,6 +26,8 @@ const MODE: usize = 0; // 0=LP, 1=HP, 2=BP, 3=Notch
 // Use f64 to match Python's float64 precision in the coupled feedback loop.
 static mut STATE_LOW: [f64; MAX_CH] = [0.0; MAX_CH];
 static mut STATE_BAND: [f64; MAX_CH] = [0.0; MAX_CH];
+
+static METADATA: &str = r#"[{"name":"Cutoff","min":20.0,"max":20000.0,"unit":"Hz","default":1000.0,"curve":"log"},{"name":"Resonance","min":0.5,"max":10.0,"unit":"","default":1.0}]"#;
 
 #[no_mangle]
 pub extern "C" fn get_input_ptr() -> i32 {
@@ -39,6 +45,16 @@ pub extern "C" fn get_params_ptr() -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn get_param_metadata_ptr() -> i32 {
+    METADATA.as_ptr() as i32
+}
+
+#[no_mangle]
+pub extern "C" fn get_param_metadata_len() -> i32 {
+    METADATA.len() as i32
+}
+
+#[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
     output: *mut f32,
@@ -51,8 +67,8 @@ pub extern "C" fn process(
     let sr = sample_rate as f64;
 
     unsafe {
-        let cutoff_hz = 20.0 * (1000.0_f64).powf(PARAMS_BUF[CUTOFF] as f64); // 20 Hz to 20 kHz (log)
-        let resonance = 0.5 + PARAMS_BUF[RESONANCE] as f64 * 9.5;             // 0.5 to 10.0
+        let cutoff_hz = PARAMS_BUF[CUTOFF] as f64;
+        let resonance = PARAMS_BUF[RESONANCE] as f64;
 
         let f = 2.0 * (core::f64::consts::PI * cutoff_hz / sr).sin();
         let q = 1.0 / resonance;

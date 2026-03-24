@@ -1,7 +1,8 @@
 import numpy as np
 
-# Parameters:
-LEVEL = 0
+PARAMS = {
+    "level": {"min": 0.0, "max": 1.0, "unit": "", "default": 0.5},
+}
 
 # LCG random state (matches Rust implementation for deterministic output)
 _rng_state = np.uint32(12345)
@@ -24,9 +25,9 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     implementations use the same LCG constants for identical output.
 
     Params:
-        0 (Level): Output level — 0.0 = silence, 1.0 = full level
+        level: Output level (0.0 = silence, 1.0 = full level)
     """
-    amplitude = params[LEVEL]  # 0 to 1
+    amplitude = params["level"]
 
     for i in range(frame_count):
         sample = _next_f32() * amplitude

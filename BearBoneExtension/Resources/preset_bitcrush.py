@@ -1,8 +1,9 @@
 import numpy as np
 
-# Parameters:
-BIT_DEPTH = 0
-DOWNSAMPLE = 1
+PARAMS = {
+    "bit_depth":  {"min": 1, "max": 16, "unit": "bits", "default": 8},
+    "downsample": {"min": 1, "max": 16, "unit": "x",    "default": 1},
+}
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -16,11 +17,11 @@ def process(inputs, outputs, frame_count, sample_rate, params):
        which introduces aliasing artifacts and a characteristic stepped sound.
 
     Params:
-        0 (Bit Depth):  1–16 bits
-        1 (Downsample): 1–16x sample rate reduction
+        bit_depth:  Quantization depth (1–16 bits)
+        downsample: Sample rate reduction factor (1–16x)
     """
-    bit_depth = int(params[BIT_DEPTH] * 15) + 1   # 1 to 16
-    downsample = int(params[DOWNSAMPLE] * 15) + 1  # 1 to 16
+    bit_depth = int(params["bit_depth"])
+    downsample = int(params["downsample"])
     levels = 2 ** bit_depth
 
     for ch in range(len(inputs)):
