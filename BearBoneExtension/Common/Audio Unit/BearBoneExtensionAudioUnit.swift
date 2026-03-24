@@ -548,7 +548,7 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			return result
 
 		case .rust:
-			// Parse param names from source (overrides WASM export if present)
+			// Parse param names from source (only used if no rich metadata)
 			let sourceParamNames = Self.parseRustParamNames(fromSource: source)
 
 			// Check cache first
@@ -559,7 +559,8 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					currentScriptSource = source
 					currentScriptLanguage = .rust
 					currentWasmBytes = cachedWasm
-					if let names = sourceParamNames {
+					// Only override param names if no rich metadata was extracted
+					if currentParamMetadata == nil, let names = sourceParamNames {
 						currentParamNames = names
 						paramNamesDidChange.send(names)
 					}
@@ -577,7 +578,8 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					currentScriptSource = source
 					currentScriptLanguage = .rust
 					currentWasmBytes = wasmBytes
-					if let names = sourceParamNames {
+					// Only override param names if no rich metadata was extracted
+					if currentParamMetadata == nil, let names = sourceParamNames {
 						currentParamNames = names
 						paramNamesDidChange.send(names)
 					}
@@ -692,8 +694,8 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						currentScriptSource = source
 						currentScriptLanguage = .rust
 						currentWasmBytes = wasmBytes
-						// Override param names from source text if available
-						if let names = Self.parseRustParamNames(fromSource: source) {
+						// Override param names from source text only if no rich metadata
+						if currentParamMetadata == nil, let names = Self.parseRustParamNames(fromSource: source) {
 							currentParamNames = names
 							paramNamesDidChange.send(names)
 						}
@@ -934,7 +936,7 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				}
 
 				// Handle all simultaneous events
-				nextEvent = Self.performAllSimultaneousEvents(kernel: kernel, now: now, event: nextEvent!)
+				nextEvent = Self.performAllSimultaneousEvents(kernel: kernel, now: now, event: nextEvent!, metadata: au.currentParamMetadata)
 			}
 
 			return noErr
@@ -978,21 +980,26 @@ public class BearBoneExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	private static func performAllSimultaneousEvents(
 		kernel: DSPKernelRef,
 		now: AUEventSampleTime,
-		event: UnsafePointer<AURenderEvent>
+		event: UnsafePointer<AURenderEvent>,
+		metadata: [ParamMetadata]?
 	) -> UnsafePointer<AURenderEvent>? {
 		var current: UnsafePointer<AURenderEvent>? = event
 		repeat {
 			guard let evt = current else { break }
 
 			// Handle parameter events from DAW automation
-			if evt.pointee.head.eventType == .parameter {
+			if evt.pointee.head.eventType == .parameter || evt.pointee.head.eventType == .parameterRamp {
 				let paramEvent = evt.pointee.parameter
-				dsp_kernel_set_parameter(kernel, paramEvent.parameterAddress, paramEvent.value)
-			} else if evt.pointee.head.eventType == .parameterRamp {
-				// For ramp events, apply the target value immediately
-				// (sample-accurate ramping would require per-sample interpolation in the kernel)
-				let paramEvent = evt.pointee.parameter
-				dsp_kernel_set_parameter(kernel, paramEvent.parameterAddress, paramEvent.value)
+				let idx = Int(paramEvent.parameterAddress)
+				// When rich metadata is active, paramEvent.value is in actual range (e.g. -21.5 dB).
+				// Normalize to 0–1 before passing to the kernel.
+				let value: Float
+				if let meta = metadata, idx < meta.count {
+					value = meta[idx].normalize(paramEvent.value)
+				} else {
+					value = paramEvent.value
+				}
+				dsp_kernel_set_parameter(kernel, paramEvent.parameterAddress, value)
 			}
 
 			// Advance to next event
