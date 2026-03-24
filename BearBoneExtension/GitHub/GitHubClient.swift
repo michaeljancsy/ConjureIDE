@@ -77,6 +77,15 @@ final class GitHubClient: Sendable {
         return try await fetchURL(url)
     }
 
+    // MARK: - Repo Info
+
+    /// Check that a repo exists (and the token has access). Throws `notFound` if it doesn't.
+    func checkRepoExists(owner: String, repo: String, token: String) async throws {
+        let url = apiURL(path: "/repos/\(owner)/\(repo)")
+        let request = apiRequest(url: url, method: "GET", token: token)
+        _ = try await perform(request)
+    }
+
     // MARK: - GitHub Contents API (authenticated)
 
     /// List the contents of a directory in a repo.
@@ -93,6 +102,20 @@ final class GitHubClient: Sendable {
         let request = apiRequest(url: url, method: "GET", token: token)
         let (data, _) = try await perform(request)
         return try decode(GitHubContentsResponse.self, from: data)
+    }
+
+    /// Fetch a file's text content via the authenticated Contents API.
+    /// Works for both public and private repos. Uses the `application/vnd.github.raw+json`
+    /// accept header to get raw content directly (no base64 decoding needed).
+    func fetchFileContent(owner: String, repo: String, path: String, token: String) async throws -> String {
+        let url = apiURL(path: "/repos/\(owner)/\(repo)/contents/\(path)")
+        var request = apiRequest(url: url, method: "GET", token: token)
+        request.setValue("application/vnd.github.raw+json", forHTTPHeaderField: "Accept")
+        let (data, _) = try await perform(request)
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw GitHubError.decodingError("Response is not valid UTF-8")
+        }
+        return text
     }
 
     /// Create or update a file in a repo. For updates, provide the file's current SHA.

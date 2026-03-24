@@ -109,10 +109,19 @@ final class GitHubService: ObservableObject {
     /// Validate that a repo is a BearBone preset repo by checking for bearbone.json.
     func validateRepo(owner: String, repo: String) async throws {
         guard let token else { throw GitHubError.noToken }
+
+        // First verify the repo exists (GET /repos/{owner}/{repo} returns 404 if not)
+        do {
+            try await client.checkRepoExists(owner: owner, repo: repo, token: token)
+        } catch GitHubError.notFound {
+            throw GitHubError.httpError(statusCode: 404, message: "Repository \(owner)/\(repo) not found")
+        }
+
+        // Then check for the marker file
         let json: String
         do {
-            json = try await client.fetchRawFile(owner: owner, repo: repo, path: BearBoneRepoMarker.filename)
-        } catch {
+            json = try await client.fetchFileContent(owner: owner, repo: repo, path: BearBoneRepoMarker.filename, token: token)
+        } catch GitHubError.notFound {
             throw GitHubError.httpError(statusCode: 0, message: "Not a BearBone preset repo (missing bearbone.json)")
         }
         guard let data = json.data(using: .utf8),
@@ -229,8 +238,23 @@ final class GitHubService: ObservableObject {
 
     // MARK: - Disconnect
 
-    func disconnect() {
+    func disconnect(presetManager: PresetManager) {
+        // Move repo presets back to user presets directory so they remain accessible
+        let fm = FileManager.default
+        if let files = try? fm.contentsOfDirectory(
+            at: presetManager.repoPresetsURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            for file in files {
+                let dest = presetManager.userPresetsURL.appendingPathComponent(file.lastPathComponent)
+                try? fm.moveItem(at: file, to: dest)
+            }
+        }
+
         personalRepoOwner = ""
         personalRepoName = ""
+        personalSync.reset()
+        presetManager.refreshPresets()
     }
 }

@@ -8,7 +8,6 @@ struct GitHubSettingsView: View {
 
     @State private var tokenInput = ""
     @State private var showToken = false
-    @State private var ownerInput = ""
     @State private var repoInput = ""
     @State private var newRepoName = "bearbone-presets"
     @State private var newRepoPrivate = true
@@ -140,7 +139,7 @@ struct GitHubSettingsView: View {
             HStack {
                 Spacer()
                 Button("Disconnect") {
-                    gitHubService.disconnect()
+                    gitHubService.disconnect(presetManager: presetManager)
                     statusMessage = nil
                 }
                 .foregroundColor(.red)
@@ -191,16 +190,8 @@ struct GitHubSettingsView: View {
 
     private var connectExistingFlow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 4) {
-                TextField("owner", text: $ownerInput)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 120)
-                Text("/")
-                    .foregroundColor(.secondary)
-                TextField("repo", text: $repoInput)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 140)
-            }
+            TextField("owner/repo or GitHub URL", text: $repoInput)
+                .textFieldStyle(.roundedBorder)
 
             HStack {
                 Button("Cancel") {
@@ -209,7 +200,7 @@ struct GitHubSettingsView: View {
                 }
                 Spacer()
                 Button("Connect") { connectRepo() }
-                    .disabled(ownerInput.isEmpty || repoInput.isEmpty || isConnecting)
+                    .disabled(repoInput.trimmingCharacters(in: .whitespaces).isEmpty || isConnecting)
             }
 
             if isConnecting {
@@ -256,15 +247,49 @@ struct GitHubSettingsView: View {
 
     // MARK: - Actions
 
+    /// Parse "owner/repo" from various input formats:
+    /// - `owner/repo`
+    /// - `https://github.com/owner/repo`
+    /// - `https://github.com/owner/repo/...` (with trailing path)
+    /// - `github.com/owner/repo`
+    private func parseRepoInput(_ input: String) -> (owner: String, repo: String)? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Try as URL first
+        if trimmed.contains("github.com") {
+            // Normalize: add scheme if missing so URL parsing works
+            let urlString = trimmed.hasPrefix("http") ? trimmed : "https://\(trimmed)"
+            if let url = URL(string: urlString) {
+                let parts = url.pathComponents.filter { $0 != "/" }
+                if parts.count >= 2 {
+                    return (parts[0], parts[1])
+                }
+            }
+        }
+
+        // Try as "owner/repo"
+        let parts = trimmed.split(separator: "/", maxSplits: 1)
+        if parts.count == 2 {
+            let owner = String(parts[0])
+            let repo = String(parts[1])
+            if !owner.isEmpty && !repo.isEmpty {
+                return (owner, repo)
+            }
+        }
+
+        return nil
+    }
+
     private func connectRepo() {
-        let owner = ownerInput.trimmingCharacters(in: .whitespaces)
-        let repo = repoInput.trimmingCharacters(in: .whitespaces)
+        guard let (owner, repo) = parseRepoInput(repoInput) else {
+            errorMessage = "Enter owner/repo or a GitHub URL"
+            return
+        }
         isConnecting = true
         errorMessage = nil
 
         Task {
             do {
-                // Validate by checking for bearbone.json marker
                 try await gitHubService.validateRepo(owner: owner, repo: repo)
                 gitHubService.personalRepoOwner = owner
                 gitHubService.personalRepoName = repo

@@ -103,7 +103,7 @@ class PersonalRepoSync: ObservableObject {
         // Remote only → pull
         for remote in remotePresets where !localNames.contains(remote.name) {
             do {
-                let source = try await client.fetchRawFile(owner: owner, repo: repo, path: remote.remotePath)
+                let source = try await client.fetchFileContent(owner: owner, repo: repo, path: remote.remotePath, token: token)
                 let destURL = presetManager.repoPresetsURL.appendingPathComponent(remote.name)
                 try source.write(to: destURL, atomically: true, encoding: .utf8)
                 result.pulled += 1
@@ -135,7 +135,7 @@ class PersonalRepoSync: ObservableObject {
             guard let localURL = localFiles[remote.name],
                   let localSource = try? String(contentsOf: localURL, encoding: .utf8) else { continue }
             do {
-                let remoteSource = try await client.fetchRawFile(owner: owner, repo: repo, path: remote.remotePath)
+                let remoteSource = try await client.fetchFileContent(owner: owner, repo: repo, path: remote.remotePath, token: token)
                 if localSource != remoteSource {
                     let ext = (remote.name as NSString).pathExtension
                     let language: ScriptLanguage = ext == "rs" ? .rust : .python
@@ -331,6 +331,14 @@ class PersonalRepoSync: ObservableObject {
                 // Metadata file may not exist — that's fine
             }
         }
+    }
+
+    /// Clear all cached sync state (called on disconnect).
+    func reset() {
+        remoteSHAs = [:]
+        pendingConflicts = []
+        hasPendingChanges = false
+        error = nil
     }
 
     // MARK: - Helpers
