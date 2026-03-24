@@ -181,6 +181,7 @@ struct MonacoEditorView: NSViewRepresentable {
                     self.retryInitIfNeeded(webView)
                 } else {
                     log.info("bridge.init JS succeeded")
+                    self.initRetryCount = 0
                 }
             }
         }
