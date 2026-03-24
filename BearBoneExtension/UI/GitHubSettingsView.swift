@@ -124,6 +124,10 @@ struct GitHubSettingsView: View {
                     .font(.system(size: 13, design: .monospaced))
             }
 
+            Text("Saves, edits, and deletes sync automatically to this repo.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
             if let date = gitHubService.personalSync.lastSyncDate {
                 Text("Last synced \(date, style: .relative) ago")
                     .font(.caption)
@@ -137,7 +141,13 @@ struct GitHubSettingsView: View {
             }
 
             HStack {
+                Button("Sync Now") {
+                    gitHubService.syncIfConnected(presetManager: presetManager)
+                }
+                .disabled(gitHubService.personalSync.isSyncing)
+
                 Spacer()
+
                 Button("Disconnect") {
                     gitHubService.disconnect(presetManager: presetManager)
                     statusMessage = nil

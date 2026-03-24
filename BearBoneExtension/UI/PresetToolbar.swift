@@ -262,7 +262,11 @@ struct PresetToolbar: View {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This cannot be undone.")
+                    if presetManager.currentPreset?.isRepo == true {
+                        Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This will also remove it from your GitHub repo.")
+                    } else {
+                        Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This cannot be undone.")
+                    }
                 }
             }
 
