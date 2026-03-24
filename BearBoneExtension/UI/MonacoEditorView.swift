@@ -1,11 +1,15 @@
+import os
 import SwiftUI
 import WebKit
+
+private let log = Logger(subsystem: "com.MichaelJancsy.BearBone.BearBoneExtension", category: "MonacoEditor")
 
 struct MonacoEditorView: NSViewRepresentable {
     @Binding var text: String
     var colorScheme: ColorScheme
     var language: ScriptLanguage = .python
     var isEditable: Bool = true
+    var extensionBundle: Bundle
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -26,11 +30,13 @@ struct MonacoEditorView: NSViewRepresentable {
 
         webView.setAccessibilityIdentifier("scriptEditor")
 
-        // Load Monaco HTML from extension bundle (not Bundle.main, which may be the host app)
-        let bundle = Bundle(for: Coordinator.self)
-        if let monacoDir = bundle.url(forResource: "monaco", withExtension: nil),
-           let monacoURL = bundle.url(forResource: "index", withExtension: "html", subdirectory: "monaco") {
+        // Load Monaco HTML from the extension bundle
+        if let monacoDir = extensionBundle.url(forResource: "monaco", withExtension: nil),
+           let monacoURL = extensionBundle.url(forResource: "index", withExtension: "html", subdirectory: "monaco") {
+            log.info("Loading Monaco from \(monacoURL.path, privacy: .public)")
             webView.loadFileURL(monacoURL, allowingReadAccessTo: monacoDir)
+        } else {
+            log.error("Monaco resources not found in bundle \(extensionBundle.bundlePath, privacy: .public)")
         }
 
         return webView
@@ -123,6 +129,7 @@ struct MonacoEditorView: NSViewRepresentable {
         ) {
             switch message.name {
             case "editorReady":
+                log.info("Monaco editor ready")
                 isEditorReady = true
                 applyPendingState()
 
@@ -141,6 +148,7 @@ struct MonacoEditorView: NSViewRepresentable {
         // MARK: - WKNavigationDelegate
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            log.info("WKWebView didFinish navigation")
             // Page loaded — initialize Monaco with options
             let theme = pendingTheme == .dark ? "vs-dark" : "vs"
             let lang = pendingLanguage == .rust ? "rust" : "python"
@@ -157,7 +165,19 @@ struct MonacoEditorView: NSViewRepresentable {
             webView.evaluateJavaScript(initScript) { _, _ in }
         }
 
-        // MARK: - Private
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            log.error("WKWebView navigation failed: \(error.localizedDescription, privacy: .public)")
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            log.error("WKWebView provisional navigation failed: \(error.localizedDescription, privacy: .public)")
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            log.error("WKWebView content process terminated, reloading")
+            isEditorReady = false
+            webView.reload()
+        }
 
         private func applyPendingState() {
             guard let webView else { return }
@@ -173,14 +193,11 @@ struct MonacoEditorView: NSViewRepresentable {
             lastReadOnly = pendingReadOnly
             webView.evaluateJavaScript("bridge.setReadOnly(\(pendingReadOnly))") { _, _ in }
 
-            if let content = pendingContent {
-                lastContent = content
-                let escaped = content.jsEscaped
-                webView.evaluateJavaScript("bridge.setContent(\"\(escaped)\")") { _, _ in }
-                pendingContent = nil
-            } else {
-                lastContent = text.wrappedValue
-            }
+            let content = pendingContent ?? text.wrappedValue
+            lastContent = content
+            let escaped = content.jsEscaped
+            webView.evaluateJavaScript("bridge.setContent(\"\(escaped)\")") { _, _ in }
+            pendingContent = nil
         }
     }
 }
