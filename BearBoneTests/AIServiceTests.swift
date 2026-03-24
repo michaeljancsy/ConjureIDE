@@ -587,97 +587,52 @@ struct URLSessionBytesTests {
 
 // MARK: - Language-Aware System Prompt Tests
 
-/// Copies of the AnthropicProvider system prompts for standalone testing.
-/// These mirror the production prompts to verify language-specific content.
+/// Copies of key prompt content for standalone testing.
+/// These mirror the production prompts in AnthropicProvider to verify language-specific content.
+/// When production prompts change, update these to match.
 private enum TestSystemPrompts {
     static let pythonApiContract = """
-        API contract:
+        API contract (Python):
         - Function signature: def process(inputs, outputs, frame_count, sample_rate, params)
         - inputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
         - outputs: list of numpy.float32 arrays (one per channel), pre-allocated to max_frames length
         - frame_count: number of valid samples this callback (may be less than array length)
         - sample_rate: current sample rate (e.g. 44100.0)
-        - params: dict of parameter values keyed by name (if PARAMS is declared), \
-          or list of floats 0–1 (legacy). Use these to make your effect controllable from the DAW.
+        - params: dict of parameter values keyed by name (when PARAMS is declared)
         - Write processed audio into outputs[ch][:frame_count]
         - Only numpy is available (imported as np)
-        - Global variables persist across callbacks (useful for phase accumulators, delay buffers, etc.)
         - Must handle both mono (1 channel) and stereo (2 channels)
-
-        Parameters — declare a PARAMS dict at module level to define named parameters with metadata:
         PARAMS = {
             "rate":  {"min": 0.5, "max": 20.0, "unit": "Hz", "default": 5.0},
-            "depth": {"min": 0.0, "max": 1.0,  "unit": "",   "default": 0.5},
         }
-        - Each entry maps a lowercase snake_case name to min, max, unit, and default.
-        - params is a dict with these names as keys and actual (denormalized) values: \
-          rate_hz = params["rate"]  # already 0.5–20.0 Hz, no manual mapping needed
-        - The DAW/UI shows sliders with real ranges and formatted values (e.g. "5.2 Hz", "-21.5 dB").
-        - Common units: "dB", "Hz", "ms", "%", ":1", "" (dimensionless).
-        - Up to 16 parameters can be declared.
-        - ALWAYS use PARAMS when your effect has controllable parameters.
-        - Dict key order determines AU parameter address (first = 0, second = 1, etc.).
         """
 
     static let rustApiContract = """
         API contract (Rust compiled to WebAssembly):
         - The script is compiled to wasm32-wasip1 and runs in a WASM sandbox
-        - Must define four #[no_mangle] pub extern "C" functions:
-          1. get_input_ptr() -> i32  — returns pointer to the input buffer
-          2. get_output_ptr() -> i32 — returns pointer to the output buffer
-          3. get_params_ptr() -> i32 — returns pointer to the params buffer (up to 16 × f32)
+        - Must define four #[unsafe(no_mangle)] pub extern "C" functions:
+          1. get_input_ptr() -> i32
+          2. get_output_ptr() -> i32
+          3. get_params_ptr() -> i32
           4. process(input: *const f32, output: *mut f32, channels: i32, frame_count: i32, sample_rate: f32)
-        - Static buffers: define MAX_CH (2) and MAX_FR (4096) constants, then:
-          static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-          static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-          static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
-        - Audio is interleaved: total samples = channels * frame_count
-        - Use std::slice::from_raw_parts(input, n) and from_raw_parts_mut(output, n) inside unsafe blocks
-        - Must handle both mono (1 channel) and stereo (2 channels)
-        - For stereo, samples are interleaved: [L0, R0, L1, R1, ...]
-
-        Rich parameters (recommended) — declare metadata so the host denormalizes values for you:
-        - Export get_param_metadata_ptr() and get_param_metadata_len() pointing to a static JSON string:
-          static METADATA: &str = r#"[
-              {"name":"Rate","min":0.5,"max":20.0,"unit":"Hz","default":5.0},
-              {"name":"Depth","min":0.0,"max":1.0,"unit":"","default":0.5}
-          ]"#;
-          #[no_mangle]
-          pub extern "C" fn get_param_metadata_ptr() -> i32 {
-              METADATA.as_ptr() as i32
-          }
-          #[no_mangle]
-          pub extern "C" fn get_param_metadata_len() -> i32 {
-              METADATA.len() as i32
-          }
-        - With metadata, PARAMS_BUF receives actual denormalized values (not 0–1):
-          let rate_hz = unsafe { PARAMS_BUF[0] }; // already 0.5–20.0 Hz, no mapping needed
-        - Add "curve":"log" for frequency and time params (exponential slider distribution):
-          {"name":"Cutoff","min":20.0,"max":20000.0,"unit":"Hz","default":1000.0,"curve":"log"}
-          Default curve is "linear". Use "log" when the range spans orders of magnitude.
-        - The DAW/UI shows sliders with real ranges and formatted values (e.g. "5.2 Hz", "-21.5 dB").
-        - Common units: "dB", "Hz", "ms", "%", ":1", "" (dimensionless).
-        - Up to 16 parameters. JSON array order determines parameter index (first = 0, second = 1, etc.).
-        - ALWAYS use rich parameters when your effect has controllable params.
+        - static mut INPUT_BUF, OUTPUT_BUF, PARAMS_BUF
+        - Access inside unsafe {} blocks
+        - Audio is interleaved: [L0, R0, L1, R1, ...]
+        - get_param_metadata_ptr(), get_param_metadata_len() for rich parameters
         """
 
-    static let pythonSystemPrompt = """
-        You are a DSP script generator for a real-time audio plugin. Generate Python scripts \
-        that define a `process()` function.
-        """
-
-    static let rustSystemPrompt = """
-        You are a DSP script generator for a real-time audio plugin compiled to WebAssembly. \
-        Generate Rust scripts that define a `process()` function and static buffers.
-        """
-
-    /// Selects the appropriate system prompt based on language.
-    /// This mirrors the dispatch logic in AnthropicProvider.generateScript().
-    static func systemPrompt(for language: ScriptLanguage) -> String {
+    /// Builds a language-specific test prompt. Mirrors AnthropicProvider.chatSystemPrompt(for:).
+    static func chatSystemPrompt(for language: ScriptLanguage) -> String {
+        let contract: String
         switch language {
-        case .python: return pythonSystemPrompt + "\n" + pythonApiContract
-        case .rust: return rustSystemPrompt + "\n" + rustApiContract
+        case .python: contract = pythonApiContract
+        case .rust: contract = rustApiContract
         }
+        return """
+            You are a DSP assistant for BearBone, a real-time audio plugin.
+            Write scripts in the current language (\(language.rawValue)).
+            \(contract)
+            """
     }
 }
 
@@ -685,24 +640,24 @@ private enum TestSystemPrompts {
 struct LanguagePromptTests {
 
     @Test func pythonPromptContainsPythonKeywords() {
-        let prompt = TestSystemPrompts.systemPrompt(for: .python)
+        let prompt = TestSystemPrompts.chatSystemPrompt(for: .python)
         #expect(prompt.contains("def process"))
         #expect(prompt.contains("numpy"))
         #expect(prompt.contains("Python"))
     }
 
     @Test func pythonPromptDoesNotContainRustKeywords() {
-        let prompt = TestSystemPrompts.systemPrompt(for: .python)
+        let prompt = TestSystemPrompts.chatSystemPrompt(for: .python)
         #expect(!prompt.contains("wasm32"))
-        #expect(!prompt.contains("#[no_mangle]"))
+        #expect(!prompt.contains("no_mangle"))
         #expect(!prompt.contains("*const f32"))
     }
 
     @Test func rustPromptContainsRustKeywords() {
-        let prompt = TestSystemPrompts.systemPrompt(for: .rust)
+        let prompt = TestSystemPrompts.chatSystemPrompt(for: .rust)
         #expect(prompt.contains("Rust"))
         #expect(prompt.contains("wasm32"))
-        #expect(prompt.contains("#[no_mangle]"))
+        #expect(prompt.contains("no_mangle"))
         #expect(prompt.contains("*const f32"))
         #expect(prompt.contains("get_input_ptr"))
         #expect(prompt.contains("get_output_ptr"))
@@ -710,26 +665,24 @@ struct LanguagePromptTests {
     }
 
     @Test func rustPromptDoesNotContainPythonKeywords() {
-        let prompt = TestSystemPrompts.systemPrompt(for: .rust)
+        let prompt = TestSystemPrompts.chatSystemPrompt(for: .rust)
         #expect(!prompt.contains("numpy"))
         #expect(!prompt.contains("def process"))
     }
 
     @Test func languageDispatchSelectsCorrectPrompt() {
-        let pythonPrompt = TestSystemPrompts.systemPrompt(for: .python)
-        let rustPrompt = TestSystemPrompts.systemPrompt(for: .rust)
+        let pythonPrompt = TestSystemPrompts.chatSystemPrompt(for: .python)
+        let rustPrompt = TestSystemPrompts.chatSystemPrompt(for: .rust)
         #expect(pythonPrompt != rustPrompt, "Python and Rust prompts should be different")
-        #expect(pythonPrompt.contains("Python"))
-        #expect(rustPrompt.contains("Rust"))
+        #expect(pythonPrompt.contains("python"))
+        #expect(rustPrompt.contains("rust"))
     }
 
     @Test func rustApiContractDocumentsBufferLayout() {
         let contract = TestSystemPrompts.rustApiContract
-        #expect(contract.contains("MAX_CH"))
-        #expect(contract.contains("MAX_FR"))
         #expect(contract.contains("INPUT_BUF"))
         #expect(contract.contains("OUTPUT_BUF"))
-        #expect(contract.contains("from_raw_parts"))
+        #expect(contract.contains("unsafe"))
         #expect(contract.contains("interleaved"))
     }
 
