@@ -176,7 +176,7 @@ struct BearBoneExtensionMainView: View {
             }
 
             VStack(spacing: 0) {
-                HighlightedTextEditor(
+                MonacoEditorView(
                     text: $scriptSource,
                     colorScheme: colorScheme,
                     language: selectedLanguage,
