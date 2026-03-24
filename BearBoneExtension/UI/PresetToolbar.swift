@@ -52,6 +52,7 @@ struct PresetToolbar: View {
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var aiService: AIService
     @ObservedObject var licenseManager: LicenseManager
+    @ObservedObject var gitHubService: GitHubService
     var isCompiling: Bool = false
     var hasUnrunChanges: Bool = false
     var selectedLanguage: ScriptLanguage
@@ -72,11 +73,14 @@ struct PresetToolbar: View {
     @State private var showDeleteConfirm = false
     @State private var showingSettings = false
     @State private var showingExport = false
+    @State private var showingCommunityBrowser = false
+    @State private var showingImportURL = false
+    @State private var showingSync = false
     @State private var exportName = ""
 
-    private var currentIsUserPreset: Bool {
+    private var currentIsMutable: Bool {
         guard let current = presetManager.currentPreset else { return false }
-        return !current.isFactory
+        return current.isUser || current.isRepo
     }
 
     var body: some View {
@@ -95,7 +99,24 @@ struct PresetToolbar: View {
                         }
                     }
                 }
-                let userPresets = presetManager.presets.filter { !$0.isFactory }
+                let repoPresets = presetManager.presets.filter(\.isRepo)
+                if !repoPresets.isEmpty {
+                    Section(gitHubService.hasPersonalRepo
+                        ? "\(gitHubService.personalRepoOwner)/\(gitHubService.personalRepoName)"
+                        : "Repo"
+                    ) {
+                        ForEach(repoPresets) { preset in
+                            Button(action: { onSelectPreset(preset) }) {
+                                if presetManager.currentPreset?.id == preset.id {
+                                    Label(preset.name, systemImage: "checkmark")
+                                } else {
+                                    Text(preset.name)
+                                }
+                            }
+                        }
+                    }
+                }
+                let userPresets = presetManager.presets.filter(\.isUser)
                 if !userPresets.isEmpty {
                     Section("User") {
                         ForEach(userPresets) { preset in
@@ -108,6 +129,13 @@ struct PresetToolbar: View {
                             }
                         }
                     }
+                }
+                Divider()
+                Button(action: { showingCommunityBrowser = true }) {
+                    Label("Browse Community\u{2026}", systemImage: "globe")
+                }
+                Button(action: { showingImportURL = true }) {
+                    Label("Import from URL\u{2026}", systemImage: "link")
                 }
             } label: {
                 HStack(spacing: 2) {
@@ -158,7 +186,7 @@ struct PresetToolbar: View {
             .accessibilityIdentifier("runButton")
 
             // Save (overwrite current user preset)
-            if currentIsUserPreset {
+            if currentIsMutable {
                 Button(action: { onSave() }) {
                     Image(systemName: "square.and.arrow.down")
                 }
@@ -221,7 +249,7 @@ struct PresetToolbar: View {
             }
 
             // Delete (user presets only)
-            if currentIsUserPreset {
+            if currentIsMutable {
                 Button(action: { showDeleteConfirm = true }) {
                     Image(systemName: "trash")
                 }
@@ -234,7 +262,11 @@ struct PresetToolbar: View {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This cannot be undone.")
+                    if presetManager.currentPreset?.isRepo == true {
+                        Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This will also remove it from your GitHub repo.")
+                    } else {
+                        Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This cannot be undone.")
+                    }
                 }
             }
 
@@ -268,6 +300,37 @@ struct PresetToolbar: View {
                     },
                     onCancel: { showingExport = false }
                 )
+            }
+
+            // Sync presets with personal repo
+            if gitHubService.hasPersonalRepo && gitHubService.hasToken {
+                Button(action: { showingSync = true }) {
+                    if gitHubService.personalSync.isSyncing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .overlay(alignment: .topTrailing) {
+                                if gitHubService.personalSync.hasPendingChanges
+                                    || !gitHubService.personalSync.pendingConflicts.isEmpty {
+                                    Circle()
+                                        .fill(.orange)
+                                        .frame(width: 6, height: 6)
+                                        .offset(x: 3, y: -3)
+                                }
+                            }
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(gitHubService.personalSync.isSyncing)
+                .toolbarTooltip("Sync with GitHub")
+                .accessibilityIdentifier("syncButton")
+                .popover(isPresented: $showingSync) {
+                    SyncStatusView(
+                        gitHubService: gitHubService,
+                        presetManager: presetManager,
+                        onPresetInstalled: { preset in onSelectPreset(preset) }
+                    )
+                }
             }
 
             // Chat sidebar toggle
@@ -316,6 +379,12 @@ struct PresetToolbar: View {
                         aiService: aiService,
                         onDone: { showingSettings = false }
                     )
+                    Divider()
+                    GitHubSettingsView(
+                        gitHubService: gitHubService,
+                        presetManager: presetManager,
+                        onDone: { showingSettings = false }
+                    )
                 }
             }
         }
@@ -324,6 +393,28 @@ struct PresetToolbar: View {
         .padding(.vertical, 4)
         .onReceive(NotificationCenter.default.publisher(for: .openLicenseSettings)) { _ in
             showingSettings = true
+        }
+        .popover(isPresented: $showingCommunityBrowser) {
+            CommunityBrowserView(
+                store: gitHubService.communityStore,
+                presetManager: presetManager,
+                onInstalled: { preset in
+                    showingCommunityBrowser = false
+                    onSelectPreset(preset)
+                },
+                onDismiss: { showingCommunityBrowser = false }
+            )
+        }
+        .popover(isPresented: $showingImportURL) {
+            ImportURLPopover(
+                presetManager: presetManager,
+                client: gitHubService.client,
+                onImported: { preset in
+                    showingImportURL = false
+                    onSelectPreset(preset)
+                },
+                onCancel: { showingImportURL = false }
+            )
         }
     }
 

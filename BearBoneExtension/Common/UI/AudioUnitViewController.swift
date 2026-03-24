@@ -46,6 +46,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var captureManager: AudioCaptureManager?
     private var parameterState: ParameterState?
     private var licenseManager: LicenseManager?
+    private var gitHubService: GitHubService?
     private var paramNamesCancellable: AnyCancellable?
     private var paramMetadataCancellable: AnyCancellable?
 
@@ -224,6 +225,13 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             licenseManager = LicenseManager()
         }
         let lm = licenseManager!
+
+        if gitHubService == nil {
+            gitHubService = GitHubService()
+        }
+        let gh = gitHubService!
+        gh.wireAutoSync(presetManager: pm)
+        gh.syncIfConnected(presetManager: pm)
         lm.verifyWithKernel = { [weak au] serial in
             au?.verifyLicense(serial) ?? false
         }
@@ -262,7 +270,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             return result
         }
 
-        // Save: overwrite current user preset + hot-reload
+        // Save: overwrite current user/repo preset + hot-reload
         let onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult = { [weak au, weak pm] source, language in
             guard let au, let pm else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
@@ -271,7 +279,12 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                 return ScriptSaveResult(success: false, error: "No user preset selected", processTimeMs: nil, budgetMs: nil)
             }
             do {
-                let saved = try pm.saveUserPreset(name: current.name, source: source, language: language)
+                let saved: Preset
+                if current.isRepo {
+                    saved = try pm.saveRepoPreset(name: current.name, source: source, language: language)
+                } else {
+                    saved = try pm.saveUserPreset(name: current.name, source: source, language: language)
+                }
                 Analytics.track(.presetSave, properties: [
                     "preset_name": current.name,
                     "is_new": false,
@@ -293,13 +306,18 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             }
         }
 
-        // Save As: create new user preset + hot-reload
-        let onSaveAsPreset: (String, String, ScriptLanguage) -> ScriptSaveResult = { [weak au, weak pm] name, source, language in
+        // Save As: create new preset (repo if connected, else user) + hot-reload
+        let onSaveAsPreset: (String, String, ScriptLanguage) -> ScriptSaveResult = { [weak au, weak pm, weak gh] name, source, language in
             guard let au, let pm else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
             do {
-                let saved = try pm.saveUserPreset(name: name, source: source, language: language)
+                let saved: Preset
+                if let gh, gh.hasPersonalRepo, gh.hasToken {
+                    saved = try pm.saveRepoPreset(name: name, source: source, language: language)
+                } else {
+                    saved = try pm.saveUserPreset(name: name, source: source, language: language)
+                }
                 Analytics.track(.presetSave, properties: [
                     "preset_name": name,
                     "is_new": true,
@@ -445,6 +463,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             captureManager: capture,
             parameterState: ps,
             licenseManager: lm,
+            gitHubService: gh,
             onRun: onRun,
             onSelectPreset: onSelectPreset,
             onSavePreset: onSavePreset,
