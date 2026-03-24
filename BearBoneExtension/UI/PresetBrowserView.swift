@@ -234,7 +234,12 @@ struct PresetBrowserView: View {
             // Source column with filter
             ColumnFilterMenu(
                 label: "Source",
-                isFiltered: selectedSources.count < (hasRepoPresets ? 3 : 2)
+                isFiltered: {
+                    let visibleSources: Set<SourceFilter> = hasRepoPresets
+                        ? [.factory, .user, .repo]
+                        : [.factory, .user]
+                    return !visibleSources.isSubset(of: selectedSources)
+                }()
             ) {
                 Button(action: { toggleSource(.factory) }) {
                     HStack {
@@ -296,7 +301,9 @@ struct PresetBrowserView: View {
                                 .frame(width: 6)
                         }
                     } else {
-                        Spacer().frame(width: isModified && isCurrent ? 18 : 12)
+                        // Reserve same width as checkmark (12) + modified asterisk (6)
+                        // so all rows align regardless of current/modified state
+                        Spacer().frame(width: 12)
                     }
 
                     Text(preset.name)
