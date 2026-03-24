@@ -117,6 +117,8 @@ struct MonacoEditorView: NSViewRepresentable {
         var pendingLanguage: ScriptLanguage = .python
         var pendingTheme: ColorScheme = .dark
         var pendingReadOnly: Bool = false
+        private var initRetryCount = 0
+        private static let maxInitRetries = 2
 
         init(text: Binding<String>) {
             self.text = text
@@ -169,11 +171,14 @@ struct MonacoEditorView: NSViewRepresentable {
                 }
             """
             log.info("Calling bridge.init (content length=\(content.count), lang=\(lang, privacy: .public))")
-            webView.evaluateJavaScript(initScript) { result, error in
+            webView.evaluateJavaScript(initScript) { [weak self] result, error in
+                guard let self else { return }
                 if let error {
                     log.error("bridge.init JS error: \(error.localizedDescription, privacy: .public)")
+                    self.retryInitIfNeeded(webView)
                 } else if let result = result as? String, result.hasPrefix("ERROR:") {
                     log.error("bridge.init threw: \(result, privacy: .public)")
+                    self.retryInitIfNeeded(webView)
                 } else {
                     log.info("bridge.init JS succeeded")
                 }
@@ -193,6 +198,17 @@ struct MonacoEditorView: NSViewRepresentable {
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             log.error("WKWebView content process terminated, reloading")
             isEditorReady = false
+            webView.reload()
+        }
+
+        private func retryInitIfNeeded(_ webView: WKWebView) {
+            isEditorReady = false
+            guard initRetryCount < Self.maxInitRetries else {
+                log.error("Monaco init failed after \(Self.maxInitRetries) retries, giving up")
+                return
+            }
+            initRetryCount += 1
+            log.info("Retrying Monaco init (attempt \(initRetryCount)/\(Self.maxInitRetries))")
             webView.reload()
         }
 
