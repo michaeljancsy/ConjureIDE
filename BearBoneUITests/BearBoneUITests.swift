@@ -17,7 +17,7 @@ final class BearBoneUITests: XCTestCase {
     func testScriptEditorIsPresent() throws {
         let app = XCUIApplication()
         app.launch()
-        let editor = app.webViews["scriptEditor"]
+        let editor = app.descendants(matching: .any)["scriptEditor"].firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 10),
                       "Script editor should be visible after launch")
     }
@@ -54,7 +54,7 @@ final class BearBoneUITests: XCTestCase {
     func testScriptEditorShowsDefaultScript() throws {
         let app = XCUIApplication()
         app.launch()
-        let editor = app.webViews["scriptEditor"]
+        let editor = app.descendants(matching: .any)["scriptEditor"].firstMatch
         guard editor.waitForExistence(timeout: 10) else {
             XCTFail("Script editor not found")
             return
@@ -123,7 +123,7 @@ final class BearBoneUITests: XCTestCase {
     func testScriptEditorAcceptsTyping() throws {
         let app = XCUIApplication()
         app.launch()
-        let editor = app.webViews["scriptEditor"]
+        let editor = app.descendants(matching: .any)["scriptEditor"].firstMatch
         guard editor.waitForExistence(timeout: 15) else {
             XCTFail("Script editor not found")
             return

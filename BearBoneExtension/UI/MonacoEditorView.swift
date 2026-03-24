@@ -1,5 +1,8 @@
+import os
 import SwiftUI
 import WebKit
+
+private let log = Logger(subsystem: "com.MichaelJancsy.BearBone.BearBoneExtension", category: "MonacoEditor")
 
 struct MonacoEditorView: NSViewRepresentable {
     @Binding var text: String
@@ -30,13 +33,17 @@ struct MonacoEditorView: NSViewRepresentable {
         let bundle = Bundle(for: Coordinator.self)
         if let monacoDir = bundle.url(forResource: "monaco", withExtension: nil),
            let monacoURL = bundle.url(forResource: "index", withExtension: "html", subdirectory: "monaco") {
+            log.info("Loading Monaco from \(monacoURL.path, privacy: .public)")
             webView.loadFileURL(monacoURL, allowingReadAccessTo: monacoDir)
+        } else {
+            log.error("Monaco resources not found in bundle \(bundle.bundlePath, privacy: .public)")
         }
 
         return webView
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+        log.info("dismantleNSView called (isEditorReady=\(coordinator.isEditorReady))")
         let controller = webView.configuration.userContentController
         controller.removeScriptMessageHandler(forName: "contentChanged")
         controller.removeScriptMessageHandler(forName: "editorReady")
@@ -110,6 +117,8 @@ struct MonacoEditorView: NSViewRepresentable {
         var pendingLanguage: ScriptLanguage = .python
         var pendingTheme: ColorScheme = .dark
         var pendingReadOnly: Bool = false
+        private var initRetryCount = 0
+        private static let maxInitRetries = 2
 
         init(text: Binding<String>) {
             self.text = text
@@ -123,6 +132,7 @@ struct MonacoEditorView: NSViewRepresentable {
         ) {
             switch message.name {
             case "editorReady":
+                log.info("Monaco editor ready")
                 isEditorReady = true
                 applyPendingState()
 
@@ -141,23 +151,66 @@ struct MonacoEditorView: NSViewRepresentable {
         // MARK: - WKNavigationDelegate
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            log.info("WKWebView didFinish navigation")
             // Page loaded — initialize Monaco with options
             let theme = pendingTheme == .dark ? "vs-dark" : "vs"
             let lang = pendingLanguage == .rust ? "rust" : "python"
             let content = (pendingContent ?? text.wrappedValue).jsEscaped
 
             let initScript = """
-                bridge.init({
-                    content: "\(content)",
-                    language: "\(lang)",
-                    theme: "\(theme)",
-                    readOnly: \(pendingReadOnly)
-                });
+                try {
+                    bridge.init({
+                        content: "\(content)",
+                        language: "\(lang)",
+                        theme: "\(theme)",
+                        readOnly: \(pendingReadOnly)
+                    });
+                    'ok';
+                } catch(e) {
+                    'ERROR: ' + e.message + ' | ' + e.stack;
+                }
             """
-            webView.evaluateJavaScript(initScript) { _, _ in }
+            log.info("Calling bridge.init (content length=\(content.count), lang=\(lang, privacy: .public))")
+            webView.evaluateJavaScript(initScript) { [weak self] result, error in
+                guard let self else { return }
+                if let error {
+                    log.error("bridge.init JS error: \(error.localizedDescription, privacy: .public)")
+                    self.retryInitIfNeeded(webView)
+                } else if let result = result as? String, result.hasPrefix("ERROR:") {
+                    log.error("bridge.init threw: \(result, privacy: .public)")
+                    self.retryInitIfNeeded(webView)
+                } else {
+                    log.info("bridge.init JS succeeded")
+                    self.initRetryCount = 0
+                }
+            }
         }
 
-        // MARK: - Private
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            log.error("WKWebView navigation failed: \(error.localizedDescription, privacy: .public)")
+            isEditorReady = false
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            log.error("WKWebView provisional navigation failed: \(error.localizedDescription, privacy: .public)")
+            isEditorReady = false
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            log.error("WKWebView content process terminated")
+            retryInitIfNeeded(webView)
+        }
+
+        private func retryInitIfNeeded(_ webView: WKWebView) {
+            isEditorReady = false
+            guard initRetryCount < Self.maxInitRetries else {
+                log.error("Monaco init failed after \(Self.maxInitRetries) retries, giving up")
+                return
+            }
+            initRetryCount += 1
+            log.info("Retrying Monaco init (attempt \(self.initRetryCount)/\(Self.maxInitRetries))")
+            webView.reload()
+        }
 
         private func applyPendingState() {
             guard let webView else { return }

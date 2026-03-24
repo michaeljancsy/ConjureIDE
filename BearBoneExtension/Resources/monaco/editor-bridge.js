@@ -43,6 +43,8 @@ const bridge = {
             this._registerCompletions();
 
             webkit.messageHandlers.editorReady.postMessage(true);
+        }, (err) => {
+            console.error('[BearBone] Monaco require() failed:', err);
         });
     },
 

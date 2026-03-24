@@ -17,8 +17,8 @@ struct SpectrogramSidePanel: View {
 
     @State private var showInput = true
     @State private var showOutput = true
-    @State private var showDifference = false
-    @State private var showNormalizedDiff = false
+    @State private var showDifference = true
+    @State private var showNormalizedDiff = true
 
     static let fftSizes = [512, 1024, 2048, 4096]
 
