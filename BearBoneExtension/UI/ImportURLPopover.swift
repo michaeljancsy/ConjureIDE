@@ -75,9 +75,11 @@ struct ImportURLPopover: View {
                 Spacer()
                 Button("Cancel") { onCancel() }
                     .keyboardShortcut(.cancelAction)
-                Button("Import") { importPreset() }
-                    .disabled(previewSource == nil || detectedName.isEmpty)
-                    .keyboardShortcut(.defaultAction)
+                if previewSource != nil {
+                    Button("Import") { importPreset() }
+                        .disabled(detectedName.isEmpty)
+                        .keyboardShortcut(.defaultAction)
+                }
             }
         }
         .padding()
