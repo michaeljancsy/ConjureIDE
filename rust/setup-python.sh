@@ -37,10 +37,10 @@ mv /tmp/python-extract/python/install "${PYTHON_DIR}"
 
 rm -rf /tmp/python-extract "/tmp/${ARCHIVE}"
 
-echo "Installing numpy..."
+echo "Installing numpy and scipy..."
 "${PYTHON_DIR}/bin/python3" -m pip install --upgrade pip
-"${PYTHON_DIR}/bin/python3" -m pip install numpy
+"${PYTHON_DIR}/bin/python3" -m pip install numpy scipy
 
 echo ""
-echo "Done! Free-threaded Python ${PYTHON_VERSION} (no-GIL) with numpy installed at: ${PYTHON_DIR}"
+echo "Done! Free-threaded Python ${PYTHON_VERSION} (no-GIL) with numpy+scipy installed at: ${PYTHON_DIR}"
 echo "You can now build the project with Xcode."

@@ -21,7 +21,7 @@ xcodebuild -project BearBone.xcodeproj -scheme BearBone test   # runs unit + UI 
 Deployment targets: macOS 26.2+.
 
 ### Python setup
-Run `rust/setup-python.sh` once before the first build. This downloads a free-threaded Python 3.14 build from python-build-standalone (~100MB) and installs numpy into it. The result lives in `rust/python-dist/` (gitignored).
+Run `rust/setup-python.sh` once before the first build. This downloads a free-threaded Python 3.14 build from python-build-standalone (~100MB) and installs numpy and scipy into it. The result lives in `rust/python-dist/` (gitignored).
 
 ### Rust build
 The `BearBoneExtension` target has a Run Script build phase that calls `rust/build-rust.sh`. This:
@@ -252,7 +252,7 @@ Bundled runtimes require proper code signing for the hardened runtime:
 
 - **Apple frameworks**: AudioToolbox, AVFoundation, CoreAudioKit, CoreMIDI, SwiftUI, Combine
 - **Rust crates**: pyo3 0.27 (Python embedding), numpy 0.27 (numpy array interop)
-- **Bundled runtime**: Free-threaded Python 3.14.3 + numpy (downloaded via `setup-python.sh`)
+- **Bundled runtime**: Free-threaded Python 3.14.3 + numpy + scipy (downloaded via `setup-python.sh`)
 
 ## Plugin Identity
 
