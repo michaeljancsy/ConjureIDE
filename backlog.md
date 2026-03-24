@@ -36,6 +36,7 @@
 - ~~Parameter-aware factory presets~~ (done, see Done section)
 - ~~Parameter-aware factory presets: Update remaining presets~~ (done, see Done section)
 - DSP utility libraries (WASM Phase 6): Provide helper libraries/modules for common DSP operations in WASM scripts
+- DSP libraries: Integrate existing DSP libraries or create a BearBone-specific DSP library for common operations (filters, envelopes, oscillators, etc.) available to both Python and Rust/WASM scripts
 - Host app DAW controls: Add preset selection and a bypass button to the BearBone host app, like a DAW would provide
 - Audio visualization polish: Persist spectrogram preferences (panel visibility, width, FFT size, frequency scale, note names) in UserDefaults. Add spectrogram to host app. Performance optimization if needed.
 - AI chat sidebar polish: ~~Add resizable divider~~, markdown rendering in messages, code block copy/insert buttons, conversation persistence, keyboard shortcut to toggle panel
