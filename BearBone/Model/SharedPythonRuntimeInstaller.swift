@@ -2,7 +2,7 @@
 //  SharedPythonRuntimeInstaller.swift
 //  BearBone
 //
-//  Copies the Python stdlib+numpy from the bundled AU extension to a shared location
+//  Copies the Python stdlib+numpy+scipy from the bundled AU extension to a shared location
 //  so exported Python AUs can find it without bundling ~130MB per export.
 //
 
@@ -45,7 +45,7 @@ enum SharedPythonRuntimeInstaller {
             // Create parent directories
             try fm.createDirectory(at: destURL, withIntermediateDirectories: true)
 
-            // Copy lib/python3.14t/ (stdlib + site-packages/numpy)
+            // Copy lib/python3.14t/ (stdlib + site-packages with numpy+scipy)
             let sourceLib = sourceURL.appendingPathComponent("lib/python3.14t")
             let destLib = destURL.appendingPathComponent("lib/python3.14t")
 
