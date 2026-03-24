@@ -208,7 +208,7 @@ struct MonacoEditorView: NSViewRepresentable {
                 return
             }
             initRetryCount += 1
-            log.info("Retrying Monaco init (attempt \(initRetryCount)/\(Self.maxInitRetries))")
+            log.info("Retrying Monaco init (attempt \(self.initRetryCount)/\(Self.maxInitRetries))")
             webView.reload()
         }
 
