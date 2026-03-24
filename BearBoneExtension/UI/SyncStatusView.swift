@@ -86,11 +86,6 @@ struct SyncStatusView: View {
                     resolveConflict(conflict, resolution: .keepRemote)
                 }
                 .font(.caption)
-
-                Button("Keep Both") {
-                    resolveConflict(conflict, resolution: .keepBoth)
-                }
-                .font(.caption)
             }
         }
         .padding(.vertical, 4)

@@ -32,7 +32,6 @@ class PersonalRepoSync: ObservableObject {
     enum ConflictResolution {
         case keepLocal
         case keepRemote
-        case keepBoth
     }
 
     struct SyncResult {
@@ -197,22 +196,6 @@ class PersonalRepoSync: ObservableObject {
             // Overwrite local with remote
             try? conflict.remoteSource.write(to: destURL, atomically: true, encoding: .utf8)
 
-        case .keepBoth:
-            // Keep remote as-is, rename local
-            let baseName = (conflict.filename as NSString).deletingPathExtension
-            let ext = (conflict.filename as NSString).pathExtension
-            let renamedName = "\(baseName) (local).\(ext)"
-            let renamedURL = presetManager.repoPresetsURL.appendingPathComponent(renamedName)
-            try? conflict.localSource.write(to: renamedURL, atomically: true, encoding: .utf8)
-            // Overwrite original with remote
-            try? conflict.remoteSource.write(to: destURL, atomically: true, encoding: .utf8)
-            // Push the renamed local copy
-            Task {
-                try? await client.putFile(
-                    owner: owner, repo: repo, path: "\(subdir)/\(renamedName)",
-                    content: conflict.localSource, message: "Add \(renamedName)", token: token
-                )
-            }
         }
 
         pendingConflicts.removeAll { $0.id == conflict.id }
