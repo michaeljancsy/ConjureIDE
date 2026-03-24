@@ -83,7 +83,8 @@ class PresetManager: ObservableObject {
                 name: entry.name,
                 source: .factory(resourceName: entry.resourceName),
                 factoryPresetNumber: entry.number,
-                language: entry.language
+                language: entry.language,
+                category: entry.category
             ))
         }
 
@@ -117,7 +118,8 @@ class PresetManager: ObservableObject {
                 name: name,
                 source: source,
                 factoryPresetNumber: nil,
-                language: language
+                language: language,
+                category: .other
             )
         }
     }

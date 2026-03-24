@@ -73,6 +73,7 @@ struct PresetToolbar: View {
     @State private var showDeleteConfirm = false
     @State private var showingSettings = false
     @State private var showingExport = false
+    @State private var showingPresetBrowser = false
     @State private var showingCommunityBrowser = false
     @State private var showingImportURL = false
     @State private var showingSync = false
@@ -86,58 +87,8 @@ struct PresetToolbar: View {
     var body: some View {
         HStack(spacing: 6) {
             // — Preset zone —
-            // Preset picker menu
-            Menu {
-                Section("Factory") {
-                    ForEach(presetManager.presets.filter(\.isFactory)) { preset in
-                        Button(action: { onSelectPreset(preset) }) {
-                            if presetManager.currentPreset?.id == preset.id {
-                                Label(preset.name, systemImage: "checkmark")
-                            } else {
-                                Text(preset.name)
-                            }
-                        }
-                    }
-                }
-                let repoPresets = presetManager.presets.filter(\.isRepo)
-                if !repoPresets.isEmpty {
-                    Section(gitHubService.hasPersonalRepo
-                        ? "\(gitHubService.personalRepoOwner)/\(gitHubService.personalRepoName)"
-                        : "Repo"
-                    ) {
-                        ForEach(repoPresets) { preset in
-                            Button(action: { onSelectPreset(preset) }) {
-                                if presetManager.currentPreset?.id == preset.id {
-                                    Label(preset.name, systemImage: "checkmark")
-                                } else {
-                                    Text(preset.name)
-                                }
-                            }
-                        }
-                    }
-                }
-                let userPresets = presetManager.presets.filter(\.isUser)
-                if !userPresets.isEmpty {
-                    Section("User") {
-                        ForEach(userPresets) { preset in
-                            Button(action: { onSelectPreset(preset) }) {
-                                if presetManager.currentPreset?.id == preset.id {
-                                    Label(preset.name, systemImage: "checkmark")
-                                } else {
-                                    Text(preset.name)
-                                }
-                            }
-                        }
-                    }
-                }
-                Divider()
-                Button(action: { showingCommunityBrowser = true }) {
-                    Label("Browse Community\u{2026}", systemImage: "globe")
-                }
-                Button(action: { showingImportURL = true }) {
-                    Label("Import from URL\u{2026}", systemImage: "link")
-                }
-            } label: {
+            // Preset browser button
+            Button(action: { showingPresetBrowser = true }) {
                 HStack(spacing: 2) {
                     Text(presetManager.currentPreset?.name ?? "Untitled")
                         .lineLimit(1)
@@ -151,9 +102,24 @@ struct PresetToolbar: View {
                         .foregroundColor(.secondary)
                 }
             }
-            .menuStyle(.borderlessButton)
+            .buttonStyle(.borderless)
             .frame(minWidth: 100, maxWidth: 200)
             .accessibilityIdentifier("presetMenu")
+            .popover(isPresented: $showingPresetBrowser) {
+                PresetBrowserView(
+                    presets: presetManager.presets,
+                    currentPreset: presetManager.currentPreset,
+                    isModified: presetManager.isModified,
+                    hasRepoPresets: presetManager.presets.contains(where: \.isRepo),
+                    onSelectPreset: { preset in
+                        showingPresetBrowser = false
+                        onSelectPreset(preset)
+                    },
+                    onBrowseCommunity: { showingCommunityBrowser = true },
+                    onImportURL: { showingImportURL = true },
+                    onDismiss: { showingPresetBrowser = false }
+                )
+            }
 
             // Language badge (read-only)
             Text(selectedLanguage == .python ? "Python" : "Rust")
