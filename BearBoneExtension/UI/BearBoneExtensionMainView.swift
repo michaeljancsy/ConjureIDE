@@ -37,15 +37,15 @@ struct BearBoneExtensionMainView: View {
     var onExport: (String) async -> ExportResult
     var defaultBenchmark: (processTimeMs: Double, budgetMs: Double)?
 
-    @State private var scriptSource: String
-    @State private var selectedLanguage: ScriptLanguage
+    @State private var scriptSource: String = ""
+    @State private var selectedLanguage: ScriptLanguage = .python
     @State private var errorMessage: String?
     @State private var showingSaveAs = false
     @State private var saveAsName = ""
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
     @State private var showNewScriptDialog: Bool = false
     @State private var isCompiling: Bool = false
-    @State private var lastRunSource: String
+    @State private var lastRunSource: String = ""
     @State private var showSpectrogram: Bool = false
     @State private var showChat: Bool = false
     @State private var chatWidth: CGFloat = 280
@@ -57,59 +57,6 @@ struct BearBoneExtensionMainView: View {
     @State private var spectrogramFFTSizeIndex: Int = 2 // default: 2048
     @State private var spectrogramShowNoteNames: Bool = false
     @Environment(\.colorScheme) private var colorScheme
-
-    init(
-        buildID: Int,
-        defaultScriptSource: String,
-        defaultLanguage: ScriptLanguage = .python,
-        extensionBundle: Bundle,
-        scriptSourcePublisher: AnyPublisher<BearBoneExtensionAudioUnit.ScriptSourceChange, Never>? = nil,
-        presetManager: PresetManager,
-        aiService: AIService,
-        chatService: ChatService,
-        captureManager: AudioCaptureManager,
-        parameterState: ParameterState,
-        licenseManager: LicenseManager,
-        gitHubService: GitHubService,
-        onRun: @escaping (String) async -> ScriptSaveResult,
-        onSelectPreset: @escaping (Preset) async -> ScriptSaveResult,
-        onSavePreset: @escaping (String, ScriptLanguage) -> ScriptSaveResult,
-        onSaveAsPreset: @escaping (String, String, ScriptLanguage) -> ScriptSaveResult,
-        onDeletePreset: @escaping () -> Void,
-        onNew: @escaping (ScriptLanguage) -> ScriptSaveResult,
-        onExport: @escaping (String) async -> ExportResult,
-        defaultBenchmark: (processTimeMs: Double, budgetMs: Double)? = nil
-    ) {
-        self.buildID = buildID
-        self.defaultScriptSource = defaultScriptSource
-        self.defaultLanguage = defaultLanguage
-        self.extensionBundle = extensionBundle
-        self.scriptSourcePublisher = scriptSourcePublisher
-        self._presetManager = ObservedObject(wrappedValue: presetManager)
-        self._aiService = ObservedObject(wrappedValue: aiService)
-        self._chatService = ObservedObject(wrappedValue: chatService)
-        self._captureManager = ObservedObject(wrappedValue: captureManager)
-        self._parameterState = ObservedObject(wrappedValue: parameterState)
-        self._licenseManager = ObservedObject(wrappedValue: licenseManager)
-        self._gitHubService = ObservedObject(wrappedValue: gitHubService)
-        self.onRun = onRun
-        self.onSelectPreset = onSelectPreset
-        self.onSavePreset = onSavePreset
-        self.onSaveAsPreset = onSaveAsPreset
-        self.onDeletePreset = onDeletePreset
-        self.onNew = onNew
-        self.onExport = onExport
-        self.defaultBenchmark = defaultBenchmark
-        // Initialize @State from constructor params so content is available from the
-        // very first render — before onAppear fires. This eliminates a race condition
-        // where MonacoEditorView could initialize with empty content.
-        self._scriptSource = State(initialValue: defaultScriptSource)
-        self._selectedLanguage = State(initialValue: defaultLanguage)
-        self._lastRunSource = State(initialValue: defaultScriptSource)
-        if let bench = defaultBenchmark {
-            self._lastBenchmark = State(initialValue: bench)
-        }
-    }
 
     /// Color for the benchmark timing based on how close to budget.
     private var benchmarkColor: Color {
@@ -373,6 +320,14 @@ struct BearBoneExtensionMainView: View {
         }
         .onChange(of: showSpectrogram) { _, newValue in
             captureManager.isActive = newValue
+        }
+        .onAppear {
+            scriptSource = defaultScriptSource
+            lastRunSource = defaultScriptSource
+            selectedLanguage = defaultLanguage
+            if let bench = defaultBenchmark {
+                lastBenchmark = bench
+            }
         }
         .onReceive(scriptSourcePublisher ?? Empty().eraseToAnyPublisher()) { change in
             scriptSource = change.source
