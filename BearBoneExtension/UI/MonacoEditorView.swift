@@ -197,9 +197,8 @@ struct MonacoEditorView: NSViewRepresentable {
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            log.error("WKWebView content process terminated, reloading")
-            isEditorReady = false
-            webView.reload()
+            log.error("WKWebView content process terminated")
+            retryInitIfNeeded(webView)
         }
 
         private func retryInitIfNeeded(_ webView: WKWebView) {
