@@ -182,10 +182,12 @@ struct MonacoEditorView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             log.error("WKWebView navigation failed: \(error.localizedDescription, privacy: .public)")
+            isEditorReady = false
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             log.error("WKWebView provisional navigation failed: \(error.localizedDescription, privacy: .public)")
+            isEditorReady = false
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
