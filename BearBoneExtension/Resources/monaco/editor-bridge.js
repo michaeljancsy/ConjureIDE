@@ -312,7 +312,27 @@ const bridge = {
                     endColumn: word.endColumn,
                 };
 
-                // np. completions
+                // np.fft. completions (must be checked before np.)
+                if (textBefore.match(/\bnp\.fft\.\w*$/)) {
+                    return { suggestions: [
+                        sug('np.fft.rfft', Kind.Function, 'rfft(${1:signal})', 'Real FFT. Returns complex spectrum (positive frequencies only).', true),
+                        sug('np.fft.irfft', Kind.Function, 'irfft(${1:spectrum})', 'Inverse real FFT. Converts spectrum back to time domain.', true),
+                        sug('np.fft.rfftfreq', Kind.Function, 'rfftfreq(${1:n}, d=1.0/sample_rate)', 'Frequency bins for rfft output.', true),
+                        sug('np.fft.fft', Kind.Function, 'fft(${1:signal})', 'Complex FFT. Use rfft for real signals (more efficient).', true),
+                        sug('np.fft.ifft', Kind.Function, 'ifft(${1:spectrum})', 'Inverse complex FFT.', true),
+                        sug('np.fft.fftfreq', Kind.Function, 'fftfreq(${1:n}, d=1.0/sample_rate)', 'Frequency bins for fft output.', true),
+                    ].map(s => ({ ...s, range })) };
+                }
+
+                // np.random. completions (must be checked before np.)
+                if (textBefore.match(/\bnp\.random\.\w*$/)) {
+                    return { suggestions: [
+                        sug('np.random.uniform', Kind.Function, 'uniform(${1:-1.0}, ${2:1.0}, ${3:frame_count})', 'Uniform random samples. Useful for noise generation.', true),
+                        sug('np.random.normal', Kind.Function, 'normal(${1:0.0}, ${2:1.0}, ${3:frame_count})', 'Gaussian random samples.', true),
+                    ].map(s => ({ ...s, range })) };
+                }
+
+                // np. completions (general — checked after submodules)
                 if (textBefore.match(/\bnp\.\w*$/)) {
                     return { suggestions: [
                         // Array creation
@@ -357,26 +377,6 @@ const bridge = {
                         sug('np.pi', Kind.Constant, 'pi', '3.14159... Used in angular frequency: w = 2 * np.pi * freq', false),
                         sug('np.float32', Kind.Constant, 'float32', 'Single-precision float type. BearBone audio buffers are float32.', false),
 
-                    ].map(s => ({ ...s, range })) };
-                }
-
-                // np.fft. completions
-                if (textBefore.match(/\bnp\.fft\.\w*$/)) {
-                    return { suggestions: [
-                        sug('np.fft.rfft', Kind.Function, 'rfft(${1:signal})', 'Real FFT. Returns complex spectrum (positive frequencies only).', true),
-                        sug('np.fft.irfft', Kind.Function, 'irfft(${1:spectrum})', 'Inverse real FFT. Converts spectrum back to time domain.', true),
-                        sug('np.fft.rfftfreq', Kind.Function, 'rfftfreq(${1:n}, d=1.0/sample_rate)', 'Frequency bins for rfft output.', true),
-                        sug('np.fft.fft', Kind.Function, 'fft(${1:signal})', 'Complex FFT. Use rfft for real signals (more efficient).', true),
-                        sug('np.fft.ifft', Kind.Function, 'ifft(${1:spectrum})', 'Inverse complex FFT.', true),
-                        sug('np.fft.fftfreq', Kind.Function, 'fftfreq(${1:n}, d=1.0/sample_rate)', 'Frequency bins for fft output.', true),
-                    ].map(s => ({ ...s, range })) };
-                }
-
-                // np.random. completions
-                if (textBefore.match(/\bnp\.random\.\w*$/)) {
-                    return { suggestions: [
-                        sug('np.random.uniform', Kind.Function, 'uniform(${1:-1.0}, ${2:1.0}, ${3:frame_count})', 'Uniform random samples. Useful for noise generation.', true),
-                        sug('np.random.normal', Kind.Function, 'normal(${1:0.0}, ${2:1.0}, ${3:frame_count})', 'Gaussian random samples.', true),
                     ].map(s => ({ ...s, range })) };
                 }
 

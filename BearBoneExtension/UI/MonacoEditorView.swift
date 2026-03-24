@@ -157,9 +157,14 @@ struct MonacoEditorView: NSViewRepresentable {
 
             let theme = pendingTheme == .dark ? "vs-dark" : "vs"
             lastTheme = theme
+            webView.evaluateJavaScript("bridge.setTheme('\(theme)')") { _, _ in }
+
             let lang = pendingLanguage == .rust ? "rust" : "python"
             lastLanguage = lang
+            webView.evaluateJavaScript("bridge.setLanguage('\(lang)')") { _, _ in }
+
             lastReadOnly = pendingReadOnly
+            webView.evaluateJavaScript("bridge.setReadOnly(\(pendingReadOnly))") { _, _ in }
 
             if let content = pendingContent {
                 lastContent = content
