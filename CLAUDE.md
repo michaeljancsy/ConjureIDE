@@ -87,22 +87,39 @@ BearBoneUITests/           UI tests (XCUITest)
 
 Up to 16 parameters, with optional rich metadata declared via `PARAMS` dict. Two modes:
 
-**Rich metadata mode** (new): Scripts declare a `PARAMS` dict with per-parameter name, min, max, unit, default. The AU parameter tree is rebuilt with real ranges. Python scripts receive a dict of actual values (`params["threshold"]` = -21.5 dB). DAW/UI shows meaningful values with units.
+**Rich metadata mode**: Scripts declare per-parameter metadata with name, min, max, unit, default, and optional `curve`. The AU parameter tree is rebuilt with real ranges. Scripts receive denormalized actual values. DAW/UI shows meaningful values with units. Both Python and Rust/WASM use the same system — parameters behave identically regardless of language.
 
+Use `"curve": "log"` for frequency and wide-range time parameters (e.g., cutoff 20–20kHz, attack 0.5–50ms). Log mapping uses `min * (max/min)^t` so the slider feels natural across orders of magnitude. Default is linear.
+
+Python:
 ```python
 PARAMS = {
-    "threshold": {"min": -40, "max": -3, "unit": "dB", "default": -20},
-    "ratio":     {"min": 2,   "max": 20, "unit": ":1", "default": 4},
+    "cutoff": {"min": 20, "max": 20000, "unit": "Hz", "default": 1000, "curve": "log"},
+    "resonance": {"min": 0, "max": 1, "unit": "", "default": 0.5},
 }
 def process(inputs, outputs, frame_count, sample_rate, params):
-    threshold_db = params["threshold"]  # already -40 to -3, no mapping needed
+    cutoff_hz = params["cutoff"]  # already 20–20000, log-mapped
 ```
 
-**Legacy mode**: Scripts without `PARAMS` get a list of 0–1 floats and generic AU parameters (backward compatible).
+Rust/WASM:
+```rust
+static METADATA: &str = r#"[
+    {"name":"Cutoff","min":20,"max":20000,"unit":"Hz","default":1000,"curve":"log"},
+    {"name":"Resonance","min":0,"max":1,"unit":"","default":0.5}
+]"#;
+
+#[unsafe(no_mangle)] pub extern "C" fn get_param_metadata_json() -> *const u8 { METADATA.as_ptr() }
+#[unsafe(no_mangle)] pub extern "C" fn get_param_metadata_len() -> usize { METADATA.len() }
+
+// PARAMS_BUF receives denormalized actual values when metadata exists
+let cutoff_hz = PARAMS_BUF[CUTOFF];  // already 20–20000, log-mapped
+```
+
+**Legacy mode**: Scripts without metadata get raw 0–1 floats and generic AU parameters (backward compatible).
 
 Implementation across layers:
 
-1. **Rust** (`params.rs`) — `ParamMetadata` struct (name, key, min, max, default, unit), `PARAM_COUNT = 16`
+1. **Rust** (`params.rs`) — `ParamMetadata` struct (name, key, min, max, default, unit, curve) with `denormalize()`/`normalize()` methods. `PARAM_COUNT = 16`
 2. **Rust** (`python_backend.rs`) — Extracts `PARAMS` dict from Python module, builds `PyDict` with denormalized values for `process()`. Falls back to `PARAM_NAMES` dict or `PyList` of 0–1 floats.
 3. **Rust** (`kernel.rs`) — Stores normalized 0–1 via `AtomicU32` array. Caches metadata as JSON. Sets defaults from metadata on script load.
 4. **Rust** (`lib.rs`) — `dsp_kernel_param_metadata_json()` FFI returns metadata JSON to Swift.
