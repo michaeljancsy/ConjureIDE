@@ -758,6 +758,7 @@ mod tests {
     fn test_ffi_demo_seconds_remaining() {
         let kernel = dsp_kernel_create();
         unsafe {
+            dsp_kernel_initialize(kernel, 1, 1, 48000.0);
             let remaining = dsp_kernel_demo_seconds_remaining(kernel, 48000.0);
             assert!((remaining - 60.0).abs() < 0.1);
 
