@@ -37,8 +37,13 @@
 
 ## Done
 
+- Add Stereo Width Optimized preset alongside original (2026-03-25)
+- Replace app icons with new designs + full-res source icons (2026-03-25)
 - Use `np.multiply(out=)` in Python presets to avoid render-loop allocations (2026-03-25)
 - Fix broken test symlinks from BearBone → ConjureDSP rename (2026-03-25)
+- Monaco editor resilience: retry init on JS failure, handle WebContent process termination (2026-03-24)
+- Fix 3 UI tests: ViewBridge-compatible element query for WKWebView (2026-03-24)
+- Import URL improvements: auto-upgrade http→https, HTML detection, gist name derivation (2026-03-24)
 - Rename BearBone to ConjureDSP across project (2026-03-24)
 - Bundle scipy in Python runtime (2026-03-23)
 - Rich parameters for WASM/Rust presets — all 22 factory presets (2026-03-23)

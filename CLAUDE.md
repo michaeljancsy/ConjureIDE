@@ -45,9 +45,13 @@ Note: `--test-threads=1` is required because Python tests share a single interpr
 ## Architecture
 
 - **Swift + SwiftUI** for all UI, host app logic, buffer management, and render block
-- **Rust** for the DSP kernel, embedding Python via pyo3/numpy for scriptable processing
-- **Python** for the user-editable DSP script (`process.py`), called each render callback with pre-allocated numpy arrays
+- **Rust** for the DSP kernel, with pluggable backends for Python and WASM processing
+- **Python** for user-editable DSP scripts, called each render callback with pre-allocated numpy arrays
+- **Rust/WASM** as an alternative DSP language — Rust source compiled to WASM via bundled rustc, executed by wasmtime
 - **C FFI** via bridging header (`ConjureDSPExtension-Bridging-Header.h`) imports `conjure_dsp.h`
+
+### Multi-language DSP
+Scripts can be written in Python (instant load) or Rust (compiled to WASM). `ScriptLanguage` auto-detects the language via heuristics (e.g., `fn process()` → Rust). `WasmCache` stores compiled WASM binaries by SHA256 hash to avoid redundant compilation. Both backends implement a common `Backend` trait with `initialize()`, `process()`, and metadata extraction.
 
 ### Python DSP pipeline
 1. On AU init, Swift calls `dsp_kernel_load_script()` with the bundled `process.py` path and Python home
@@ -56,30 +60,92 @@ Note: `--test-threads=1` is required because Python tests share a single interpr
 4. Each render callback: Rust copies input audio into numpy arrays, calls `process(inputs, outputs, frame_count, sample_rate, params)`, copies output back. If PARAMS metadata exists, params is a dict of denormalized values; otherwise a list of 0–1 floats.
 5. If Python fails to load or errors at runtime, Rust falls back to passthrough (copies input to output)
 
+### WASM DSP pipeline
+1. Rust source is compiled to `wasm32-wasip1` using a bundled standalone rustc (preferred for sandbox compatibility) or system rustc
+2. wasmtime loads the WASM module with fuel metering for safety (prevents infinite loops)
+3. I/O buffers are shared via WASM exports (`get_input_ptr`/`get_output_ptr`) or fixed memory offsets
+4. Parameter metadata is extracted from `get_param_metadata_json`/`get_param_metadata_len` WASM exports
+
+### Monaco Editor
+The code editor uses Monaco Editor (VS Code's editor) loaded in a WKWebView. It auto-detects Python vs Rust, applies light/dark themes, and communicates with Swift via `WKUserContentController` message handlers. Downloaded by `scripts/setup-monaco.sh` to `Resources/monaco/vs/` (gitignored).
+
+### AI Chat Sidebar
+An in-plugin AI assistant powered by Anthropic's Claude API with SSE streaming. Exposes 9 tools the AI can invoke: `compile_and_run`, `get_script`, `get_error`, `set_parameter`, `get_parameters`, `get_audio_state`, `list_presets`, `save_preset`, and `toggle_bypass`. API keys stored in Keychain.
+
+### GitHub Integration
+Two workflows: **CommunityPresetStore** for browsing community presets via public GitHub search, and **PersonalRepoSync** for two-way sync with a user's private preset repository (PAT-based). Repos are validated via a `conjuredsp.json` marker file. Auto-syncs preset saves/deletes via callbacks into PresetManager.
+
+### Spectrogram Visualization
+Lock-free ring buffers (written by audio thread, read by UI) feed FFT computation via Accelerate/vDSP on the main thread (CADisplayLink-synced). Supports 4 modes: input, output, difference, and normalized difference. Log and linear frequency scales with diverging colormaps for difference modes.
+
+### License System
+Ed25519-based offline license verification. Licenses stored at `~/Library/Application Support/ConjureDSP/license.key`. Rust verifies signatures using an embedded public key and sets an atomic `licensed` flag for lock-free audio-thread checks. Demo mode allows 60 seconds of unlicensed processing before silencing output.
+
 ## Project Structure
 
 ```
 ConjureDSP/                  Host app — loads and tests the AU extension
-  Model/                     AudioUnitHostModel, AudioUnitViewModel
+  Model/                     AudioUnitHostModel, AudioUnitViewModel, PendingExportHandler, SharedPythonRuntimeInstaller
   Common/Audio/              SimplePlayEngine (AVAudioEngine wrapper)
   Common/MIDI/               MIDIManager
+  SentrySetup.swift          Sentry crash reporting initialization
+  ValidationView.swift       Debug UI for AU validation output
 ConjureDSPExtension/         The AU plugin itself
+  AI/                        AI chat sidebar — AnthropicProvider, ChatTools (9 tools), ToolExecutor, SSEParser, KeychainHelper
+  Analytics.swift            Mixpanel analytics wrapper
+  Audio/                     AudioCaptureManager — reads ring buffers for spectrogram FFT
+  Compilation/               RustCompiler (bundled rustc → WASM), ScriptCompiler, ScriptLanguage (auto-detect), WasmCache (SHA256)
+  Export/                    ExportManager (standalone AUv3 pipeline), ExportRegistry, SubtypeGenerator
+  GitHub/                    GitHubService, GitHubClient, CommunityPresetStore, PersonalRepoSync, GitHubModels
+  Model/                     LicenseManager (Ed25519 + demo), Preset, PresetManager
   Parameters/                Parameter addresses (Swift enum)
-  UI/                        SwiftUI views (MainView with Python script editor)
-  Resources/process.py       Python DSP script (bundled into .appex)
+  UI/                        MonacoEditorView, SpectrogramView, ChatSidebarView, CommunityBrowserView,
+                             PresetBrowserView, ParameterSlidersView, GitHubSettingsView, ExportPopover, and more
+  Resources/                 Factory presets (.py + .wasm), process.py, monaco/ (gitignored)
   Common/Audio Unit/         ConjureDSPExtensionAudioUnit.swift — AUAudioUnit subclass + render block
   Common/UI/                 AudioUnitViewController
+  Common/Utility/            CrossPlatform.swift, SentrySetup.swift, String+Utils.swift
+ConjureDSPExportAUTemplate/  Standalone export AU template project
+  ConjureDSPExportAUTemplate/          Host app for template
+  ConjureDSPExportAUTemplateExtension/ AU extension template
+  ConjureDSPExportAUTemplateTests/     Template tests
+  project.yml               XcodeGen project spec
 rust/                        Rust DSP crate
-  conjure_dsp/src/       kernel.rs (DSP+Python), lib.rs (FFI), params.rs (addresses)
+  conjure_dsp/src/
+    lib.rs                   C FFI entry points
+    kernel.rs                DSPKernel — manages backends, parameters, license/demo state, ring buffers
+    backend.rs               Backend trait (pluggable processing interface)
+    python_backend.rs        pyo3-based Python 3.14 embedding, numpy array interop
+    wasm_backend.rs          wasmtime-based WASM execution with fuel metering
+    params.rs                ParamMetadata, denormalize/normalize with log curve support
+    ring_buffer.rs           SPSC lock-free ring buffer (audio thread → UI)
+    license.rs               Ed25519 license verification (embedded public key)
+  test_plugin_dsp/           Test harness for standalone DSP testing
   include/                   Generated C header (conjure_dsp.h)
   build-rust.sh              Xcode build phase script
-  setup-python.sh            Downloads free-threaded Python 3.14 + numpy
+  setup-python.sh            Downloads free-threaded Python 3.14 + numpy + scipy
+  setup-wasm-target.sh       Installs wasm32-wasip1 target for Rust compiler
   python-dist/               Bundled Python runtime (gitignored)
 scripts/                     Build and setup scripts
   setup-rustc.sh             Downloads standalone Rust compiler for WASM compilation
+  setup-monaco.sh            Downloads Monaco Editor for code editing UI
   stamp-build-id.sh          Stamps build ID into extension Info.plist
   bust-au-cache.sh           Kills AudioComponentRegistrar for fresh AU registration
+  release.sh                 End-to-end release: archive, notarize, DMG
+  build-release.sh           Archives Release configuration with Developer ID signing
+  create-dmg.sh              Creates distributable DMG from signed .app
+  notarize.sh                Submits to Apple notarization service
+  upload-dsyms.sh            Uploads debug symbols to Sentry
+  pre-build-clean.sh         Moves /Applications install out of DerivedData's way
+  generate-test-serial.sh    Generates test license serial numbers
+  backup-keypair.sh          Backs up Ed25519 license keypair
+  restore-keypair.sh         Restores Ed25519 license keypair
+  rebuild-and-copy-export-template.sh  Builds export AU template and copies into main app
+assets/                      App icons (app-icon.png, export-icon.png)
+tools/generate-license/      Rust CLI for generating license keys
+plans/                       Implementation plans (ai-assisted-coding, host-app-daw-controls, etc.)
 rustc-dist/                  Bundled Rust compiler + wasm32-wasip1 target (gitignored)
+docs/                        Design docs (export-au-plan, python-package-management, preset-repo-format, etc.)
 ConjureDSPTests/             Unit tests (Swift Testing)
 ConjureDSPUITests/           UI tests (XCUITest)
 ```
@@ -254,6 +320,7 @@ Bundled runtimes require proper code signing for the hardened runtime:
 ## Dependencies
 
 - **Apple frameworks**: AudioToolbox, AVFoundation, CoreAudioKit, CoreMIDI, SwiftUI, Combine
+- **Swift packages**: Sentry (crash reporting), Mixpanel (analytics)
 - **Rust crates**: pyo3 0.27 (Python embedding), numpy 0.27 (numpy array interop)
 - **Bundled runtime**: Free-threaded Python 3.14.3 + numpy + scipy (downloaded via `setup-python.sh`)
 
@@ -276,13 +343,12 @@ These are configured via per-configuration build settings (`CD_AU_SUBTYPE`, `CD_
 
 ## Export Preset as Standalone AUv3
 
-Planned feature to export ConjureDSP presets as standalone AUv3 plugins. Full implementation plan in `docs/export-au-plan.md`, design Q&A in `docs/export-au-questions.md`. Key points:
+Export ConjureDSP presets as standalone AUv3 plugins. Phases 1–4 complete; Phase 5 (polish & validation) remaining. Full implementation plan in `docs/export-au-plan.md`, design Q&A in `docs/export-au-questions.md`. Key points:
 - Both Python (.py) and Rust (.wasm) presets exportable
-- Pre-built template AU (no xcodebuild at export time) — copy, patch plist, inject preset, ad-hoc sign
+- Pre-built template AU (`ConjureDSPExportAUTemplate/`) — copy, patch plist, inject preset, ad-hoc sign
 - App Group container for sandbox-safe writes from DAW-hosted AU extension
 - Shared Python runtime at `~/Library/Application Support/ConjureDSP/PythonRuntime-3.14/`
 - Licensed users only can export; exported AUs run freely
-- 5 implementation phases (see `docs/export-au-plan.md`)
 
 ## Backlog Management
 
