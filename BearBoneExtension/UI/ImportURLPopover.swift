@@ -113,8 +113,8 @@ struct ImportURLPopover: View {
         Task {
             do {
                 let (source, responseURL) = try await client.fetchURLWithResponseURL(url)
-                let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmed.hasPrefix("<!DOCTYPE") || trimmed.hasPrefix("<html") || trimmed.hasPrefix("<HTML") {
+                let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if trimmed.hasPrefix("<!doctype") || trimmed.hasPrefix("<html") {
                     self.error = "URL returned a web page. Link to a .py or .rs file."
                 } else {
                     // Derive name and language from the final URL (after redirects)
