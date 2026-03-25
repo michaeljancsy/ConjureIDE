@@ -25,21 +25,21 @@ Also updated the success alert in `ContentView.swift` to say "Find it in your DA
 
 ### 3. License Key System Update
 The original Ed25519 keypair was lost (created in a worktree that was cleaned up). A new keypair was generated and:
-- `rust/bearbone_dsp/src/license.rs` — updated `PUBLIC_KEY_BYTES` to match new keypair
-- `tools/generate-license/src/main.rs` — searches multiple locations for `keypair.bin` (cwd, exe dir, `~/Library/Application Support/BearBone/`), auto-backs up new keypairs to Application Support
+- `rust/conjure_dsp/src/license.rs` — updated `PUBLIC_KEY_BYTES` to match new keypair
+- `tools/generate-license/src/main.rs` — searches multiple locations for `keypair.bin` (cwd, exe dir, `~/Library/Application Support/ConjureDSP/`), auto-backs up new keypairs to Application Support
 - `tools/generate-license/Cargo.toml` — added `dirs = "6"` dependency
 - `.gitignore` — added `testing_license_key`
 - `testing_license_key` — contains a valid license key for `michaeljancsy@gmail.com`
-- Keypair backup exists at `~/Library/Application Support/BearBone/keypair.bin`
+- Keypair backup exists at `~/Library/Application Support/ConjureDSP/keypair.bin`
 
 ## Unresolved Issue: Exported App Still "Can't Be Opened"
 
-After all fixes were applied and BearBone was rebuilt, the user exported `mar7exporttest4` and still got macOS's "The application can't be opened" error.
+After all fixes were applied and ConjureDSP was rebuilt, the user exported `mar7exporttest4` and still got macOS's "The application can't be opened" error.
 
 ### What we know:
 1. **Quarantine is the cause** — manually running `xattr -dr com.apple.quarantine` on an exported app (mar52026test2) made it launch successfully.
 2. **The `Process()` call to `xattr` may be failing silently** — `try?` swallows errors. `Process()` works for `codesign` in the same code path, so it's not a blanket `Process()` issue.
-3. **The exported app was NOT found** in `~/Library/Application Support/BearBone/Exports/` when checked — this is puzzling since the "Installed" success message appeared. Could be a timing issue, or the export went through the App Group fallback path instead.
+3. **The exported app was NOT found** in `~/Library/Application Support/ConjureDSP/Exports/` when checked — this is puzzling since the "Installed" success message appeared. Could be a timing issue, or the export went through the App Group fallback path instead.
 
 ### Likely next steps:
 1. **Add error logging to `stripQuarantine()`** — remove `try?` and log any errors so we can see if/why it fails.
@@ -60,17 +60,17 @@ After all fixes were applied and BearBone was rebuilt, the user exported `mar7ex
 | File | Change |
 |------|--------|
 | `.gitignore` | Added `testing_license_key` |
-| `BearBone/ContentView.swift` | Updated export success alert message |
-| `BearBone/Model/PendingExportHandler.swift` | Added `stripQuarantine()`, `NSWorkspace.shared.open()`, and `stripQuarantine` method |
-| `BearBoneExtension/Common/UI/AudioUnitViewController.swift` | Added `NSWorkspace.shared.open()` after lsregister |
-| `BearBoneExtension/Export/ExportManager.swift` | Added `stripQuarantine()` step 7 and `stripQuarantine` method |
-| `rust/bearbone_dsp/src/license.rs` | Updated `PUBLIC_KEY_BYTES` to new keypair, fixed test comments |
+| `ConjureDSP/ContentView.swift` | Updated export success alert message |
+| `ConjureDSP/Model/PendingExportHandler.swift` | Added `stripQuarantine()`, `NSWorkspace.shared.open()`, and `stripQuarantine` method |
+| `ConjureDSPExtension/Common/UI/AudioUnitViewController.swift` | Added `NSWorkspace.shared.open()` after lsregister |
+| `ConjureDSPExtension/Export/ExportManager.swift` | Added `stripQuarantine()` step 7 and `stripQuarantine` method |
+| `rust/conjure_dsp/src/license.rs` | Updated `PUBLIC_KEY_BYTES` to new keypair, fixed test comments |
 | `tools/generate-license/Cargo.lock` | Updated for `dirs` dependency |
 | `tools/generate-license/Cargo.toml` | Added `dirs = "6"` |
 | `tools/generate-license/src/main.rs` | Multi-location keypair search, durable backup |
 
 ## Build Notes
-- The `BearBoneExportAUTemplate` project needs to be built before BearBone (the "Copy Export Template" build phase copies it). It was previously built to `/tmp` to avoid iCloud Drive xattr issues, then the product was copied back.
+- The `ConjureDSPExportAUTemplate` project needs to be built before ConjureDSP (the "Copy Export Template" build phase copies it). It was previously built to `/tmp` to avoid iCloud Drive xattr issues, then the product was copied back.
 - After moving out of iCloud Drive, building directly should work without the `/tmp` workaround.
 - The worktree at `/Users/michaeljancsy/busy-hellman` was already moved out of iCloud. After you move the main repo, the worktree's `.git` file will need updating to point to the new main repo location.
 

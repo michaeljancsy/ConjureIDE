@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 KEYPAIR_FILE="$REPO_ROOT/tools/generate-license/keypair.bin"
 
-SERVICE_NAME="BearBone Ed25519 Signing Key"
+SERVICE_NAME="ConjureDSP Ed25519 Signing Key"
 ACCOUNT_NAME="production"
 
 # Check if file already exists

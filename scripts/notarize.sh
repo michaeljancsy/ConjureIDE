@@ -6,7 +6,7 @@
 #
 # Prerequisites:
 #   Store your app-specific password in the Keychain:
-#     xcrun notarytool store-credentials "BearBone-Notarize" \
+#     xcrun notarytool store-credentials "ConjureDSP-Notarize" \
 #       --apple-id "your@email.com" \
 #       --team-id "A4R63LAVLS" \
 #       --password "xxxx-xxxx-xxxx-xxxx"
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-KEYCHAIN_PROFILE="BearBone-Notarize"
+KEYCHAIN_PROFILE="ConjureDSP-Notarize"
 
 if [ $# -lt 1 ]; then
     echo "Usage: $0 <path-to-app-or-dmg>"

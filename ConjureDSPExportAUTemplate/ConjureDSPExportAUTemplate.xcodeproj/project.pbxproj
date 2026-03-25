@@ -1,0 +1,716 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		023242A8D7F5AD96194453B2 /* preset.wasm in Resources */ = {isa = PBXBuildFile; fileRef = 757997CC72127B6A4078AF02 /* preset.wasm */; };
+		2F2664C00F1DF8CAA541B73A /* AUInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1563F2EA08157C3CFB82FAB /* AUInfo.swift */; };
+		5922FF3BA969CA2538A153DB /* ConjureDSPExportAUTemplateApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36D1FD858363EA73CD27C0B5 /* ConjureDSPExportAUTemplateApp.swift */; };
+		67A377E8921535522B895798 /* ExportParameterState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5572990347D241783683010B /* ExportParameterState.swift */; };
+		683B07E9EA3A0389F8CC0110 /* runtime-config.json in Resources */ = {isa = PBXBuildFile; fileRef = 9930D3FAEB010E06979DC72E /* runtime-config.json */; };
+		7A3F90AFE363F8D2C368AE75 /* ExportAUMainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 298FAC2A22989D4BF1A244D7 /* ExportAUMainView.swift */; };
+		7F6803B4AC890E2307A5794C /* ConjureDSPExportAUTemplateExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7FFA4101E217BA9AD9B73603 /* ConjureDSPExportAUTemplateExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		888C47BB3A5214331177B10F /* ExportAUTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA5195C6C370FAB81B1B6446 /* ExportAUTests.swift */; };
+		9BE5307B54AA26417EC05FA6 /* ExportAUViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2BAC1A565FB124CFA30ADD8 /* ExportAUViewController.swift */; };
+		9FBAAA50D6AE0E7A07F9C803 /* InfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F040D1713B99E9E5BC7D91A /* InfoView.swift */; };
+		A5D47E6220EA1F73F3249310 /* PythonRuntimeErrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C670E8AF5116A04B9301CF9D /* PythonRuntimeErrorView.swift */; };
+		E2434D90792E22D70BCA3422 /* RuntimeConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59CF6DCC3B6582CA08A5CF78 /* RuntimeConfig.swift */; };
+		EC47729FACC82D18A69A182A /* ExportAUAudioUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBEEB331BCA80E46E416C240 /* ExportAUAudioUnit.swift */; };
+		F1A2B3C4D5E6F708190A2B3C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* Assets.xcassets */; };
+		D2E3F4A5B6C7D8E9F0A1B2C3 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D4E5F6A7B8C9D0E1F2A3B4 /* main.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		07D0154BA5934C3A25BBBE47 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BDA3A4F1DF071D926150C3FA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9E37700FA3887CC9872C8236;
+			remoteInfo = ConjureDSPExportAUTemplate;
+		};
+		77772E7DF32581611288C3EA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BDA3A4F1DF071D926150C3FA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C28DFED66D2F2FF7CA8BA6ED;
+			remoteInfo = ConjureDSPExportAUTemplateExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		3492F65FB50C16C56591F8D5 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				7F6803B4AC890E2307A5794C /* ConjureDSPExportAUTemplateExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		298FAC2A22989D4BF1A244D7 /* ExportAUMainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUMainView.swift; sourceTree = "<group>"; };
+		2F040D1713B99E9E5BC7D91A /* InfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfoView.swift; sourceTree = "<group>"; };
+		36D1FD858363EA73CD27C0B5 /* ConjureDSPExportAUTemplateApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConjureDSPExportAUTemplateApp.swift; sourceTree = "<group>"; };
+		5572990347D241783683010B /* ExportParameterState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportParameterState.swift; sourceTree = "<group>"; };
+		59CF6DCC3B6582CA08A5CF78 /* RuntimeConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeConfig.swift; sourceTree = "<group>"; };
+		757997CC72127B6A4078AF02 /* preset.wasm */ = {isa = PBXFileReference; path = preset.wasm; sourceTree = "<group>"; };
+		7590084439C85DF58573DF0E /* ExportAUBridgingHeader.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ExportAUBridgingHeader.h; sourceTree = "<group>"; };
+		7FFA4101E217BA9AD9B73603 /* ConjureDSPExportAUTemplateExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConjureDSPExportAUTemplateExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		9445B824F3B64E503A8C37E9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		9930D3FAEB010E06979DC72E /* runtime-config.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "runtime-config.json"; sourceTree = "<group>"; };
+		9EC6877B8343EECDBD0796EE /* ConjureDSPExportAUTemplateTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPExportAUTemplateTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA5195C6C370FAB81B1B6446 /* ExportAUTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUTests.swift; sourceTree = "<group>"; };
+		C670E8AF5116A04B9301CF9D /* PythonRuntimeErrorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonRuntimeErrorView.swift; sourceTree = "<group>"; };
+		D1563F2EA08157C3CFB82FAB /* AUInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AUInfo.swift; sourceTree = "<group>"; };
+		E2BAC1A565FB124CFA30ADD8 /* ExportAUViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUViewController.swift; sourceTree = "<group>"; };
+		F9B1B3C95BDB0878CC0C2318 /* ConjureDSPExportAUTemplate.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ConjureDSPExportAUTemplate.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FBEEB331BCA80E46E416C240 /* ExportAUAudioUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUAudioUnit.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C3D4E5F6A7B8C9D0E1F2A3B4 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		24AFA339E3986B7CCBE9B766 /* ConjureDSPExportAUTemplateExtension */ = {
+			isa = PBXGroup;
+			children = (
+				9445B824F3B64E503A8C37E9 /* Info.plist */,
+				86D4ED2EEEC53C76123C3F5B /* Audio Unit */,
+				7A74EEEBE1A210508CCA8B6B /* Common */,
+				BC6F2FE2D9759C4E67D1E3C3 /* Model */,
+				FEF8E50A0303FD6627769FCF /* Resources */,
+				2AD5D1EC30DD885C1A3E04C1 /* UI */,
+			);
+			path = ConjureDSPExportAUTemplateExtension;
+			sourceTree = "<group>";
+		};
+		2A9B678B81C2576D4883118E = {
+			isa = PBXGroup;
+			children = (
+				E7495CF1B31D52736FE1945E /* ConjureDSPExportAUTemplate */,
+				24AFA339E3986B7CCBE9B766 /* ConjureDSPExportAUTemplateExtension */,
+				699398EA032B3640EE2A4FCC /* ConjureDSPExportAUTemplateTests */,
+				36E039018DDDC3EF102091BC /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		2AD5D1EC30DD885C1A3E04C1 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				298FAC2A22989D4BF1A244D7 /* ExportAUMainView.swift */,
+				E2BAC1A565FB124CFA30ADD8 /* ExportAUViewController.swift */,
+				5572990347D241783683010B /* ExportParameterState.swift */,
+				C670E8AF5116A04B9301CF9D /* PythonRuntimeErrorView.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		36E039018DDDC3EF102091BC /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F9B1B3C95BDB0878CC0C2318 /* ConjureDSPExportAUTemplate.app */,
+				7FFA4101E217BA9AD9B73603 /* ConjureDSPExportAUTemplateExtension.appex */,
+				9EC6877B8343EECDBD0796EE /* ConjureDSPExportAUTemplateTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		699398EA032B3640EE2A4FCC /* ConjureDSPExportAUTemplateTests */ = {
+			isa = PBXGroup;
+			children = (
+				AA5195C6C370FAB81B1B6446 /* ExportAUTests.swift */,
+			);
+			path = ConjureDSPExportAUTemplateTests;
+			sourceTree = "<group>";
+		};
+		7A74EEEBE1A210508CCA8B6B /* Common */ = {
+			isa = PBXGroup;
+			children = (
+				7590084439C85DF58573DF0E /* ExportAUBridgingHeader.h */,
+			);
+			path = Common;
+			sourceTree = "<group>";
+		};
+		86D4ED2EEEC53C76123C3F5B /* Audio Unit */ = {
+			isa = PBXGroup;
+			children = (
+				FBEEB331BCA80E46E416C240 /* ExportAUAudioUnit.swift */,
+			);
+			path = "Audio Unit";
+			sourceTree = "<group>";
+		};
+		BC6F2FE2D9759C4E67D1E3C3 /* Model */ = {
+			isa = PBXGroup;
+			children = (
+				59CF6DCC3B6582CA08A5CF78 /* RuntimeConfig.swift */,
+			);
+			path = Model;
+			sourceTree = "<group>";
+		};
+		E7495CF1B31D52736FE1945E /* ConjureDSPExportAUTemplate */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F60718293A4B5C /* Assets.xcassets */,
+				D1563F2EA08157C3CFB82FAB /* AUInfo.swift */,
+				36D1FD858363EA73CD27C0B5 /* ConjureDSPExportAUTemplateApp.swift */,
+				2F040D1713B99E9E5BC7D91A /* InfoView.swift */,
+				C3D4E5F6A7B8C9D0E1F2A3B4 /* main.swift */,
+			);
+			path = ConjureDSPExportAUTemplate;
+			sourceTree = "<group>";
+		};
+		FEF8E50A0303FD6627769FCF /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				757997CC72127B6A4078AF02 /* preset.wasm */,
+				9930D3FAEB010E06979DC72E /* runtime-config.json */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		9E37700FA3887CC9872C8236 /* ConjureDSPExportAUTemplate */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 81E5A21EC981C2BA8A19B2AB /* Build configuration list for PBXNativeTarget "ConjureDSPExportAUTemplate" */;
+			buildPhases = (
+				1C211C94567EBABBDD117A15 /* Sources */,
+				B2C3D4E5F6071829A3B4C5D6 /* Resources */,
+				3492F65FB50C16C56591F8D5 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				EC2B56C52AD12B93ACE703AE /* PBXTargetDependency */,
+			);
+			name = ConjureDSPExportAUTemplate;
+			packageProductDependencies = (
+			);
+			productName = ConjureDSPExportAUTemplate;
+			productReference = F9B1B3C95BDB0878CC0C2318 /* ConjureDSPExportAUTemplate.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A592A15B14C2DAFC2776331C /* ConjureDSPExportAUTemplateTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CFED4E013C1B2E5EF7AC14DB /* Build configuration list for PBXNativeTarget "ConjureDSPExportAUTemplateTests" */;
+			buildPhases = (
+				C7E838A89095435A81F684BE /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				8F02F19C6FE0E3CB464D2D08 /* PBXTargetDependency */,
+			);
+			name = ConjureDSPExportAUTemplateTests;
+			packageProductDependencies = (
+			);
+			productName = ConjureDSPExportAUTemplateTests;
+			productReference = 9EC6877B8343EECDBD0796EE /* ConjureDSPExportAUTemplateTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		C28DFED66D2F2FF7CA8BA6ED /* ConjureDSPExportAUTemplateExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B04EF2CA4F736E2EBFCB24D1 /* Build configuration list for PBXNativeTarget "ConjureDSPExportAUTemplateExtension" */;
+			buildPhases = (
+				399D7B49AD5A7F5EED8B6AEF /* Build Rust */,
+				E9BCEA4FA84D5452B27AECEC /* Sources */,
+				4F9BB718DC02813B9682C3B7 /* Resources */,
+				1F6AD69B38338D638FAE79F9 /* Copy Python Dylib */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ConjureDSPExportAUTemplateExtension;
+			packageProductDependencies = (
+			);
+			productName = ConjureDSPExportAUTemplateExtension;
+			productReference = 7FFA4101E217BA9AD9B73603 /* ConjureDSPExportAUTemplateExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		BDA3A4F1DF071D926150C3FA /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1630;
+				TargetAttributes = {
+					9E37700FA3887CC9872C8236 = {
+						DevelopmentTeam = A4R63LAVLS;
+						ProvisioningStyle = Automatic;
+					};
+					A592A15B14C2DAFC2776331C = {
+						DevelopmentTeam = A4R63LAVLS;
+						ProvisioningStyle = Automatic;
+					};
+					C28DFED66D2F2FF7CA8BA6ED = {
+						DevelopmentTeam = A4R63LAVLS;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 949D74AC8FC555D1F530A483 /* Build configuration list for PBXProject "ConjureDSPExportAUTemplate" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 2A9B678B81C2576D4883118E;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				9E37700FA3887CC9872C8236 /* ConjureDSPExportAUTemplate */,
+				C28DFED66D2F2FF7CA8BA6ED /* ConjureDSPExportAUTemplateExtension */,
+				A592A15B14C2DAFC2776331C /* ConjureDSPExportAUTemplateTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B2C3D4E5F6071829A3B4C5D6 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F1A2B3C4D5E6F708190A2B3C /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4F9BB718DC02813B9682C3B7 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				023242A8D7F5AD96194453B2 /* preset.wasm in Resources */,
+				683B07E9EA3A0389F8CC0110 /* runtime-config.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		1F6AD69B38338D638FAE79F9 /* Copy Python Dylib */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Python Dylib";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libpython3.14t.dylib",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "FRAMEWORKS_DIR=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\nmkdir -p \"${FRAMEWORKS_DIR}\"\n\nPYTHON_LIB=\"${SRCROOT}/../rust/python-dist/lib/libpython3.14t.dylib\"\nif [ -f \"${PYTHON_LIB}\" ]; then\n    cp \"${PYTHON_LIB}\" \"${FRAMEWORKS_DIR}/\"\n    if [ -n \"${EXPANDED_CODE_SIGN_IDENTITY}\" ]; then\n        codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \\\n            \"${FRAMEWORKS_DIR}/libpython3.14t.dylib\"\n    fi\nelse\n    echo \"warning: libpython3.14t.dylib not found at ${PYTHON_LIB}\" >&2\nfi\n";
+		};
+		399D7B49AD5A7F5EED8B6AEF /* Build Rust */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/libconjure_dsp.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "cd \"${SRCROOT}/../rust\"\nbash build-rust.sh\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1C211C94567EBABBDD117A15 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2F2664C00F1DF8CAA541B73A /* AUInfo.swift in Sources */,
+				5922FF3BA969CA2538A153DB /* ConjureDSPExportAUTemplateApp.swift in Sources */,
+				9FBAAA50D6AE0E7A07F9C803 /* InfoView.swift in Sources */,
+				D2E3F4A5B6C7D8E9F0A1B2C3 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C7E838A89095435A81F684BE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				888C47BB3A5214331177B10F /* ExportAUTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E9BCEA4FA84D5452B27AECEC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EC47729FACC82D18A69A182A /* ExportAUAudioUnit.swift in Sources */,
+				7A3F90AFE363F8D2C368AE75 /* ExportAUMainView.swift in Sources */,
+				9BE5307B54AA26417EC05FA6 /* ExportAUViewController.swift in Sources */,
+				67A377E8921535522B895798 /* ExportParameterState.swift in Sources */,
+				A5D47E6220EA1F73F3249310 /* PythonRuntimeErrorView.swift in Sources */,
+				E2434D90792E22D70BCA3422 /* RuntimeConfig.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		8F02F19C6FE0E3CB464D2D08 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9E37700FA3887CC9872C8236 /* ConjureDSPExportAUTemplate */;
+			targetProxy = 07D0154BA5934C3A25BBBE47 /* PBXContainerItemProxy */;
+		};
+		EC2B56C52AD12B93ACE703AE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C28DFED66D2F2FF7CA8BA6ED /* ConjureDSPExportAUTemplateExtension */;
+			targetProxy = 77772E7DF32581611288C3EA /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		125EB1FC0453B3162A5119D7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplate.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.ConjureDSP-user.ExportTemplate";
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		3BD88FBD2D5B7CF412513773 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../rust/include",
+				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../rust/python-dist/lib",
+					"@loader_path/../../../ConjureDSPExportAUTemplateExtension.appex/Contents/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(BUILT_PRODUCTS_DIR)",
+					"$(SRCROOT)/../rust/python-dist/lib",
+				);
+				OTHER_LDFLAGS = (
+					"-lconjure_dsp",
+					"-lpython3.14t",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.ConjureDSP-user.ConjureDSPExportAUTemplateTests";
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = ConjureDSPExportAUTemplateExtension/Common/ExportAUBridgingHeader.h;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ConjureDSPExportAUTemplate.app/Contents/MacOS/ConjureDSPExportAUTemplate";
+			};
+			name = Release;
+		};
+		40D5220717E1C1A74615C651 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplate.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.ConjureDSP-user.ExportTemplate";
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		61D752910C6FA78A2CAB520D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../rust/include",
+				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../rust/python-dist/lib",
+					"@loader_path/../../../ConjureDSPExportAUTemplateExtension.appex/Contents/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(BUILT_PRODUCTS_DIR)",
+					"$(SRCROOT)/../rust/python-dist/lib",
+				);
+				OTHER_LDFLAGS = (
+					"-lconjure_dsp",
+					"-lpython3.14t",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.ConjureDSP-user.ConjureDSPExportAUTemplateTests";
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = ConjureDSPExportAUTemplateExtension/Common/ExportAUBridgingHeader.h;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ConjureDSPExportAUTemplate.app/Contents/MacOS/ConjureDSPExportAUTemplate";
+			};
+			name = Debug;
+		};
+		62CB5CB0C659C6A74C904FA2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ConjureDSPExportAUTemplateExtension/ConjureDSPExportAUTemplateExtension.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../rust/include",
+				);
+				INFOPLIST_FILE = ConjureDSPExportAUTemplateExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(BUILT_PRODUCTS_DIR)",
+					"$(SRCROOT)/../rust/python-dist/lib",
+				);
+				OTHER_LDFLAGS = (
+					"-lconjure_dsp",
+					"-lpython3.14t",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.ConjureDSP-user.ExportTemplate.Extension";
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = ConjureDSPExportAUTemplateExtension/Common/ExportAUBridgingHeader.h;
+			};
+			name = Release;
+		};
+		670CD3D269F06934B1AD8A2C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = A4R63LAVLS;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		B17926F44AEEFEDAA8F4ECFC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ConjureDSPExportAUTemplateExtension/ConjureDSPExportAUTemplateExtension.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../rust/include",
+				);
+				INFOPLIST_FILE = ConjureDSPExportAUTemplateExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(BUILT_PRODUCTS_DIR)",
+					"$(SRCROOT)/../rust/python-dist/lib",
+				);
+				OTHER_LDFLAGS = (
+					"-lconjure_dsp",
+					"-lpython3.14t",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.ConjureDSP-user.ExportTemplate.Extension";
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = ConjureDSPExportAUTemplateExtension/Common/ExportAUBridgingHeader.h;
+			};
+			name = Debug;
+		};
+		EEBF592471FFDADA87FEEDA8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = A4R63LAVLS;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		81E5A21EC981C2BA8A19B2AB /* Build configuration list for PBXNativeTarget "ConjureDSPExportAUTemplate" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				40D5220717E1C1A74615C651 /* Debug */,
+				125EB1FC0453B3162A5119D7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		949D74AC8FC555D1F530A483 /* Build configuration list for PBXProject "ConjureDSPExportAUTemplate" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EEBF592471FFDADA87FEEDA8 /* Debug */,
+				670CD3D269F06934B1AD8A2C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B04EF2CA4F736E2EBFCB24D1 /* Build configuration list for PBXNativeTarget "ConjureDSPExportAUTemplateExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B17926F44AEEFEDAA8F4ECFC /* Debug */,
+				62CB5CB0C659C6A74C904FA2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CFED4E013C1B2E5EF7AC14DB /* Build configuration list for PBXNativeTarget "ConjureDSPExportAUTemplateTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				61D752910C6FA78A2CAB520D /* Debug */,
+				3BD88FBD2D5B7CF412513773 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = BDA3A4F1DF071D926150C3FA /* Project object */;
+}

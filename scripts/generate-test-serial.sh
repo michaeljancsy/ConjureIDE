@@ -1,6 +1,6 @@
 #!/bin/bash
 # Generates a test license serial for automated tests.
-# Called as an Xcode Run Script build phase on BearBoneExtension.
+# Called as an Xcode Run Script build phase on ConjureDSPExtension.
 #
 # Looks for keypair.bin in the current repo; if in a worktree,
 # falls back to the main worktree's copy. Writes the serial to
@@ -57,7 +57,7 @@ if ! command -v cargo &>/dev/null; then
 fi
 
 # Generate the test serial
-SERIAL=$(cd "$TOOL_DIR" && cargo run --quiet -- --email test@bearbone.dev 2>/dev/null)
+SERIAL=$(cd "$TOOL_DIR" && cargo run --quiet -- --email test@conjuredsp.dev 2>/dev/null)
 
 if [ -z "$SERIAL" ]; then
     echo "⚠️ Failed to generate test serial"

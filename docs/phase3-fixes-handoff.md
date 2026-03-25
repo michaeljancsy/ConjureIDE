@@ -50,25 +50,25 @@ This fixed 3 previously-failing tests: `exportRustPreset`, `exportPythonPreset`,
 
 ## Files Changed
 
-- `BearBoneExtension/Common/UI/AudioUnitViewController.swift` — Replaced identity-based host detection with try-direct/fallback-to-staging
-- `BearBoneExtension/Export/ExportManager.swift` — Fixed Frameworks signing (enumerate items), fixed codesign (preserve entitlements, no --deep)
-- `BearBone/Model/PendingExportHandler.swift` — Fixed codesign (preserve entitlements, no --deep)
-- `BearBoneTests/ExportManager.swift` — Synced copy of ExportManager
-- `BearBoneTests/ExportTests.swift` — Fixed mock template (zip it), added integration test
+- `ConjureDSPExtension/Common/UI/AudioUnitViewController.swift` — Replaced identity-based host detection with try-direct/fallback-to-staging
+- `ConjureDSPExtension/Export/ExportManager.swift` — Fixed Frameworks signing (enumerate items), fixed codesign (preserve entitlements, no --deep)
+- `ConjureDSP/Model/PendingExportHandler.swift` — Fixed codesign (preserve entitlements, no --deep)
+- `ConjureDSPTests/ExportManager.swift` — Synced copy of ExportManager
+- `ConjureDSPTests/ExportTests.swift` — Fixed mock template (zip it), added integration test
 
 ## Test Results
 
 - **119 tests pass** (3 previously-failing export tests now pass, 1 new integration test passes)
-- **32 tests fail** — all pre-existing (BearBoneTests AU failures from worktree registration, 1 sanitize test)
+- **32 tests fail** — all pre-existing (ConjureDSPTests AU failures from worktree registration, 1 sanitize test)
 
 ## What's Left for Phase 3
 
 1. ~~Fix host app detection~~ ✅
 2. ~~Verify exported AU appears in DAW~~ ✅ (automated via integration test)
-3. **Test DAW export path** (export from DAW → open BearBone to finalize) — requires manual testing in Logic/Ableton. The DAW path uses `ditto` (Process) to unzip the template, which may fail if the DAW's sandbox blocks process spawning. If so, a Foundation-based unzip alternative would be needed.
+3. **Test DAW export path** (export from DAW → open ConjureDSP to finalize) — requires manual testing in Logic/Ableton. The DAW path uses `ditto` (Process) to unzip the template, which may fail if the DAW's sandbox blocks process spawning. If so, a Foundation-based unzip alternative would be needed.
 
 ## What's Next (Phase 4+)
 
 Per `backlog.md`:
-- **Phase 4: Python export support** — Shared Python runtime at `~/Library/Application Support/BearBone/PythonRuntime-3.14/`, error UI with auto-download if runtime missing
+- **Phase 4: Python export support** — Shared Python runtime at `~/Library/Application Support/ConjureDSP/PythonRuntime-3.14/`, error UI with auto-download if runtime missing
 - **Phase 5: Polish & validation** — Integration tests, edge cases, documentation

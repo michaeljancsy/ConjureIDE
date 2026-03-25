@@ -18,7 +18,7 @@ Should the export flow let the user name parameters, set ranges/units, choose ho
 
 ### Q3. Should the exported AU have any UI?
 
-Options: (a) No custom UI, (b) Minimal generic sliders, (c) Full BearBone editor, (d) Subset (sliders + spectrogram)
+Options: (a) No custom UI, (b) Minimal generic sliders, (c) Full ConjureDSP editor, (d) Subset (sliders + spectrogram)
 
 **Answer:** b - make it have sliders
 
@@ -48,11 +48,11 @@ Options: (a) Blank window, (b) Simple test UI, (c) Auto-register and quit
 
 ### Q8. Template app naming?
 
-**Answer:** "[Effect Name].app" containing "[Effect Name].appex". No BearBone branding in the exported app name.
+**Answer:** "[Effect Name].app" containing "[Effect Name].appex". No ConjureDSP branding in the exported app name.
 
 ### Q9. Bundle identifiers?
 
-**Answer:** `com.BearBone_user.Export.<sanitized-name>` — tied to the developer identity for code signing consistency.
+**Answer:** `com.ConjureDSP_user.Export.<sanitized-name>` — tied to the developer identity for code signing consistency.
 
 ---
 
@@ -60,17 +60,17 @@ Options: (a) Blank window, (b) Simple test UI, (c) Auto-register and quit
 
 ### Q10. Shared runtime location and installation?
 
-**Answer:** `~/Library/Application Support/BearBone/PythonRuntime-3.14/`. Auto-installed on first BearBone launch (not just on first export). Same content as `rust/python-dist/` but in the shared location.
+**Answer:** `~/Library/Application Support/ConjureDSP/PythonRuntime-3.14/`. Auto-installed on first ConjureDSP launch (not just on first export). Same content as `rust/python-dist/` but in the shared location.
 
 ### Q11. Runtime versioning?
 
-**Answer:** Version the path (e.g., `PythonRuntime-3.14/`). Exported AUs pin to the version they were exported with. Document that updating BearBone may require re-exporting old presets.
+**Answer:** Version the path (e.g., `PythonRuntime-3.14/`). Exported AUs pin to the version they were exported with. Document that updating ConjureDSP may require re-exporting old presets.
 
-### Q12. What if the user doesn't have BearBone installed?
+### Q12. What if the user doesn't have ConjureDSP installed?
 
 Scenario: someone shares an exported AU with a friend.
 
-**Answer:** The exported AU shows an error UI with a download button/link that auto-installs the Python runtime (downloads it directly, same as `setup-python.sh` does). No need to install full BearBone.
+**Answer:** The exported AU shows an error UI with a download button/link that auto-installs the Python runtime (downloads it directly, same as `setup-python.sh` does). No need to install full ConjureDSP.
 
 ---
 
@@ -113,7 +113,7 @@ No xcodebuild at export time — template is pre-built.
 
 ### Q18. Manufacturer code?
 
-**Answer:** `BEAR` (same as BearBone). Identifies exported AUs as BearBone family.
+**Answer:** `CONJ` (same as ConjureDSP). Identifies exported AUs as ConjureDSP family.
 
 ### Q19. What if the user exports the same preset twice?
 

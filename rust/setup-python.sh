@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Downloads a standalone free-threaded (no-GIL) Python 3.14 distribution for
-# embedding in BearBone. Run once before your first build:
+# embedding in ConjureDSP. Run once before your first build:
 #   cd rust && ./setup-python.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

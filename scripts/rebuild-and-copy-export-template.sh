@@ -8,15 +8,15 @@ set -euo pipefail
 # In a git worktree, auto-symlinks the template build dir from the main worktree.
 
 SRCROOT="${SRCROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-TEMPLATE_BUILD="${SRCROOT}/BearBoneExportAUTemplate/build"
-TEMPLATE_PROJECT="${SRCROOT}/BearBoneExportAUTemplate/BearBoneExportAUTemplate.xcodeproj"
+TEMPLATE_BUILD="${SRCROOT}/ConjureDSPExportAUTemplate/build"
+TEMPLATE_PROJECT="${SRCROOT}/ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplate.xcodeproj"
 
 # Auto-symlink template build dir from main worktree if missing
 if [ ! -d "${TEMPLATE_BUILD}" ] && [ ! -L "${TEMPLATE_BUILD}" ]; then
     MAIN_WORKTREE=$(git -C "${SRCROOT}" worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //')
-    if [ -n "${MAIN_WORKTREE}" ] && [ -d "${MAIN_WORKTREE}/BearBoneExportAUTemplate/build" ]; then
+    if [ -n "${MAIN_WORKTREE}" ] && [ -d "${MAIN_WORKTREE}/ConjureDSPExportAUTemplate/build" ]; then
         echo "note: Symlinking export template build from main worktree" >&2
-        ln -s "${MAIN_WORKTREE}/BearBoneExportAUTemplate/build" "${TEMPLATE_BUILD}"
+        ln -s "${MAIN_WORKTREE}/ConjureDSPExportAUTemplate/build" "${TEMPLATE_BUILD}"
     fi
 fi
 
@@ -31,7 +31,7 @@ if [ -f "${TEMPLATE_PROJECT}/project.pbxproj" ]; then
     echo "Building export template (${TEMPLATE_CONFIG})..."
     env -i HOME="$HOME" PATH="$PATH" DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}" \
         xcodebuild -project "${TEMPLATE_PROJECT}" \
-        -scheme BearBoneExportAUTemplate \
+        -scheme ConjureDSPExportAUTemplate \
         -configuration "${TEMPLATE_CONFIG}" \
         -arch arm64 \
         -derivedDataPath "${TEMPLATE_BUILD}" \
@@ -39,7 +39,7 @@ if [ -f "${TEMPLATE_PROJECT}/project.pbxproj" ]; then
         2>&1 | tail -1
 fi
 
-TEMPLATE_SRC="${TEMPLATE_BUILD}/Build/Products/${TEMPLATE_CONFIG}/BearBoneExportAUTemplate.app"
+TEMPLATE_SRC="${TEMPLATE_BUILD}/Build/Products/${TEMPLATE_CONFIG}/ConjureDSPExportAUTemplate.app"
 TEMPLATE_DST="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExportTemplate.zip"
 
 if [ -d "$TEMPLATE_SRC" ]; then
@@ -48,5 +48,5 @@ if [ -d "$TEMPLATE_SRC" ]; then
     zip -qry "$TEMPLATE_DST" "$(basename "$TEMPLATE_SRC")"
 else
     echo "warning: Export template not built at $TEMPLATE_SRC" >&2
-    echo "warning: Run: cd BearBoneExportAUTemplate && xcodebuild -scheme BearBoneExportAUTemplate -configuration ${TEMPLATE_CONFIG} -arch arm64 -derivedDataPath build build" >&2
+    echo "warning: Run: cd ConjureDSPExportAUTemplate && xcodebuild -scheme ConjureDSPExportAUTemplate -configuration ${TEMPLATE_CONFIG} -arch arm64 -derivedDataPath build build" >&2
 fi

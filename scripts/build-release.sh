@@ -12,14 +12,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT_DIR="${1:-$PROJECT_DIR/build/release}"
-ARCHIVE_PATH="$PROJECT_DIR/build/BearBone.xcarchive"
+ARCHIVE_PATH="$PROJECT_DIR/build/ConjureDSP.xcarchive"
 EXPORT_OPTIONS="$PROJECT_DIR/ExportOptions.plist"
 
 echo "=== Building Release archive ==="
 
 xcodebuild archive \
-    -project "$PROJECT_DIR/BearBone.xcodeproj" \
-    -scheme BearBone \
+    -project "$PROJECT_DIR/ConjureDSP.xcodeproj" \
+    -scheme ConjureDSP \
     -configuration Release \
     -archivePath "$ARCHIVE_PATH" \
     -arch arm64 \
@@ -37,7 +37,7 @@ xcodebuild -exportArchive \
     -exportOptionsPlist "$EXPORT_OPTIONS" \
     | tail -1
 
-APP_PATH="$OUTPUT_DIR/BearBone.app"
+APP_PATH="$OUTPUT_DIR/ConjureDSP.app"
 
 if [ ! -d "$APP_PATH" ]; then
     echo "ERROR: Export failed — $APP_PATH not found"
@@ -47,8 +47,8 @@ fi
 echo "=== Re-signing bundled components for notarization ==="
 
 SIGN_ID="Developer ID Application"
-APPEX_PATH="$APP_PATH/Contents/PlugIns/BearBoneExtension.appex"
-ENTITLEMENTS_DIR="$PROJECT_DIR/BearBoneExportAUTemplate"
+APPEX_PATH="$APP_PATH/Contents/PlugIns/ConjureDSPExtension.appex"
+ENTITLEMENTS_DIR="$PROJECT_DIR/ConjureDSPExportAUTemplate"
 
 # Re-sign the export template inside the extension Resources
 TEMPLATE_ZIP="$APPEX_PATH/Contents/Resources/ExportTemplate.zip"
@@ -58,8 +58,8 @@ if [ -f "$TEMPLATE_ZIP" ]; then
     mkdir -p "$TEMPLATE_TMP"
     unzip -q "$TEMPLATE_ZIP" -d "$TEMPLATE_TMP"
 
-    TEMPLATE_APP="$TEMPLATE_TMP/BearBoneExportAUTemplate.app"
-    TEMPLATE_APPEX="$TEMPLATE_APP/Contents/PlugIns/BearBoneExportAUTemplateExtension.appex"
+    TEMPLATE_APP="$TEMPLATE_TMP/ConjureDSPExportAUTemplate.app"
+    TEMPLATE_APPEX="$TEMPLATE_APP/Contents/PlugIns/ConjureDSPExportAUTemplateExtension.appex"
 
     # Sign inside-out: deepest binaries first
     # 1. Python dylib in extension Frameworks
@@ -69,20 +69,20 @@ if [ -f "$TEMPLATE_ZIP" ]; then
     fi
     # 2. Extension appex
     codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
-        --entitlements "$ENTITLEMENTS_DIR/BearBoneExportAUTemplateExtension/BearBoneExportAUTemplateExtension.entitlements" \
+        --entitlements "$ENTITLEMENTS_DIR/ConjureDSPExportAUTemplateExtension/ConjureDSPExportAUTemplateExtension.entitlements" \
         "$TEMPLATE_APPEX"
     # 3. Host app dylibs and executables
     find "$TEMPLATE_APP/Contents/MacOS" -type f \( -name '*.dylib' \) \
         -exec codesign --force --sign "$SIGN_ID" --options runtime --timestamp {} \;
     # 4. Host app bundle
     codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
-        --entitlements "$ENTITLEMENTS_DIR/BearBoneExportAUTemplate/BearBoneExportAUTemplate.entitlements" \
+        --entitlements "$ENTITLEMENTS_DIR/ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplate.entitlements" \
         "$TEMPLATE_APP"
 
     # Re-zip
     rm "$TEMPLATE_ZIP"
     cd "$TEMPLATE_TMP"
-    zip -qry "$TEMPLATE_ZIP" "BearBoneExportAUTemplate.app"
+    zip -qry "$TEMPLATE_ZIP" "ConjureDSPExportAUTemplate.app"
     cd "$PROJECT_DIR"
     rm -rf "$TEMPLATE_TMP"
     echo "Re-signed ExportTemplate.zip"
@@ -99,8 +99,8 @@ if [ -d "$RUSTC_DST" ]; then
 fi
 
 # Re-sign the extension and app after modifying their contents
-EXTENSION_ENTITLEMENTS="$PROJECT_DIR/BearBoneExtension/BearBoneExtension.entitlements"
-APP_ENTITLEMENTS="$PROJECT_DIR/BearBone/BearBone.entitlements"
+EXTENSION_ENTITLEMENTS="$PROJECT_DIR/ConjureDSPExtension/ConjureDSPExtension.entitlements"
+APP_ENTITLEMENTS="$PROJECT_DIR/ConjureDSP/ConjureDSP.entitlements"
 codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
     --entitlements "$EXTENSION_ENTITLEMENTS" "$APPEX_PATH"
 codesign --force --sign "$SIGN_ID" --options runtime --timestamp \

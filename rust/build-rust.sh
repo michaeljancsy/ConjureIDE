@@ -2,7 +2,7 @@
 set -euo pipefail
 
 RUST_DIR="$(cd "$(dirname "$0")" && pwd)"
-MANIFEST_PATH="${RUST_DIR}/bearbone_dsp/Cargo.toml"
+MANIFEST_PATH="${RUST_DIR}/conjure_dsp/Cargo.toml"
 
 # Source cargo environment
 if [ -f "$HOME/.cargo/env" ]; then
@@ -64,14 +64,14 @@ else
     RUST_BUILD_DIR="debug"
 fi
 
-LIB_DST="${BUILT_PRODUCTS_DIR:-${RUST_DIR}/target}/libbearbone_dsp.a"
+LIB_DST="${BUILT_PRODUCTS_DIR:-${RUST_DIR}/target}/libconjure_dsp.a"
 
 # Build for each architecture
 LIBS=()
 for ARCH in ${ARCHS:-arm64}; do
     RUST_TARGET=$(arch_to_rust_target "${ARCH}")
     cargo build --manifest-path "${MANIFEST_PATH}" --target "${RUST_TARGET}" ${CARGO_FLAGS}
-    LIBS+=("${RUST_DIR}/target/${RUST_TARGET}/${RUST_BUILD_DIR}/libbearbone_dsp.a")
+    LIBS+=("${RUST_DIR}/target/${RUST_TARGET}/${RUST_BUILD_DIR}/libconjure_dsp.a")
 done
 
 # Combine with lipo if multiple architectures, otherwise just copy
@@ -83,6 +83,6 @@ fi
 
 # Regenerate C header
 cbindgen --config "${RUST_DIR}/cbindgen.toml" \
-         --crate bearbone_dsp \
-         --output "${RUST_DIR}/include/bearbone_dsp.h" \
-         "${RUST_DIR}/bearbone_dsp"
+         --crate conjure_dsp \
+         --output "${RUST_DIR}/include/conjure_dsp.h" \
+         "${RUST_DIR}/conjure_dsp"

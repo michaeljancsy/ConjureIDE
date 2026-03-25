@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Downloads a standalone Rust compiler with wasm32-wasip1 target support for
-# bundling inside the BearBone AU extension. Run once before your first build:
+# bundling inside the ConjureDSP AU extension. Run once before your first build:
 #   ./scripts/setup-rustc.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

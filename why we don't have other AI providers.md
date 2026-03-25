@@ -1,10 +1,10 @@
 # Why We Don't Have Other AI Providers
 
-BearBone currently supports only Anthropic Claude as its AI provider. This is a deliberate choice, not an oversight.
+ConjureDSP currently supports only Anthropic Claude as its AI provider. This is a deliberate choice, not an oversight.
 
 ## The core issue: tool use
 
-BearBone's AI chat isn't a simple text-in/text-out interface. It runs an agentic loop with 9 tools — compile_and_run, get_script, set_parameter, toggle_bypass, save_preset, and more. The AI autonomously compiles DSP scripts, reads errors, fixes them, adjusts parameters, and iterates — all without the user copying and pasting anything.
+ConjureDSP's AI chat isn't a simple text-in/text-out interface. It runs an agentic loop with 9 tools — compile_and_run, get_script, set_parameter, toggle_bypass, save_preset, and more. The AI autonomously compiles DSP scripts, reads errors, fixes them, adjusts parameters, and iterates — all without the user copying and pasting anything.
 
 This requires reliable structured tool calling with multi-step reasoning. The AI needs to:
 

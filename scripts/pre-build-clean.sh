@@ -12,11 +12,11 @@ if [ "${ACTION:-build}" = "test" ] || [ "${ACTION:-build}" = "build-for-testing"
     exit 0
 fi
 
-# 1. Move any installed BearBone.app out of /Applications/ so it doesn't
+# 1. Move any installed ConjureDSP.app out of /Applications/ so it doesn't
 #    shadow the DerivedData build via PluginKit. Moves to a .dev-backup
 #    location so it's recoverable (not deleted).
-INSTALLED_APP="/Applications/BearBone.app"
-BACKUP_APP="/Applications/BearBone.app.dev-backup"
+INSTALLED_APP="/Applications/ConjureDSP.app"
+BACKUP_APP="/Applications/ConjureDSP.app.dev-backup"
 if [ -d "${INSTALLED_APP}" ]; then
     echo "note: Moving ${INSTALLED_APP} to ${BACKUP_APP} to prevent PluginKit shadowing" >&2
     mv "${INSTALLED_APP}" "${BACKUP_APP}"
