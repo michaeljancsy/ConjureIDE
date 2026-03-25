@@ -89,7 +89,12 @@ struct ImportURLPopover: View {
     // MARK: - Actions
 
     private func fetchPreview() {
-        guard let url = URL(string: urlString), url.scheme == "https" || url.scheme == "http" else {
+        // Upgrade http to https (ATS blocks plaintext HTTP)
+        var normalized = urlString
+        if normalized.lowercased().hasPrefix("http://") {
+            normalized = "https://" + normalized.dropFirst("http://".count)
+        }
+        guard let url = URL(string: normalized), url.scheme == "https" else {
             error = "Enter a valid URL"
             return
         }
