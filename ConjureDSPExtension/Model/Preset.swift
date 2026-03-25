@@ -87,6 +87,7 @@ enum FactoryPresetRegistry {
         Entry(name: "DC Blocker (Rust)", number: 5, resourceName: "preset_dcblocker_rust", language: .rust, category: .utility),
         Entry(name: "Stereo Width (Python)", number: 6, resourceName: "preset_stereowidth", language: .python, category: .utility),
         Entry(name: "Stereo Width (Rust)", number: 7, resourceName: "preset_stereowidth_rust", language: .rust, category: .utility),
+        Entry(name: "Stereo Width Optimized (Python)", number: 44, resourceName: "preset_stereowidth_optimized", language: .python, category: .utility),
 
         // Distortion / Saturation
         Entry(name: "Soft Clip (Python)", number: 8, resourceName: "preset_softclip", language: .python, category: .distortion),
