@@ -68,6 +68,24 @@ final class GitHubClient: Sendable {
         return url
     }
 
+    /// Returns a user-facing error if the URL is a known non-file pattern (e.g. GitHub repo root).
+    static func validateImportURL(_ url: URL) -> String? {
+        let host = url.host?.lowercased() ?? ""
+        let pathComponents = url.pathComponents.filter { $0 != "/" }
+
+        if host == "github.com" || host == "www.github.com" {
+            // Repo root: github.com/{owner}/{repo}
+            if pathComponents.count <= 2 {
+                return "This is a repo URL. Link to a specific .py or .rs file."
+            }
+            // Tree/folder view: github.com/{owner}/{repo}/tree/{branch}/...
+            if pathComponents.count >= 3, pathComponents[2] == "tree" {
+                return "This is a folder URL. Link to a specific .py or .rs file."
+            }
+        }
+        return nil
+    }
+
     // MARK: - Raw Content (raw.githubusercontent.com, not rate-limited like API)
 
     /// Fetch a raw file from a public GitHub repo via raw.githubusercontent.com.

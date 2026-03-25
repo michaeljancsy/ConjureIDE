@@ -96,6 +96,13 @@ struct ImportURLPopover: View {
 
         error = nil
         previewSource = nil
+
+        // Catch known non-file URLs before fetching
+        if let validationError = GitHubClient.validateImportURL(url) {
+            error = validationError
+            return
+        }
+
         isLoading = true
 
         // Derive name and language from URL path
@@ -110,7 +117,12 @@ struct ImportURLPopover: View {
         Task {
             do {
                 let source = try await client.fetchURL(url)
-                previewSource = source
+                let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.hasPrefix("<!DOCTYPE") || trimmed.hasPrefix("<html") || trimmed.hasPrefix("<HTML") {
+                    self.error = "URL returned a web page. Link to a .py or .rs file."
+                } else {
+                    previewSource = source
+                }
             } catch {
                 self.error = error.localizedDescription
             }
