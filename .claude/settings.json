@@ -23,7 +23,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "./scripts/setup-monaco.sh"
+            "command": "./scripts/setup-monaco.sh",
+            "timeout": 60,
+            "statusMessage": "Setting up Monaco editor..."
           }
         ]
       }
