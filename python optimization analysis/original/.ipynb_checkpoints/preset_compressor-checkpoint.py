@@ -70,4 +70,5 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     _envelope = env
 
     for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = inputs[ch][:frame_count] * gain * makeup
+        np.multiply(inputs[ch][:frame_count], gain, out=outputs[ch][:frame_count])
+        np.multiply(outputs[ch][:frame_count], makeup, out=outputs[ch][:frame_count])

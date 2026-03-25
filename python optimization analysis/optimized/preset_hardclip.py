@@ -19,4 +19,5 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     drive = params["drive"]
 
     for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = np.clip(drive * inputs[ch][:frame_count], -1.0, 1.0)
+        np.multiply(inputs[ch][:frame_count], drive, out=outputs[ch][:frame_count])
+        np.clip(outputs[ch][:frame_count], -1.0, 1.0, out=outputs[ch][:frame_count])

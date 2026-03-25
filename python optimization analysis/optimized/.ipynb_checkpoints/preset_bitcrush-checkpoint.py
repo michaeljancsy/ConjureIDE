@@ -26,12 +26,15 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
     for ch in range(len(inputs)):
         signal = inputs[ch][:frame_count]
+        out = outputs[ch][:frame_count]
 
         # Bit depth reduction: quantize to fewer levels
-        crushed = np.round(signal * levels) / levels
+        np.multiply(signal, levels, out=out)
+        np.round(out, out=out)
+        np.divide(out, levels, out=out)
 
         # Sample rate reduction: hold every Nth sample
         for i in range(frame_count):
             if i % downsample == 0:
-                held = crushed[i]
+                held = out[i]
             outputs[ch][i] = held

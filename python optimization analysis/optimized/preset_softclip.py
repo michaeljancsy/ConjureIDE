@@ -21,4 +21,6 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     norm = 1.0 / np.tanh(drive)
 
     for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = np.tanh(drive * inputs[ch][:frame_count]) * norm
+        np.multiply(inputs[ch][:frame_count], drive, out=outputs[ch][:frame_count])
+        np.tanh(outputs[ch][:frame_count], out=outputs[ch][:frame_count])
+        np.multiply(outputs[ch][:frame_count], norm, out=outputs[ch][:frame_count])
