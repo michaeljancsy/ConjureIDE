@@ -6,10 +6,16 @@ use crate::wasm_backend::WasmBackend;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 
-/// Demo limit: 60 seconds at 48kHz = 2,880,000 samples.
-/// Using a fixed count keeps the atomic check simple on the audio thread.
-/// At 44.1kHz this is ~65.3s; at 96kHz this is ~30s.
-const DEMO_LIMIT_SAMPLES: u64 = 2_880_000;
+/// Demo limit in seconds. The actual sample count is computed from the host sample rate
+/// at `initialize()` time so the demo period is consistent regardless of sample rate.
+/// Only buffers with output peak >= DEMO_SILENCE_THRESHOLD count toward this limit,
+/// so idle time (no audio playing) does not consume the demo period.
+const DEMO_LIMIT_SECONDS: f64 = 60.0;
+
+/// Silence threshold for demo gating: ~-60 dB.
+/// Output buffers with peak amplitude below this are considered silent
+/// and do not count against the demo time limit.
+const DEMO_SILENCE_THRESHOLD: f32 = 0.001;
 
 /// Real-time audio DSP kernel with pluggable processing backends.
 ///
@@ -45,9 +51,13 @@ pub struct DSPKernel {
     /// Main thread writes (after verification), audio thread reads — lock-free.
     licensed: AtomicBool,
     /// Cumulative count of audio samples processed while unlicensed.
-    /// Once this reaches DEMO_LIMIT_SAMPLES, output is silenced.
+    /// Once this reaches `demo_limit_samples`, output is silenced.
     /// Incremented on audio thread, read from UI thread — lock-free.
     demo_samples_processed: AtomicU64,
+    /// Sample count equivalent of DEMO_LIMIT_SECONDS at the current sample rate.
+    /// Computed in `initialize()` from the host sample rate.
+    /// Main thread writes (at initialize), audio thread reads — lock-free.
+    demo_limit_samples: AtomicU64,
     /// Cached JSON representation of script-declared parameter names.
     /// Set after each successful script/WASM load. None means "no names declared."
     /// Pointer returned by `param_names_json_ptr()` is valid until next script load or destroy.
@@ -75,6 +85,7 @@ impl DSPKernel {
             capture_scratch: vec![0.0; 1024],
             licensed: AtomicBool::new(false),
             demo_samples_processed: AtomicU64::new(0),
+            demo_limit_samples: AtomicU64::new((DEMO_LIMIT_SECONDS * 44100.0) as u64),
             param_names_json: None,
             param_metadata_json: None,
         }
@@ -83,6 +94,7 @@ impl DSPKernel {
     pub fn initialize(&mut self, input_channels: i32, _output_channels: i32, sample_rate: f64) {
         self.sample_rate = sample_rate;
         self.channel_count = input_channels as usize;
+        self.demo_limit_samples.store((DEMO_LIMIT_SECONDS * sample_rate) as u64, Ordering::Relaxed);
 
         if let Ok(mut guard) = self.backend.lock() {
             if let Some(backend) = guard.as_mut() {
@@ -247,7 +259,7 @@ impl DSPKernel {
             return f64::INFINITY;
         }
         let processed = self.demo_samples_processed.load(Ordering::Relaxed);
-        let remaining = DEMO_LIMIT_SAMPLES.saturating_sub(processed);
+        let remaining = self.demo_limit_samples.load(Ordering::Relaxed).saturating_sub(processed);
         remaining as f64 / sample_rate
     }
 
@@ -492,7 +504,7 @@ impl DSPKernel {
         // Demo mode gate: if unlicensed and demo time exhausted, output silence.
         if !self.licensed.load(Ordering::Relaxed) {
             let processed = self.demo_samples_processed.load(Ordering::Relaxed);
-            if processed >= DEMO_LIMIT_SAMPLES {
+            if processed >= self.demo_limit_samples.load(Ordering::Relaxed) {
                 // Zero all output buffers
                 for ch in 0..channel_count {
                     let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
@@ -523,14 +535,17 @@ impl DSPKernel {
             if let Some(ref mut backend) = *guard {
                 if backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate, &params) {
                     Self::safety_clamp(outputs, channel_count, frame_count);
+                    // Cast output pointers to const (used for capture and demo gating)
+                    let out_as_const: Vec<*const f32> = outputs.iter().map(|p| *p as *const f32).collect();
                     // Capture output audio for spectrogram (after processing)
                     if capturing {
-                        // Cast output pointers to const for capture
-                        let out_as_const: Vec<*const f32> = outputs.iter().map(|p| *p as *const f32).collect();
                         self.capture_to_ring(&out_as_const, channel_count, frame_count, &self.output_ring);
                     }
-                    // Increment demo counter (after successful processing)
-                    if !self.licensed.load(Ordering::Relaxed) {
+                    // Increment demo counter only if output is non-silent
+                    if !self.licensed.load(Ordering::Relaxed)
+                        && Self::buffer_peak(&out_as_const, channel_count, frame_count)
+                            >= DEMO_SILENCE_THRESHOLD
+                    {
                         self.demo_samples_processed
                             .fetch_add(frame_count as u64, Ordering::Relaxed);
                     }
@@ -549,10 +564,16 @@ impl DSPKernel {
         if capturing {
             self.capture_to_ring(inputs, channel_count, frame_count, &self.output_ring);
         }
-        // Increment demo counter (after passthrough fallback)
+        // Increment demo counter only if output is non-silent
         if !self.licensed.load(Ordering::Relaxed) {
-            self.demo_samples_processed
-                .fetch_add(frame_count as u64, Ordering::Relaxed);
+            let out_as_const: Vec<*const f32> =
+                outputs.iter().map(|p| *p as *const f32).collect();
+            if Self::buffer_peak(&out_as_const, channel_count, frame_count)
+                >= DEMO_SILENCE_THRESHOLD
+            {
+                self.demo_samples_processed
+                    .fetch_add(frame_count as u64, Ordering::Relaxed);
+            }
         }
     }
 
@@ -568,6 +589,22 @@ impl DSPKernel {
                 *sample = sample.clamp(-1.0, 1.0);
             }
         }
+    }
+
+    /// Compute the peak absolute sample value across all channels.
+    /// Used for demo silence gating — returns 0.0 for empty buffers.
+    unsafe fn buffer_peak(buffers: &[*const f32], channel_count: usize, frame_count: usize) -> f32 {
+        let mut peak: f32 = 0.0;
+        for ch in 0..channel_count {
+            let buf = std::slice::from_raw_parts(buffers[ch], frame_count);
+            for &sample in buf {
+                let abs = sample.abs();
+                if abs > peak {
+                    peak = abs;
+                }
+            }
+        }
+        peak
     }
 
     /// Copy input to output unchanged.
@@ -590,6 +627,9 @@ mod tests {
     use super::*;
 
     // --- Helper ---
+
+    /// Demo limit in samples at 48kHz (the sample rate used in tests).
+    const TEST_DEMO_LIMIT_SAMPLES: u64 = (DEMO_LIMIT_SECONDS * 48000.0) as u64;
 
     /// Returns (python_home, script_path) for integration tests.
     /// Returns None if the bundled Python runtime hasn't been set up.
@@ -889,7 +929,8 @@ mod tests {
             kernel.process(&input_ptr, &output_ptr, 1, 4);
         }
 
-        assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
+        // process.py applies gain from params["gain"], default 0 dB = unity gain
+        assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
     }
 
     #[test]
@@ -918,8 +959,9 @@ mod tests {
             kernel.process(input_ptrs.as_ptr(), output_ptrs.as_ptr(), 2, 4);
         }
 
-        assert_eq!(output_l, [0.5, 0.25, -0.5, 0.0]);
-        assert_eq!(output_r, [0.1, 0.2, 0.3, 0.4]);
+        // process.py applies gain from params["gain"], default 0 dB = unity gain
+        assert_eq!(output_l, [1.0, 0.5, -1.0, 0.0]);
+        assert_eq!(output_r, [0.2, 0.4, 0.6, 0.8]);
     }
 
     #[test]
@@ -1463,13 +1505,12 @@ mod tests {
         // WASM applies 0.5x gain
         assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
 
-        // Hot-reload to Python (process.py applies 0.5x gain too)
+        // Hot-reload to Python (process.py applies 0 dB gain = unity)
         assert!(kernel.load_script(&python_home, &script_path));
 
         output = [0.0; 4];
         unsafe { kernel.process(&ip, &op, 1, 4); }
-        // Python process.py also applies 0.5x gain
-        assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
+        assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
     }
 
     // --- License & demo mode tests ---
@@ -1492,7 +1533,8 @@ mod tests {
 
     #[test]
     fn test_demo_seconds_remaining_initial() {
-        let kernel = DSPKernel::new();
+        let mut kernel = DSPKernel::new();
+        kernel.initialize(1, 1, 48000.0);
         let remaining = kernel.demo_seconds_remaining(48000.0);
         assert!((remaining - 60.0).abs() < 0.1);
     }
@@ -1512,7 +1554,7 @@ mod tests {
 
         let frames = 4096u32;
         // Process well past the demo limit
-        let iterations = (DEMO_LIMIT_SAMPLES / frames as u64) + 100;
+        let iterations = (TEST_DEMO_LIMIT_SAMPLES / frames as u64) + 100;
 
         let input = vec![0.5f32; frames as usize];
         let mut output = vec![0.0f32; frames as usize];
@@ -1536,7 +1578,7 @@ mod tests {
         kernel.initialize(1, 1, 48000.0);
 
         let frames = 4096u32;
-        let iterations_to_exceed = (DEMO_LIMIT_SAMPLES / frames as u64) + 10;
+        let iterations_to_exceed = (TEST_DEMO_LIMIT_SAMPLES / frames as u64) + 10;
 
         let input = vec![0.5f32; frames as usize];
         let mut output = vec![0.0f32; frames as usize];
@@ -1581,7 +1623,7 @@ mod tests {
         kernel.initialize(1, 1, 48000.0);
 
         let frames = 4096u32;
-        let iterations = (DEMO_LIMIT_SAMPLES / frames as u64) + 100;
+        let iterations = (TEST_DEMO_LIMIT_SAMPLES / frames as u64) + 100;
 
         let input = vec![0.5f32; frames as usize];
         let mut output = vec![0.0f32; frames as usize];
@@ -1608,6 +1650,107 @@ mod tests {
             kernel.process(&ip, &op, 1, frames);
         }
         assert_eq!(output[0], 0.5); // passthrough
+    }
+
+    #[test]
+    fn test_silent_output_does_not_count_against_demo() {
+        let mut kernel = DSPKernel::new();
+        assert!(!kernel.is_licensed());
+        kernel.initialize(1, 1, 48000.0);
+
+        let frames = 4096u32;
+        // Process well past the demo limit with silent input (passthrough → silent output)
+        let iterations = (TEST_DEMO_LIMIT_SAMPLES / frames as u64) + 100;
+
+        let input = vec![0.0f32; frames as usize];
+        let mut output = vec![0.0f32; frames as usize];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        for _ in 0..iterations {
+            unsafe {
+                kernel.process(&ip, &op, 1, frames);
+            }
+        }
+
+        // Demo counter should not have advanced (silent output)
+        let remaining = kernel.demo_seconds_remaining(48000.0);
+        assert!((remaining - 60.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_below_threshold_does_not_count_against_demo() {
+        let mut kernel = DSPKernel::new();
+        assert!(!kernel.is_licensed());
+        kernel.initialize(1, 1, 48000.0);
+
+        let frames = 1024u32;
+        // Input below silence threshold (0.0001 < 0.001)
+        let input = vec![0.0001f32; frames as usize];
+        let mut output = vec![0.0f32; frames as usize];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        let iterations = (TEST_DEMO_LIMIT_SAMPLES / frames as u64) + 100;
+        for _ in 0..iterations {
+            unsafe {
+                kernel.process(&ip, &op, 1, frames);
+            }
+        }
+
+        // Counter should not have advanced
+        let remaining = kernel.demo_seconds_remaining(48000.0);
+        assert!((remaining - 60.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_above_threshold_counts_against_demo() {
+        let mut kernel = DSPKernel::new();
+        assert!(!kernel.is_licensed());
+        kernel.initialize(1, 1, 48000.0);
+
+        let frames = 1024u32;
+        // Input at exactly the threshold
+        let input = vec![DEMO_SILENCE_THRESHOLD; frames as usize];
+        let mut output = vec![0.0f32; frames as usize];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        unsafe {
+            kernel.process(&ip, &op, 1, frames);
+        }
+
+        // Counter should have advanced
+        let remaining = kernel.demo_seconds_remaining(48000.0);
+        assert!(remaining < 60.0);
+    }
+
+    #[test]
+    fn test_mixed_silent_and_loud_counts_correctly() {
+        let mut kernel = DSPKernel::new();
+        assert!(!kernel.is_licensed());
+        kernel.initialize(1, 1, 48000.0);
+
+        let frames = 1024u32;
+        let silent_input = vec![0.0f32; frames as usize];
+        let loud_input = vec![0.5f32; frames as usize];
+        let mut output = vec![0.0f32; frames as usize];
+        let silent_ip: *const f32 = silent_input.as_ptr();
+        let loud_ip: *const f32 = loud_input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        // 10 loud buffers, 10 silent buffers
+        for _ in 0..10 {
+            unsafe { kernel.process(&loud_ip, &op, 1, frames); }
+        }
+        for _ in 0..10 {
+            unsafe { kernel.process(&silent_ip, &op, 1, frames); }
+        }
+
+        // Only 10 * 1024 = 10240 samples should have been counted
+        let processed_seconds = 60.0 - kernel.demo_seconds_remaining(48000.0);
+        let expected_seconds = (10 * frames as u64) as f64 / 48000.0;
+        assert!((processed_seconds - expected_seconds).abs() < 0.01);
     }
 
     // --- Param names tests ---

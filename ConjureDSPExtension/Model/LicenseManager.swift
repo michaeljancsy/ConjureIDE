@@ -71,11 +71,12 @@ class LicenseManager: ObservableObject {
     }
 
     /// Verify a serial entered by the user. Persists on success.
+    /// On failure, preserves the previous license state (a bad key doesn't revoke an existing license).
     func activate(serial: String) -> Bool {
         let valid = verifyWithKernel?(serial) ?? false
-        isLicensed = valid
         Analytics.track(.licenseActivate, properties: ["success": valid])
         if valid {
+            isLicensed = true
             do {
                 try saveLicense(serial)
                 log.info("License activated and saved")
