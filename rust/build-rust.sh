@@ -81,8 +81,16 @@ else
     cp "${LIBS[0]}" "${LIB_DST}"
 fi
 
-# Regenerate C header
+# Regenerate C header (only overwrite if changed, to avoid triggering Swift recompilation)
+HEADER="${RUST_DIR}/include/conjure_dsp.h"
+HEADER_TMP="${HEADER}.tmp"
 cbindgen --config "${RUST_DIR}/cbindgen.toml" \
          --crate conjure_dsp \
-         --output "${RUST_DIR}/include/conjure_dsp.h" \
+         --output "${HEADER_TMP}" \
          "${RUST_DIR}/conjure_dsp"
+if ! cmp -s "${HEADER_TMP}" "${HEADER}"; then
+    mv "${HEADER_TMP}" "${HEADER}"
+    echo "note: C header updated" >&2
+else
+    rm "${HEADER_TMP}"
+fi
