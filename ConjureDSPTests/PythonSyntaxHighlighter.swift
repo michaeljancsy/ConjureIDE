@@ -1,1 +1,1 @@
-../BearBoneExtension/UI/PythonSyntaxHighlighter.swift
+../ConjureDSPExtension/UI/PythonSyntaxHighlighter.swift
