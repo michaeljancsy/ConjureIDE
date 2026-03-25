@@ -29,7 +29,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     carrier = np.sin(2.0 * np.pi * carrier_hz * t + _phase)
 
     for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = inputs[ch][:frame_count] * carrier
+        np.multiply(inputs[ch][:frame_count], carrier, out=outputs[ch][:frame_count])
 
     _phase += 2.0 * np.pi * carrier_hz * frame_count / sample_rate
     _phase %= 2.0 * np.pi

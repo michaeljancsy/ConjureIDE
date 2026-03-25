@@ -21,7 +21,8 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     drive = params["drive"]
 
     for ch in range(len(inputs)):
-        x = inputs[ch][:frame_count] * drive
+        x = outputs[ch][:frame_count]
+        np.multiply(inputs[ch][:frame_count], drive, out=x)
         # Triangle-wave fold: maps any value into [-1, 1]
         t = (x + 1.0) * 0.25
         t = t - np.floor(t)

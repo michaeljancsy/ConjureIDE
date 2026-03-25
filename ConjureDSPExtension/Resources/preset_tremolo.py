@@ -29,7 +29,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     lfo = 1.0 - depth * 0.5 * (1.0 + np.sin(2.0 * np.pi * rate_hz * t + _phase))
 
     for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = inputs[ch][:frame_count] * lfo
+        np.multiply(inputs[ch][:frame_count], lfo, out=outputs[ch][:frame_count])
 
     _phase += 2.0 * np.pi * rate_hz * frame_count / sample_rate
     _phase %= 2.0 * np.pi

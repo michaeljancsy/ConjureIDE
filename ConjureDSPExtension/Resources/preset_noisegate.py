@@ -69,4 +69,4 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     _hold_counter = hold
 
     for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = inputs[ch][:frame_count] * gain
+        np.multiply(inputs[ch][:frame_count], gain, out=outputs[ch][:frame_count])
