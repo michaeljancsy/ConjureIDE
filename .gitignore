@@ -25,6 +25,9 @@ DerivedData/
 # Sentry CLI config (contains auth token)
 .sentryclirc
 
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
 # Xcode user-specific files
 *.xcuserstate
 xcuserdata/

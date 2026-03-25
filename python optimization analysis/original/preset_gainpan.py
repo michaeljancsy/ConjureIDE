@@ -25,10 +25,10 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
     if n_ch == 1:
         # Mono: just apply gain
-        np.multiply(inputs[0][:frame_count], gain, out=outputs[0][:frame_count])
+        outputs[0][:frame_count] = inputs[0][:frame_count] * gain
     else:
         # Stereo: constant-power pan
         left_gain = gain * math.cos(pan * math.pi * 0.5)
         right_gain = gain * math.sin(pan * math.pi * 0.5)
-        np.multiply(inputs[0][:frame_count], left_gain, out=outputs[0][:frame_count])
-        np.multiply(inputs[1][:frame_count], right_gain, out=outputs[1][:frame_count])
+        outputs[0][:frame_count] = inputs[0][:frame_count] * left_gain
+        outputs[1][:frame_count] = inputs[1][:frame_count] * right_gain
