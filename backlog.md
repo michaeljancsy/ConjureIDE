@@ -9,8 +9,8 @@
 ## To Do
 
 ### Distribution
+- Full distribution plan at `docs/distribution-plan.md` (Paddle + GitHub Releases + Sparkle)
 - Store notarization credentials in Keychain, run `scripts/release.sh` end-to-end, verify DMG on clean machine
-- Auto-update mechanism (Sparkle)
 
 ### Export Preset as Standalone AUv3
 - Phase 5: Polish & validation (integration tests, edge cases, documentation)
@@ -34,6 +34,7 @@
 ### Other
 - AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration)
 - Fix flaky `extensionPlistContainsBuildID` test (build phase timing)
+- Add link to website for licensing
 
 ## Done
 

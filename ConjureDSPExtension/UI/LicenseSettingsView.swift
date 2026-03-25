@@ -69,6 +69,7 @@ struct LicenseSettingsView: View {
                     .accessibilityIdentifier("licenseErrorMessage")
             }
 
+            #if DEBUG
             Divider()
 
             Text("Public Key: \(embeddedPublicKeyFingerprint)")
@@ -76,6 +77,7 @@ struct LicenseSettingsView: View {
                 .foregroundColor(.secondary)
                 .textSelection(.enabled)
                 .accessibilityIdentifier("publicKeyFingerprint")
+            #endif
         }
         .padding()
         .frame(minWidth: 300)

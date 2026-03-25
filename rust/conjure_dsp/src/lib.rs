@@ -330,10 +330,19 @@ pub unsafe extern "C" fn dsp_kernel_reset_demo(kernel: DSPKernelRef) {
 }
 
 /// Return a pointer to the embedded Ed25519 public key (32 bytes).
-/// The pointer is valid for the lifetime of the process (static data).
+/// Only available in debug builds for diagnostics. Returns null in release.
 #[no_mangle]
 pub extern "C" fn dsp_kernel_public_key() -> *const u8 {
-    license::public_key_bytes().as_ptr()
+    #[cfg(debug_assertions)]
+    {
+        // Leak a boxed copy so the pointer is stable for the caller.
+        let key = Box::new(license::public_key_bytes());
+        Box::leak(key).as_ptr()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        std::ptr::null()
+    }
 }
 
 #[cfg(test)]
