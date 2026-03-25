@@ -56,7 +56,8 @@ pub struct DSPKernel {
     demo_samples_processed: AtomicU64,
     /// Sample count equivalent of DEMO_LIMIT_SECONDS at the current sample rate.
     /// Computed in `initialize()` from the host sample rate.
-    demo_limit_samples: u64,
+    /// Main thread writes (at initialize), audio thread reads — lock-free.
+    demo_limit_samples: AtomicU64,
     /// Cached JSON representation of script-declared parameter names.
     /// Set after each successful script/WASM load. None means "no names declared."
     /// Pointer returned by `param_names_json_ptr()` is valid until next script load or destroy.
@@ -84,7 +85,7 @@ impl DSPKernel {
             capture_scratch: vec![0.0; 1024],
             licensed: AtomicBool::new(false),
             demo_samples_processed: AtomicU64::new(0),
-            demo_limit_samples: (DEMO_LIMIT_SECONDS * 44100.0) as u64,
+            demo_limit_samples: AtomicU64::new((DEMO_LIMIT_SECONDS * 44100.0) as u64),
             param_names_json: None,
             param_metadata_json: None,
         }
@@ -93,7 +94,7 @@ impl DSPKernel {
     pub fn initialize(&mut self, input_channels: i32, _output_channels: i32, sample_rate: f64) {
         self.sample_rate = sample_rate;
         self.channel_count = input_channels as usize;
-        self.demo_limit_samples = (DEMO_LIMIT_SECONDS * sample_rate) as u64;
+        self.demo_limit_samples.store((DEMO_LIMIT_SECONDS * sample_rate) as u64, Ordering::Relaxed);
 
         if let Ok(mut guard) = self.backend.lock() {
             if let Some(backend) = guard.as_mut() {
@@ -258,7 +259,7 @@ impl DSPKernel {
             return f64::INFINITY;
         }
         let processed = self.demo_samples_processed.load(Ordering::Relaxed);
-        let remaining = self.demo_limit_samples.saturating_sub(processed);
+        let remaining = self.demo_limit_samples.load(Ordering::Relaxed).saturating_sub(processed);
         remaining as f64 / sample_rate
     }
 
@@ -503,7 +504,7 @@ impl DSPKernel {
         // Demo mode gate: if unlicensed and demo time exhausted, output silence.
         if !self.licensed.load(Ordering::Relaxed) {
             let processed = self.demo_samples_processed.load(Ordering::Relaxed);
-            if processed >= self.demo_limit_samples {
+            if processed >= self.demo_limit_samples.load(Ordering::Relaxed) {
                 // Zero all output buffers
                 for ch in 0..channel_count {
                     let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
