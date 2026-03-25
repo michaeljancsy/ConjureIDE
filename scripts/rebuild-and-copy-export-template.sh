@@ -43,9 +43,14 @@ TEMPLATE_SRC="${TEMPLATE_BUILD}/Build/Products/${TEMPLATE_CONFIG}/ConjureDSPExpo
 TEMPLATE_DST="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExportTemplate.zip"
 
 if [ -d "$TEMPLATE_SRC" ]; then
-    echo "Zipping export template from $TEMPLATE_SRC"
-    cd "$(dirname "$TEMPLATE_SRC")"
-    zip -qry "$TEMPLATE_DST" "$(basename "$TEMPLATE_SRC")"
+    # Skip zip if the output is newer than the source app
+    if [ -f "$TEMPLATE_DST" ] && [ "$TEMPLATE_DST" -nt "$TEMPLATE_SRC" ]; then
+        echo "note: Export template zip is up to date" >&2
+    else
+        echo "Zipping export template from $TEMPLATE_SRC"
+        cd "$(dirname "$TEMPLATE_SRC")"
+        zip -qry "$TEMPLATE_DST" "$(basename "$TEMPLATE_SRC")"
+    fi
 else
     echo "warning: Export template not built at $TEMPLATE_SRC" >&2
     echo "warning: Run: cd ConjureDSPExportAUTemplate && xcodebuild -scheme ConjureDSPExportAUTemplate -configuration ${TEMPLATE_CONFIG} -arch arm64 -derivedDataPath build build" >&2
