@@ -2,7 +2,7 @@
 name = "generate-license"
 version = "0.1.0"
 edition = "2021"
-description = "Ed25519 license key generator for BearBone"
+description = "Ed25519 license key generator for ConjureDSP"
 
 [dependencies]
 ed25519-dalek = { version = "2", features = ["std", "rand_core"] }

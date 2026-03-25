@@ -7,7 +7,7 @@
 # Prerequisites:
 #   1. Developer ID Application certificate in Keychain
 #   2. Notarization credentials stored:
-#        xcrun notarytool store-credentials "BearBone-Notarize" \
+#        xcrun notarytool store-credentials "ConjureDSP-Notarize" \
 #          --apple-id "your@email.com" \
 #          --team-id "A4R63LAVLS" \
 #          --password "xxxx-xxxx-xxxx-xxxx"
@@ -20,7 +20,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT_DIR="$PROJECT_DIR/build/release"
 
 echo "========================================"
-echo "  BearBone Release Pipeline"
+echo "  ConjureDSP Release Pipeline"
 echo "========================================"
 echo ""
 
@@ -28,7 +28,7 @@ echo ""
 echo "[1/4] Building Release archive..."
 "$SCRIPT_DIR/build-release.sh" "$OUTPUT_DIR"
 
-APP_PATH="$OUTPUT_DIR/BearBone.app"
+APP_PATH="$OUTPUT_DIR/ConjureDSP.app"
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
 
@@ -38,7 +38,7 @@ echo "[2/4] Notarizing app..."
 
 echo ""
 echo "[3/4] Creating DMG..."
-DMG_PATH="$OUTPUT_DIR/BearBone-${VERSION}.dmg"
+DMG_PATH="$OUTPUT_DIR/ConjureDSP-${VERSION}.dmg"
 "$SCRIPT_DIR/create-dmg.sh" "$APP_PATH" "$DMG_PATH"
 
 echo ""

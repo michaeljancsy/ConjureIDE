@@ -1,5 +1,5 @@
 language = "C"
-include_guard = "BEARBONE_DSP_H"
+include_guard = "CONJURE_DSP_H"
 no_includes = true
 sys_includes = ["stdint.h", "stdbool.h"]
 

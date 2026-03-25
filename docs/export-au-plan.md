@@ -1,6 +1,6 @@
 # AUv3 Preset Export — Implementation Plan
 
-Export a BearBone preset (Python or Rust) as a standalone AUv3 plugin that the user can install and use in any DAW without BearBone running.
+Export a ConjureDSP preset (Python or Rust) as a standalone AUv3 plugin that the user can install and use in any DAW without ConjureDSP running.
 
 ## Key Decisions
 
@@ -8,18 +8,18 @@ Export a BearBone preset (Python or Rust) as a standalone AUv3 plugin that the u
 |----------|--------|
 | Exportable languages | Both: Python (.py source) and Rust (.wasm binary only) |
 | Template app behavior | Richer info window (AU metadata, DAW instructions, Quit button) |
-| Template location | Separate XcodeGen project (`BearBoneExportAUTemplate/`) |
+| Template location | Separate XcodeGen project (`ConjureDSPExportAUTemplate/`) |
 | Export trigger | Toolbar button in the AU extension UI |
 | Sandbox strategy | App Group container for DAW-hosted extension writes |
 | Code signing | Ad-hoc (`codesign -s -`) for local use |
 | Build at export time | No — pre-built template, just copy + patch + sign |
-| Shared Python runtime | `~/Library/Application Support/BearBone/PythonRuntime-3.14/` |
-| Python runtime install | Auto-installed on first BearBone launch |
+| Shared Python runtime | `~/Library/Application Support/ConjureDSP/PythonRuntime-3.14/` |
+| Python runtime install | Auto-installed on first ConjureDSP launch |
 | Missing runtime UX | SwiftUI error view with download button that auto-installs |
-| AU manufacturer code | `BEAR` (same as BearBone) |
+| AU manufacturer code | `CONJ` (same as ConjureDSP) |
 | AU subtype | Hash of preset name → 4 chars, collision check against local registry |
 | Exported AU UI | Minimal generic UI (labeled sliders). Error UI for missing Python runtime |
-| Exported AU licensing | None — exports run freely. Only licensed BearBone users can export |
+| Exported AU licensing | None — exports run freely. Only licensed ConjureDSP users can export |
 | Duplicate export | Overwrite previous (same AU identity) |
 | Parameter system | Same 8 generic params for v1. Customization is future work |
 
@@ -51,13 +51,13 @@ MyEffect.app/
 ### Shared Python Runtime
 
 ```
-~/Library/Application Support/BearBone/
+~/Library/Application Support/ConjureDSP/
   PythonRuntime-3.14/
     lib/
       python3.14t/              ← stdlib + site-packages (numpy)
 ```
 
-- Installed automatically on first BearBone launch
+- Installed automatically on first ConjureDSP launch
 - Same content as `rust/python-dist/` minus the interpreter binary
 - Each exported Python AU bundles only `libpython3.14t.dylib` (~5-10MB) in its own Frameworks/
 - The heavy stdlib+numpy (~80-90MB) is shared via `PYTHONHOME` pointing to this location
@@ -75,13 +75,13 @@ func findPythonHome() -> String? {
     }
 
     // 2. Shared location
-    let shared = NSHomeDirectory() + "/Library/Application Support/BearBone/PythonRuntime-3.14"
+    let shared = NSHomeDirectory() + "/Library/Application Support/ConjureDSP/PythonRuntime-3.14"
     if FileManager.default.fileExists(atPath: shared) {
         return shared
     }
 
     // 3. Environment variable override (power users)
-    if let env = ProcessInfo.processInfo.environment["BEARBONE_PYTHON_HOME"] {
+    if let env = ProcessInfo.processInfo.environment["CONJUREDSP_PYTHON_HOME"] {
         return env
     }
 
@@ -97,11 +97,11 @@ When runtime is not found:
 
 ### AU Identity
 
-- **Type:** `aufx` (effect) — same as BearBone
-- **Manufacturer:** `BEAR` — same as BearBone, identifies as BearBone family
+- **Type:** `aufx` (effect) — same as ConjureDSP
+- **Manufacturer:** `CONJ` — same as ConjureDSP, identifies as ConjureDSP family
 - **Subtype:** 4-char code derived from hash of preset name
   - Hash preset name → take first 4 bytes → map to printable ASCII
-  - Check against local export registry (`~/Library/Application Support/BearBone/export-registry.json`)
+  - Check against local export registry (`~/Library/Application Support/ConjureDSP/export-registry.json`)
   - On collision, increment last char
   - Registry tracks: `{ name: string, subtype: string, bundleId: string, exportDate: string, language: string }`
 
@@ -109,20 +109,20 @@ When runtime is not found:
 
 The AU extension runs sandboxed in DAWs. It cannot write to arbitrary filesystem locations. Solution:
 
-1. Define an **App Group** (e.g., `group.com.MichaelJancsy.BearBone`)
+1. Define an **App Group** (e.g., `group.com.MichaelJancsy.ConjureDSP`)
 2. Both the host app and the AU extension join the App Group
 3. At export time, the extension writes the assembled .app bundle to the App Group container
-4. The extension notifies the user to "Open BearBone to complete export" or uses `NSWorkspace.shared.open()` to launch the host app
+4. The extension notifies the user to "Open ConjureDSP to complete export" or uses `NSWorkspace.shared.open()` to launch the host app
 5. The host app (unsandboxed) moves the bundle from the App Group container to the user's chosen location (via `NSSavePanel`), performs final code signing, and reveals in Finder
 
 Alternative (simpler but less polished): write directly to App Group container and tell the user to move it manually.
 
 ### Rust FFI Sharing
 
-The exported AU player needs to call the same Rust DSP kernel FFI as BearBone. Two options:
+The exported AU player needs to call the same Rust DSP kernel FFI as ConjureDSP. Two options:
 
-1. **Static link** — Build a variant of `libbearbone_dsp.a` for the player target. Same Rust code, same FFI. The player target's build phase calls the same `build-rust.sh`.
-2. **Shared framework** — Extract the Rust FFI into a framework used by both BearBone and the player. More complex, probably not worth it for v1.
+1. **Static link** — Build a variant of `libconjure_dsp.a` for the player target. Same Rust code, same FFI. The player target's build phase calls the same `build-rust.sh`.
+2. **Shared framework** — Extract the Rust FFI into a framework used by both ConjureDSP and the player. More complex, probably not worth it for v1.
 
 Recommendation: Static link (option 1). The player target gets its own "Build Rust" build phase.
 
@@ -165,33 +165,33 @@ The player AU reads this at init to determine which backend to use and how to co
 
 **Goal:** A minimal AUv3 that loads a DSP preset from its own bundle Resources and processes audio. WASM-only initially.
 
-**Implemented as:** `BearBoneExportAUTemplate/` — a separate XcodeGen-based project.
+**Implemented as:** `ConjureDSPExportAUTemplate/` — a separate XcodeGen-based project.
 
 **Deliverables (all complete):**
-- [x] Separate XcodeGen project: `BearBoneExportAUTemplate/project.yml` → generates `.xcodeproj`
-  - Host app target (`BearBoneExportAUTemplate`) — info window with AU metadata, DAW instructions, Quit button
-  - AU extension target (`BearBoneExportAUTemplateExtension`) — sandboxed appex
-  - Unit test target (`BearBoneExportAUTemplateTests`) — 13 tests
+- [x] Separate XcodeGen project: `ConjureDSPExportAUTemplate/project.yml` → generates `.xcodeproj`
+  - Host app target (`ConjureDSPExportAUTemplate`) — info window with AU metadata, DAW instructions, Quit button
+  - AU extension target (`ConjureDSPExportAUTemplateExtension`) — sandboxed appex
+  - Unit test target (`ConjureDSPExportAUTemplateTests`) — 13 tests
 - [x] Host app: richer info view showing AU name, type, subtype, manufacturer, version, DAW-specific hints
 - [x] AU extension: `ExportAUAudioUnit` (AUAudioUnit subclass)
   - Loads `preset.wasm` from own bundle Resources via `dsp_kernel_load_wasm()`
   - Loads `runtime-config.json` for metadata (preset name, param count, param names)
   - Config-driven parameter tree (paramCount and paramNames from runtime-config.json)
-  - Render block copied from main BearBone AU (same event processing, bypass, safety clamp)
+  - Render block copied from main ConjureDSP AU (same event processing, bypass, safety clamp)
   - Calls `dsp_kernel_set_licensed(kernel, true)` — no demo timer in exports
-- [x] Minimal SwiftUI UI: preset name header, labeled sliders, "Made with BearBone" footer
-- [x] Extension links same full `libbearbone_dsp.a` (with pyo3). Bundles `libpython3.14t.dylib` for linker resolution
+- [x] Minimal SwiftUI UI: preset name header, labeled sliders, "Made with ConjureDSP" footer
+- [x] Extension links same full `libconjure_dsp.a` (with pyo3). Bundles `libpython3.14t.dylib` for linker resolution
 - [x] Passthrough WASM preset compiled from `process.rs` included as placeholder
 - [x] 13 unit tests: 4 Rust FFI (kernel lifecycle, bypass, params, licensing) + 9 AU component (instantiation, buses, channels, params, bypass, render lifecycle, WASM loading)
 
 **Key files created:**
-- `BearBoneExportAUTemplate/project.yml` — XcodeGen spec (3 targets + scheme)
-- `BearBoneExportAUTemplate/BearBoneExportAUTemplate/` — host app (App.swift, InfoView.swift, AUInfo.swift)
-- `BearBoneExportAUTemplate/BearBoneExportAUTemplateExtension/Audio Unit/ExportAUAudioUnit.swift`
-- `BearBoneExportAUTemplate/BearBoneExportAUTemplateExtension/UI/` — ExportAUViewController, ExportAUMainView, ExportParameterState
-- `BearBoneExportAUTemplate/BearBoneExportAUTemplateExtension/Model/RuntimeConfig.swift`
-- `BearBoneExportAUTemplate/BearBoneExportAUTemplateExtension/Resources/` — preset.wasm, runtime-config.json
-- `BearBoneExportAUTemplate/BearBoneExportAUTemplateTests/ExportAUTests.swift`
+- `ConjureDSPExportAUTemplate/project.yml` — XcodeGen spec (3 targets + scheme)
+- `ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplate/` — host app (App.swift, InfoView.swift, AUInfo.swift)
+- `ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplateExtension/Audio Unit/ExportAUAudioUnit.swift`
+- `ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplateExtension/UI/` — ExportAUViewController, ExportAUMainView, ExportParameterState
+- `ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplateExtension/Model/RuntimeConfig.swift`
+- `ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplateExtension/Resources/` — preset.wasm, runtime-config.json
+- `ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplateTests/ExportAUTests.swift`
 
 **Key build requirements discovered:**
 - `ENABLE_APP_SANDBOX: YES` on extension target — required for PluginKit to register the AU
@@ -201,13 +201,13 @@ The player AU reads this at init to determine which backend to use and how to co
 - XcodeGen `schemes:` section needed to include test target in Cmd+U
 
 **Placeholder AU identity (patched at export time):**
-- Type: `aufx`, Subtype: `TMPL`, Manufacturer: `BEAR`, Name: `BearBone: ExportTemplate`
+- Type: `aufx`, Subtype: `TMPL`, Manufacturer: `CONJ`, Name: `ConjureDSP: ExportTemplate`
 
 ### Phase 2: Export Pipeline ✅ COMPLETE (2026-03-05)
 
 **Goal:** Given a preset (script source + compiled WASM if Rust), produce a working exported .app bundle.
 
-**Implemented as:** `BearBoneExtension/Export/` — three files.
+**Implemented as:** `ConjureDSPExtension/Export/` — three files.
 
 **Deliverables (all complete):**
 - [x] `ExportManager` class with `exportPreset(name:, source:, wasmData:, language:, templateURL:, outputDirectory:) throws -> URL`
@@ -222,15 +222,15 @@ The player AU reads this at init to determine which backend to use and how to co
   8. Ad-hoc code sign (deepest first: frameworks → appex → app) via `/usr/bin/codesign -s -`
   9. Register in ExportRegistry
   10. Return URL to the signed .app
-- [x] `ExportRegistry` class: JSON file at `~/Library/Application Support/BearBone/export-registry.json`
+- [x] `ExportRegistry` class: JSON file at `~/Library/Application Support/ConjureDSP/export-registry.json`
 - [x] `SubtypeGenerator`: SHA256 hash → 4-char alphanumeric code, collision + reserved code avoidance
 - [x] 20 unit tests: 8 SubtypeGenerator + 6 ExportRegistry + 6 ExportManager (end-to-end with mock template)
 
 **Key files created:**
-- `BearBoneExtension/Export/ExportManager.swift`
-- `BearBoneExtension/Export/ExportRegistry.swift`
-- `BearBoneExtension/Export/SubtypeGenerator.swift`
-- `BearBoneTests/ExportTests.swift` (+ test copies of Export files)
+- `ConjureDSPExtension/Export/ExportManager.swift`
+- `ConjureDSPExtension/Export/ExportRegistry.swift`
+- `ConjureDSPExtension/Export/SubtypeGenerator.swift`
+- `ConjureDSPTests/ExportTests.swift` (+ test copies of Export files)
 
 **Technical notes:**
 - Template embedding deferred to Phase 3 — `ExportManager` accepts `templateURL` parameter
@@ -248,37 +248,37 @@ The player AU reads this at init to determine which backend to use and how to co
   - Tooltip: "License required to export" when disabled
 - [x] Export popover (`ExportPopover.swift`): editable effect name, language label, Export/Cancel buttons
 - [x] Progress indicator: spinner replaces export icon during export
-- [x] Post-export alert: success message ("Open BearBone to install") or error
-- [x] App Group setup: `group.com.MichaelJancsy.BearBone` entitlement on extension
+- [x] Post-export alert: success message ("Open ConjureDSP to install") or error
+- [x] App Group setup: `group.com.MichaelJancsy.ConjureDSP` entitlement on extension
   - Host app accesses Group Containers path directly (unsandboxed, no entitlement needed)
   - `ExportManager` gains `skipSigning: Bool` parameter and `appGroupContainerURL()` helper
 - [x] Host app handler (`PendingExportHandler`): on launch, checks App Group's `PendingExports/`
-  - Moves to `~/Library/Application Support/BearBone/Exports/`
+  - Moves to `~/Library/Application Support/ConjureDSP/Exports/`
   - Code signs via `/usr/bin/codesign -s - --force --deep`
   - Launches .app via `NSWorkspace` (triggers AU registration)
   - Reveals in Finder
   - Alerts user: "Installed [name]. Find it in your DAW."
 
 **Key files created:**
-- `BearBoneExtension/UI/ExportPopover.swift` — export configuration popover
-- `BearBone/Model/PendingExportHandler.swift` — host app pending export installer
+- `ConjureDSPExtension/UI/ExportPopover.swift` — export configuration popover
+- `ConjureDSP/Model/PendingExportHandler.swift` — host app pending export installer
 
 **Key files modified:**
-- `BearBoneExtension/UI/PresetToolbar.swift` — added Export button + popover
-- `BearBoneExtension/UI/BearBoneExtensionMainView.swift` — added `onExport` closure, export state, alert
-- `BearBoneExtension/Common/UI/AudioUnitViewController.swift` — added `onExport` closure implementation
-- `BearBoneExtension/Export/ExportManager.swift` — added `skipSigning`, `appGroupContainerURL()`
-- `BearBoneExtension/Common/Audio Unit/BearBoneExtensionAudioUnit.swift` — added public `wasmBytes` accessor
-- `BearBoneExtension/BearBoneExtension.entitlements` — added App Group
-- `BearBone/BearBoneApp.swift` — added `PendingExportHandler`, checks on launch
-- `BearBone/ContentView.swift` — added export installed/error alerts
-- `BearBone.xcodeproj/project.pbxproj` — added "Copy Export Template" build phase
+- `ConjureDSPExtension/UI/PresetToolbar.swift` — added Export button + popover
+- `ConjureDSPExtension/UI/ConjureDSPExtensionMainView.swift` — added `onExport` closure, export state, alert
+- `ConjureDSPExtension/Common/UI/AudioUnitViewController.swift` — added `onExport` closure implementation
+- `ConjureDSPExtension/Export/ExportManager.swift` — added `skipSigning`, `appGroupContainerURL()`
+- `ConjureDSPExtension/Common/Audio Unit/ConjureDSPExtensionAudioUnit.swift` — added public `wasmBytes` accessor
+- `ConjureDSPExtension/ConjureDSPExtension.entitlements` — added App Group
+- `ConjureDSP/ConjureDSPApp.swift` — added `PendingExportHandler`, checks on launch
+- `ConjureDSP/ContentView.swift` — added export installed/error alerts
+- `ConjureDSP.xcodeproj/project.pbxproj` — added "Copy Export Template" build phase
 
 **Technical notes:**
-- App Group identifier: `group.com.MichaelJancsy.BearBone`
+- App Group identifier: `group.com.MichaelJancsy.ConjureDSP`
 - Extension writes unsigned .app to App Group `PendingExports/` directory
-- Host app (unsandboxed) reads `~/Library/Group Containers/group.com.MichaelJancsy.BearBone/PendingExports/` directly
-- "Copy Export Template" build phase copies pre-built template from `BearBoneExportAUTemplate/build/Build/Products/Release/BearBoneExportAUTemplate.app` into extension Resources as `ExportTemplate.app`
+- Host app (unsandboxed) reads `~/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/PendingExports/` directly
+- "Copy Export Template" build phase copies pre-built template from `ConjureDSPExportAUTemplate/build/Build/Products/Release/ConjureDSPExportAUTemplate.app` into extension Resources as `ExportTemplate.app`
 - Prerequisite: must build the template project first and enable App Group capability in Xcode Signing & Capabilities for the extension target
 
 ### Phase 4: Python Support
@@ -287,7 +287,7 @@ The player AU reads this at init to determine which backend to use and how to co
 
 **Deliverables:**
 - [ ] Shared Python runtime installer:
-  - On first BearBone launch, copy `python-dist/lib/python3.14t/` to `~/Library/Application Support/BearBone/PythonRuntime-3.14/`
+  - On first ConjureDSP launch, copy `python-dist/lib/python3.14t/` to `~/Library/Application Support/ConjureDSP/PythonRuntime-3.14/`
   - Skip if already exists (version check via marker file)
   - Progress indicator during copy (~80MB)
 - [ ] Player AU Python support:
@@ -303,13 +303,13 @@ The player AU reads this at init to determine which backend to use and how to co
 - [ ] Runtime download manager:
   - Same logic as `setup-python.sh` but in Swift
   - Downloads python-build-standalone release
-  - Extracts to `~/Library/Application Support/BearBone/PythonRuntime-3.14/`
+  - Extracts to `~/Library/Application Support/ConjureDSP/PythonRuntime-3.14/`
   - Installs numpy via pip or bundles pre-built numpy
 
 **Key files to create/modify:**
-- `BearBonePlayerExtension/UI/RuntimeErrorView.swift`
-- `BearBonePlayerExtension/RuntimeInstaller.swift` (or shared location)
-- `BearBone/Model/SharedRuntimeManager.swift`
+- `ConjureDSPPlayerExtension/UI/RuntimeErrorView.swift`
+- `ConjureDSPPlayerExtension/RuntimeInstaller.swift` (or shared location)
+- `ConjureDSP/Model/SharedRuntimeManager.swift`
 
 **Technical notes:**
 - The dylib (~5-10MB) MUST be in each exported AU's Frameworks/ — dynamic linker needs it at load time regardless of PYTHONHOME
@@ -345,10 +345,10 @@ The player AU reads this at init to determine which backend to use and how to co
 ## Open Questions / Future Work
 
 - **Parameter customization:** Let users name params, set ranges, choose count. Requires changes to the parameter tree in the exported AU. Deferred to post-v1.
-- **Notarization pipeline:** For users who want to share exports. Would need either (a) user provides their own developer identity, or (b) BearBone notarizes on behalf (requires server infrastructure). Deferred.
+- **Notarization pipeline:** For users who want to share exports. Would need either (a) user provides their own developer identity, or (b) ConjureDSP notarizes on behalf (requires server infrastructure). Deferred.
 - **Export UI enhancement:** v1 has minimal labeled sliders. Could add richer UI (knobs, visualizations) if parameter metadata is available.
 - **Preset bundles:** Export multiple presets as a single AU with a preset selector. More complex, deferred.
-- **Windows/Linux:** If BearBone ever goes cross-platform, the export concept could extend to VST3/CLAP. Very far future.
+- **Windows/Linux:** If ConjureDSP ever goes cross-platform, the export concept could extend to VST3/CLAP. Very far future.
 
 ---
 
@@ -357,8 +357,8 @@ The player AU reads this at init to determine which backend to use and how to co
 - Design Q&A: `docs/export-au-questions.md`
 - Backlog: `backlog.md` (Export AUv3 feature, 5 phases)
 - Related existing code:
-  - WASM compilation: `BearBoneExtension/Common/Audio Unit/RustCompiler.swift`, `WasmCache.swift`
-  - Rust kernel FFI: `rust/bearbone_dsp/src/lib.rs`, `kernel.rs`
+  - WASM compilation: `ConjureDSPExtension/Common/Audio Unit/RustCompiler.swift`, `WasmCache.swift`
+  - Rust kernel FFI: `rust/conjure_dsp/src/lib.rs`, `kernel.rs`
   - Python runtime setup: `rust/setup-python.sh`
   - AU identity patching: `scripts/patch-worktree-au-identity.sh` (similar plist patching needed for exports)
-  - License system: `rust/bearbone_dsp/src/license.rs`, `BearBoneExtension/UI/LicenseManager.swift`
+  - License system: `rust/conjure_dsp/src/license.rs`, `ConjureDSPExtension/UI/LicenseManager.swift`

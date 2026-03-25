@@ -15,16 +15,16 @@ if [ "${ACTION:-build}" = "test" ] || [ "${ACTION:-build}" = "build-for-testing"
 fi
 
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
-APP_PATH="${BUILT_PRODUCTS_DIR:-}/BearBone.app"
+APP_PATH="${BUILT_PRODUCTS_DIR:-}/ConjureDSP.app"
 
 # Resolve the real (canonical) path of the current build so we can compare
 # against LaunchServices entries and skip unregistering ourselves.
 REAL_APP_PATH="$(cd "${APP_PATH}" 2>/dev/null && pwd -P)" || REAL_APP_PATH=""
 
-# Unregister all OTHER BearBone debug/release builds from LaunchServices.
+# Unregister all OTHER ConjureDSP debug/release builds from LaunchServices.
 # Without this, PluginKit may serve a stale extension from a different
 # worktree or DerivedData directory that shares the same bundle ID.
-$LSREGISTER -dump | grep -B20 "identifier:.*com\.MichaelJancsy\.BearBone" | grep "path:" | sed 's/.*path:[[:space:]]*//' | sed 's/ (0x.*//' | while read -r registered_path; do
+{ $LSREGISTER -dump | grep -B20 "identifier:.*com\.MichaelJancsy\.ConjureDSP" | grep "path:" | sed 's/.*path:[[:space:]]*//' | sed 's/ (0x.*//' || true; } | while read -r registered_path; do
     # Resolve symlinks for accurate comparison
     real_registered="$(cd "${registered_path}" 2>/dev/null && pwd -P)" || real_registered=""
     if [ -n "$REAL_APP_PATH" ] && [ "$real_registered" = "$REAL_APP_PATH" ]; then

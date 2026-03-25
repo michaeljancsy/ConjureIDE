@@ -1,4 +1,4 @@
-//! BearBone license key generator.
+//! ConjureDSP license key generator.
 //!
 //! First run: generates an Ed25519 keypair, saves the private key to `keypair.bin`,
 //! and prints the public key bytes for embedding in `license.rs`.
@@ -19,7 +19,7 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "generate-license", about = "Generate BearBone license keys")]
+#[command(name = "generate-license", about = "Generate ConjureDSP license keys")]
 struct Cli {
     /// Email address for the license
     #[arg(long)]
@@ -91,7 +91,7 @@ fn generate_serial(signing_key: &SigningKey, email: &str) -> String {
 
     let payload = json!({
         "email": email,
-        "product": "bearbone",
+        "product": "conjuredsp",
         "created": today
     });
 

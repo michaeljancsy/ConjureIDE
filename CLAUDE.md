@@ -1,14 +1,14 @@
-# BearBone
+# ConjureDSP
 
 AUv3 audio effect plugin for macOS with embedded Python DSP scripting. Built with Apple's Audio Unit Extension framework.
 
 ## Build
 
-Xcode project with a Rust build phase. Open `BearBone.xcodeproj` or build from CLI:
+Xcode project with a Rust build phase. Open `ConjureDSP.xcodeproj` or build from CLI:
 
 ```bash
-xcodebuild -project BearBone.xcodeproj -scheme BearBone build
-xcodebuild -project BearBone.xcodeproj -scheme BearBone test   # runs unit + UI tests
+xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP build
+xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test   # runs unit + UI tests
 ```
 
 ### Prerequisites
@@ -25,21 +25,21 @@ Deployment targets: macOS 26.2+.
 Run `rust/setup-python.sh` once before the first build. This downloads a free-threaded Python 3.14 build from python-build-standalone (~100MB) and installs numpy and scipy into it. The result lives in `rust/python-dist/` (gitignored).
 
 ### Rust build
-The `BearBoneExtension` target has a Run Script build phase that calls `rust/build-rust.sh`. This:
+The `ConjureDSPExtension` target has a Run Script build phase that calls `rust/build-rust.sh`. This:
 1. Sets `PYO3_PYTHON` to the bundled `rust/python-dist/bin/python3`
-2. Builds the Rust static library (`libbearbone_dsp.a`) via `cargo build`
-3. Generates the C header (`rust/include/bearbone_dsp.h`) via `cbindgen`
+2. Builds the Rust static library (`libconjure_dsp.a`) via `cargo build`
+3. Generates the C header (`rust/include/conjure_dsp.h`) via `cbindgen`
 
 To build/test the Rust crate standalone: `cd rust && DYLD_LIBRARY_PATH="$(pwd)/python-dist/lib" PYO3_PYTHON="$(pwd)/python-dist/bin/python3" cargo test -- --test-threads=1`
 
 Note: `--test-threads=1` is required because Python tests share a single interpreter and the module name `dsp_script` in `sys.modules`. `DYLD_LIBRARY_PATH` is needed because python-build-standalone reports its LIBDIR as `/install/lib` (build-time path); the `build.rs` handles link-time search paths but the dylib must be findable at runtime too.
 
-### Xcode build phases (BearBoneExtension target)
+### Xcode build phases (ConjureDSPExtension target)
 1. **Run Script — Build Rust**: calls `rust/build-rust.sh`
 2. **Run Script — Copy Python Runtime**: copies `libpython3.14t.dylib` into Frameworks, copies `python3.14t/` stdlib+numpy into Resources/python-dist, and code-signs the dylib and all `.so` files with `EXPANDED_CODE_SIGN_IDENTITY`
 3. **Run Script — Copy Rust Compiler**: copies bundled `rustc`, `librustc_driver`, `rust-lld`, and wasm32-wasip1 sysroot into Resources/rustc-dist/, code-signs all executables and dylibs
 
-### Xcode build phases (BearBone host app target)
+### Xcode build phases (ConjureDSP host app target)
 4. **Bust AU Cache**: calls `scripts/bust-au-cache.sh` — kills `AudioComponentRegistrar` so macOS re-discovers AU registrations after every build. Skipped during test actions to avoid interfering with the test runner.
 
 ## Architecture
@@ -47,7 +47,7 @@ Note: `--test-threads=1` is required because Python tests share a single interpr
 - **Swift + SwiftUI** for all UI, host app logic, buffer management, and render block
 - **Rust** for the DSP kernel, embedding Python via pyo3/numpy for scriptable processing
 - **Python** for the user-editable DSP script (`process.py`), called each render callback with pre-allocated numpy arrays
-- **C FFI** via bridging header (`BearBoneExtension-Bridging-Header.h`) imports `bearbone_dsp.h`
+- **C FFI** via bridging header (`ConjureDSPExtension-Bridging-Header.h`) imports `conjure_dsp.h`
 
 ### Python DSP pipeline
 1. On AU init, Swift calls `dsp_kernel_load_script()` with the bundled `process.py` path and Python home
@@ -59,19 +59,19 @@ Note: `--test-threads=1` is required because Python tests share a single interpr
 ## Project Structure
 
 ```
-BearBone/                  Host app — loads and tests the AU extension
+ConjureDSP/                  Host app — loads and tests the AU extension
   Model/                     AudioUnitHostModel, AudioUnitViewModel
   Common/Audio/              SimplePlayEngine (AVAudioEngine wrapper)
   Common/MIDI/               MIDIManager
-BearBoneExtension/         The AU plugin itself
+ConjureDSPExtension/         The AU plugin itself
   Parameters/                Parameter addresses (Swift enum)
   UI/                        SwiftUI views (MainView with Python script editor)
   Resources/process.py       Python DSP script (bundled into .appex)
-  Common/Audio Unit/         BearBoneExtensionAudioUnit.swift — AUAudioUnit subclass + render block
+  Common/Audio Unit/         ConjureDSPExtensionAudioUnit.swift — AUAudioUnit subclass + render block
   Common/UI/                 AudioUnitViewController
 rust/                        Rust DSP crate
-  bearbone_dsp/src/       kernel.rs (DSP+Python), lib.rs (FFI), params.rs (addresses)
-  include/                   Generated C header (bearbone_dsp.h)
+  conjure_dsp/src/       kernel.rs (DSP+Python), lib.rs (FFI), params.rs (addresses)
+  include/                   Generated C header (conjure_dsp.h)
   build-rust.sh              Xcode build phase script
   setup-python.sh            Downloads free-threaded Python 3.14 + numpy
   python-dist/               Bundled Python runtime (gitignored)
@@ -80,8 +80,8 @@ scripts/                     Build and setup scripts
   stamp-build-id.sh          Stamps build ID into extension Info.plist
   bust-au-cache.sh           Kills AudioComponentRegistrar for fresh AU registration
 rustc-dist/                  Bundled Rust compiler + wasm32-wasip1 target (gitignored)
-BearBoneTests/             Unit tests (Swift Testing)
-BearBoneUITests/           UI tests (XCUITest)
+ConjureDSPTests/             Unit tests (Swift Testing)
+ConjureDSPUITests/           UI tests (XCUITest)
 ```
 
 ## Parameter System
@@ -124,7 +124,7 @@ Implementation across layers:
 2. **Rust** (`python_backend.rs`) — Extracts `PARAMS` dict from Python module, builds `PyDict` with denormalized values for `process()`. Falls back to `PARAM_NAMES` dict or `PyList` of 0–1 floats.
 3. **Rust** (`kernel.rs`) — Stores normalized 0–1 via `AtomicU32` array. Caches metadata as JSON. Sets defaults from metadata on script load.
 4. **Rust** (`lib.rs`) — `dsp_kernel_param_metadata_json()` FFI returns metadata JSON to Swift.
-5. **Swift** (`BearBoneExtensionAudioUnit.swift`) — `rebuildParameterTree(metadata:)` creates `AUParameter`s with real ranges. `implementorValueObserver` normalizes actual → 0–1 for kernel. `implementorValueProvider` denormalizes 0–1 → actual for DAW. `formatParamValue` displays values with units.
+5. **Swift** (`ConjureDSPExtensionAudioUnit.swift`) — `rebuildParameterTree(metadata:)` creates `AUParameter`s with real ranges. `implementorValueObserver` normalizes actual → 0–1 for kernel. `implementorValueProvider` denormalizes 0–1 → actual for DAW. `formatParamValue` displays values with units.
 6. **WASM** (`wasm_backend.rs`) — Extracts metadata from `get_param_metadata_ptr`/`get_param_metadata_len` WASM exports. When metadata exists, WASM scripts receive denormalized actual values in `PARAMS_BUF` (same as Python). Two separate exports are used instead of a tuple return to avoid WASM multi-value return ABI issues with Rust's `extern "C"`.
 
 Parameters are passed to Python scripts as a 5th argument (dict or list) and to WASM modules via `get_params_ptr()`.
@@ -143,7 +143,7 @@ Parameters are passed to Python scripts as a 5th argument (dict or list) and to 
 
 ## Worktrees
 
-Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/`, `rustc-dist/`, and `BearBoneExtension/Resources/monaco/vs/` since they're gitignored. The `build-rust.sh` script auto-symlinks `python-dist/` from the main worktree, and the "Copy Rust Compiler" build phase auto-symlinks `rustc-dist/` from the main worktree. Monaco must be set up independently in each worktree: `./scripts/setup-monaco.sh`. So `xcodebuild build` and `xcodebuild test` work automatically (after Monaco setup). For standalone `cargo test`, run the Xcode build first (to create the symlink) or manually: `ln -s /path/to/main/repo/rust/python-dist rust/python-dist`.
+Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/`, `rustc-dist/`, and `ConjureDSPExtension/Resources/monaco/vs/` since they're gitignored. The `build-rust.sh` script auto-symlinks `python-dist/` from the main worktree, and the "Copy Rust Compiler" build phase auto-symlinks `rustc-dist/` from the main worktree. Monaco must be set up independently in each worktree: `./scripts/setup-monaco.sh`. So `xcodebuild build` and `xcodebuild test` work automatically (after Monaco setup). For standalone `cargo test`, run the Xcode build first (to create the symlink) or manually: `ln -s /path/to/main/repo/rust/python-dist rust/python-dist`.
 
 **After creating a worktree, always run `./scripts/setup-monaco.sh` immediately.** A `PostToolUse` hook in `.claude/settings.json` handles this automatically for the `EnterWorktree` tool, but if you create a worktree manually, run it yourself.
 
@@ -171,7 +171,7 @@ Over time, LaunchServices accumulates entries from old DerivedData directories t
 **Diagnosis:** Check if LaunchServices has stale entries:
 ```bash
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
-$LSREGISTER -dump | grep -B20 "identifier:.*com\.MichaelJancsy\.BearBone$" | grep "path:"
+$LSREGISTER -dump | grep -B20 "identifier:.*com\.MichaelJancsy\.ConjureDSP$" | grep "path:"
 ```
 If this shows paths to DerivedData directories that no longer exist, that's the problem.
 
@@ -192,15 +192,15 @@ This is the fix for `pluginkit -r` damage and stale registration conflicts:
 ```bash
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
 
-# Unregister ALL stale BearBone entries from LaunchServices
-$LSREGISTER -dump | grep -B20 "identifier:.*com\.MichaelJancsy\.BearBone" | grep "path:" | sed 's/.*path:[[:space:]]*//' | sed 's/ (0x.*//' | while read -r path; do
+# Unregister ALL stale ConjureDSP entries from LaunchServices
+$LSREGISTER -dump | grep -B20 "identifier:.*com\.MichaelJancsy\.ConjureDSP" | grep "path:" | sed 's/.*path:[[:space:]]*//' | sed 's/ (0x.*//' | while read -r path; do
     echo "Unregistering: $path"
     $LSREGISTER -u "$path" 2>/dev/null
 done
 
 # Re-register ONLY the current build
-$LSREGISTER -f -R -trusted ~/Library/Developer/Xcode/DerivedData/BearBone-*/Build/Products/Release/BearBone.app
-$LSREGISTER -f -R -trusted ~/Library/Developer/Xcode/DerivedData/BearBone-*/Build/Products/Debug/BearBone.app
+$LSREGISTER -f -R -trusted ~/Library/Developer/Xcode/DerivedData/ConjureDSP-*/Build/Products/Release/ConjureDSP.app
+$LSREGISTER -f -R -trusted ~/Library/Developer/Xcode/DerivedData/ConjureDSP-*/Build/Products/Debug/ConjureDSP.app
 
 # Restart PluginKit and AudioComponentRegistrar
 killall -9 pkd AudioComponentRegistrar
@@ -219,7 +219,7 @@ cat /private/var/folders/<your-path>/0/com.apple.pluginkit/Annotations
 # Look for your bundle ID with election = 0 (disabled)
 
 # Fix it:
-/usr/libexec/PlistBuddy -c "Set :data:com.MichaelJancsy.BearBone.BearBoneExtension:election 1" <path-to-Annotations>
+/usr/libexec/PlistBuddy -c "Set :data:com.MichaelJancsy.ConjureDSP.ConjureDSPExtension:election 1" <path-to-Annotations>
 killall -9 pkd AudioComponentRegistrar
 ```
 
@@ -233,15 +233,15 @@ This resets ALL LaunchServices registrations system-wide. Apps will re-register 
 ### Prevention
 
 - **Never use `pluginkit -r` or `pluginkit -e ignore` in build scripts.** The post-build `bust-au-cache.sh` uses only `killall AudioComponentRegistrar` + `lsregister`, which are safe.
-- **Move `/Applications/BearBone.app` during development** if a production install exists — it shadows DerivedData builds via PluginKit. The pre-build script handles this automatically.
-- **Periodically clean old DerivedData** — stale entries accumulate in LaunchServices and can cause registration conflicts: `ls ~/Library/Developer/Xcode/DerivedData/BearBone-*`
+- **Move `/Applications/ConjureDSP.app` during development** if a production install exists — it shadows DerivedData builds via PluginKit. The pre-build script handles this automatically.
+- **Periodically clean old DerivedData** — stale entries accumulate in LaunchServices and can cause registration conflicts: `ls ~/Library/Developer/Xcode/DerivedData/ConjureDSP-*`
 
 ### Useful diagnostic commands
 
 - `pluginkit -mv -p com.apple.AudioUnit-UI` — list registered AU extensions with paths (look for `+` prefix = elected)
-- `pluginkit -m | grep BearBone` — search all protocols (not just AU)
-- `auval -v aufx 0001 BEAR` — validate the Release AU component
-- `auval -v aufx DBG1 BEAR` — validate the Debug AU component
+- `pluginkit -m | grep ConjureDSP` — search all protocols (not just AU)
+- `auval -v aufx 0001 CONJ` — validate the Release AU component
+- `auval -v aufx DBG1 CONJ` — validate the Debug AU component
 - `codesign -v -vvv <path-to-app>` — verify code signing is valid
 - `codesign -d --entitlements - <path-to-appex>` — inspect extension entitlements
 
@@ -260,27 +260,27 @@ Bundled runtimes require proper code signing for the hardened runtime:
 ## Plugin Identity
 
 - Type: `aufx` (effect)
-- Manufacturer: `BEAR`
+- Manufacturer: `CONJ`
 - Subtype: `0001` (Release) / `DBG1` (Debug)
 
 Debug and Release builds use different AU identities and bundle IDs so they can coexist without interfering:
 
 | | Debug | Release |
 |---|---|---|
-| Host App Bundle ID | `com.MichaelJancsy.BearBone.debug` | `com.MichaelJancsy.BearBone` |
-| Extension Bundle ID | `com.MichaelJancsy.BearBone.debug.BearBoneExtension` | `com.MichaelJancsy.BearBone.BearBoneExtension` |
+| Host App Bundle ID | `com.MichaelJancsy.ConjureDSP.debug` | `com.MichaelJancsy.ConjureDSP` |
+| Extension Bundle ID | `com.MichaelJancsy.ConjureDSP.debug.ConjureDSPExtension` | `com.MichaelJancsy.ConjureDSP.ConjureDSPExtension` |
 | AU Subtype | `DBG1` | `0001` |
-| AU Name | `Michael Jancsy: BearBoneExtension (Debug)` | `Michael Jancsy: BearBoneExtension` |
+| AU Name | `Michael Jancsy: ConjureDSPExtension (Debug)` | `Michael Jancsy: ConjureDSPExtension` |
 
-These are configured via per-configuration build settings (`BB_AU_SUBTYPE`, `BB_AU_NAME`, `PRODUCT_BUNDLE_IDENTIFIER`) in the pbxproj, referenced in `BearBoneExtension/Info.plist` via `$(VARIABLE)` substitution. Both the host app and extension use separate bundle IDs per configuration so PluginKit registers them independently — this prevents a Release build installed at `/Applications/` from shadowing the Debug extension during development.
+These are configured via per-configuration build settings (`CD_AU_SUBTYPE`, `CD_AU_NAME`, `PRODUCT_BUNDLE_IDENTIFIER`) in the pbxproj, referenced in `ConjureDSPExtension/Info.plist` via `$(VARIABLE)` substitution. Both the host app and extension use separate bundle IDs per configuration so PluginKit registers them independently — this prevents a Release build installed at `/Applications/` from shadowing the Debug extension during development.
 
 ## Export Preset as Standalone AUv3
 
-Planned feature to export BearBone presets as standalone AUv3 plugins. Full implementation plan in `docs/export-au-plan.md`, design Q&A in `docs/export-au-questions.md`. Key points:
+Planned feature to export ConjureDSP presets as standalone AUv3 plugins. Full implementation plan in `docs/export-au-plan.md`, design Q&A in `docs/export-au-questions.md`. Key points:
 - Both Python (.py) and Rust (.wasm) presets exportable
 - Pre-built template AU (no xcodebuild at export time) — copy, patch plist, inject preset, ad-hoc sign
 - App Group container for sandbox-safe writes from DAW-hosted AU extension
-- Shared Python runtime at `~/Library/Application Support/BearBone/PythonRuntime-3.14/`
+- Shared Python runtime at `~/Library/Application Support/ConjureDSP/PythonRuntime-3.14/`
 - Licensed users only can export; exported AUs run freely
 - 5 implementation phases (see `docs/export-au-plan.md`)
 

@@ -15,8 +15,8 @@ tools/generate-license/keypair.bin
 .test-serial
 
 # Bundled Monaco Editor (created by scripts/setup-monaco.sh)
-BearBoneExtension/Resources/monaco/vs/
-BearBoneExtension/Resources/monaco/LICENSE
+ConjureDSPExtension/Resources/monaco/vs/
+ConjureDSPExtension/Resources/monaco/LICENSE
 
 # Xcode build artifacts
 build/

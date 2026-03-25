@@ -59,21 +59,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
-name = "bearbone_dsp"
-version = "0.1.0"
-dependencies = [
- "base64",
- "ed25519-dalek",
- "numpy",
- "pyo3",
- "rand",
- "serde",
- "serde_json",
- "wasmtime",
- "wat",
-]
-
-[[package]]
 name = "bitflags"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -131,6 +116,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "conjure_dsp"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "ed25519-dalek",
+ "numpy",
+ "pyo3",
+ "rand",
+ "serde",
+ "serde_json",
+ "wasmtime",
+ "wat",
 ]
 
 [[package]]
