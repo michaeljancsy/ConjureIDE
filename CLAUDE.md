@@ -145,6 +145,8 @@ Parameters are passed to Python scripts as a 5th argument (dict or list) and to 
 
 Git worktrees (e.g. created by Claude Code) are missing `rust/python-dist/`, `rustc-dist/`, and `BearBoneExtension/Resources/monaco/vs/` since they're gitignored. The `build-rust.sh` script auto-symlinks `python-dist/` from the main worktree, and the "Copy Rust Compiler" build phase auto-symlinks `rustc-dist/` from the main worktree. Monaco must be set up independently in each worktree: `./scripts/setup-monaco.sh`. So `xcodebuild build` and `xcodebuild test` work automatically (after Monaco setup). For standalone `cargo test`, run the Xcode build first (to create the symlink) or manually: `ln -s /path/to/main/repo/rust/python-dist rust/python-dist`.
 
+**After creating a worktree, always run `./scripts/setup-monaco.sh` immediately.** A `PostToolUse` hook in `.claude/settings.json` handles this automatically for the `EnterWorktree` tool, but if you create a worktree manually, run it yourself.
+
 Debug and Release builds use different AU identities (see Plugin Identity section), so worktree builds in Debug configuration automatically get the debug identity without any special handling. The host app and tests read AU identity from the embedded extension's Info.plist at runtime.
 
 ## AU Registration Troubleshooting

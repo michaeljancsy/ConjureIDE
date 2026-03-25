@@ -89,28 +89,45 @@ struct ImportURLPopover: View {
     // MARK: - Actions
 
     private func fetchPreview() {
-        guard let url = URL(string: urlString), url.scheme == "https" || url.scheme == "http" else {
+        // Upgrade http to https (ATS blocks plaintext HTTP)
+        var normalized = urlString
+        if normalized.lowercased().hasPrefix("http://") {
+            normalized = "https://" + normalized.dropFirst("http://".count)
+        }
+        guard let url = URL(string: normalized), url.scheme == "https" else {
             error = "Enter a valid URL"
             return
         }
 
         error = nil
         previewSource = nil
-        isLoading = true
 
-        // Derive name and language from URL path
-        let filename = url.lastPathComponent
-        let ext = url.pathExtension.lowercased()
-        detectedLanguage = ext == "rs" ? .rust : .python
-        detectedName = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
-        if detectedName.isEmpty || detectedName == "/" {
-            detectedName = "Imported"
+        // Catch known non-file URLs before fetching
+        if let validationError = GitHubClient.validateImportURL(url) {
+            error = validationError
+            return
         }
+
+        isLoading = true
 
         Task {
             do {
-                let source = try await client.fetchURL(url)
-                previewSource = source
+                let (source, responseURL) = try await client.fetchURLWithResponseURL(url)
+                let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if trimmed.hasPrefix("<!doctype") || trimmed.hasPrefix("<html") {
+                    self.error = "URL returned a web page. Link to a .py or .rs file."
+                } else {
+                    // Derive name and language from the final URL (after redirects)
+                    // so gist URLs resolve to the actual filename
+                    let filename = responseURL.lastPathComponent
+                    let ext = responseURL.pathExtension.lowercased()
+                    detectedLanguage = ext == "rs" ? .rust : .python
+                    detectedName = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
+                    if detectedName.isEmpty || detectedName == "/" {
+                        detectedName = "Imported"
+                    }
+                    previewSource = source
+                }
             } catch {
                 self.error = error.localizedDescription
             }
