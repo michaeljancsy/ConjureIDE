@@ -110,22 +110,22 @@ struct ImportURLPopover: View {
 
         isLoading = true
 
-        // Derive name and language from URL path
-        let filename = url.lastPathComponent
-        let ext = url.pathExtension.lowercased()
-        detectedLanguage = ext == "rs" ? .rust : .python
-        detectedName = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
-        if detectedName.isEmpty || detectedName == "/" {
-            detectedName = "Imported"
-        }
-
         Task {
             do {
-                let source = try await client.fetchURL(url)
+                let (source, responseURL) = try await client.fetchURLWithResponseURL(url)
                 let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.hasPrefix("<!DOCTYPE") || trimmed.hasPrefix("<html") || trimmed.hasPrefix("<HTML") {
                     self.error = "URL returned a web page. Link to a .py or .rs file."
                 } else {
+                    // Derive name and language from the final URL (after redirects)
+                    // so gist URLs resolve to the actual filename
+                    let filename = responseURL.lastPathComponent
+                    let ext = responseURL.pathExtension.lowercased()
+                    detectedLanguage = ext == "rs" ? .rust : .python
+                    detectedName = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
+                    if detectedName.isEmpty || detectedName == "/" {
+                        detectedName = "Imported"
+                    }
                     previewSource = source
                 }
             } catch {

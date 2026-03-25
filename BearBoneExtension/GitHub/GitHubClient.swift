@@ -15,6 +15,13 @@ final class GitHubClient: Sendable {
     /// Fetch raw text from any HTTPS URL. Automatically converts GitHub blob/Gist
     /// URLs to their raw equivalents so users can paste any GitHub link.
     func fetchURL(_ url: URL) async throws -> String {
+        let (text, _) = try await fetchURLWithResponseURL(url)
+        return text
+    }
+
+    /// Fetch raw text and return the final response URL (after redirects).
+    /// Useful for gist URLs where GitHub redirects to a URL containing the actual filename.
+    func fetchURLWithResponseURL(_ url: URL) async throws -> (String, URL) {
         let resolved = GitHubClient.normalizeToRawURL(url)
         var request = URLRequest(url: resolved)
         request.setValue("BearBone-AUv3", forHTTPHeaderField: "User-Agent")
@@ -23,7 +30,7 @@ final class GitHubClient: Sendable {
         guard let text = String(data: data, encoding: .utf8) else {
             throw GitHubError.decodingError("Response is not valid UTF-8")
         }
-        return text
+        return (text, response.url ?? resolved)
     }
 
     /// Convert GitHub web URLs to raw content URLs.
