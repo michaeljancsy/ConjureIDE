@@ -248,17 +248,28 @@ final class CCompiler: ScriptCompiler {
 
     // MARK: - Private
 
-    private func bundledSysroot() -> URL? {
+    /// Returns the wasi-sysroot directory inside the bundled clang-dist.
+    /// Note: clang's --sysroot must point to share/wasi-sysroot, NOT the
+    /// top-level clang-dist directory — otherwise headers won't be found.
+    private func bundledWasiSysroot() -> URL? {
         let bundle = Bundle(for: CCompiler.self)
         guard let path = bundle.path(forResource: "clang-dist", ofType: nil) else {
             return nil
         }
-        return URL(fileURLWithPath: path)
+        let sysroot = URL(fileURLWithPath: path)
+            .appendingPathComponent("share/wasi-sysroot")
+        guard FileManager.default.fileExists(atPath: sysroot.path) else {
+            return nil
+        }
+        return sysroot
     }
 
     private func bundledClang() -> URL? {
-        guard let sysroot = bundledSysroot() else { return nil }
-        let clang = sysroot.appendingPathComponent("bin/clang")
+        let bundle = Bundle(for: CCompiler.self)
+        guard let path = bundle.path(forResource: "clang-dist", ofType: nil) else {
+            return nil
+        }
+        let clang = URL(fileURLWithPath: path).appendingPathComponent("bin/clang")
         if FileManager.default.fileExists(atPath: clang.path) {
             return clang
         }
@@ -276,7 +287,7 @@ final class CCompiler: ScriptCompiler {
         if let cached = cachedClangURL { return cached }
 
         // Prefer bundled (works in sandbox)
-        if let bundled = bundledClang(), let sysroot = bundledSysroot() {
+        if let bundled = bundledClang(), let sysroot = bundledWasiSysroot() {
             cachedClangURL = bundled
             cachedSysroot = sysroot
             return cachedClangURL
@@ -468,17 +479,28 @@ var fileExtension: String {
 Add C factory presets. Start with a passthrough and a gain preset at minimum:
 
 ```swift
-Entry(name: "Passthrough (C)", number: 47, resourceName: "preset_passthrough_c", language: .c, category: .utility),
-Entry(name: "Gain + Pan (C)", number: 48, resourceName: "preset_gainpan_c", language: .c, category: .utility),
+Entry(name: "Passthrough (C)", number: 51, resourceName: "preset_passthrough_c", language: .c, category: .utility),
+Entry(name: "Gain + Pan (C)", number: 52, resourceName: "preset_gainpan_c", language: .c, category: .utility),
 ```
 
 Create corresponding files: `ConjureDSPExtension/Resources/preset_passthrough_c.c`, `preset_gainpan_c.c`.
 
 #### 5c: PresetManager
 
-**File: `ConjureDSPExtension/Model/PresetManager.swift`** (lines 168, 190)
+**File: `ConjureDSPExtension/Model/PresetManager.swift`**
 
-Two places with `language == .rust ? "rs" : "py"` — update to switch or use `preset.fileExtension`.
+Three changes:
+
+1. **`supportedExtensions` (line 74)** — Add `"c"` so user/repo C presets are discovered on disk:
+```swift
+// Before:
+private static let supportedExtensions: Set<String> = ["py", "rs"]
+
+// After:
+private static let supportedExtensions: Set<String> = ["py", "rs", "c"]
+```
+
+2–3. **File extension ternaries (lines 168, 190)** — Two places with `language == .rust ? "rs" : "py"` — update to switch or use `preset.fileExtension`.
 
 ---
 
@@ -706,7 +728,7 @@ C uses `static` variables for persistent state (delay lines, filter memory, etc.
 | `ConjureDSPExtension/Compilation/ScriptLanguage.swift` | Add `.c` case, detection, `displayName`, `monacoLanguageId` |
 | `ConjureDSPExtension/Common/Audio Unit/ConjureDSPExtensionAudioUnit.swift` | Add `.c` to `compileAndRun()`, fullState, factory loading |
 | `ConjureDSPExtension/Model/Preset.swift` | `fileExtension` switch, factory registry entries |
-| `ConjureDSPExtension/Model/PresetManager.swift` | File extension ternaries → switch (2 places) |
+| `ConjureDSPExtension/Model/PresetManager.swift` | Add `"c"` to `supportedExtensions`, file extension ternaries → switch (2 places) |
 | `ConjureDSPExtension/Export/ExportManager.swift` | WASM guard + preset write for `.c` |
 | `ConjureDSPExtension/AI/AnthropicProvider.swift` | Add `cApiContract`, update `chatSystemPrompt()` |
 | `ConjureDSPExtension/AI/ChatTools.swift` | Update tool descriptions |
