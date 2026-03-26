@@ -147,12 +147,15 @@ struct ConjureDSPExtensionMainView: View {
             ZStack {
             HStack(spacing: 0) {
             // Claude Code terminal sidebar — always rendered at full width to preserve
-            // WKWebView state and ensure xterm.js initializes with correct dimensions.
-            // Hidden via opacity + hit testing when sidebar is closed.
-            if showChat {
-                TerminalView(colorScheme: colorScheme, isVisible: showChat)
-                    .frame(width: chatWidth)
+            // WKWebView state (WebSocket connection, terminal history) across toggles.
+            // Inner frame keeps NSView at chatWidth; outer frame collapses layout to 0 when hidden.
+            TerminalView(colorScheme: colorScheme, isVisible: showChat)
+                .frame(width: chatWidth)
+                .frame(width: showChat ? chatWidth : 0, alignment: .leading)
+                .clipped()
+                .allowsHitTesting(showChat)
 
+            if showChat {
                 // Resizable divider
                 Rectangle()
                     .fill(Color.secondary.opacity(0.2))

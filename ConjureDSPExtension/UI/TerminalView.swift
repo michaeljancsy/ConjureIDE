@@ -12,12 +12,25 @@ import WebKit
 
 private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExtension", category: "TerminalView")
 
-/// Container NSView that ensures the WKWebView gets keyboard focus when clicked.
-/// In AU extension ViewBridge contexts, WKWebView doesn't reliably become first
-/// responder on click. This wrapper intercepts mouse events and explicitly
-/// makes the WKWebView first responder.
+/// WKWebView subclass that forces first responder status on mouse click.
+/// In AU extension ViewBridge contexts, WKWebView doesn't reliably become
+/// first responder through normal event handling. This ensures keyboard
+/// events reach xterm.js.
+class FocusableWebView: WKWebView {
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+}
+
+/// Container NSView for the terminal WKWebView.
+/// Triggers xterm.js fit on layout changes and provides a fallback
+/// click-to-focus path for the WKWebView.
 class TerminalContainerView: NSView {
-    var webView: WKWebView?
+    var webView: FocusableWebView?
     private var lastFitWidth: CGFloat = 0
 
     override var acceptsFirstResponder: Bool { true }
@@ -26,6 +39,7 @@ class TerminalContainerView: NSView {
         super.mouseDown(with: event)
         if let webView = webView {
             window?.makeFirstResponder(webView)
+            webView.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
         }
     }
 
@@ -33,8 +47,6 @@ class TerminalContainerView: NSView {
         super.layout()
         // Trigger xterm.js fit whenever the container width changes to a usable size
         let width = bounds.width
-        let height = bounds.height
-        log.info("TerminalContainer layout: \(width)x\(height), webView frame: \(self.webView?.frame.width ?? -1)x\(self.webView?.frame.height ?? -1)")
         if width > 10 && width != lastFitWidth {
             lastFitWidth = width
             webView?.evaluateJavaScript("if (window.terminalBridge) terminalBridge.fit()") { _, error in
@@ -59,7 +71,7 @@ struct TerminalView: NSViewRepresentable {
         // Allow local file access for xterm.js resources
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
 
-        let webView = WKWebView(frame: container.bounds, configuration: config)
+        let webView = FocusableWebView(frame: container.bounds, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.translatesAutoresizingMaskIntoConstraints = false
         context.coordinator.webView = webView
@@ -133,7 +145,7 @@ struct TerminalView: NSViewRepresentable {
     // MARK: - Coordinator
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-        weak var webView: WKWebView?
+        weak var webView: FocusableWebView?
         var isTerminalReady = false
         var lastTheme: String?
         var pendingTheme: ColorScheme?
