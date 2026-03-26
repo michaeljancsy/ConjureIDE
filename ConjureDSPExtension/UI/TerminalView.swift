@@ -43,9 +43,9 @@ struct TerminalView: NSViewRepresentable {
         // Allow local file access for xterm.js resources
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
 
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = WKWebView(frame: container.bounds, configuration: config)
         webView.navigationDelegate = context.coordinator
-        webView.autoresizingMask = [.width, .height]
+        webView.translatesAutoresizingMaskIntoConstraints = false
         context.coordinator.webView = webView
         container.webView = webView
 
@@ -53,6 +53,12 @@ struct TerminalView: NSViewRepresentable {
         webView.setValue(false, forKey: "drawsBackground")
 
         container.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
 
         // Load terminal HTML from extension bundle
         let bundle = Bundle(for: Coordinator.self)
