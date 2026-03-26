@@ -82,36 +82,55 @@ struct TerminalView: NSViewRepresentable {
         var lastTheme: String?
         var pendingTheme: ColorScheme?
 
-        /// Log first responder and view hierarchy info for debugging keyboard issues.
-        func logResponderState(context: String) {
-            guard let webView = webView else {
-                log.info("[\(context, privacy: .public)] webView is nil")
-                return
-            }
+        /// Write first responder diagnostics directly to the terminal so they're
+        /// visible without needing system Console.app (extension logs don't appear
+        /// in Xcode's console for AU extensions).
+        private func writeResponderDiagnostics() {
+            guard let webView = webView else { return }
+
             let window = webView.window
-            let firstResponder = window?.firstResponder
-            let frType = firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
-            let frClass = firstResponder.map { NSStringFromClass(type(of: $0)) } ?? "nil"
+            let fr = window?.firstResponder
+            let frType = fr.map { String(describing: type(of: $0)) } ?? "nil"
             let windowType = window.map { String(describing: type(of: $0)) } ?? "nil"
             let isKey = window?.isKeyWindow ?? false
-            let acceptsFR = webView.acceptsFirstResponder
 
-            log.info("""
-            [\(context, privacy: .public)] \
-            window=\(windowType, privacy: .public) isKey=\(isKey) \
-            firstResponder=\(frType, privacy: .public) (\(frClass, privacy: .public)) \
-            webView.acceptsFirstResponder=\(acceptsFR) \
-            webView.window!=nil: \(window != nil)
-            """)
+            // Try to make the WKWebView first responder
+            let makeResult = window?.makeFirstResponder(webView) ?? false
+            let frAfter = window?.firstResponder
+            let frAfterType = frAfter.map { String(describing: type(of: $0)) } ?? "nil"
 
-            // Walk the responder chain from the WKWebView
-            var responder: NSResponder? = webView
+            // Walk responder chain
             var chain: [String] = []
-            while let r = responder, chain.count < 10 {
+            var resp: NSResponder? = webView
+            while let r = resp, chain.count < 8 {
                 chain.append(String(describing: type(of: r)))
-                responder = r.nextResponder
+                resp = r.nextResponder
             }
-            log.info("[\(context, privacy: .public)] responder chain: \(chain.joined(separator: " → "), privacy: .public)")
+
+            // Also try making the hit-tested subview first responder
+            let center = NSPoint(x: webView.bounds.midX, y: webView.bounds.midY)
+            let hitView = webView.hitTest(center)
+            let hitType = hitView.map { String(describing: type(of: $0)) } ?? "nil"
+            var hitResult = false
+            if let hv = hitView, let w = window {
+                hitResult = w.makeFirstResponder(hv)
+            }
+            let frAfterHit = window?.firstResponder
+            let frAfterHitType = frAfterHit.map { String(describing: type(of: $0)) } ?? "nil"
+
+            let lines = [
+                "\\x1b[36m--- RESPONDER DIAGNOSTICS ---\\x1b[0m",
+                "window: \\(windowType)  isKey: \\(isKey)",
+                "firstResponder BEFORE: \\(frType)",
+                "makeFirstResponder(webView): \\(makeResult)  FR after: \\(frAfterType)",
+                "hitTest center: \\(hitType)",
+                "makeFirstResponder(hitView): \\(hitResult)  FR after: \\(frAfterHitType)",
+                "chain: \\(chain.joined(separator: \" → \"))",
+                "\\x1b[36m----------------------------\\x1b[0m",
+            ]
+            let escaped = lines.joined(separator: "\\r\\n")
+            let js = "terminalBridge.write('\\r\\n\(escaped)\\r\\n')"
+            webView.evaluateJavaScript(js) { _, _ in }
         }
 
         func disconnect() {
@@ -149,8 +168,6 @@ struct TerminalView: NSViewRepresentable {
             case "connected":
                 log.info("Terminal connected to WebSocket")
                 webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
-                // Diagnostic: log first responder and view hierarchy info
-                logResponderState(context: "after connect")
 
             case "disconnected":
                 let code = data["code"] as? Int ?? 0
@@ -164,15 +181,9 @@ struct TerminalView: NSViewRepresentable {
             case "debug":
                 let msg = data["message"] as? String ?? ""
                 log.info("Terminal debug: \(msg, privacy: .public)")
-                // Log responder state on every click
+                // On click, write responder diagnostics directly to the terminal
                 if msg.contains("[click]") {
-                    logResponderState(context: "after click")
-                    // Also try to explicitly become first responder
-                    if let webView = webView, let window = webView.window {
-                        let result = window.makeFirstResponder(webView)
-                        log.info("makeFirstResponder(webView) returned \(result, privacy: .public)")
-                        logResponderState(context: "after makeFirstResponder")
-                    }
+                    writeResponderDiagnostics()
                 }
 
             default:
