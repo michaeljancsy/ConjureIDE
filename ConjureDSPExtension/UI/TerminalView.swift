@@ -82,6 +82,38 @@ struct TerminalView: NSViewRepresentable {
         var lastTheme: String?
         var pendingTheme: ColorScheme?
 
+        /// Log first responder and view hierarchy info for debugging keyboard issues.
+        func logResponderState(context: String) {
+            guard let webView = webView else {
+                log.info("[\(context, privacy: .public)] webView is nil")
+                return
+            }
+            let window = webView.window
+            let firstResponder = window?.firstResponder
+            let frType = firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+            let frClass = firstResponder.map { NSStringFromClass(type(of: $0)) } ?? "nil"
+            let windowType = window.map { String(describing: type(of: $0)) } ?? "nil"
+            let isKey = window?.isKeyWindow ?? false
+            let acceptsFR = webView.acceptsFirstResponder
+
+            log.info("""
+            [\(context, privacy: .public)] \
+            window=\(windowType, privacy: .public) isKey=\(isKey) \
+            firstResponder=\(frType, privacy: .public) (\(frClass, privacy: .public)) \
+            webView.acceptsFirstResponder=\(acceptsFR) \
+            webView.window!=nil: \(window != nil)
+            """)
+
+            // Walk the responder chain from the WKWebView
+            var responder: NSResponder? = webView
+            var chain: [String] = []
+            while let r = responder, chain.count < 10 {
+                chain.append(String(describing: type(of: r)))
+                responder = r.nextResponder
+            }
+            log.info("[\(context, privacy: .public)] responder chain: \(chain.joined(separator: " → "), privacy: .public)")
+        }
+
         func disconnect() {
             webView?.evaluateJavaScript("terminalBridge.disconnect()") { _, _ in }
         }
@@ -117,6 +149,8 @@ struct TerminalView: NSViewRepresentable {
             case "connected":
                 log.info("Terminal connected to WebSocket")
                 webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
+                // Diagnostic: log first responder and view hierarchy info
+                logResponderState(context: "after connect")
 
             case "disconnected":
                 let code = data["code"] as? Int ?? 0
@@ -130,6 +164,16 @@ struct TerminalView: NSViewRepresentable {
             case "debug":
                 let msg = data["message"] as? String ?? ""
                 log.info("Terminal debug: \(msg, privacy: .public)")
+                // Log responder state on every click
+                if msg.contains("[click]") {
+                    logResponderState(context: "after click")
+                    // Also try to explicitly become first responder
+                    if let webView = webView, let window = webView.window {
+                        let result = window.makeFirstResponder(webView)
+                        log.info("makeFirstResponder(webView) returned \(result, privacy: .public)")
+                        logResponderState(context: "after makeFirstResponder")
+                    }
+                }
 
             default:
                 break
