@@ -50,7 +50,7 @@ private extension View {
 /// Toolbar for browsing, running, saving, and deleting presets.
 struct PresetToolbar: View {
     @ObservedObject var presetManager: PresetManager
-    @ObservedObject var licenseManager: LicenseManager
+    @ObservedObject var subscriptionManager: SubscriptionManager
     @ObservedObject var gitHubService: GitHubService
     var isCompiling: Bool = false
     var hasUnrunChanges: Bool = false
@@ -251,14 +251,14 @@ struct PresetToolbar: View {
                 }
             }
             .buttonStyle(.borderless)
-            .disabled(!licenseManager.isLicensed || isExporting || isCompiling)
-            .toolbarTooltip(licenseManager.isLicensed ? "Export as standalone AU" : "License required to export")
+            .disabled(!subscriptionManager.isLicensed || isExporting || isCompiling)
+            .toolbarTooltip(subscriptionManager.isLicensed ? "Export as standalone AU" : "License required to export")
             .accessibilityIdentifier("exportButton")
             .popover(isPresented: $showingExport) {
                 ExportPopover(
                     exportName: $exportName,
                     language: selectedLanguage,
-                    isLicensed: licenseManager.isLicensed,
+                    isLicensed: subscriptionManager.isLicensed,
                     onExport: { name in
                         showingExport = false
                         onExport(name)
@@ -318,8 +318,8 @@ struct PresetToolbar: View {
             Divider().frame(height: 20)
 
             // Demo mode indicator — links to subscribe page
-            if !licenseManager.isLicensed {
-                Link(destination: LicenseSettingsView.subscribeURL) {
+            if !subscriptionManager.isLicensed {
+                Link(destination: SubscriptionSettingsView.subscribeURL) {
                     Text("DEMO")
                         .font(.caption2.bold())
                         .foregroundColor(.orange)
@@ -340,7 +340,7 @@ struct PresetToolbar: View {
             .accessibilityIdentifier("settingsButton")
             .popover(isPresented: $showingSettings) {
                 VStack(spacing: 0) {
-                    LicenseSettingsView(licenseManager: licenseManager)
+                    SubscriptionSettingsView(subscriptionManager: subscriptionManager)
                     Divider()
                     GitHubSettingsView(
                         gitHubService: gitHubService,

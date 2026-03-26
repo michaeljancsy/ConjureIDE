@@ -620,12 +620,27 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
-	// MARK: - License
+	// MARK: - Subscription
 
-	/// Verify a license serial key against the kernel's embedded public key.
-	/// Returns true if valid (kernel is now in licensed state).
-	func verifyLicense(_ serial: String) -> Bool {
-		return dsp_kernel_verify_license(kernel, serial)
+	/// Verify a subscription token's signature and expiry, set kernel state.
+	/// Returns the SubscriptionStatus raw value (0=Active, 1=GracePeriod, 2=Expired, 3=Cancelled, 4=NoSubscription).
+	func verifyToken(_ token: String) -> UInt8 {
+		return dsp_kernel_verify_token(kernel, token)
+	}
+
+	/// Set the subscription status directly.
+	func setSubscriptionStatus(_ status: UInt8) {
+		dsp_kernel_set_subscription_status(kernel, status)
+	}
+
+	/// Get the current subscription status.
+	func subscriptionStatus() -> UInt8 {
+		return dsp_kernel_subscription_status(kernel)
+	}
+
+	/// Get the grace period deadline as Unix seconds.
+	func graceDeadlineUnix() -> Int64 {
+		return dsp_kernel_grace_deadline_unix(kernel)
 	}
 
 	/// Check if kernel is currently licensed.
@@ -644,7 +659,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		dsp_kernel_reset_demo(kernel)
 	}
 
-	/// Set the licensed state directly (used by tests and license restore).
+	/// Set the licensed state directly (used by tests).
 	func setLicensed(_ licensed: Bool) {
 		dsp_kernel_set_licensed(kernel, licensed)
 	}

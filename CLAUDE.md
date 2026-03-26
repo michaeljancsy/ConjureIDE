@@ -120,8 +120,8 @@ Two workflows: **CommunityPresetStore** for browsing community presets via publi
 ### Spectrogram Visualization
 Lock-free ring buffers (written by audio thread, read by UI) feed FFT computation via Accelerate/vDSP on the main thread (CADisplayLink-synced). Supports 4 modes: input, output, difference, and normalized difference. Log and linear frequency scales with diverging colormaps for difference modes.
 
-### License System
-Ed25519-based offline license verification. Licenses stored at `~/Library/Application Support/ConjureDSP/license.key`. Rust verifies signatures using an embedded public key and sets an atomic `licensed` flag for lock-free audio-thread checks. Demo mode allows 60 seconds of unlicensed processing before silencing output.
+### Subscription System
+Paddle Billing subscription model with a Cloudflare Workers backend (`server/`). The server issues Ed25519-signed time-limited tokens on subscription activation and refresh. The app verifies tokens locally (offline OK for up to 7 days grace period) using an embedded public key. Tokens stored in the App Group container (`group.com.MichaelJancsy.ConjureDSP`) shared between host app and AU extension. `SubscriptionManager.swift` handles periodic server refresh (6h when active, 1h during grace). Demo mode allows 60 seconds of unlicensed processing before silencing output. The `AtomicBool` licensed flag on the audio thread is set by `SubscriptionStatus` — Active and GracePeriod grant access, everything else falls back to demo.
 
 ## Project Structure
 
@@ -139,7 +139,7 @@ ConjureDSPExtension/         The AU plugin itself
   Compilation/               RustCompiler (bundled rustc → WASM), ScriptCompiler, ScriptLanguage (auto-detect), WasmCache (SHA256)
   Export/                    ExportManager (standalone AUv3 pipeline), ExportRegistry, SubtypeGenerator
   GitHub/                    GitHubService, GitHubClient, CommunityPresetStore, PersonalRepoSync, GitHubModels
-  Model/                     LicenseManager (Ed25519 + demo), Preset, PresetManager
+  Model/                     SubscriptionManager (token verification + server refresh), SubscriptionAPI (server comms), Preset, PresetManager
   Parameters/                Parameter addresses (Swift enum)
   UI/                        MonacoEditorView, SpectrogramView, TerminalView, CommunityBrowserView,
                              PresetBrowserView, ParameterSlidersView, GitHubSettingsView, ExportPopover, and more
@@ -166,7 +166,7 @@ rust/                        Rust DSP crate
     wasm_backend.rs          wasmtime-based WASM execution with fuel metering
     params.rs                ParamMetadata, denormalize/normalize with log curve support
     ring_buffer.rs           SPSC lock-free ring buffer (audio thread → UI)
-    license.rs               Ed25519 license verification (embedded public key)
+    license.rs               Ed25519 token verification + subscription status (embedded server public key)
   test_plugin_dsp/           Test harness for standalone DSP testing
   include/                   Generated C header (conjure_dsp.h)
   build-rust.sh              Xcode build phase script
@@ -183,6 +183,7 @@ rust/                        Rust DSP crate
     src/json.rs              Const-fn JSON serialization for compile-time metadata
     src/context.rs           Context struct for safe buffer access
   python-dist/               Bundled Python runtime (gitignored)
+server/                      Cloudflare Workers subscription API (D1 SQLite, Paddle webhooks, Ed25519 token signing)
 scripts/                     Build and setup scripts
   setup-rustc.sh             Downloads standalone Rust compiler for WASM compilation
   setup-monaco.sh            Downloads Monaco Editor for code editing UI

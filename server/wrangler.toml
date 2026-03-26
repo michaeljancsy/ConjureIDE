@@ -1,0 +1,16 @@
+name = "conjuredsp-api"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[vars]
+PADDLE_API_BASE = "https://api.paddle.com"
+
+# Secrets (set via `wrangler secret put`):
+# - PADDLE_API_KEY
+# - PADDLE_WEBHOOK_SECRET
+# - ED25519_PRIVATE_KEY (base64-encoded 32-byte seed)
+
+[[d1_databases]]
+binding = "DB"
+database_name = "conjuredsp-db"
+database_id = ""  # Set after `wrangler d1 create conjuredsp-db`

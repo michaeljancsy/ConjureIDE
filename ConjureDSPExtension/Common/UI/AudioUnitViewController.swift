@@ -44,7 +44,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var captureManager: AudioCaptureManager?
     private var processProfiler: ProcessProfiler?
     private var parameterState: ParameterState?
-    private var licenseManager: LicenseManager?
+    private var subscriptionManager: SubscriptionManager?
     private var gitHubService: GitHubService?
     private var terminalServer: TerminalServer?
     private var paramNamesCancellable: AnyCancellable?
@@ -214,10 +214,10 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                 }
         }
 
-        if licenseManager == nil {
-            licenseManager = LicenseManager()
+        if subscriptionManager == nil {
+            subscriptionManager = SubscriptionManager()
         }
-        let lm = licenseManager!
+        let lm = subscriptionManager!
 
         if gitHubService == nil {
             gitHubService = GitHubService()
@@ -225,14 +225,20 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         let gh = gitHubService!
         gh.wireAutoSync(presetManager: pm)
         gh.syncIfConnected(presetManager: pm)
-        lm.verifyWithKernel = { [weak au] serial in
-            au?.verifyLicense(serial) ?? false
+        lm.verifyTokenWithKernel = { [weak au] token in
+            au?.verifyToken(token) ?? SubscriptionStatus.noSubscription.rawValue
+        }
+        lm.setSubscriptionStatusInKernel = { [weak au] status in
+            au?.setSubscriptionStatus(status)
         }
         lm.getDemoSecondsRemaining = { [weak au] in
             au?.demoSecondsRemaining() ?? 0
         }
         lm.resetDemoInKernel = { [weak au] in
             au?.resetDemo()
+        }
+        lm.getGraceDeadlineUnix = { [weak au] in
+            au?.graceDeadlineUnix() ?? 0
         }
         lm.loadAndVerify()
 
@@ -454,7 +460,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             captureManager: capture,
             processProfiler: profiler,
             parameterState: ps,
-            licenseManager: lm,
+            subscriptionManager: lm,
             gitHubService: gh,
             onRun: onRun,
             onSelectPreset: onSelectPreset,

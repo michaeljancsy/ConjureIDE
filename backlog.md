@@ -8,7 +8,7 @@
 
 ### v1 Release
 - Run `scripts/release.sh` end-to-end, store notarization creds in Keychain, verify DMG on clean machine. Full plan at `docs/distribution-plan.md`.
-- Paddle account setup + pre-generate license key batch
+- Deploy Paddle subscription server (Cloudflare Worker, Ed25519 keypair, Paddle webhooks)
 - Landing page (static site with Buy + Download)
 - In-app "Buy" link for unlicensed users
 
@@ -44,6 +44,7 @@
 - Fix flaky `extensionPlistContainsBuildID` test — use Info.plist preprocessing instead of post-hoc stamping (2026-03-26)
 - conjuredsp Rust library: rlib for wasm32-wasip1 with setup!/params! macros, DSP building blocks (Biquad, DelayLine, Lfo), and utility functions. All 25 factory Rust presets migrated. Parity tests pass. (2026-03-26)
 - Monaco inline error markers (Python/Rust line parsing → squiggly underlines) + 6 custom color themes with settings picker (2026-03-26)
+- Paddle subscription system — backend server, Rust token verification, Swift SubscriptionManager, UI, tests, cleanup of old license system (2026-03-25)
 - BPM sync: host transport (tempo, beat, time sig, playing) piped through entire pipeline to Python/WASM scripts + tempo-synced delay preset (2026-03-25)
 - Monaco numpy/scipy/signal autocomplete in editor-bridge.js (2026-03-25)
 - Add Stereo Width Optimized preset alongside original (2026-03-25)
