@@ -12,57 +12,11 @@ import WebKit
 
 private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExtension", category: "TerminalView")
 
-/// WKWebView subclass that forces first responder status on mouse click.
-/// In AU extension ViewBridge contexts, WKWebView doesn't reliably become
-/// first responder through normal event handling. This ensures keyboard
-/// events reach xterm.js.
-class FocusableWebView: WKWebView {
-    override var acceptsFirstResponder: Bool { true }
-    override var canBecomeKeyView: Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        super.mouseDown(with: event)
-    }
-}
-
-/// Container NSView for the terminal WKWebView.
-/// Triggers xterm.js fit on layout changes and provides a fallback
-/// click-to-focus path for the WKWebView.
-class TerminalContainerView: NSView {
-    var webView: FocusableWebView?
-    private var lastFitWidth: CGFloat = 0
-
-    override var acceptsFirstResponder: Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        super.mouseDown(with: event)
-        if let webView = webView {
-            window?.makeFirstResponder(webView)
-            webView.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
-        }
-    }
-
-    override func layout() {
-        super.layout()
-        // Trigger xterm.js fit whenever the container width changes to a usable size
-        let width = bounds.width
-        if width > 10 && width != lastFitWidth {
-            lastFitWidth = width
-            webView?.evaluateJavaScript("if (window.terminalBridge) terminalBridge.fit()") { _, error in
-                if let error { log.warning("fit() error: \(error.localizedDescription, privacy: .public)") }
-            }
-        }
-    }
-}
-
 struct TerminalView: NSViewRepresentable {
     var colorScheme: ColorScheme
     var isVisible: Bool
 
-    func makeNSView(context: Context) -> TerminalContainerView {
-        let container = TerminalContainerView()
-
+    func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         let contentController = WKUserContentController()
         contentController.add(context.coordinator, name: "terminalBridge")
@@ -71,22 +25,12 @@ struct TerminalView: NSViewRepresentable {
         // Allow local file access for xterm.js resources
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
 
-        let webView = FocusableWebView(frame: container.bounds, configuration: config)
+        let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
-        webView.translatesAutoresizingMaskIntoConstraints = false
         context.coordinator.webView = webView
-        container.webView = webView
 
         // Transparent background
         webView.setValue(false, forKey: "drawsBackground")
-
-        container.addSubview(webView)
-        NSLayoutConstraint.activate([
-            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            webView.topAnchor.constraint(equalTo: container.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
 
         // Load terminal HTML from extension bundle
         let bundle = Bundle(for: Coordinator.self)
@@ -98,21 +42,18 @@ struct TerminalView: NSViewRepresentable {
             log.error("Terminal resources not found in bundle \(bundle.bundlePath, privacy: .public)")
         }
 
-        return container
+        return webView
     }
 
-    static func dismantleNSView(_ container: TerminalContainerView, coordinator: Coordinator) {
+    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
         log.info("TerminalView dismantled")
         coordinator.disconnect()
-        if let webView = container.webView {
-            let controller = webView.configuration.userContentController
-            controller.removeScriptMessageHandler(forName: "terminalBridge")
-        }
+        let controller = webView.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: "terminalBridge")
         coordinator.webView = nil
-        container.webView = nil
     }
 
-    func updateNSView(_ container: TerminalContainerView, context: Context) {
+    func updateNSView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
 
         guard coordinator.isTerminalReady else {
@@ -125,15 +66,13 @@ struct TerminalView: NSViewRepresentable {
         let theme = colorScheme == .dark ? "dark" : "light"
         if coordinator.lastTheme != theme {
             coordinator.lastTheme = theme
-            container.webView?.evaluateJavaScript("terminalBridge.setTheme('\(theme)')") { _, _ in }
+            webView.evaluateJavaScript("terminalBridge.setTheme('\(theme)')") { _, _ in }
         }
 
-        // Focus terminal when becoming visible
+        // Fit + focus terminal when becoming visible
         if isVisible && !coordinator.wasVisible {
-            container.webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
-            if let webView = container.webView {
-                webView.window?.makeFirstResponder(webView)
-            }
+            webView.evaluateJavaScript("terminalBridge.fit()") { _, _ in }
+            webView.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
         }
         coordinator.wasVisible = isVisible
     }
@@ -145,7 +84,7 @@ struct TerminalView: NSViewRepresentable {
     // MARK: - Coordinator
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-        weak var webView: FocusableWebView?
+        weak var webView: WKWebView?
         var isTerminalReady = false
         var lastTheme: String?
         var pendingTheme: ColorScheme?
@@ -190,12 +129,8 @@ struct TerminalView: NSViewRepresentable {
 
             case "connected":
                 log.info("Terminal connected to WebSocket")
-                // Focus the terminal so it receives keyboard input
+                // Focus terminal so it receives keyboard input
                 webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
-                // Make WKWebView the first responder so macOS routes keyboard events to it
-                if let webView = webView {
-                    webView.window?.makeFirstResponder(webView)
-                }
 
             case "disconnected":
                 let code = data["code"] as? Int ?? 0
