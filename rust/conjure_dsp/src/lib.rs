@@ -370,6 +370,36 @@ pub extern "C" fn dsp_kernel_public_key() -> *const u8 {
     }
 }
 
+/// Get the most recent backend.process() duration in microseconds.
+/// Returns 0 when no backend has processed yet.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_profiler_current_us(kernel: DSPKernelRef) -> u32 {
+    (*kernel).profiler_current_us.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Get the exponential moving average of backend.process() duration in microseconds.
+/// Smoothed over ~0.5 seconds of callbacks.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_profiler_avg_us(kernel: DSPKernelRef) -> u32 {
+    (*kernel).profiler_avg_us.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Get the decaying peak of backend.process() duration in microseconds.
+/// Decays by ~0.1% per callback, so peaks fade after a few seconds.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_profiler_peak_us(kernel: DSPKernelRef) -> u32 {
+    (*kernel).profiler_peak_us.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -864,6 +894,69 @@ mod tests {
             let json_str = std::ffi::CStr::from_ptr(ptr).to_str().unwrap();
             assert!(json_str.contains("Gain"));
 
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_profiler_initially_zero() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            assert_eq!(dsp_kernel_profiler_current_us(kernel), 0);
+            assert_eq!(dsp_kernel_profiler_avg_us(kernel), 0);
+            assert_eq!(dsp_kernel_profiler_peak_us(kernel), 0);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_profiler_updates_after_wasm_process() {
+        let wasm = passthrough_wasm_bytes();
+        let kernel = dsp_kernel_create();
+        unsafe {
+            assert!(dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32));
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+
+            let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+
+            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+
+            // After processing with a backend, profiler should have non-zero values
+            assert!(dsp_kernel_profiler_current_us(kernel) > 0);
+            assert!(dsp_kernel_profiler_avg_us(kernel) > 0);
+            assert!(dsp_kernel_profiler_peak_us(kernel) > 0);
+
+            dsp_kernel_deinitialize(kernel);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_profiler_resets_on_load() {
+        let wasm = passthrough_wasm_bytes();
+        let kernel = dsp_kernel_create();
+        unsafe {
+            assert!(dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32));
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+
+            // Process to populate profiler
+            let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+            assert!(dsp_kernel_profiler_current_us(kernel) > 0);
+
+            // Load a new WASM module — profiler should reset
+            assert!(dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32));
+            assert_eq!(dsp_kernel_profiler_current_us(kernel), 0);
+            assert_eq!(dsp_kernel_profiler_avg_us(kernel), 0);
+            assert_eq!(dsp_kernel_profiler_peak_us(kernel), 0);
+
+            dsp_kernel_deinitialize(kernel);
             dsp_kernel_destroy(kernel);
         }
     }
