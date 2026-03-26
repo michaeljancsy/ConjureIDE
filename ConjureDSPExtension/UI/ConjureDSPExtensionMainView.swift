@@ -146,16 +146,13 @@ struct ConjureDSPExtensionMainView: View {
 
             ZStack {
             HStack(spacing: 0) {
-            // Claude Code terminal sidebar — always rendered at full width to preserve
-            // WKWebView state (WebSocket connection, terminal history) across toggles.
-            // Inner frame keeps NSView at chatWidth; outer frame collapses layout to 0 when hidden.
-            TerminalView(colorScheme: colorScheme, isVisible: showChat)
-                .frame(width: chatWidth)
-                .frame(width: showChat ? chatWidth : 0, alignment: .leading)
-                .clipped()
-                .allowsHitTesting(showChat)
-
+            // Claude Code terminal sidebar — conditional rendering matching
+            // MonacoEditorView's pattern (bare WKWebView, simple frame).
+            // WKWebView is recreated on toggle; WebSocket reconnects automatically.
             if showChat {
+                TerminalView(colorScheme: colorScheme)
+                    .frame(width: chatWidth)
+
                 // Resizable divider
                 Rectangle()
                     .fill(Color.secondary.opacity(0.2))
