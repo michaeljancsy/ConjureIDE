@@ -48,6 +48,7 @@ struct TerminalView: NSViewRepresentable {
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
         log.info("TerminalView dismantled")
         coordinator.disconnect()
+        coordinator.removeEventMonitor()
         let controller = webView.configuration.userContentController
         controller.removeScriptMessageHandler(forName: "terminalBridge")
         coordinator.webView = nil
@@ -91,6 +92,47 @@ struct TerminalView: NSViewRepresentable {
         var pendingVisible: Bool?
         var wasVisible = false
         private var wsPort: UInt16?
+        private var eventMonitor: Any?
+
+        deinit {
+            removeEventMonitor()
+        }
+
+        func removeEventMonitor() {
+            if let monitor = eventMonitor {
+                NSEvent.removeMonitor(monitor)
+                eventMonitor = nil
+            }
+        }
+
+        /// Install a local event monitor that forces the WKWebView's internal
+        /// view to become first responder when clicked. In AU extension ViewBridge
+        /// contexts, the internal WKWebView subviews don't reliably set themselves
+        /// as first responder on mouseDown, so keyboard events never arrive.
+        /// This monitor runs before event dispatch, hit-tests the click point,
+        /// and makes the deepest hit view the first responder.
+        private func installEventMonitor() {
+            guard eventMonitor == nil else { return }
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                guard let self = self,
+                      let webView = self.webView,
+                      let window = webView.window else { return event }
+                let point = webView.convert(event.locationInWindow, from: nil)
+                if webView.bounds.contains(point) {
+                    // Find the deepest internal subview and make it first responder.
+                    // WKWebView routes keyboard events through its internal view
+                    // hierarchy, so the correct internal view must be first responder.
+                    if let hitView = webView.hitTest(webView.convert(point, to: webView.superview)) {
+                        log.info("Event monitor: making \(String(describing: type(of: hitView)), privacy: .public) first responder")
+                        window.makeFirstResponder(hitView)
+                    } else {
+                        window.makeFirstResponder(webView)
+                    }
+                }
+                return event
+            }
+            log.info("Installed click-to-focus event monitor for terminal WKWebView")
+        }
 
         func disconnect() {
             webView?.evaluateJavaScript("terminalBridge.disconnect()") { _, _ in }
@@ -108,6 +150,9 @@ struct TerminalView: NSViewRepresentable {
             case "terminalReady":
                 isTerminalReady = true
                 log.info("Terminal ready")
+
+                // Install event monitor for click-to-focus
+                installEventMonitor()
 
                 // Apply pending theme
                 if let theme = pendingTheme {
