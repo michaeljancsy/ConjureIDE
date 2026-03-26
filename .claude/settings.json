@@ -17,6 +17,18 @@
     ]
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ ! -d \"ConjureDSPExtension/Resources/monaco/vs\" ]; then ./scripts/setup-monaco.sh; fi",
+            "timeout": 60,
+            "statusMessage": "Setting up Monaco editor..."
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "EnterWorktree",
