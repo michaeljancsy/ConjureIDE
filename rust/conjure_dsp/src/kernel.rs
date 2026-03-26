@@ -17,6 +17,19 @@ const DEMO_LIMIT_SECONDS: f64 = 60.0;
 /// and do not count against the demo time limit.
 const DEMO_SILENCE_THRESHOLD: f32 = 0.001;
 
+/// Host DAW transport state, updated once per render callback via `set_transport()`.
+/// All fields default to zero/false, meaning "no transport data available."
+/// Written and read on the render thread only — no synchronization needed.
+#[derive(Clone, Copy, Default)]
+pub struct TransportState {
+    pub tempo: f64,
+    pub beat_position: f64,
+    pub is_playing: bool,
+    pub time_sig_numerator: i32,
+    pub time_sig_denominator: i32,
+    pub sample_position: f64,
+}
+
 /// Real-time audio DSP kernel with pluggable processing backends.
 ///
 /// Supports Python scripts (via pyo3/numpy) and WASM modules (via wasmtime).
@@ -66,6 +79,8 @@ pub struct DSPKernel {
     /// Set after each successful script/WASM load that declares a `PARAMS` dict.
     /// None means "no rich metadata" (backward-compatible mode).
     param_metadata_json: Option<std::ffi::CString>,
+    /// Host DAW transport state. Updated each render callback via `set_transport()`.
+    transport: TransportState,
 }
 
 impl DSPKernel {
@@ -88,6 +103,7 @@ impl DSPKernel {
             demo_limit_samples: AtomicU64::new((DEMO_LIMIT_SECONDS * 44100.0) as u64),
             param_names_json: None,
             param_metadata_json: None,
+            transport: TransportState::default(),
         }
     }
 
@@ -172,6 +188,27 @@ impl DSPKernel {
 
     pub fn is_bypassed(&self) -> bool {
         self.bypassed
+    }
+
+    /// Update host DAW transport state. Called from the render thread
+    /// once per callback, before the process loop.
+    pub fn set_transport(
+        &mut self,
+        tempo: f64,
+        beat_position: f64,
+        is_playing: bool,
+        time_sig_numerator: i32,
+        time_sig_denominator: i32,
+        sample_position: f64,
+    ) {
+        self.transport = TransportState {
+            tempo,
+            beat_position,
+            is_playing,
+            time_sig_numerator,
+            time_sig_denominator,
+            sample_position,
+        };
     }
 
     /// Set a parameter value. Addresses are 0-based (0–7).
@@ -533,7 +570,7 @@ impl DSPKernel {
         // If the main thread is swapping backends, we fall through to passthrough.
         if let Ok(mut guard) = self.backend.try_lock() {
             if let Some(ref mut backend) = *guard {
-                if backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate, &params) {
+                if backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate, &params, &self.transport) {
                     Self::safety_clamp(outputs, channel_count, frame_count);
                     // Cast output pointers to const (used for capture and demo gating)
                     let out_as_const: Vec<*const f32> = outputs.iter().map(|p| *p as *const f32).collect();

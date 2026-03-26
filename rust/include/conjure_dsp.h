@@ -109,6 +109,21 @@ void dsp_kernel_process(DSPKernelRef kernel,
                         uint32_t frame_count);
 
 /**
+ * Update host DAW transport state. Called from the real-time audio thread
+ * once per render callback, before the process loop.
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+void dsp_kernel_set_transport(DSPKernelRef kernel,
+                              double tempo,
+                              double beat_position,
+                              bool is_playing,
+                              int32_t time_sig_numerator,
+                              int32_t time_sig_denominator,
+                              double sample_position);
+
+/**
  * Load a Python script for DSP processing.
  *
  * `python_home` is the path to the bundled Python distribution root (containing lib/python3.14/).

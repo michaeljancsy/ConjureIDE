@@ -110,6 +110,31 @@ pub unsafe extern "C" fn dsp_kernel_process(
     (*kernel).process(input_buffers, output_buffers, channel_count, frame_count);
 }
 
+/// Update host DAW transport state. Called from the real-time audio thread
+/// once per render callback, before the process loop.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_set_transport(
+    kernel: DSPKernelRef,
+    tempo: f64,
+    beat_position: f64,
+    is_playing: bool,
+    time_sig_numerator: i32,
+    time_sig_denominator: i32,
+    sample_position: f64,
+) {
+    (*kernel).set_transport(
+        tempo,
+        beat_position,
+        is_playing,
+        time_sig_numerator,
+        time_sig_denominator,
+        sample_position,
+    );
+}
+
 /// Load a Python script for DSP processing.
 ///
 /// `python_home` is the path to the bundled Python distribution root (containing lib/python3.14/).

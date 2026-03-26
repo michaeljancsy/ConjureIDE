@@ -907,6 +907,35 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				}
 			}
 
+			// Query host musical context and transport state for BPM sync.
+			// Both blocks are documented as render-thread-safe by Apple.
+			var tempo: Double = 0
+			var timeSigNumerator: Double = 0
+			var timeSigDenominator: Int = 0
+			var beatPosition: Double = 0
+			if let musicalContext = au.musicalContextBlock {
+				var downbeatPosition: Double = 0
+				var sampleOffsetToNextBeat: Int = 0
+				musicalContext(&tempo, &timeSigNumerator, &timeSigDenominator,
+							   &beatPosition, &sampleOffsetToNextBeat, &downbeatPosition)
+			}
+
+			var transportIsPlaying = false
+			var samplePosition: Double = 0
+			if let transportState = au.transportStateBlock {
+				var transportFlags: AUHostTransportStateFlags = []
+				var currentSamplePosition: Double = 0
+				var cycleStart: Double = 0
+				var cycleEnd: Double = 0
+				transportState(&transportFlags, &currentSamplePosition, &cycleStart, &cycleEnd)
+				transportIsPlaying = transportFlags.contains(.moving)
+				samplePosition = currentSamplePosition
+			}
+
+			dsp_kernel_set_transport(kernel, tempo, beatPosition, transportIsPlaying,
+									 Int32(timeSigNumerator), Int32(timeSigDenominator),
+									 samplePosition)
+
 			// Process with events (replaces AUProcessHelper.processWithEvents)
 			let channelCount = UInt32(inABL.count)
 			var now = AUEventSampleTime(timestamp.pointee.mSampleTime)
