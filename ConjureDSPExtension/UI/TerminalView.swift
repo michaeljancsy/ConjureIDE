@@ -31,6 +31,7 @@ class TerminalContainerView: NSView {
 
 struct TerminalView: NSViewRepresentable {
     var colorScheme: ColorScheme
+    var isVisible: Bool
 
     func makeNSView(context: Context) -> TerminalContainerView {
         let container = TerminalContainerView()
@@ -89,6 +90,7 @@ struct TerminalView: NSViewRepresentable {
 
         guard coordinator.isTerminalReady else {
             coordinator.pendingTheme = colorScheme
+            coordinator.pendingVisible = isVisible
             return
         }
 
@@ -98,6 +100,19 @@ struct TerminalView: NSViewRepresentable {
             coordinator.lastTheme = theme
             container.webView?.evaluateJavaScript("terminalBridge.setTheme('\(theme)')") { _, _ in }
         }
+
+        // Re-fit terminal when becoming visible (xterm.js needs non-zero dimensions)
+        if isVisible && !coordinator.wasVisible {
+            // Small delay to let Auto Layout finish resizing the container
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                container.webView?.evaluateJavaScript("terminalBridge.fit()") { _, _ in }
+                container.webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
+                if let webView = container.webView {
+                    webView.window?.makeFirstResponder(webView)
+                }
+            }
+        }
+        coordinator.wasVisible = isVisible
     }
 
     func makeCoordinator() -> Coordinator {
@@ -111,6 +126,8 @@ struct TerminalView: NSViewRepresentable {
         var isTerminalReady = false
         var lastTheme: String?
         var pendingTheme: ColorScheme?
+        var pendingVisible: Bool?
+        var wasVisible = false
         private var wsPort: UInt16?
 
         func disconnect() {
@@ -135,6 +152,14 @@ struct TerminalView: NSViewRepresentable {
                     let themeName = theme == .dark ? "dark" : "light"
                     lastTheme = themeName
                     webView?.evaluateJavaScript("terminalBridge.setTheme('\(themeName)')") { _, _ in }
+                }
+
+                // Fit terminal if it's already visible when ready
+                if pendingVisible == true {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                        self?.webView?.evaluateJavaScript("terminalBridge.fit()") { _, _ in }
+                    }
+                    wasVisible = true
                 }
 
                 // Read WebSocket port from App Group and connect

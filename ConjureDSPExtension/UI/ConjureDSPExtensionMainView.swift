@@ -148,7 +148,7 @@ struct ConjureDSPExtensionMainView: View {
             HStack(spacing: 0) {
             // Claude Code terminal sidebar — always rendered to preserve WKWebView state,
             // hidden via frame(width: 0) when collapsed to avoid destroying the WebSocket connection.
-            TerminalView(colorScheme: colorScheme)
+            TerminalView(colorScheme: colorScheme, isVisible: showChat)
                 .frame(width: showChat ? chatWidth : 0)
                 .clipped()
 
