@@ -11,6 +11,26 @@ xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP build
 xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test   # runs unit + UI tests
 ```
 
+### Testing
+
+UI tests are slow. **Do not run the full UI test suite unless explicitly asked.** Prefer running only unit tests by default. Only run UI tests when the change directly affects UI that those tests cover, and then run only the specific relevant class or method.
+
+```bash
+# Unit tests only (default — use this unless UI tests are needed)
+xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPTests
+
+# Specific UI test class
+xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPUITests/ConjureDSPUITests
+
+# Specific UI test method
+xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPUITests/LicenseUITests/testLicenseActivationUI
+```
+
+UI test classes and what they cover:
+- `ConjureDSPUITests` — script editor, run button, preset toolbar, save button, build ID label, parameter sliders panel, typing in editor
+- `LicenseUITests` — license activation flow, invalid serial error, activate button state
+- `ConjureDSPUITestsLaunchTests` — app launch screenshot
+
 ### Prerequisites
 - Xcode with Swift 5.0+
 - Rust toolchain (`rustup`, `cargo`) with target: `aarch64-apple-darwin`
