@@ -9,6 +9,8 @@
 import SwiftUI
 
 struct LicenseSettingsView: View {
+    static let subscribeURL = URL(string: "https://conjuredsp.com/buy")!
+
     @ObservedObject var licenseManager: LicenseManager
     @State private var serialInput: String = ""
     @State private var showError: Bool = false
@@ -34,6 +36,10 @@ struct LicenseSettingsView: View {
                     Text(demoStatusText)
                         .foregroundColor(.orange)
                         .font(.callout)
+                    Spacer()
+                    Link("Subscribe \u{2192}", destination: Self.subscribeURL)
+                        .font(.callout)
+                        .accessibilityIdentifier("subscribeLinkSettings")
                 }
                 .accessibilityIdentifier("demoStatus")
             }

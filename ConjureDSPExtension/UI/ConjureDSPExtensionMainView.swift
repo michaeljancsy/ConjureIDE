@@ -289,6 +289,14 @@ struct ConjureDSPExtensionMainView: View {
                         .controlSize(.large)
                         .accessibilityIdentifier("restartDemoButton")
 
+                        Link(destination: LicenseSettingsView.subscribeURL) {
+                            Text("Subscribe")
+                                .frame(minWidth: 160)
+                        }
+                        .controlSize(.large)
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("subscribeLinkOverlay")
+
                         Button {
                             showingSaveAs = false // dismiss any other popover
                             // Open settings by triggering the toolbar gear button
@@ -298,7 +306,6 @@ struct ConjureDSPExtensionMainView: View {
                                 .frame(minWidth: 160)
                         }
                         .controlSize(.large)
-                        .buttonStyle(.borderedProminent)
                         .accessibilityIdentifier("enterLicenseKeyButton")
                     }
                     .padding(.top, 4)

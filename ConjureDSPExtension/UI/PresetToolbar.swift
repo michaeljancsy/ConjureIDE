@@ -318,16 +318,18 @@ struct PresetToolbar: View {
             // — Status/settings zone —
             Divider().frame(height: 20)
 
-            // Demo mode indicator
+            // Demo mode indicator — links to subscribe page
             if !licenseManager.isLicensed {
-                Text("DEMO")
-                    .font(.caption2.bold())
-                    .foregroundColor(.orange)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(Color.orange.opacity(0.15))
-                    .cornerRadius(3)
-                    .accessibilityIdentifier("demoIndicator")
+                Link(destination: LicenseSettingsView.subscribeURL) {
+                    Text("DEMO")
+                        .font(.caption2.bold())
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.orange.opacity(0.15))
+                        .cornerRadius(3)
+                }
+                .accessibilityIdentifier("demoIndicator")
             }
 
             // Settings (License + AI)
