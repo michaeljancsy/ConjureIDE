@@ -1,0 +1,8 @@
+[package]
+name = "conjuredsp"
+version = "0.1.0"
+edition = "2021"
+description = "DSP building blocks for ConjureDSP Rust/WASM presets"
+
+[lib]
+crate-type = ["rlib"]

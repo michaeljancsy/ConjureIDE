@@ -527,7 +527,110 @@ const bridge = {
                     endColumn: word.endColumn,
                 };
                 return { suggestions: [
-                    // ── ConjureDSP WASM boilerplate ──
+                    // ── conjuredsp library ──
+                    sug('setup', Kind.Snippet,
+                        'use conjuredsp::*;\nsetup!();\n',
+                        'ConjureDSP boilerplate — declares buffers, exports, transport, and ctx() helper.\nReplaces manual INPUT_BUF/OUTPUT_BUF/PARAMS_BUF declarations and get_*_ptr() exports.',
+                        true),
+
+                    sug('params', Kind.Snippet,
+                        [
+                            'params! {',
+                            '\t${1:CUTOFF} = freq(),',
+                            '\t${2:MIX} = mix(),',
+                            '}',
+                        ].join('\n'),
+                        'Declare parameter metadata. Generates index constants, METADATA JSON, and exports.\n' +
+                        'Builders: freq(), db(), time_ms(), mix(), pct(), toggle(), ratio(), param(min, max)\n' +
+                        'Customize with .min(), .max(), .default(), .unit(), .curve()',
+                        true),
+
+                    sug('process (conjuredsp)', Kind.Function,
+                        [
+                            '#[no_mangle]',
+                            'pub extern "C" fn process(',
+                            '\tinput: *const f32,',
+                            '\toutput: *mut f32,',
+                            '\tchannels: i32,',
+                            '\tframe_count: i32,',
+                            '\tsample_rate: f32,',
+                            ') {',
+                            '\tlet ctx = ctx(input, output, channels, frame_count, sample_rate);',
+                            '',
+                            '\tfor c in 0..ctx.channels() {',
+                            '\t\tfor i in 0..ctx.frames() {',
+                            '\t\t\tctx.set_output(c, i, ctx.input(c, i));${0}',
+                            '\t\t}',
+                            '\t}',
+                            '}',
+                        ].join('\n'),
+                        'Process function using ctx() for safe buffer access.\n' +
+                        'Requires setup!() to be called first.',
+                        true),
+
+                    sug('freq', Kind.Function, 'freq()', 'Frequency param: 20–20000 Hz, log curve. Customize with .min()/.max()/.default()', true),
+                    sug('db', Kind.Function, 'db()', 'Decibel param: -60 to +12 dB. Customize with .min()/.max()/.default()', true),
+                    sug('time_ms', Kind.Function, 'time_ms()', 'Time param: 0.1–1000 ms, log curve. Customize with .min()/.max()/.default()', true),
+                    sug('mix', Kind.Function, 'mix()', 'Wet/dry mix param: 0.0–1.0, default 0.5', true),
+                    sug('pct', Kind.Function, 'pct()', 'Percentage param: 0–100%', true),
+                    sug('toggle', Kind.Function, 'toggle()', 'On/off toggle param: 0 or 1', true),
+                    sug('ratio', Kind.Function, 'ratio()', 'Compression ratio: 1–20 :1', true),
+
+                    sug('db_to_gain', Kind.Function, 'db_to_gain(${1:db_val} as f64)', 'Convert dB to linear gain. 0 dB = 1.0', true),
+                    sug('gain_to_db', Kind.Function, 'gain_to_db(${1:gain_val})', 'Convert linear gain to dB.', true),
+                    sug('ms_to_samples', Kind.Function, 'ms_to_samples(${1:ms} as f64, ${2:sample_rate} as f64)', 'Convert ms to sample count.', true),
+                    sug('smooth_coeff', Kind.Function, 'smooth_coeff(${1:time_ms} as f64, ${2:sample_rate} as f64)', 'One-pole smoothing coefficient from ms time constant.', true),
+                    sug('soft_clip', Kind.Function, 'soft_clip(${1:x}, ${2:1.0})', 'Soft clip via tanh saturation.', true),
+                    sug('crossfade', Kind.Function, 'crossfade(${1:dry}, ${2:wet}, ${3:mix_val})', 'Linear crossfade. mix=0 dry, mix=1 wet.', true),
+
+                    sug('Biquad', Kind.Snippet,
+                        [
+                            'static mut FILTERS: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH];',
+                            '',
+                            '// In process():',
+                            'let coeffs = BiquadCoeffs::lowpass(${1:cutoff_hz} as f64, ${2:0.707}, ctx.sample_rate() as f64);',
+                            'unsafe {',
+                            '\tfor c in 0..ctx.channels() {',
+                            '\t\tFILTERS[c].set_coeffs(coeffs);',
+                            '\t\tfor i in 0..ctx.frames() {',
+                            '\t\t\tlet x = ctx.input(c, i) as f64;',
+                            '\t\t\tlet y = FILTERS[c].process_sample(x);',
+                            '\t\t\tctx.set_output(c, i, y as f32);',
+                            '\t\t}',
+                            '\t}',
+                            '}',
+                        ].join('\n'),
+                        'Biquad filter with per-channel state.\n' +
+                        'Types: lowpass, highpass, bandpass, notch, peak, lowshelf, highshelf, allpass.',
+                        true),
+
+                    sug('DelayLine', Kind.Snippet,
+                        [
+                            'static mut DELAYS: [DelayLine<${1:48000}>; MAX_CH] = [DelayLine::new(); MAX_CH];',
+                            'static mut WRITE_POS: usize = 0;',
+                        ].join('\n'),
+                        'Circular delay buffer.\n' +
+                        'Methods: write(sample), read(delay_samples), read_cubic(delay_samples), tap(n), clear().',
+                        true),
+
+                    sug('Lfo', Kind.Snippet,
+                        [
+                            'static mut LFO: Lfo = Lfo::new();',
+                            '',
+                            '// In process():',
+                            'unsafe {',
+                            '\tLFO.init(ctx.sample_rate() as f64, ${1:rate_hz} as f64);',
+                            '\tfor i in 0..ctx.frames() {',
+                            '\t\tlet mod_val = LFO.tick();',
+                            '\t\t${0:// use mod_val}',
+                            '\t}',
+                            '}',
+                        ].join('\n'),
+                        'Low-frequency oscillator. Waveforms: Sine, Triangle, Saw, Square.\n' +
+                        'set_waveform(Waveform::Triangle) to change.',
+                        true),
+
+                    // ── Legacy manual boilerplate (still works without conjuredsp) ──
                     sug('process', Kind.Function,
                         [
                             '#[no_mangle]',

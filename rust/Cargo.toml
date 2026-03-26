@@ -1,5 +1,5 @@
 [workspace]
-members = ["conjure_dsp"]
+members = ["conjure_dsp", "conjuredsp-rs"]
 resolver = "2"
 
 [profile.release]

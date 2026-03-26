@@ -67,6 +67,25 @@ cp "${RUSTC_EXTRACT}/lib/rustlib/${HOST_TARGET}/bin/gcc-ld/wasm-ld" \
 cp -R "${STD_EXTRACT}/lib/rustlib/wasm32-wasip1/lib" \
    "${RUSTC_DIR}/lib/rustlib/wasm32-wasip1/"
 
+# Compile conjuredsp library as rlib for wasm32-wasip1
+CONJUREDSP_SRC="${REPO_ROOT}/rust/conjuredsp-rs/src/lib.rs"
+CONJUREDSP_RLIB="${RUSTC_DIR}/lib/libconjuredsp.rlib"
+if [ -f "${CONJUREDSP_SRC}" ]; then
+    echo "Compiling conjuredsp library for wasm32-wasip1..."
+    "${RUSTC_DIR}/bin/rustc" \
+        --target wasm32-wasip1 \
+        --edition 2021 \
+        --crate-type rlib \
+        --crate-name conjuredsp \
+        -C opt-level=2 \
+        --sysroot "${RUSTC_DIR}" \
+        -o "${CONJUREDSP_RLIB}" \
+        "${CONJUREDSP_SRC}"
+    echo "conjuredsp rlib compiled: ${CONJUREDSP_RLIB}"
+else
+    echo "warning: conjuredsp-rs source not found at ${CONJUREDSP_SRC}, skipping rlib build"
+fi
+
 echo ""
 echo "Done! Minimal Rust compiler ${RUST_VERSION} installed at: ${RUSTC_DIR}"
 echo "On-disk size: $(du -sh "${RUSTC_DIR}" | cut -f1)"

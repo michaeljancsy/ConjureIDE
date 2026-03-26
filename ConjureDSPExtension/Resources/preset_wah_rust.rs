@@ -14,97 +14,24 @@
 //   5 (Attack):      Envelope attack time — 0.5 to 50 ms (log)
 //   6 (Release):     Envelope release time — 10 to 500 ms (log)
 
-const MAX_CH: usize = 2;
-const MAX_FR: usize = 4096;
+use conjuredsp::*;
+setup!();
 
-static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
+params! {
+    SENSITIVITY = db().min(-40.0).max(0.0).default(-20.0),
+    DEPTH = pct().default(80.0),
+    MIN_FREQ = freq().min(200.0).max(800.0).default(400.0),
+    MAX_FREQ = freq().min(1000.0).max(8000.0).default(3000.0),
+    Q = param(0.5, 10.0).default(3.0),
+    ATTACK = time_ms().min(0.5).max(50.0).default(5.0),
+    RELEASE = time_ms().min(10.0).max(500.0).default(50.0),
+}
 
-// Parameter indices
-const SENSITIVITY: usize = 0;
-const DEPTH: usize = 1;
-const MIN_FREQ: usize = 2;
-const MAX_FREQ: usize = 3;
-const Q_PARAM: usize = 4;
-const ATTACK: usize = 5;
-const RELEASE: usize = 6;
-
-// Biquad state (Direct Form II Transposed)
-static mut Z1: [f64; MAX_CH] = [0.0; MAX_CH];
-static mut Z2: [f64; MAX_CH] = [0.0; MAX_CH];
+// Biquad state per channel
+static mut FILTERS: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH];
 
 // Envelope follower
 static mut ENVELOPE: f64 = 0.0;
-
-static METADATA: &str = r#"[{"name":"Sensitivity","min":-40.0,"max":0.0,"unit":"dB","default":-20.0},{"name":"Depth","min":0.0,"max":100.0,"unit":"%","default":80.0},{"name":"Min Freq","min":200.0,"max":800.0,"unit":"Hz","default":400.0,"curve":"log"},{"name":"Max Freq","min":1000.0,"max":8000.0,"unit":"Hz","default":3000.0,"curve":"log"},{"name":"Q","min":0.5,"max":10.0,"unit":"","default":3.0},{"name":"Attack","min":0.5,"max":50.0,"unit":"ms","default":5.0,"curve":"log"},{"name":"Release","min":10.0,"max":500.0,"unit":"ms","default":50.0,"curve":"log"}]"#;
-
-#[no_mangle]
-pub extern "C" fn get_input_ptr() -> i32 {
-    unsafe { INPUT_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_output_ptr() -> i32 {
-    unsafe { OUTPUT_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_params_ptr() -> i32 {
-    unsafe { PARAMS_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_param_metadata_ptr() -> i32 {
-    METADATA.as_ptr() as i32
-}
-
-#[no_mangle]
-pub extern "C" fn get_param_metadata_len() -> i32 {
-    METADATA.len() as i32
-}
-
-fn db_to_lin(db: f64) -> f64 {
-    (10.0_f64).powf(db / 20.0)
-}
-
-fn smooth_coeff(time_ms: f64, sr: f64) -> f64 {
-    if time_ms <= 0.0 {
-        return 0.0;
-    }
-    (-1.0 / (time_ms * 0.001 * sr)).exp()
-}
-
-// Audio EQ Cookbook bandpass (constant skirt gain)
-struct Coeffs {
-    b0: f64,
-    b1: f64,
-    b2: f64,
-    a1: f64,
-    a2: f64,
-}
-
-fn bandpass(freq: f64, q: f64, sr: f64) -> Coeffs {
-    let w0 = 2.0 * core::f64::consts::PI * freq / sr;
-    let cos_w0 = w0.cos();
-    let alpha = w0.sin() / (2.0 * q);
-    let a0 = 1.0 + alpha;
-    Coeffs {
-        b0: alpha / a0,
-        b1: 0.0,
-        b2: -alpha / a0,
-        a1: -2.0 * cos_w0 / a0,
-        a2: (1.0 - alpha) / a0,
-    }
-}
-
-#[inline]
-fn biquad_sample(x: f64, c: &Coeffs, z1: &mut f64, z2: &mut f64) -> f64 {
-    let y = c.b0 * x + *z1;
-    *z1 = c.b1 * x - c.a1 * y + *z2;
-    *z2 = c.b2 * x - c.a2 * y;
-    y
-}
 
 #[no_mangle]
 pub extern "C" fn process(
@@ -114,35 +41,30 @@ pub extern "C" fn process(
     frame_count: i32,
     sample_rate: f32,
 ) {
-    let ch = channels as usize;
-    let frames = frame_count as usize;
+    let ctx = ctx(input, output, channels, frame_count, sample_rate);
     let sr = sample_rate as f64;
 
     unsafe {
-        let sensitivity_gain = db_to_lin(PARAMS_BUF[SENSITIVITY] as f64);
-        let depth = PARAMS_BUF[DEPTH] as f64 / 100.0;
-        let min_freq = PARAMS_BUF[MIN_FREQ] as f64;
-        let max_freq = PARAMS_BUF[MAX_FREQ] as f64;
-        let q = PARAMS_BUF[Q_PARAM] as f64;
-        let attack_ms = PARAMS_BUF[ATTACK] as f64;
-        let release_ms = PARAMS_BUF[RELEASE] as f64;
+        let sensitivity_gain = db_to_gain(ctx.param(SENSITIVITY) as f64);
+        let depth = ctx.param(DEPTH) as f64 / 100.0;
+        let min_freq = ctx.param(MIN_FREQ) as f64;
+        let max_freq = ctx.param(MAX_FREQ) as f64;
+        let q = ctx.param(Q) as f64;
+        let attack_ms = ctx.param(ATTACK) as f64;
+        let release_ms = ctx.param(RELEASE) as f64;
 
         let attack_coeff = smooth_coeff(attack_ms, sr);
         let release_coeff = smooth_coeff(release_ms, sr);
 
         let freq_range = max_freq - min_freq;
 
-        let inp = std::slice::from_raw_parts(input, ch * frames);
-        let out = std::slice::from_raw_parts_mut(output, ch * frames);
-
         let mut env = ENVELOPE;
 
-        for i in 0..frames {
+        for i in 0..ctx.frames() {
             // Peak detect across channels with sensitivity scaling
             let mut peak_val: f64 = 0.0;
-            for c in 0..ch {
-                let idx = c * frames + i;
-                let abs_val = (inp[idx] as f64).abs() * sensitivity_gain;
+            for c in 0..ctx.channels() {
+                let abs_val = (ctx.input(c, i) as f64).abs() * sensitivity_gain;
                 if abs_val > peak_val {
                     peak_val = abs_val;
                 }
@@ -166,12 +88,12 @@ pub extern "C" fn process(
             let wah_freq = min_freq + depth * freq_range * env_clamped;
 
             // Compute bandpass coefficients per sample
-            let bp = bandpass(wah_freq, q, sr);
+            let bp = BiquadCoeffs::bandpass(wah_freq, q, sr);
 
-            for c in 0..ch {
-                let idx = c * frames + i;
-                let x = inp[idx] as f64;
-                out[idx] = biquad_sample(x, &bp, &mut Z1[c], &mut Z2[c]) as f32;
+            for c in 0..ctx.channels() {
+                let x = ctx.input(c, i) as f64;
+                FILTERS[c].set_coeffs(bp);
+                ctx.set_output(c, i, FILTERS[c].process_sample(x) as f32);
             }
         }
 

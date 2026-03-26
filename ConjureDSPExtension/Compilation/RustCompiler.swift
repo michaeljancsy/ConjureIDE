@@ -47,14 +47,25 @@ final class RustCompiler: ScriptCompiler {
             inputFile.path,
         ]
 
-        // When using bundled compiler, set explicit sysroot
+        // When using bundled compiler, set explicit sysroot and link conjuredsp rlib
         if useBundledSysroot, let sysroot = bundledSysroot() {
             args = ["--sysroot", sysroot.path] + args
+
+            // Link conjuredsp rlib if available
+            let rlibPath = sysroot.appendingPathComponent("lib/libconjuredsp.rlib").path
+            if FileManager.default.fileExists(atPath: rlibPath) {
+                args = ["--extern", "conjuredsp=\(rlibPath)"] + args
+            }
 
             // Set DYLD_LIBRARY_PATH so librustc_driver can be found
             var env = ProcessInfo.processInfo.environment
             env["DYLD_LIBRARY_PATH"] = sysroot.appendingPathComponent("lib").path
             process.environment = env
+        } else {
+            // System rustc: look for rlib in repo's rustc-dist
+            if let rlibPath = findRepoRlib() {
+                args = ["--extern", "conjuredsp=\(rlibPath)"] + args
+            }
         }
 
         process.arguments = args
@@ -112,6 +123,39 @@ final class RustCompiler: ScriptCompiler {
             return String(cString: dir)
         }
         return NSHomeDirectory()
+    }
+
+    /// Find the conjuredsp rlib in the repo's rustc-dist (for system rustc fallback).
+    /// Walks up from the extension bundle to find the source repo's rustc-dist.
+    private func findRepoRlib() -> String? {
+        // The bundle is inside DerivedData; the source repo is at SRCROOT.
+        // Try common development locations relative to the real home directory.
+        let home = realUserHome
+
+        // Search for rustc-dist/lib/libconjuredsp.rlib in likely repo locations
+        let searchRoots = [
+            Bundle(for: RustCompiler.self).bundleURL
+                .deletingLastPathComponent()  // .app or .appex parent
+                .deletingLastPathComponent()
+                .deletingLastPathComponent(),
+        ]
+
+        // Also try walking up from __FILE__ equivalent via bundle
+        // In practice, this fallback is only used during development with system rustc
+        for root in searchRoots {
+            let candidate = root.appendingPathComponent("rustc-dist/lib/libconjuredsp.rlib")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate.path
+            }
+        }
+
+        // Try well-known development paths
+        let wellKnown = "\(home)/Code Projects/conjuredsp-application/rustc-dist/lib/libconjuredsp.rlib"
+        if FileManager.default.fileExists(atPath: wellKnown) {
+            return wellKnown
+        }
+
+        return nil
     }
 
     private func findRustc() -> URL? {
