@@ -129,7 +129,6 @@ rust/                        Rust DSP crate
 scripts/                     Build and setup scripts
   setup-rustc.sh             Downloads standalone Rust compiler for WASM compilation
   setup-monaco.sh            Downloads Monaco Editor for code editing UI
-  stamp-build-id.sh          Stamps build ID into extension Info.plist
   bust-au-cache.sh           Kills AudioComponentRegistrar for fresh AU registration
   release.sh                 End-to-end release: archive, notarize, DMG
   build-release.sh           Archives Release configuration with Developer ID signing
