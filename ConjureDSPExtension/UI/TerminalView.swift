@@ -33,9 +33,13 @@ class TerminalContainerView: NSView {
         super.layout()
         // Trigger xterm.js fit whenever the container width changes to a usable size
         let width = bounds.width
+        let height = bounds.height
+        log.info("TerminalContainer layout: \(width)x\(height), webView frame: \(self.webView?.frame.width ?? -1)x\(self.webView?.frame.height ?? -1)")
         if width > 10 && width != lastFitWidth {
             lastFitWidth = width
-            webView?.evaluateJavaScript("if (window.terminalBridge) terminalBridge.fit()") { _, _ in }
+            webView?.evaluateJavaScript("if (window.terminalBridge) terminalBridge.fit()") { _, error in
+                if let error { log.warning("fit() error: \(error.localizedDescription, privacy: .public)") }
+            }
         }
     }
 }
