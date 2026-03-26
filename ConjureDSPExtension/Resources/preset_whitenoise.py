@@ -1,7 +1,8 @@
 import numpy as np
+from conjuredsp.params import param
 
 PARAMS = {
-    "level": {"min": 0.0, "max": 1.0, "unit": "", "default": 0.5},
+    "level": param(0, 1, default=0.5),
 }
 
 # LCG random state (matches Rust implementation for deterministic output)

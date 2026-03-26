@@ -1,9 +1,10 @@
 import numpy as np
+from conjuredsp.params import param, mix as mix_param
 
 PARAMS = {
-    "time":     {"min": 50.0, "max": 500.0, "unit": "ms", "default": 250.0},
-    "feedback": {"min": 0.0,  "max": 0.95,  "unit": "",   "default": 0.4},
-    "mix":      {"min": 0.0,  "max": 1.0,   "unit": "",   "default": 0.5},
+    "time":     param(50, 500, unit="ms", default=250),
+    "feedback": param(0, 0.95, default=0.4),
+    "mix":      mix_param(default=0.5),
 }
 
 # Max delay in samples (supports 500 ms at 96 kHz)

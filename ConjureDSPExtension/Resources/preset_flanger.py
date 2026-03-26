@@ -1,12 +1,13 @@
 import numpy as np
 import math
+from conjuredsp.params import param, mix as mix_param
 
 PARAMS = {
-    "rate":     {"min": 0.1, "max": 5.0, "unit": "Hz", "default": 0.5},
-    "depth":    {"min": 0.5, "max": 5.0, "unit": "ms", "default": 2.0},
-    "delay":    {"min": 1.0, "max": 5.0, "unit": "ms", "default": 2.0},
-    "feedback": {"min": 0.0, "max": 1.0, "unit": "",   "default": 0.5},
-    "mix":      {"min": 0.0, "max": 1.0, "unit": "",   "default": 0.5},
+    "rate":     param(0.1, 5, unit="Hz", default=0.5),
+    "depth":    param(0.5, 5, unit="ms", default=2),
+    "delay":    param(1, 5, unit="ms", default=2),
+    "feedback": param(0, 1, default=0.5),
+    "mix":      mix_param(default=0.5),
 }
 
 # Max delay in samples (supports up to 96 kHz)

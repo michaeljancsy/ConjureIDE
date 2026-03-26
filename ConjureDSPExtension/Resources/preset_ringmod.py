@@ -1,7 +1,8 @@
 import numpy as np
+from conjuredsp import freq
 
 PARAMS = {
-    "frequency": {"min": 20.0, "max": 20000.0, "unit": "Hz", "default": 440.0, "curve": "log"},
+    "frequency": freq(20, 20000, default=440),
 }
 
 # Persistent phase across callbacks

@@ -1,9 +1,10 @@
-import numpy as np
 import math
+from conjuredsp import freq
+from conjuredsp.params import param
 
 PARAMS = {
-    "cutoff":    {"min": 20.0, "max": 20000.0, "unit": "Hz", "default": 1000.0, "curve": "log"},
-    "resonance": {"min": 0.5,  "max": 10.0,    "unit": "Q",  "default": 1.0},
+    "cutoff":    freq(),
+    "resonance": param(0.5, 10, unit="Q", default=1),
 }
 
 # Mode: "low", "high", "band", "notch"

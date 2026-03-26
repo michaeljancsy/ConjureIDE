@@ -1,9 +1,11 @@
 import numpy as np
 import math
+from conjuredsp.params import db, param
+from conjuredsp.dsp import db_to_gain
 
 PARAMS = {
-    "gain": {"min": -24.0, "max": 12.0, "unit": "dB", "default": 0.0},
-    "pan":  {"min": 0.0,   "max": 1.0,  "unit": "",   "default": 0.5},
+    "gain": db(-24, 12, default=0),
+    "pan":  param(0, 1, default=0.5),
 }
 
 
@@ -20,7 +22,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     gain_db = params["gain"]
     pan = params["pan"]
 
-    gain = 10.0 ** (gain_db / 20.0)
+    gain = db_to_gain(gain_db)
     n_ch = len(inputs)
 
     if n_ch == 1:

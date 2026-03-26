@@ -1,7 +1,8 @@
 import numpy as np
+from conjuredsp.params import param
 
 PARAMS = {
-    "drive": {"min": 1.0, "max": 15.0, "unit": "x", "default": 3.0},
+    "drive": param(1, 15, unit="x", default=3),
 }
 
 

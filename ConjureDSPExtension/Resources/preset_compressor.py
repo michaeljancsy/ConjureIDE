@@ -1,11 +1,13 @@
 import numpy as np
+from conjuredsp.params import db, ratio, param
+from conjuredsp.dsp import db_to_gain, smooth_coeff
 
 PARAMS = {
-    "threshold": {"min": -40.0, "max": -3.0,  "unit": "dB", "default": -20.0},
-    "ratio":     {"min": 2.0,   "max": 20.0,  "unit": ":1", "default": 4.0},
-    "attack":    {"min": 0.5,   "max": 50.0,  "unit": "ms", "default": 5.0},
-    "release":   {"min": 10.0,  "max": 500.0, "unit": "ms", "default": 50.0},
-    "makeup":    {"min": 0.0,   "max": 20.0,  "unit": "dB", "default": 0.0},
+    "threshold": db(-40, -3, default=-20),
+    "ratio":     ratio(2, 20, default=4),
+    "attack":    param(0.5, 50, unit="ms", default=5),
+    "release":   param(10, 500, unit="ms", default=50),
+    "makeup":    db(0, 20, default=0),
 }
 
 # Persistent envelope follower state
@@ -40,10 +42,10 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     release_ms = params["release"]
     makeup_db = params["makeup"]
 
-    threshold = 10.0 ** (threshold_db / 20.0)
-    makeup = 10.0 ** (makeup_db / 20.0)
-    attack_coeff = np.exp(-1.0 / (attack_ms * 0.001 * sample_rate))
-    release_coeff = np.exp(-1.0 / (release_ms * 0.001 * sample_rate))
+    threshold = db_to_gain(threshold_db)
+    makeup = db_to_gain(makeup_db)
+    attack_coeff = smooth_coeff(attack_ms, sample_rate)
+    release_coeff = smooth_coeff(release_ms, sample_rate)
 
     # Compute gain reduction per sample using peak envelope across channels
     gain = np.ones(frame_count, dtype=np.float32)

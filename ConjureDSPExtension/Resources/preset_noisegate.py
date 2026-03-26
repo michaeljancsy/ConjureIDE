@@ -1,11 +1,12 @@
 import numpy as np
-import math
+from conjuredsp.params import db, param
+from conjuredsp.dsp import db_to_gain, smooth_coeff
 
 PARAMS = {
-    "threshold": {"min": -80.0, "max": -20.0, "unit": "dB", "default": -40.0},
-    "attack":    {"min": 0.1,   "max": 10.0,  "unit": "ms", "default": 1.0},
-    "release":   {"min": 10.0,  "max": 500.0, "unit": "ms", "default": 100.0},
-    "hold":      {"min": 0.0,   "max": 100.0, "unit": "ms", "default": 20.0},
+    "threshold": db(-80, -20, default=-40),
+    "attack":    param(0.1, 10, unit="ms", default=1),
+    "release":   param(10, 500, unit="ms", default=100),
+    "hold":      param(0, 100, unit="ms", default=20),
 }
 
 # Persistent state
@@ -36,9 +37,9 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     release_ms = params["release"]
     hold_ms = params["hold"]
 
-    threshold = 10.0 ** (threshold_db / 20.0)
-    attack_coeff = math.exp(-1.0 / (attack_ms * 0.001 * sample_rate))
-    release_coeff = math.exp(-1.0 / (release_ms * 0.001 * sample_rate))
+    threshold = db_to_gain(threshold_db)
+    attack_coeff = smooth_coeff(attack_ms, sample_rate)
+    release_coeff = smooth_coeff(release_ms, sample_rate)
     hold_samples = int(hold_ms * 0.001 * sample_rate)
 
     gain = np.ones(frame_count, dtype=np.float32)

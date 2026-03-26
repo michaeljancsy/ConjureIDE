@@ -1,12 +1,12 @@
-import numpy as np
 import math
+from conjuredsp.params import param, mix as mix_param
 
 PARAMS = {
-    "rate":     {"min": 0.1,   "max": 5.0,     "unit": "Hz", "default": 0.5},
-    "min_freq": {"min": 50.0,  "max": 500.0,   "unit": "Hz", "default": 200.0},
-    "max_freq": {"min": 500.0, "max": 10000.0, "unit": "Hz", "default": 4000.0},
-    "stages":   {"min": 2,     "max": 6,       "unit": "",   "default": 4},
-    "mix":      {"min": 0.0,   "max": 1.0,     "unit": "",   "default": 0.5},
+    "rate":     param(0.1, 5, unit="Hz", default=0.5),
+    "min_freq": param(50, 500, unit="Hz", default=200),
+    "max_freq": param(500, 10000, unit="Hz", default=4000),
+    "stages":   param(2, 6, default=4),
+    "mix":      mix_param(default=0.5),
 }
 
 # Maximum number of allpass stages
