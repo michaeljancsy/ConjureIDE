@@ -98,13 +98,14 @@ if [ -d "$RUSTC_DST" ]; then
     echo "Re-signed rustc-dist binaries"
 fi
 
-# Re-sign the extension and app after modifying their contents
-EXTENSION_ENTITLEMENTS="$PROJECT_DIR/ConjureDSPExtension/ConjureDSPExtension.entitlements"
-APP_ENTITLEMENTS="$PROJECT_DIR/ConjureDSP/ConjureDSP.entitlements"
+# Re-sign the extension and app after modifying their contents.
+# Use --preserve-metadata=entitlements to keep the entitlements that xcodebuild
+# injected during export (com.apple.application-identifier, team-identifier,
+# app-sandbox, etc.) — without these, pkd won't discover the AU extension.
 codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
-    --entitlements "$EXTENSION_ENTITLEMENTS" "$APPEX_PATH"
+    --preserve-metadata=entitlements "$APPEX_PATH"
 codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
-    --entitlements "$APP_ENTITLEMENTS" "$APP_PATH"
+    --preserve-metadata=entitlements "$APP_PATH"
 echo "Re-signed extension and app"
 
 # Read version from the exported app

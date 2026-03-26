@@ -13,7 +13,7 @@
 	<key>provisioningProfiles</key>
 	<dict>
 		<key>com.MichaelJancsy.ConjureDSP</key>
-		<string>com.MichaelJancsy.ConjureDSP Provisioning Profile</string>
+		<string>com.MichaelJancsy.ConjureDSP</string>
 		<key>com.MichaelJancsy.ConjureDSP.ConjureDSPExtension</key>
 		<string>com.MichaelJancsy.ConjureDSP.ConjureDSPExtension</string>
 	</dict>

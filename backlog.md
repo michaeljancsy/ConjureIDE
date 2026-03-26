@@ -2,15 +2,17 @@
 
 ## In Progress
 
-- **GitHub preset integration**: Phases 1–4 complete. Remaining: Phase 5 polish (rate limits, ETag caching, offline mode, tests). Need to create `conjuredsp-community/presets` repo.
-- **Python package management**: Phase 2 (bundle uv + host-app install UI) and Phase 3 (per-preset requirements.txt). Design doc at `docs/python-package-management.md`.
-- **Monaco editor**: Remaining: inline error markers, numpy/scipy autocomplete, custom color themes, memory profiling with multiple instances.
+- **GitHub preset integration**: Phases 1–4 complete. Rate limit detection, time-based catalog cache (1hr TTL), and offline fallback all working. Community repo created. Remaining: ETag HTTP caching, automatic retry/backoff, unit tests.
+- **Monaco editor**: Remaining: wire inline error markers from Swift → existing JS bridge (parse line numbers from Python/Rust errors), custom color themes.
 
 ## To Do
 
-### Distribution
-- Full distribution plan at `docs/distribution-plan.md` (Paddle + GitHub Releases + Sparkle)
-- Store notarization credentials in Keychain, run `scripts/release.sh` end-to-end, verify DMG on clean machine
+### v1 Release
+- Run `scripts/release.sh` end-to-end, store notarization creds in Keychain, verify DMG on clean machine. Full plan at `docs/distribution-plan.md`.
+- Paddle account setup + pre-generate license key batch
+- Landing page (static site with Buy + Download)
+- In-app "Buy" link for unlicensed users
+- Fix flaky `extensionPlistContainsBuildID` test (build phase timing)
 
 ### Export Preset as Standalone AUv3
 - Phase 5: Polish & validation (integration tests, edge cases, documentation)
@@ -24,20 +26,25 @@
 - Preset comparison tests: tighten tolerance (investigate native Rust compilation instead of WASM to eliminate libm differences)
 
 ### UI & Editor
-- Autocomplete: basic (keywords, builtins, identifiers) + AI-powered (context-aware LLM suggestions)
+- AI-powered autocomplete (context-aware LLM suggestions)
 - AI chat sidebar polish: markdown rendering, code block copy/insert buttons, conversation persistence, keyboard shortcut to toggle
 - Audio visualization polish: persist spectrogram preferences in UserDefaults, add spectrogram to host app
 - Host app DAW controls: preset selection and bypass button
 - Full-screen text editor mode
 - Make scrolling smoother
 
+### Post-Launch
+- Python package management: Phase 2 (bundle uv + host-app install UI) and Phase 3 (per-preset requirements.txt). Design doc at `docs/python-package-management.md`.
+- GitHub integration Phase 5 polish (ETag HTTP caching, retry/backoff, unit tests)
+- Monaco custom color themes
+
 ### Other
 - AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration)
-- Fix flaky `extensionPlistContainsBuildID` test (build phase timing)
 - Add link to website for licensing
 
 ## Done
 
+- Monaco numpy/scipy/signal autocomplete in editor-bridge.js (2026-03-25)
 - Add Stereo Width Optimized preset alongside original (2026-03-25)
 - Replace app icons with new designs + full-res source icons (2026-03-25)
 - Use `np.multiply(out=)` in Python presets to avoid render-loop allocations (2026-03-25)
