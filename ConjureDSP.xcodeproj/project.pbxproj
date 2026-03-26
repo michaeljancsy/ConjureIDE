@@ -15,13 +15,14 @@
 		25BC19432F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		25BC19442F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		25BC19452F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
+		25FE99E52F75CECC0004DC3A /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000200000001SPARKLE /* Sparkle */; };
 		AA11000100000001MIXPANEL /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000200000001MIXPANEL /* Mixpanel */; };
 		AA11000300000001MIXPANEL /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000400000001MIXPANEL /* Mixpanel */; };
 		AA11000600000001MIXPANEL /* Analytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000700000001MIXPANEL /* Analytics.swift */; };
-		AA5E00012F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00022F5013850036AAB6 /* Sentry */; };
-		AA5E00032F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00042F5013850036AAB6 /* Sentry */; };
 		AA22000200000001SHARED /* MCPToolProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22000100000001SHARED /* MCPToolProvider.swift */; };
 		AA22000300000001SHARED /* MCPToolProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22000100000001SHARED /* MCPToolProvider.swift */; };
+		AA5E00012F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00022F5013850036AAB6 /* Sentry */; };
+		AA5E00032F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00042F5013850036AAB6 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -72,8 +73,8 @@
 		2579117E2F5013850036AAB6 /* ConjureDSPExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConjureDSPExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		25BC19412F563DB20009EA0D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = ConjureDSP/Assets.xcassets; sourceTree = "<group>"; };
 		AA11000700000001MIXPANEL /* Analytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Analytics.swift; path = ConjureDSPExtension/Analytics.swift; sourceTree = "<group>"; };
-		AABB00022F5013850036AAB6 /* rust */ = {isa = PBXFileReference; lastKnownFileType = folder; path = rust; sourceTree = "<group>"; };
 		AA22000100000001SHARED /* MCPToolProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPToolProvider.swift; sourceTree = "<group>"; };
+		AABB00022F5013850036AAB6 /* rust */ = {isa = PBXFileReference; lastKnownFileType = folder; path = rust; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -83,7 +84,7 @@
 				Info.plist,
 				"Resources/monaco/editor-bridge.js",
 				Resources/monaco/index.html,
-				"Resources/terminal/index.html",
+				Resources/terminal/index.html,
 				"Resources/terminal/terminal-bridge.js",
 			);
 			target = 2579117D2F5013850036AAB6 /* ConjureDSPExtension */;
@@ -121,6 +122,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				25FE99E52F75CECC0004DC3A /* Sparkle in Frameworks */,
 				AA5E00012F5013850036AAB6 /* Sentry in Frameworks */,
 				AA11000100000001MIXPANEL /* Mixpanel in Frameworks */,
 			);
@@ -560,26 +562,6 @@
 			shellPath = /bin/bash;
 			shellScript = "# Copy Monaco Editor resources into the extension bundle\nMONACO_SRC=\"${SRCROOT}/ConjureDSPExtension/Resources/monaco\"\nMONACO_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/monaco\"\n\nif [ ! -d \"${MONACO_SRC}/vs\" ]; then\n    echo \"warning: Monaco Editor not found at ${MONACO_SRC}/vs. Run scripts/setup-monaco.sh first.\" >&2\n    # Still copy index.html and editor-bridge.js so the build doesn't fail\n    mkdir -p \"${MONACO_DST}\"\n    cp -f \"${MONACO_SRC}/index.html\" \"${MONACO_DST}/\" 2>/dev/null || true\n    cp -f \"${MONACO_SRC}/editor-bridge.js\" \"${MONACO_DST}/\" 2>/dev/null || true\n    exit 0\nfi\n\n# Skip if no source file is newer than the last copy\nSTAMP=\"${MONACO_DST}/.copy-stamp\"\nif [ -f \"$STAMP\" ] && [ -z \"$(find -L \"${MONACO_SRC}\" -type f -newer \"$STAMP\" -print -quit 2>/dev/null)\" ]; then\n    echo \"note: Monaco Editor unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${MONACO_DST}\"\nrsync -aL --delete \"${MONACO_SRC}/\" \"${MONACO_DST}/\"\n\ntouch \"$STAMP\"\n";
 		};
-		AABB0020000000XTERM0001 /* Copy Terminal (xterm.js) */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/ConjureDSPExtension/Resources/terminal/index.html",
-			);
-			name = "Copy Terminal (xterm.js)";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/terminal/index.html",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "# Copy terminal resources into the extension bundle, auto-downloading xterm.js if needed\nTERM_SRC=\"${SRCROOT}/ConjureDSPExtension/Resources/terminal\"\nTERM_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/terminal\"\n\n# Auto-download xterm.js if missing\nif [ ! -f \"${TERM_SRC}/xterm.js\" ]; then\n    echo \"note: xterm.js not found, downloading...\" >&2\n    \"${SRCROOT}/scripts/setup-xterm.sh\" || {\n        echo \"warning: Failed to download xterm.js. Terminal will not work.\" >&2\n        # Still copy checked-in files so build doesn't fail\n        mkdir -p \"${TERM_DST}\"\n        cp -f \"${TERM_SRC}/index.html\" \"${TERM_DST}/\" 2>/dev/null || true\n        cp -f \"${TERM_SRC}/terminal-bridge.js\" \"${TERM_DST}/\" 2>/dev/null || true\n        exit 0\n    }\nfi\n\n# Skip if no source file is newer than the last copy\nSTAMP=\"${TERM_DST}/.copy-stamp\"\nif [ -f \"$STAMP\" ] && [ -z \"$(find -L \"${TERM_SRC}\" -type f -newer \"$STAMP\" -print -quit 2>/dev/null)\" ]; then\n    echo \"note: Terminal resources unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${TERM_DST}\"\nrsync -aL --delete \"${TERM_SRC}/\" \"${TERM_DST}/\"\n\ntouch \"$STAMP\"\n";
-		};
 		AABB00112F5013850036AAB6 /* Pre-Build Clean */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -618,6 +600,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "\"${SRCROOT}/scripts/upload-dsyms.sh\"\n";
+		};
+		AABB0020000000XTERM0001 /* Copy Terminal (xterm.js) */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/ConjureDSPExtension/Resources/terminal/index.html",
+			);
+			name = "Copy Terminal (xterm.js)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/terminal/index.html",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# Copy terminal resources into the extension bundle, auto-downloading xterm.js if needed\nTERM_SRC=\"${SRCROOT}/ConjureDSPExtension/Resources/terminal\"\nTERM_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/terminal\"\n\n# Auto-download xterm.js if missing\nif [ ! -f \"${TERM_SRC}/xterm.js\" ]; then\n    echo \"note: xterm.js not found, downloading...\" >&2\n    \"${SRCROOT}/scripts/setup-xterm.sh\" || {\n        echo \"warning: Failed to download xterm.js. Terminal will not work.\" >&2\n        # Still copy checked-in files so build doesn't fail\n        mkdir -p \"${TERM_DST}\"\n        cp -f \"${TERM_SRC}/index.html\" \"${TERM_DST}/\" 2>/dev/null || true\n        cp -f \"${TERM_SRC}/terminal-bridge.js\" \"${TERM_DST}/\" 2>/dev/null || true\n        exit 0\n    }\nfi\n\n# Skip if no source file is newer than the last copy\nSTAMP=\"${TERM_DST}/.copy-stamp\"\nif [ -f \"$STAMP\" ] && [ -z \"$(find -L \"${TERM_SRC}\" -type f -newer \"$STAMP\" -print -quit 2>/dev/null)\" ]; then\n    echo \"note: Terminal resources unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${TERM_DST}\"\nrsync -aL --delete \"${TERM_SRC}/\" \"${TERM_DST}/\"\n\ntouch \"$STAMP\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1202,20 +1204,20 @@
 				minimumVersion = 4.3.0;
 			};
 		};
-		AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 9.0.0;
-			};
-		};
 		AA11000500000001SPARKLE /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 2.0.0;
+			};
+		};
+		AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.0.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -1225,6 +1227,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA11000500000001MIXPANEL /* XCRemoteSwiftPackageReference "mixpanel-swift" */;
 			productName = Mixpanel;
+		};
+		AA11000200000001SPARKLE /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA11000500000001SPARKLE /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 		AA11000400000001MIXPANEL /* Mixpanel */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -1240,11 +1247,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
 			productName = Sentry;
-		};
-		AA11000200000001SPARKLE /* Sparkle */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = AA11000500000001SPARKLE /* XCRemoteSwiftPackageReference "Sparkle" */;
-			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
