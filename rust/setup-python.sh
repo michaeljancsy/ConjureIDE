@@ -41,6 +41,11 @@ echo "Installing numpy and scipy..."
 "${PYTHON_DIR}/bin/python3" -m pip install --upgrade pip
 "${PYTHON_DIR}/bin/python3" -m pip install numpy scipy
 
+echo "Installing conjuredsp package..."
+SITE_PACKAGES="$(${PYTHON_DIR}/bin/python3 -c 'import site; print(site.getsitepackages()[0])')"
+rm -rf "${SITE_PACKAGES}/conjuredsp"
+cp -r "${SCRIPT_DIR}/conjuredsp" "${SITE_PACKAGES}/conjuredsp"
+
 echo ""
-echo "Done! Free-threaded Python ${PYTHON_VERSION} (no-GIL) with numpy+scipy installed at: ${PYTHON_DIR}"
+echo "Done! Free-threaded Python ${PYTHON_VERSION} (no-GIL) with numpy+scipy+conjuredsp installed at: ${PYTHON_DIR}"
 echo "You can now build the project with Xcode."

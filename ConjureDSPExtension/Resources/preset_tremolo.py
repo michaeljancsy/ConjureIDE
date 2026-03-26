@@ -1,8 +1,9 @@
 import numpy as np
+from conjuredsp.params import param
 
 PARAMS = {
-    "rate":  {"min": 0.5, "max": 20.0, "unit": "Hz", "default": 5.0},
-    "depth": {"min": 0.0, "max": 1.0,  "unit": "",   "default": 0.5},
+    "rate":  param(0.5, 20, unit="Hz", default=5),
+    "depth": param(0, 1, default=0.5),
 }
 
 # Persistent phase across callbacks
