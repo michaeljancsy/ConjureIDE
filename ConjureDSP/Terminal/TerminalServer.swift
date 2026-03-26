@@ -51,9 +51,16 @@ final class TerminalServer {
             self?.webSocketServer.broadcast(data)
         }
 
-        // 4. Wire WebSocket input → pty
+        // 4. Wire WebSocket input → pty (intercept control messages like resize)
         webSocketServer.onClientInput = { [weak self] data in
-            self?.ptyManager.write(data)
+            // Check for resize control messages from xterm.js
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let type = json["type"] as? String, type == "resize",
+               let cols = json["cols"] as? Int, let rows = json["rows"] as? Int {
+                self?.ptyManager.resize(cols: UInt16(cols), rows: UInt16(rows))
+            } else {
+                self?.ptyManager.write(data)
+            }
         }
 
         // 5. Track state changes

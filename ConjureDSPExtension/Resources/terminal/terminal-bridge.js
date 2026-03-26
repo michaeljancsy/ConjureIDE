@@ -116,6 +116,11 @@
         });
         resizeObserver.observe(document.getElementById('terminal-container'));
 
+        // Click on terminal container re-focuses the terminal (in case focus was lost)
+        document.getElementById('terminal-container').addEventListener('mousedown', function() {
+            if (terminal) terminal.focus();
+        });
+
         // Notify Swift that terminal is ready
         postToSwift('terminalReady', {});
     }
@@ -145,6 +150,9 @@
                 reconnectAttempts = 0;
                 hideStatus();
                 postToSwift('connected', {});
+
+                // Focus terminal so it receives keyboard input
+                if (terminal) terminal.focus();
 
                 // Send initial terminal size
                 if (terminal) {

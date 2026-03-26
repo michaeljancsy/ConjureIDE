@@ -152,10 +152,8 @@ final class PTYManager {
             childPID = 0
         }
 
-        if masterFD >= 0 {
-            close(masterFD)
-            masterFD = -1
-        }
+        // masterFD is closed by the readSource cancel handler — don't close here
+        // to avoid a double-close race with the async cancel handler.
 
         state = .idle
         onStateChange?(.idle)

@@ -110,6 +110,12 @@ struct TerminalView: NSViewRepresentable {
 
             case "connected":
                 log.info("Terminal connected to WebSocket")
+                // Focus the terminal so it receives keyboard input
+                webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
+                // Make WKWebView the first responder so macOS routes keyboard events to it
+                if let webView = webView {
+                    webView.window?.makeFirstResponder(webView)
+                }
 
             case "disconnected":
                 let code = data["code"] as? Int ?? 0
