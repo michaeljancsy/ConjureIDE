@@ -12,6 +12,9 @@
 #          --team-id "A4R63LAVLS" \
 #          --password "xxxx-xxxx-xxxx-xxxx"
 #   3. Rust toolchain + bundled Python runtime (rust/setup-python.sh)
+#   4. Sparkle EdDSA keypair: on first run, generate_appcast will prompt you
+#      to create one. Store the private key in Keychain (Sparkle does this
+#      automatically) and add the public key to SUPublicEDKey in Info.plist.
 
 set -euo pipefail
 
@@ -46,6 +49,24 @@ echo "[4/4] Notarizing DMG..."
 "$SCRIPT_DIR/notarize.sh" "$DMG_PATH"
 
 echo ""
+echo "[5/5] Generating Sparkle appcast..."
+APPCAST_DIR="$OUTPUT_DIR/appcast"
+mkdir -p "$APPCAST_DIR"
+cp "$DMG_PATH" "$APPCAST_DIR/"
+# generate_appcast scans the directory for archives, extracts version info
+# from embedded app bundles, signs with EdDSA, and produces appcast.xml.
+# On first run it will create an EdDSA keypair and store it in Keychain.
+SPARKLE_BIN=$(find "$PROJECT_DIR/.build" ~/Library/Developer/Xcode/DerivedData -name "generate_appcast" -type f 2>/dev/null | head -1)
+if [ -n "$SPARKLE_BIN" ]; then
+    "$SPARKLE_BIN" "$APPCAST_DIR"
+    echo "  Appcast: $APPCAST_DIR/appcast.xml"
+else
+    echo "  WARNING: generate_appcast not found. Build the project first or run:"
+    echo "    xcrun --find generate_appcast"
+    echo "  Then re-run this script, or manually generate the appcast."
+fi
+
+echo ""
 echo "========================================"
 echo "  Release complete!"
 echo "========================================"
@@ -53,6 +74,10 @@ echo ""
 echo "  Version: $VERSION (build $BUILD)"
 echo "  DMG:     $DMG_PATH"
 echo "  Size:    $(du -h "$DMG_PATH" | awk '{print $1}')"
+if [ -f "$APPCAST_DIR/appcast.xml" ]; then
+echo "  Appcast: $APPCAST_DIR/appcast.xml"
+fi
 echo ""
 echo "  The DMG is signed, notarized, and ready to distribute."
+echo "  Upload the DMG and appcast.xml to your update server."
 echo ""
