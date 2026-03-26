@@ -23,7 +23,7 @@ Quick start::
 from .types import AudioBuffer, ChannelList, ParamDict, ParamSpec, ParamValues
 
 # Parameter helpers
-from .params import db, freq, mix, param, pct, ratio, time_ms, toggle
+from .params import choice, db, freq, mix, param, pct, ratio, time_ms, toggle
 
 # DSP utilities
 from .dsp import (
@@ -53,6 +53,7 @@ __all__ = [
     "ParamValues",
     # Parameter helpers
     "param",
+    "choice",
     "freq",
     "db",
     "time_ms",

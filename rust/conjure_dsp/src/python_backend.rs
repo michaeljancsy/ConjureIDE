@@ -154,6 +154,17 @@ impl PythonBackend {
                             .flatten()
                             .and_then(|v| v.extract::<String>().ok())
                             .unwrap_or_else(|| "linear".to_string());
+                        let style = spec
+                            .get_item("style")
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v.extract::<String>().ok())
+                            .unwrap_or_else(|| "slider".to_string());
+                        let options: Option<Vec<String>> = spec
+                            .get_item("options")
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v.extract::<Vec<String>>().ok());
                         // Title-case the name for display, keep original as key
                         let display_name = Self::to_title_case(&name);
                         names.insert(i as u8, display_name.clone());
@@ -165,6 +176,8 @@ impl PythonBackend {
                             default: default.clamp(min.min(max), min.max(max)),
                             unit,
                             curve,
+                            style,
+                            options,
                         });
                     }
                 }

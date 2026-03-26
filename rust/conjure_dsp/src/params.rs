@@ -21,10 +21,20 @@ pub struct ParamMetadata {
     /// Log curve: min * (max/min)^normalized — ideal for frequency and time params.
     #[serde(default = "default_curve")]
     pub curve: String,
+    /// Display style: "slider" (default), "toggle", or "choice".
+    #[serde(default = "default_style")]
+    pub style: String,
+    /// Option labels for "choice" style parameters (e.g., ["Low", "Mid", "High"]).
+    #[serde(default)]
+    pub options: Option<Vec<String>>,
 }
 
 fn default_curve() -> String {
     "linear".to_string()
+}
+
+fn default_style() -> String {
+    "slider".to_string()
 }
 
 impl ParamMetadata {

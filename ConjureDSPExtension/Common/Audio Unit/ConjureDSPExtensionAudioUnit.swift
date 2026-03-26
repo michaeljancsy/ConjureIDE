@@ -34,6 +34,13 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		public let unit: String
 		/// Mapping curve: "linear" (default) or "log" (exponential/logarithmic).
 		public let curve: String?
+		/// Display style: "slider" (default), "toggle", or "choice".
+		public let style: String?
+		/// Option labels for "choice" style parameters.
+		public let options: [String]?
+
+		var isToggle: Bool { style == "toggle" }
+		var isChoice: Bool { style == "choice" }
 
 		/// Denormalize a 0–1 value to the actual parameter range.
 		func denormalize(_ normalized: Float) -> Float {
@@ -106,16 +113,28 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		for i in 0..<count {
 			let meta = metadataRef[i]
+			let auUnit: AudioUnitParameterUnit
+			let valueStrings: [String]?
+			if meta.isToggle {
+				auUnit = .boolean
+				valueStrings = nil
+			} else if meta.isChoice, let opts = meta.options {
+				auUnit = .indexed
+				valueStrings = opts
+			} else {
+				auUnit = .generic
+				valueStrings = nil
+			}
 			let param = AUParameterTree.createParameter(
 				withIdentifier: "param\(i)",
 				name: meta.name,
 				address: AUParameterAddress(i),
 				min: meta.min,
 				max: meta.max,
-				unit: .generic,
+				unit: auUnit,
 				unitName: nil,
 				flags: [.flag_IsReadable, .flag_IsWritable],
-				valueStrings: nil,
+				valueStrings: valueStrings,
 				dependentParameters: nil
 			)
 			param.value = meta.default
@@ -151,7 +170,17 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			let value = valuePtr?.pointee ?? param.value
 			let idx = Int(param.address)
 			if idx < metadataRef.count {
-				return Self.formatParamValue(value, unit: metadataRef[idx].unit)
+				let meta = metadataRef[idx]
+				if meta.isToggle {
+					return value >= 0.5 ? "On" : "Off"
+				}
+				if meta.isChoice, let opts = meta.options {
+					let choiceIdx = Int(value.rounded())
+					if choiceIdx >= 0, choiceIdx < opts.count {
+						return opts[choiceIdx]
+					}
+				}
+				return Self.formatParamValue(value, unit: meta.unit)
 			}
 			return String(format: "%.3f", value)
 		}

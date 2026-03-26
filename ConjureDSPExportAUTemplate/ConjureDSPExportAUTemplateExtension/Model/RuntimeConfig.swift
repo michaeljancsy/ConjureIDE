@@ -14,6 +14,11 @@ struct ExportParamMetadata: Codable {
     let `default`: Float
     let unit: String
     let curve: String?
+    let style: String?
+    let options: [String]?
+
+    var isToggle: Bool { style == "toggle" }
+    var isChoice: Bool { style == "choice" }
 
     /// Denormalize a 0–1 value to the actual parameter range.
     func denormalize(_ normalized: Float) -> Float {

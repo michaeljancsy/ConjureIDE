@@ -11,6 +11,26 @@ xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP build
 xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test   # runs unit + UI tests
 ```
 
+### Testing
+
+UI tests are slow. **Do not run the full UI test suite unless explicitly asked.** Prefer running only unit tests by default. Only run UI tests when the change directly affects UI that those tests cover, and then run only the specific relevant class or method.
+
+```bash
+# Unit tests only (default — use this unless UI tests are needed)
+xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPTests
+
+# Specific UI test class
+xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPUITests/ConjureDSPUITests
+
+# Specific UI test method
+xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPUITests/LicenseUITests/testLicenseActivationUI
+```
+
+UI test classes and what they cover:
+- `ConjureDSPUITests` — script editor, run button, preset toolbar, save button, build ID label, parameter sliders panel, typing in editor
+- `LicenseUITests` — license activation flow, invalid serial error, activate button state
+- `ConjureDSPUITestsLaunchTests` — app launch screenshot
+
 ### Prerequisites
 - Xcode with Swift 5.0+
 - Rust toolchain (`rustup`, `cargo`) with target: `aarch64-apple-darwin`
@@ -158,21 +178,30 @@ Up to 16 parameters, with optional rich metadata declared via `PARAMS` dict. Two
 
 Use `"curve": "log"` for frequency and wide-range time parameters (e.g., cutoff 20–20kHz, attack 0.5–50ms). Log mapping uses `min * (max/min)^t` so the slider feels natural across orders of magnitude. Default is linear.
 
+Use `"style": "toggle"` for on/off parameters (renders as a switch in the UI, `AUParameterUnit.boolean` for DAWs). Use `"style": "choice"` with `"options": ["A", "B", "C"]` for enum parameters (renders as a dropdown menu, `AUParameterUnit.indexed` with `valueStrings` for DAWs). Scripts receive the selected index as a float (0.0, 1.0, 2.0...). Default style is `"slider"`.
+
 Python:
 ```python
+from conjuredsp import freq, toggle, choice
+
 PARAMS = {
-    "cutoff": {"min": 20, "max": 20000, "unit": "Hz", "default": 1000, "curve": "log"},
-    "resonance": {"min": 0, "max": 1, "unit": "", "default": 0.5},
+    "cutoff": freq(),                                    # slider with log curve
+    "bypass_eq": toggle(),                               # switch UI, 0.0 or 1.0
+    "mode": choice("Low", "Mid", "High", default="Mid"), # dropdown, index as float
 }
 def process(inputs, outputs, frame_count, sample_rate, params):
-    cutoff_hz = params["cutoff"]  # already 20–20000, log-mapped
+    cutoff_hz = params["cutoff"]      # already 20–20000, log-mapped
+    if params["bypass_eq"] >= 0.5:    # toggle is 0.0 or 1.0
+        ...
+    mode = int(params["mode"])        # 0, 1, or 2
 ```
 
 Rust/WASM:
 ```rust
 static METADATA: &str = r#"[
     {"name":"Cutoff","min":20,"max":20000,"unit":"Hz","default":1000,"curve":"log"},
-    {"name":"Resonance","min":0,"max":1,"unit":"","default":0.5}
+    {"name":"Bypass EQ","min":0,"max":1,"default":0,"unit":"","style":"toggle"},
+    {"name":"Mode","min":0,"max":2,"default":1,"unit":"","style":"choice","options":["Low","Mid","High"]}
 ]"#;
 
 #[unsafe(no_mangle)] pub extern "C" fn get_param_metadata_json() -> *const u8 { METADATA.as_ptr() }
@@ -180,13 +209,15 @@ static METADATA: &str = r#"[
 
 // PARAMS_BUF receives denormalized actual values when metadata exists
 let cutoff_hz = PARAMS_BUF[CUTOFF];  // already 20–20000, log-mapped
+let bypass = PARAMS_BUF[BYPASS] >= 0.5;  // toggle: true/false
+let mode = PARAMS_BUF[MODE] as usize;    // choice: 0, 1, or 2
 ```
 
 **Legacy mode**: Scripts without metadata get raw 0–1 floats and generic AU parameters (backward compatible).
 
 Implementation across layers:
 
-1. **Rust** (`params.rs`) — `ParamMetadata` struct (name, key, min, max, default, unit, curve) with `denormalize()`/`normalize()` methods. `PARAM_COUNT = 16`
+1. **Rust** (`params.rs`) — `ParamMetadata` struct (name, key, min, max, default, unit, curve, style, options) with `denormalize()`/`normalize()` methods. `PARAM_COUNT = 16`
 2. **Rust** (`python_backend.rs`) — Extracts `PARAMS` dict from Python module, builds `PyDict` with denormalized values for `process()`. Falls back to `PARAM_NAMES` dict or `PyList` of 0–1 floats.
 3. **Rust** (`kernel.rs`) — Stores normalized 0–1 via `AtomicU32` array. Caches metadata as JSON. Sets defaults from metadata on script load.
 4. **Rust** (`lib.rs`) — `dsp_kernel_param_metadata_json()` FFI returns metadata JSON to Swift.
