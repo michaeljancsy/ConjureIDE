@@ -73,7 +73,34 @@ def mix(default: float = 0.5) -> ParamSpec:
 
 def toggle(default: float = 0.0) -> ParamSpec:
     """On/off toggle parameter (0 or 1)."""
-    return param(0.0, 1.0, default=default)
+    spec = param(0.0, 1.0, default=default)
+    spec["style"] = "toggle"
+    return spec
+
+
+def choice(*labels: str, default: str | None = None) -> ParamSpec:
+    """Enum parameter rendered as a dropdown menu.
+
+    Args:
+        *labels: Option labels (e.g., "Low", "Mid", "High").
+        default: Default option label. Defaults to the first label.
+
+    Returns:
+        A ParamSpec dict. The script receives the selected index as a float
+        (e.g., 0.0, 1.0, 2.0).
+    """
+    if len(labels) < 2:
+        raise ValueError("choice() requires at least 2 labels")
+    default_idx = 0.0
+    if default is not None:
+        try:
+            default_idx = float(labels.index(default))
+        except ValueError:
+            raise ValueError(f"default {default!r} not in labels: {labels}")
+    spec = param(0.0, float(len(labels) - 1), default=default_idx)
+    spec["style"] = "choice"
+    spec["options"] = list(labels)
+    return spec
 
 
 def ratio(min: float = 1.0, max: float = 20.0, default: float = 4.0) -> ParamSpec:
