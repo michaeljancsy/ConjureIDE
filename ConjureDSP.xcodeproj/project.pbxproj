@@ -784,12 +784,14 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/ConjureDSPExtension/Resources/monaco/index.html",
+				"$(SRCROOT)/ConjureDSPExtension/Resources/monaco/vs/loader.js",
 			);
 			name = "Copy Monaco Editor";
 			outputFileListPaths = (
 			);
 			outputPaths = (
 				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/monaco/index.html",
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/monaco/vs/loader.js",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
