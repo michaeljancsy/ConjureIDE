@@ -18,6 +18,11 @@ tools/generate-license/keypair.bin
 ConjureDSPExtension/Resources/monaco/vs/
 ConjureDSPExtension/Resources/monaco/LICENSE
 
+# Bundled xterm.js (created by scripts/setup-xterm.sh)
+ConjureDSPExtension/Resources/terminal/xterm.js
+ConjureDSPExtension/Resources/terminal/xterm.css
+ConjureDSPExtension/Resources/terminal/addon-*.js
+
 # Xcode build artifacts
 build/
 DerivedData/

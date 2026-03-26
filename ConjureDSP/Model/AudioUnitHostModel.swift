@@ -20,8 +20,14 @@ class AudioUnitHostModel {
     var viewModel = AudioUnitViewModel()
 
     var isPlaying: Bool { playEngine.isPlaying }
-    
+
     var audioUnitCrashed = false
+
+    /// The AU as an MCP tool provider, available after the AU loads.
+    /// Used by MCPServer to execute tool calls.
+    var mcpToolProvider: MCPToolProvider? {
+        playEngine.avAudioUnit?.auAudioUnit as? MCPToolProvider
+    }
 
     /// Audio Component Description
     let type: String

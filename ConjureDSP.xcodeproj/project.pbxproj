@@ -20,6 +20,8 @@
 		AA11000600000001MIXPANEL /* Analytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000700000001MIXPANEL /* Analytics.swift */; };
 		AA5E00012F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00022F5013850036AAB6 /* Sentry */; };
 		AA5E00032F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00042F5013850036AAB6 /* Sentry */; };
+		AA22000200000001SHARED /* MCPToolProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22000100000001SHARED /* MCPToolProvider.swift */; };
+		AA22000300000001SHARED /* MCPToolProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22000100000001SHARED /* MCPToolProvider.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -71,6 +73,7 @@
 		25BC19412F563DB20009EA0D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = ConjureDSP/Assets.xcassets; sourceTree = "<group>"; };
 		AA11000700000001MIXPANEL /* Analytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Analytics.swift; path = ConjureDSPExtension/Analytics.swift; sourceTree = "<group>"; };
 		AABB00022F5013850036AAB6 /* rust */ = {isa = PBXFileReference; lastKnownFileType = folder; path = rust; sourceTree = "<group>"; };
+		AA22000100000001SHARED /* MCPToolProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPToolProvider.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -80,6 +83,8 @@
 				Info.plist,
 				"Resources/monaco/editor-bridge.js",
 				Resources/monaco/index.html,
+				"Resources/terminal/index.html",
+				"Resources/terminal/terminal-bridge.js",
 			);
 			target = 2579117D2F5013850036AAB6 /* ConjureDSPExtension */;
 		};
@@ -158,6 +163,7 @@
 				257911752F5013850036AAB6 /* ConjureDSPUITests */,
 				257911822F5013850036AAB6 /* ConjureDSPExtension */,
 				AABB00022F5013850036AAB6 /* rust */,
+				AA22000400000001SHARED /* Shared */,
 				257911412F5013840036AAB6 /* Products */,
 				25BC19412F563DB20009EA0D /* Assets.xcassets */,
 				25F5C9B42F737A0E0022143A /* Recovered References */,
@@ -181,6 +187,14 @@
 				AA11000700000001MIXPANEL /* Analytics.swift */,
 			);
 			name = "Recovered References";
+			sourceTree = "<group>";
+		};
+		AA22000400000001SHARED /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				AA22000100000001SHARED /* MCPToolProvider.swift */,
+			);
+			path = Shared;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -273,6 +287,7 @@
 				AABB00032F5013850036AAB6 /* Copy Python Runtime */,
 				AABB00092F5013850036AAB6 /* Copy Rust Compiler */,
 				AABB0010000000MONACO0001 /* Copy Monaco Editor */,
+				AABB0020000000XTERM0001 /* Copy Terminal (xterm.js) */,
 				AABB00072F5013850036AAB6 /* Stamp Build ID */,
 				AABB000B2F5013850036AAB6 /* Copy Export Template */,
 				AABB000D2F5013850036AAB6 /* Generate Test Serial */,
@@ -545,6 +560,26 @@
 			shellPath = /bin/bash;
 			shellScript = "# Copy Monaco Editor resources into the extension bundle\nMONACO_SRC=\"${SRCROOT}/ConjureDSPExtension/Resources/monaco\"\nMONACO_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/monaco\"\n\nif [ ! -d \"${MONACO_SRC}/vs\" ]; then\n    echo \"warning: Monaco Editor not found at ${MONACO_SRC}/vs. Run scripts/setup-monaco.sh first.\" >&2\n    # Still copy index.html and editor-bridge.js so the build doesn't fail\n    mkdir -p \"${MONACO_DST}\"\n    cp -f \"${MONACO_SRC}/index.html\" \"${MONACO_DST}/\" 2>/dev/null || true\n    cp -f \"${MONACO_SRC}/editor-bridge.js\" \"${MONACO_DST}/\" 2>/dev/null || true\n    exit 0\nfi\n\n# Skip if no source file is newer than the last copy\nSTAMP=\"${MONACO_DST}/.copy-stamp\"\nif [ -f \"$STAMP\" ] && [ -z \"$(find \"${MONACO_SRC}\" -type f -newer \"$STAMP\" -print -quit 2>/dev/null)\" ]; then\n    echo \"note: Monaco Editor unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${MONACO_DST}\"\nrsync -a --delete \"${MONACO_SRC}/\" \"${MONACO_DST}/\"\n\ntouch \"$STAMP\"\n";
 		};
+		AABB0020000000XTERM0001 /* Copy Terminal (xterm.js) */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/ConjureDSPExtension/Resources/terminal/index.html",
+			);
+			name = "Copy Terminal (xterm.js)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/terminal/index.html",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# Copy terminal resources into the extension bundle, auto-downloading xterm.js if needed\nTERM_SRC=\"${SRCROOT}/ConjureDSPExtension/Resources/terminal\"\nTERM_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/terminal\"\n\n# Auto-download xterm.js if missing\nif [ ! -f \"${TERM_SRC}/xterm.js\" ]; then\n    echo \"note: xterm.js not found, downloading...\" >&2\n    \"${SRCROOT}/scripts/setup-xterm.sh\" || {\n        echo \"warning: Failed to download xterm.js. Terminal will not work.\" >&2\n        # Still copy checked-in files so build doesn't fail\n        mkdir -p \"${TERM_DST}\"\n        cp -f \"${TERM_SRC}/index.html\" \"${TERM_DST}/\" 2>/dev/null || true\n        cp -f \"${TERM_SRC}/terminal-bridge.js\" \"${TERM_DST}/\" 2>/dev/null || true\n        exit 0\n    }\nfi\n\n# Skip if no source file is newer than the last copy\nSTAMP=\"${TERM_DST}/.copy-stamp\"\nif [ -f \"$STAMP\" ] && [ -z \"$(find \"${TERM_SRC}\" -type f -newer \"$STAMP\" -print -quit 2>/dev/null)\" ]; then\n    echo \"note: Terminal resources unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${TERM_DST}\"\nrsync -a --delete \"${TERM_SRC}/\" \"${TERM_DST}/\"\n\ntouch \"$STAMP\"\n";
+		};
 		AABB00112F5013850036AAB6 /* Pre-Build Clean */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -592,6 +627,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA11000600000001MIXPANEL /* Analytics.swift in Sources */,
+				AA22000200000001SHARED /* MCPToolProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -613,6 +649,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA22000300000001SHARED /* MCPToolProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

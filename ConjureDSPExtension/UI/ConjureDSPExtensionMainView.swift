@@ -49,6 +49,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var showSpectrogram: Bool = false
     @State private var showChat: Bool = false
     @State private var chatWidth: CGFloat = 280
+    @State private var useTerminalMode: Bool = false
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
     @State private var showExportAlert: Bool = false
@@ -150,10 +151,49 @@ struct ConjureDSPExtensionMainView: View {
 
             ZStack {
             HStack(spacing: 0) {
-            // Chat sidebar (collapsible, left side)
+            // AI sidebar (collapsible, left side) — Chat or Terminal mode
             if showChat {
-                ChatSidebarView(chatService: chatService)
-                    .frame(width: chatWidth)
+                VStack(spacing: 0) {
+                    // Mode toggle
+                    HStack(spacing: 0) {
+                        Button(action: { useTerminalMode = false }) {
+                            Text("Chat")
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(useTerminalMode ? Color.clear : Color.accentColor.opacity(0.15))
+                                .cornerRadius(4)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: { useTerminalMode = true }) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "terminal")
+                                    .font(.caption2)
+                                Text("Claude Code")
+                                    .font(.caption)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(useTerminalMode ? Color.accentColor.opacity(0.15) : Color.clear)
+                            .cornerRadius(4)
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+
+                    Divider()
+
+                    if useTerminalMode {
+                        TerminalView(colorScheme: colorScheme)
+                    } else {
+                        ChatSidebarView(chatService: chatService)
+                    }
+                }
+                .frame(width: chatWidth)
 
                 // Resizable divider
                 Rectangle()

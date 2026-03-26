@@ -14,6 +14,7 @@ struct ConjureDSPApp: App {
     private let hostModel = AudioUnitHostModel()
     @StateObject private var exportHandler = PendingExportHandler()
     private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+    private let terminalServer = TerminalServer()
 
     init() {
         SentrySetup.start()
@@ -30,12 +31,27 @@ struct ConjureDSPApp: App {
                     DispatchQueue.global(qos: .utility).async {
                         SharedPythonRuntimeInstaller.installIfNeeded()
                     }
+                    startTerminalServer()
                 }
         }
         .defaultSize(width: 700, height: 650)
         .commands {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updater: updaterController.updater)
+            }
+        }
+    }
+
+    private func startTerminalServer() {
+        terminalServer.start()
+        // Poll for AU availability — it loads asynchronously
+        Task { @MainActor in
+            for _ in 0..<60 {
+                if let provider = hostModel.mcpToolProvider {
+                    terminalServer.mcpServer.toolProvider = provider
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(500))
             }
         }
     }
