@@ -18,6 +18,7 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExte
 /// makes the WKWebView first responder.
 class TerminalContainerView: NSView {
     var webView: WKWebView?
+    private var lastFitWidth: CGFloat = 0
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -25,6 +26,16 @@ class TerminalContainerView: NSView {
         super.mouseDown(with: event)
         if let webView = webView {
             window?.makeFirstResponder(webView)
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        // Trigger xterm.js fit whenever the container width changes to a usable size
+        let width = bounds.width
+        if width > 10 && width != lastFitWidth {
+            lastFitWidth = width
+            webView?.evaluateJavaScript("if (window.terminalBridge) terminalBridge.fit()") { _, _ in }
         }
     }
 }
@@ -101,15 +112,11 @@ struct TerminalView: NSViewRepresentable {
             container.webView?.evaluateJavaScript("terminalBridge.setTheme('\(theme)')") { _, _ in }
         }
 
-        // Re-fit terminal when becoming visible (xterm.js needs non-zero dimensions)
+        // Focus terminal when becoming visible
         if isVisible && !coordinator.wasVisible {
-            // Small delay to let Auto Layout finish resizing the container
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                container.webView?.evaluateJavaScript("terminalBridge.fit()") { _, _ in }
-                container.webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
-                if let webView = container.webView {
-                    webView.window?.makeFirstResponder(webView)
-                }
+            container.webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
+            if let webView = container.webView {
+                webView.window?.makeFirstResponder(webView)
             }
         }
         coordinator.wasVisible = isVisible
