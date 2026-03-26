@@ -66,6 +66,17 @@
 <body>
     <div id="terminal-container">
         <div id="terminal"></div>
+        <!-- Transparent contentEditable overlay that triggers WebKit's text input
+             context. The AU ViewBridge doesn't forward plain keyDown events to
+             extensions, but it DOES forward text input for contentEditable areas
+             (this is how Monaco editor receives keyboard input in DAWs).
+             Input is captured here and forwarded to the WebSocket. -->
+        <div id="input-overlay" contenteditable="true" autocorrect="off"
+             autocapitalize="off" spellcheck="false"
+             style="position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+                    z-index: 5; opacity: 0; color: transparent; caret-color: transparent;
+                    outline: none; overflow: hidden; white-space: pre;
+                    font-size: 1px; line-height: 1px;"></div>
         <div id="status-overlay">
             <div class="status-text" id="status-text">Connecting...</div>
             <div class="status-hint" id="status-hint"></div>

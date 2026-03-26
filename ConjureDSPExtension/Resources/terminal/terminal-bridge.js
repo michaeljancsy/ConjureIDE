@@ -116,9 +116,64 @@
         });
         resizeObserver.observe(document.getElementById('terminal-container'));
 
-        // Click on terminal container re-focuses the terminal (in case focus was lost)
+        // --- Input overlay for AU ViewBridge keyboard input ---
+        // The AU ViewBridge doesn't forward plain keyDown events to extensions,
+        // but it DOES forward text input for contentEditable elements (same
+        // mechanism that makes Monaco editor work in DAWs). We use a transparent
+        // contentEditable overlay to capture keyboard input.
+        var inputOverlay = document.getElementById('input-overlay');
+
+        // Focus the overlay on click (this triggers WebKit's text input context)
         document.getElementById('terminal-container').addEventListener('mousedown', function() {
-            if (terminal) terminal.focus();
+            inputOverlay.focus();
+        });
+
+        // Capture text input from the contentEditable overlay
+        inputOverlay.addEventListener('input', function(e) {
+            // Read whatever was typed, send to WebSocket, then clear
+            var text = inputOverlay.textContent || inputOverlay.innerText || '';
+            if (text && socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(text);
+            }
+            // Clear the overlay so it doesn't accumulate text
+            inputOverlay.textContent = '';
+        });
+
+        // Capture special keys (Enter, Escape, Backspace, arrows, Ctrl+key)
+        inputOverlay.addEventListener('keydown', function(e) {
+            var data = null;
+
+            // Ctrl+key combinations
+            if (e.ctrlKey && e.key.length === 1) {
+                var code = e.key.toLowerCase().charCodeAt(0) - 96; // a=1, b=2, ...
+                if (code >= 1 && code <= 26) {
+                    data = String.fromCharCode(code);
+                }
+            } else {
+                switch (e.key) {
+                case 'Enter':      data = '\r'; break;
+                case 'Escape':     data = '\x1b'; break;
+                case 'Backspace':  data = '\x7f'; break;
+                case 'Tab':        data = '\t'; break;
+                case 'ArrowUp':    data = '\x1b[A'; break;
+                case 'ArrowDown':  data = '\x1b[B'; break;
+                case 'ArrowRight': data = '\x1b[C'; break;
+                case 'ArrowLeft':  data = '\x1b[D'; break;
+                case 'Home':       data = '\x1b[H'; break;
+                case 'End':        data = '\x1b[F'; break;
+                case 'PageUp':     data = '\x1b[5~'; break;
+                case 'PageDown':   data = '\x1b[6~'; break;
+                case 'Delete':     data = '\x1b[3~'; break;
+                }
+            }
+
+            if (data !== null) {
+                e.preventDefault();
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(data);
+                }
+            }
+            // Let regular character keys fall through to the 'input' event handler
         });
 
         // --- DEBUG: Diagnose keyboard input ---

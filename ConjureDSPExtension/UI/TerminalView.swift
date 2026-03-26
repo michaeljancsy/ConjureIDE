@@ -198,18 +198,26 @@ struct TerminalView: NSViewRepresentable {
             if let m = eventMonitor { NSEvent.removeMonitor(m); eventMonitor = nil }
         }
 
-        /// Track clicks outside the terminal to clear logical focus.
+        /// Track clicks outside the terminal to clear logical focus and notify the host app.
         private func installEventMonitor() {
             guard eventMonitor == nil else { return }
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
                 guard let self = self,
                       let webView = self.webView,
                       let hostView = self.hostView else { return event }
-                // If click is outside the terminal WKWebView, clear focus
                 if let window = webView.window {
                     let point = webView.convert(event.locationInWindow, from: nil)
                     if !webView.bounds.contains(point) {
                         hostView.hasTerminalFocus = false
+                        // Tell host app to stop capturing keyboard events
+                        webView.evaluateJavaScript("""
+                            if (typeof terminalBridge !== 'undefined') {
+                                var s = terminalBridge._socket;
+                                if (s && s.readyState === WebSocket.OPEN) {
+                                    s.send(JSON.stringify({ type: 'focus', focused: false }));
+                                }
+                            }
+                        """) { _, _ in }
                     }
                 }
                 return event
