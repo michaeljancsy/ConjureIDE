@@ -104,6 +104,8 @@ enum FactoryPresetRegistry {
         Entry(name: "Low-Pass Filter (Rust)", number: 17, resourceName: "preset_lowpass_rust", language: .rust, category: .filters),
         Entry(name: "State Variable Filter (Python)", number: 18, resourceName: "preset_svf", language: .python, category: .filters),
         Entry(name: "State Variable Filter (Rust)", number: 19, resourceName: "preset_svf_rust", language: .rust, category: .filters),
+        Entry(name: "3-Band EQ (Python)", number: 45, resourceName: "preset_eq3", language: .python, category: .filters),
+        Entry(name: "3-Band EQ (Rust)", number: 46, resourceName: "preset_eq3_rust", language: .rust, category: .filters),
 
         // Dynamics
         Entry(name: "Compressor (Python)", number: 20, resourceName: "preset_compressor", language: .python, category: .dynamics),
@@ -112,6 +114,8 @@ enum FactoryPresetRegistry {
         Entry(name: "Limiter (Rust)", number: 23, resourceName: "preset_limiter_rust", language: .rust, category: .dynamics),
         Entry(name: "Noise Gate (Python)", number: 24, resourceName: "preset_noisegate", language: .python, category: .dynamics),
         Entry(name: "Noise Gate (Rust)", number: 25, resourceName: "preset_noisegate_rust", language: .rust, category: .dynamics),
+        Entry(name: "De-esser (Python)", number: 47, resourceName: "preset_deesser", language: .python, category: .dynamics),
+        Entry(name: "De-esser (Rust)", number: 48, resourceName: "preset_deesser_rust", language: .rust, category: .dynamics),
 
         // Modulation
         Entry(name: "Tremolo (Python)", number: 26, resourceName: "preset_tremolo", language: .python, category: .modulation),
@@ -124,6 +128,8 @@ enum FactoryPresetRegistry {
         Entry(name: "Phaser (Rust)", number: 33, resourceName: "preset_phaser_rust", language: .rust, category: .modulation),
         Entry(name: "Ring Modulator (Python)", number: 34, resourceName: "preset_ringmod", language: .python, category: .modulation),
         Entry(name: "Ring Modulator (Rust)", number: 35, resourceName: "preset_ringmod_rust", language: .rust, category: .modulation),
+        Entry(name: "Auto-Wah (Python)", number: 49, resourceName: "preset_wah", language: .python, category: .modulation),
+        Entry(name: "Auto-Wah (Rust)", number: 50, resourceName: "preset_wah_rust", language: .rust, category: .modulation),
 
         // Delay / Time
         Entry(name: "Delay (Python)", number: 36, resourceName: "preset_delay", language: .python, category: .delay),
