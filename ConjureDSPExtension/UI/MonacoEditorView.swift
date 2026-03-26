@@ -6,9 +6,10 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExte
 
 struct MonacoEditorView: NSViewRepresentable {
     @Binding var text: String
-    var colorScheme: ColorScheme
+    var theme: String
     var language: ScriptLanguage = .python
     var isEditable: Bool = true
+    var markers: [Marker] = []
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -55,7 +56,7 @@ struct MonacoEditorView: NSViewRepresentable {
 
         // Update stored properties for when editor becomes ready
         coordinator.pendingLanguage = language
-        coordinator.pendingTheme = colorScheme
+        coordinator.pendingTheme = theme
         coordinator.pendingReadOnly = !isEditable
 
         guard coordinator.isEditorReady else {
@@ -65,7 +66,6 @@ struct MonacoEditorView: NSViewRepresentable {
         }
 
         // Update theme if changed
-        let theme = colorScheme == .dark ? "vs-dark" : "vs"
         if coordinator.lastTheme != theme {
             coordinator.lastTheme = theme
             webView.evaluateJavaScript("bridge.setTheme('\(theme)')") { _, _ in }
@@ -91,6 +91,23 @@ struct MonacoEditorView: NSViewRepresentable {
             let escaped = text.jsEscaped
             webView.evaluateJavaScript("bridge.setContent(\"\(escaped)\")") { _, _ in }
         }
+
+        // Update error markers if changed
+        if markers != coordinator.lastMarkers {
+            coordinator.lastMarkers = markers
+            if markers.isEmpty {
+                webView.evaluateJavaScript("bridge.clearMarkers()") { _, _ in }
+            } else {
+                let json = markers.map { m in
+                    let msg = m.message.jsEscaped
+                    let endLine = m.endLine ?? m.startLine
+                    let startCol = m.startColumn ?? 1
+                    let endCol = m.endColumn ?? 1000
+                    return "{startLine:\(m.startLine),startColumn:\(startCol),endLine:\(endLine),endColumn:\(endCol),message:\"\(msg)\",severity:\"\(m.severity)\"}"
+                }.joined(separator: ",")
+                webView.evaluateJavaScript("bridge.setMarkers([\(json)])") { _, _ in }
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -115,8 +132,11 @@ struct MonacoEditorView: NSViewRepresentable {
         // Queued state for before editor is ready
         var pendingContent: String?
         var pendingLanguage: ScriptLanguage = .python
-        var pendingTheme: ColorScheme = .dark
+        var pendingTheme: String = "vs-dark"
         var pendingReadOnly: Bool = false
+
+        // Last-sent markers for diffing
+        var lastMarkers: [Marker] = []
         private var initRetryCount = 0
         private static let maxInitRetries = 2
 
@@ -153,7 +173,6 @@ struct MonacoEditorView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             log.info("WKWebView didFinish navigation")
             // Page loaded — initialize Monaco with options
-            let theme = pendingTheme == .dark ? "vs-dark" : "vs"
             let lang = pendingLanguage == .rust ? "rust" : "python"
             let content = (pendingContent ?? text.wrappedValue).jsEscaped
 
@@ -162,7 +181,7 @@ struct MonacoEditorView: NSViewRepresentable {
                     bridge.init({
                         content: "\(content)",
                         language: "\(lang)",
-                        theme: "\(theme)",
+                        theme: "\(pendingTheme)",
                         readOnly: \(pendingReadOnly)
                     });
                     'ok';
@@ -215,9 +234,8 @@ struct MonacoEditorView: NSViewRepresentable {
         private func applyPendingState() {
             guard let webView else { return }
 
-            let theme = pendingTheme == .dark ? "vs-dark" : "vs"
-            lastTheme = theme
-            webView.evaluateJavaScript("bridge.setTheme('\(theme)')") { _, _ in }
+            lastTheme = pendingTheme
+            webView.evaluateJavaScript("bridge.setTheme('\(pendingTheme)')") { _, _ in }
 
             let lang = pendingLanguage == .rust ? "rust" : "python"
             lastLanguage = lang
@@ -241,12 +259,22 @@ struct MonacoEditorView: NSViewRepresentable {
 // MARK: - Error markers
 
 extension MonacoEditorView {
-    /// Set error/warning markers in the editor.
-    /// Call via the coordinator's webView after obtaining it.
-    struct Marker {
+    struct Marker: Equatable {
         let startLine: Int
+        let startColumn: Int?
+        let endLine: Int?
+        let endColumn: Int?
         let message: String
         let severity: String  // "error" or "warning"
+
+        init(startLine: Int, startColumn: Int? = nil, endLine: Int? = nil, endColumn: Int? = nil, message: String, severity: String = "error") {
+            self.startLine = startLine
+            self.startColumn = startColumn
+            self.endLine = endLine
+            self.endColumn = endColumn
+            self.message = message
+            self.severity = severity
+        }
     }
 }
 
