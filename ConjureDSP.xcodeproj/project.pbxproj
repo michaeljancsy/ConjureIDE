@@ -210,6 +210,7 @@
 			packageProductDependencies = (
 				AA5E00022F5013850036AAB6 /* Sentry */,
 				AA11000200000001MIXPANEL /* Mixpanel */,
+				AA11000200000001SPARKLE /* Sparkle */,
 			);
 			productName = ConjureDSP;
 			productReference = 257911402F5013840036AAB6 /* ConjureDSP.app */;
@@ -330,6 +331,7 @@
 			packageReferences = (
 				AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				AA11000500000001MIXPANEL /* XCRemoteSwiftPackageReference "mixpanel-swift" */,
+				AA11000500000001SPARKLE /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 257911412F5013840036AAB6 /* Products */;
@@ -935,6 +937,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = ConjureDSP;
+				INFOPLIST_KEY_SUFeedURL = "https://example.com/appcast.xml";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -1170,6 +1173,14 @@
 				minimumVersion = 9.0.0;
 			};
 		};
+		AA11000500000001SPARKLE /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1192,6 +1203,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
 			productName = Sentry;
+		};
+		AA11000200000001SPARKLE /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA11000500000001SPARKLE /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

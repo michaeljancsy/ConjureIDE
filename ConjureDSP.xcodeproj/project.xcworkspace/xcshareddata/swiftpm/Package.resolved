@@ -1,5 +1,5 @@
 {
-  "originHash" : "placeholder",
+  "originHash" : "ae938f5a5a8e9784fe8e1922ac1c35a087bfe4f24509a072530711c4d7e8747c",
   "pins" : [
     {
       "identity" : "mixpanel-swift",
@@ -17,6 +17,15 @@
       "state" : {
         "revision" : "05d3ce8332097ff0b2347231ac66476fd7d2f4d8",
         "version" : "9.8.0"
+      }
+    },
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle",
+      "state" : {
+        "revision" : "21d8df80440b1ca3b65fa82e40782f1e5a9e6ba2",
+        "version" : "2.9.0"
       }
     }
   ],
