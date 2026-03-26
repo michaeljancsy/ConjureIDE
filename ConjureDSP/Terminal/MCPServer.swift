@@ -32,6 +32,9 @@ final class MCPServer {
     /// Active SSE connections waiting for server-initiated events.
     private var sseConnections: [ObjectIdentifier: NWConnection] = [:]
 
+    /// Buffered data per connection for handling fragmented TCP packets.
+    private var connectionBuffers: [ObjectIdentifier: Data] = [:]
+
     // MARK: - Lifecycle
 
     /// Start the MCP server on a random available port.
@@ -121,6 +124,7 @@ final class MCPServer {
     private func removeConnection(_ connection: NWConnection) {
         connections.removeAll { $0 === connection }
         sseConnections.removeValue(forKey: ObjectIdentifier(connection))
+        connectionBuffers.removeValue(forKey: ObjectIdentifier(connection))
     }
 
     // MARK: - HTTP Request Parsing
@@ -130,7 +134,7 @@ final class MCPServer {
             guard let self, let connection else { return }
             Task { @MainActor in
                 if let data {
-                    self.handleHTTPData(data, on: connection)
+                    self.appendAndTryParse(data, on: connection)
                 }
                 if let error {
                     log.debug("Connection receive error: \(error.localizedDescription, privacy: .public)")
@@ -144,14 +148,50 @@ final class MCPServer {
         }
     }
 
-    private func handleHTTPData(_ data: Data, on connection: NWConnection) {
-        guard let requestString = String(data: data, encoding: .utf8) else {
+    /// Buffer incoming data and attempt to parse a complete HTTP request.
+    private func appendAndTryParse(_ data: Data, on connection: NWConnection) {
+        let connId = ObjectIdentifier(connection)
+        var buffer = connectionBuffers[connId] ?? Data()
+        buffer.append(data)
+        connectionBuffers[connId] = buffer
+
+        guard let requestString = String(data: buffer, encoding: .utf8) else {
             sendHTTPResponse(connection: connection, status: 400, body: "Bad Request")
+            connectionBuffers.removeValue(forKey: connId)
             return
         }
 
-        // Parse HTTP request line
-        let lines = requestString.components(separatedBy: "\r\n")
+        // Need at least the headers (terminated by \r\n\r\n)
+        guard let headerEndRange = requestString.range(of: "\r\n\r\n") else {
+            // Headers incomplete — wait for more data
+            return
+        }
+
+        let headerSection = String(requestString[..<headerEndRange.lowerBound])
+        let bodyStart = requestString[headerEndRange.upperBound...]
+
+        // Parse Content-Length to know how much body to expect
+        var contentLength = 0
+        for line in headerSection.components(separatedBy: "\r\n") {
+            if line.lowercased().hasPrefix("content-length:") {
+                let value = line.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)
+                contentLength = Int(value) ?? 0
+                break
+            }
+        }
+
+        // Check if we have the complete body
+        let bodyReceivedCount = bodyStart.utf8.count
+        if bodyReceivedCount < contentLength {
+            // Body incomplete — wait for more data
+            return
+        }
+
+        // Complete request — consume buffer and parse
+        connectionBuffers.removeValue(forKey: connId)
+
+        // Parse request line
+        let lines = headerSection.components(separatedBy: "\r\n")
         guard let requestLine = lines.first else {
             sendHTTPResponse(connection: connection, status: 400, body: "Bad Request")
             return
@@ -165,15 +205,7 @@ final class MCPServer {
 
         let method = String(parts[0])
         let path = String(parts[1])
-
-        // Extract body (after blank line)
-        let body: String?
-        if let blankLineRange = requestString.range(of: "\r\n\r\n") {
-            let bodyStr = String(requestString[blankLineRange.upperBound...])
-            body = bodyStr.isEmpty ? nil : bodyStr
-        } else {
-            body = nil
-        }
+        let body: String? = contentLength > 0 ? String(bodyStart.prefix(contentLength)) : nil
 
         // Route
         switch (method, path) {

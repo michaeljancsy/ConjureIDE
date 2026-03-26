@@ -65,8 +65,8 @@ final class TerminalServer {
 
         webSocketServer.onClientCountChange = { [weak self] count in
             self?.onStateChange?()
-            // Auto-start Claude Code when first client connects
-            if count > 0, case .idle = self?.ptyManager.state {
+            // Auto-start Claude Code when first client connects, but only after MCP is ready
+            if count > 0, case .idle = self?.ptyManager.state, self?.mcpServer.port != nil {
                 self?.startClaudeCode()
             }
         }
@@ -89,7 +89,22 @@ final class TerminalServer {
         if case .running = ptyManager.state {
             return  // Already running
         }
-        ptyManager.mcpServerPort = mcpServer.port
+        guard let port = mcpServer.port else {
+            // MCP server not ready yet — poll until it is
+            Task { @MainActor in
+                for _ in 0..<20 {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    if let port = mcpServer.port {
+                        ptyManager.mcpServerPort = port
+                        ptyManager.start()
+                        return
+                    }
+                }
+                log.warning("MCP server did not become ready in time")
+            }
+            return
+        }
+        ptyManager.mcpServerPort = port
         ptyManager.start()
     }
 

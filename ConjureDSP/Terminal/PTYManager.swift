@@ -60,8 +60,21 @@ final class PTYManager {
             return
         }
 
+        // Write MCP config BEFORE fork — Foundation APIs are not fork-safe
+        if let port = mcpServerPort {
+            writeMCPConfig(port: port)
+        }
+
+        // Prepare C strings before fork (avoid Swift allocations in child)
+        let env = buildEnvironment()
+        let args = [claudePath, "--dangerously-skip-permissions"]
+        let cPath = strdup(claudePath)!
+        var cArgs: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) }
+        cArgs.append(nil)
+        var cEnv: [UnsafeMutablePointer<CChar>?] = env.map { strdup($0) }
+        cEnv.append(nil)
+
         // Create pty
-        var slaveFD: Int32 = -1
         var winSize = winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0)
 
         let pid = forkpty(&masterFD, nil, nil, &winSize)
@@ -71,31 +84,24 @@ final class PTYManager {
             state = .error(errorMsg)
             onStateChange?(.error(errorMsg))
             log.error("\(errorMsg, privacy: .public)")
+            // Clean up strdup'd memory
+            free(cPath)
+            cArgs.forEach { if let p = $0 { free(p) } }
+            cEnv.forEach { if let p = $0 { free(p) } }
             return
         }
 
         if pid == 0 {
-            // Child process — exec claude
-            var env = buildEnvironment()
-            var args = [claudePath, "--dangerously-skip-permissions"]
-
-            // Configure MCP server if port is available
-            if let port = mcpServerPort {
-                // Claude Code will be configured via environment or config file
-                // The MCP server URL is passed via a temporary config
-                writeMCPConfig(port: port)
-            }
-
-            // Convert to C strings
-            let cArgs = args.map { strdup($0) } + [nil]
-            let cEnv = env.map { strdup($0) } + [nil]
-
-            execve(claudePath, cArgs, cEnv)
-
-            // If execve returns, it failed
+            // Child process — only fork-safe calls (no Foundation, no Swift allocations)
+            execve(cPath, cArgs, cEnv)
             perror("execve")
             _exit(127)
         }
+
+        // Parent process — clean up strdup'd memory
+        free(cPath)
+        cArgs.forEach { if let p = $0 { free(p) } }
+        cEnv.forEach { if let p = $0 { free(p) } }
 
         // Parent process
         childPID = pid

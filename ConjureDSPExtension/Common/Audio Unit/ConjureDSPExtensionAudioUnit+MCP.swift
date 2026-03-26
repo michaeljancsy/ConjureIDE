@@ -7,6 +7,7 @@
 //
 
 import AVFoundation
+import ObjectiveC
 import os.log
 
 private let mcpLog = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "MCP")
@@ -204,11 +205,11 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
 
     // MARK: - Helpers
 
-    /// Last error tracked for MCP tool calls (separate from ToolExecutor's tracking).
-    private static var _mcpLastError: String?
+    /// Last error tracked for MCP tool calls (per-instance via associated object).
+    private static var mcpLastErrorKey: UInt8 = 0
     private var mcpLastError: String? {
-        get { Self._mcpLastError }
-        set { Self._mcpLastError = newValue }
+        get { objc_getAssociatedObject(self, &Self.mcpLastErrorKey) as? String }
+        set { objc_setAssociatedObject(self, &Self.mcpLastErrorKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
     }
 
     private func jsonStr(_ dict: [String: Any]) -> String {
