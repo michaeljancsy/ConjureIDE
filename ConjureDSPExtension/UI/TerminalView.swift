@@ -28,6 +28,22 @@ class TerminalHostView: NSView {
     var hasTerminalFocus: Bool = false
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // DIAGNOSTIC: Log every call to see what events reach this method
+        let keyChar = event.characters ?? "?"
+        let keyCode = event.keyCode
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let modStr = [
+            mods.contains(.command) ? "Cmd" : nil,
+            mods.contains(.control) ? "Ctrl" : nil,
+            mods.contains(.option) ? "Opt" : nil,
+            mods.contains(.shift) ? "Shift" : nil,
+        ].compactMap { $0 }.joined(separator: "+")
+        let diagMsg = "performKeyEquivalent: key='\(keyChar)' code=\(keyCode) mods=[\(modStr)] hasFocus=\(hasTerminalFocus)"
+        let escaped = diagMsg
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        webView?.evaluateJavaScript("terminalBridge.write('\\r\\n\\x1b[35m\(escaped)\\x1b[0m\\r\\n')") { _, _ in }
+
         guard hasTerminalFocus, webView != nil else {
             return super.performKeyEquivalent(with: event)
         }
