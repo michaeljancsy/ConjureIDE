@@ -140,7 +140,7 @@ ARCH="$(uname -m)"  # arm64 or x86_64
 
 DEST="$(dirname "$0")/../clang-dist"
 
-if [ -d "$DEST/bin/clang" ] || [ -L "$DEST/bin/clang" ]; then
+if [ -f "$DEST/bin/clang" ] || [ -L "$DEST/bin/clang" ]; then
     echo "clang-dist already exists, skipping download"
     exit 0
 fi
@@ -500,7 +500,32 @@ private static let supportedExtensions: Set<String> = ["py", "rs"]
 private static let supportedExtensions: Set<String> = ["py", "rs", "c"]
 ```
 
-2–3. **File extension ternaries (lines 168, 190)** — Two places with `language == .rust ? "rs" : "py"` — update to switch or use `preset.fileExtension`.
+2–3. **Output ternaries (lines 168, 190)** — Two places with `language == .rust ? "rs" : "py"` — update to switch or use `preset.fileExtension`.
+
+4. **Input ternary (line 114, `discoverPresets()`)** — `ext == "rs" ? .rust : .python` will misclassify `.c` files as Python. Update to a switch:
+```swift
+// Before:
+let language: ScriptLanguage = ext == "rs" ? .rust : .python
+
+// After:
+let language: ScriptLanguage = switch ext {
+    case "rs": .rust
+    case "c": .c
+    default: .python
+}
+```
+
+#### 5d: PersonalRepoSync
+
+**File: `ConjureDSPExtension/GitHub/PersonalRepoSync.swift`** (line 140)
+
+Same input ternary: `ext == "rs" ? .rust : .python` — update to switch with `.c` case.
+
+#### 5e: ImportURLPopover
+
+**File: `ConjureDSPExtension/UI/ImportURLPopover.swift`** (line 124)
+
+Same input ternary: `ext == "rs" ? .rust : .python` — update to switch with `.c` case.
 
 ---
 
@@ -728,7 +753,9 @@ C uses `static` variables for persistent state (delay lines, filter memory, etc.
 | `ConjureDSPExtension/Compilation/ScriptLanguage.swift` | Add `.c` case, detection, `displayName`, `monacoLanguageId` |
 | `ConjureDSPExtension/Common/Audio Unit/ConjureDSPExtensionAudioUnit.swift` | Add `.c` to `compileAndRun()`, fullState, factory loading |
 | `ConjureDSPExtension/Model/Preset.swift` | `fileExtension` switch, factory registry entries |
-| `ConjureDSPExtension/Model/PresetManager.swift` | Add `"c"` to `supportedExtensions`, file extension ternaries → switch (2 places) |
+| `ConjureDSPExtension/Model/PresetManager.swift` | Add `"c"` to `supportedExtensions`, input + output extension ternaries → switch |
+| `ConjureDSPExtension/GitHub/PersonalRepoSync.swift` | Extension → language ternary → switch with `.c` case |
+| `ConjureDSPExtension/UI/ImportURLPopover.swift` | Extension → language ternary → switch with `.c` case |
 | `ConjureDSPExtension/Export/ExportManager.swift` | WASM guard + preset write for `.c` |
 | `ConjureDSPExtension/AI/AnthropicProvider.swift` | Add `cApiContract`, update `chatSystemPrompt()` |
 | `ConjureDSPExtension/AI/ChatTools.swift` | Update tool descriptions |
