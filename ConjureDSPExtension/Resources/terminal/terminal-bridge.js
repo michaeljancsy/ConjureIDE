@@ -123,7 +123,9 @@
         // contentEditable overlay to capture keyboard input.
         var inputOverlay = document.getElementById('input-overlay');
 
-        // Focus the overlay on click (this triggers WebKit's text input context)
+        // Focus the overlay on click (triggers WebKit's text input context).
+        // The overlay has pointer-events:none so mouse events pass through to
+        // xterm.js for text selection and scrolling — we focus it programmatically.
         document.getElementById('terminal-container').addEventListener('mousedown', function() {
             inputOverlay.focus();
         });
@@ -141,6 +143,9 @@
 
         // Capture special keys (Enter, Escape, Backspace, arrows, Ctrl+key)
         inputOverlay.addEventListener('keydown', function(e) {
+            // Let Cmd+key pass through for app shortcuts and xterm.js selection
+            if (e.metaKey) return;
+
             var data = null;
 
             // Ctrl+key combinations
