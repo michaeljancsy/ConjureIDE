@@ -1,10 +1,28 @@
 import Foundation
 import os
 
+// MARK: - ETag Cache
+
+/// Thread-safe in-memory cache for HTTP ETag conditional requests.
+/// Stores ETags and response data keyed by URL, enabling 304 Not Modified responses.
+private actor ETagCache {
+    struct Entry {
+        let etag: String
+        let data: Data
+        let response: HTTPURLResponse
+    }
+
+    private var entries: [URL: Entry] = [:]
+
+    func get(_ url: URL) -> Entry? { entries[url] }
+    func set(_ url: URL, _ entry: Entry) { entries[url] = entry }
+}
+
 /// Low-level wrapper around the GitHub REST API and generic URL fetching.
 final class GitHubClient: Sendable {
     private let session: URLSession
     private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "GitHub")
+    private let etagCache = ETagCache()
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -219,7 +237,45 @@ final class GitHubClient: Sendable {
         return request
     }
 
+    /// Perform an HTTP request with automatic retry (for idempotent methods) and ETag caching.
     private func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let maxAttempts = 7
+        let method = request.httpMethod ?? "GET"
+        let isIdempotent = ["GET", "PUT", "DELETE"].contains(method)
+
+        var lastError: Error?
+        for attempt in 0..<maxAttempts {
+            if attempt > 0 {
+                let delay = retryDelay(attempt: attempt, lastError: lastError)
+                log.warning("Retry \(attempt)/\(maxAttempts - 1) for \(request.url?.absoluteString ?? "?", privacy: .public) after \(String(format: "%.1f", delay))s")
+                try await Task.sleep(for: .seconds(delay))
+            }
+            do {
+                return try await performOnce(request)
+            } catch {
+                lastError = error
+                if !isIdempotent || !Self.isRetryable(error) {
+                    throw error
+                }
+            }
+        }
+        throw lastError!
+    }
+
+    /// Single-attempt HTTP request with ETag conditional request support.
+    private func performOnce(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        var request = request
+        let isGET = (request.httpMethod ?? "GET") == "GET"
+
+        // Add If-None-Match header for GET requests with cached ETags
+        var cachedEntry: ETagCache.Entry?
+        if isGET, let url = request.url {
+            cachedEntry = await etagCache.get(url)
+            if let etag = cachedEntry?.etag {
+                request.setValue(etag, forHTTPHeaderField: "If-None-Match")
+            }
+        }
+
         let (data, response): (Data, URLResponse)
         do {
             (data, response) = try await session.data(for: request)
@@ -231,8 +287,18 @@ final class GitHubClient: Sendable {
             throw GitHubError.httpError(statusCode: 0, message: "Not an HTTP response")
         }
 
+        // Handle 304 Not Modified — return cached data
+        if httpResponse.statusCode == 304, let cached = cachedEntry {
+            return (cached.data, cached.response)
+        }
+
         switch httpResponse.statusCode {
         case 200...299:
+            // Cache ETag for GET responses
+            if isGET, let url = request.url,
+               let etag = httpResponse.value(forHTTPHeaderField: "ETag") {
+                await etagCache.set(url, ETagCache.Entry(etag: etag, data: data, response: httpResponse))
+            }
             return (data, httpResponse)
         case 404:
             throw GitHubError.notFound
@@ -252,6 +318,38 @@ final class GitHubClient: Sendable {
             let message = String(data: data.prefix(500), encoding: .utf8) ?? "Unknown error"
             throw GitHubError.httpError(statusCode: httpResponse.statusCode, message: message)
         }
+    }
+
+    /// Whether an error is worth retrying (transient failures only).
+    private static func isRetryable(_ error: Error) -> Bool {
+        switch error {
+        case is GitHubError:
+            switch error as! GitHubError {
+            case .networkError:
+                return true
+            case .httpError(let code, _) where code >= 500:
+                return true
+            case .rateLimited:
+                return true
+            default:
+                return false
+            }
+        default:
+            return false
+        }
+    }
+
+    /// Compute retry delay with exponential backoff (1,2,4,8,16,32s) and ±20% jitter.
+    /// For rate-limited responses, uses the server's retry-after value (capped at 32s).
+    private func retryDelay(attempt: Int, lastError: Error?) -> Double {
+        if let error = lastError as? GitHubError,
+           case .rateLimited(let retryAfter) = error,
+           let seconds = retryAfter {
+            return min(Double(seconds), 32.0)
+        }
+        let base = pow(2.0, Double(attempt - 1)) // 1, 2, 4, 8, 16, 32
+        let jitter = base * Double.random(in: -0.2...0.2)
+        return min(base + jitter, 32.0)
     }
 
     private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
