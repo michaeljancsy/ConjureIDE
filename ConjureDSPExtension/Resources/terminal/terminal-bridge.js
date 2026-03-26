@@ -116,70 +116,40 @@
         });
         resizeObserver.observe(document.getElementById('terminal-container'));
 
-        // --- Input overlay for AU ViewBridge keyboard input ---
-        // The AU ViewBridge doesn't forward plain keyDown events to extensions,
-        // but it DOES forward text input for contentEditable elements (same
-        // mechanism that makes Monaco editor work in DAWs). We use a transparent
-        // contentEditable overlay to capture keyboard input.
-        var inputOverlay = document.getElementById('input-overlay');
+        // --- Patch xterm.js textarea for AU ViewBridge compatibility ---
+        // The AU ViewBridge doesn't forward plain keyDown events to extensions.
+        // It DOES forward text input for editable elements via NSTextInputClient
+        // (this is how Monaco editor works in DAWs). xterm.js hides its textarea
+        // at left:-9999em with width:0 height:0, which prevents WebKit from
+        // establishing a text input session for it.
+        //
+        // Fix: use a MutationObserver to keep the textarea positioned within the
+        // viewport with nonzero dimensions. xterm.js's _syncTextArea() resets
+        // inline styles on every cursor move, so we must continuously override.
+        // This preserves xterm.js's native input handling (onData, key conversion,
+        // IME support) — no duplicate event handlers or overlay elements needed.
+        var ta = document.querySelector('.xterm-helper-textarea');
+        if (ta) {
+            var patchTextarea = function() {
+                ta.style.setProperty('left', '0px', 'important');
+                ta.style.setProperty('top', '0px', 'important');
+                ta.style.setProperty('width', '4px', 'important');
+                ta.style.setProperty('height', '4px', 'important');
+                ta.style.setProperty('opacity', '0.01', 'important');
+                ta.style.setProperty('z-index', '0', 'important');
+            };
+            patchTextarea();
 
-        // Focus the overlay on click (triggers WebKit's text input context).
-        // The overlay has pointer-events:none so mouse events pass through to
-        // xterm.js for text selection and scrolling — we focus it programmatically.
-        document.getElementById('terminal-container').addEventListener('mousedown', function() {
-            inputOverlay.focus();
-        });
-
-        // Capture text input from the contentEditable overlay
-        inputOverlay.addEventListener('input', function(e) {
-            // Read whatever was typed, send to WebSocket, then clear
-            var text = inputOverlay.textContent || inputOverlay.innerText || '';
-            if (text && socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(text);
-            }
-            // Clear the overlay so it doesn't accumulate text
-            inputOverlay.textContent = '';
-        });
-
-        // Capture special keys (Enter, Escape, Backspace, arrows, Ctrl+key)
-        inputOverlay.addEventListener('keydown', function(e) {
-            // Let Cmd+key pass through for app shortcuts and xterm.js selection
-            if (e.metaKey) return;
-
-            var data = null;
-
-            // Ctrl+key combinations
-            if (e.ctrlKey && e.key.length === 1) {
-                var code = e.key.toLowerCase().charCodeAt(0) - 96; // a=1, b=2, ...
-                if (code >= 1 && code <= 26) {
-                    data = String.fromCharCode(code);
-                }
-            } else {
-                switch (e.key) {
-                case 'Enter':      data = '\r'; break;
-                case 'Escape':     data = '\x1b'; break;
-                case 'Backspace':  data = '\x7f'; break;
-                case 'Tab':        data = '\t'; break;
-                case 'ArrowUp':    data = '\x1b[A'; break;
-                case 'ArrowDown':  data = '\x1b[B'; break;
-                case 'ArrowRight': data = '\x1b[C'; break;
-                case 'ArrowLeft':  data = '\x1b[D'; break;
-                case 'Home':       data = '\x1b[H'; break;
-                case 'End':        data = '\x1b[F'; break;
-                case 'PageUp':     data = '\x1b[5~'; break;
-                case 'PageDown':   data = '\x1b[6~'; break;
-                case 'Delete':     data = '\x1b[3~'; break;
-                }
-            }
-
-            if (data !== null) {
-                e.preventDefault();
-                if (socket && socket.readyState === WebSocket.OPEN) {
-                    socket.send(data);
-                }
-            }
-            // Let regular character keys fall through to the 'input' event handler
-        });
+            var patchingEnabled = true;
+            var observer = new MutationObserver(function() {
+                if (!patchingEnabled) return;
+                // Temporarily disable to avoid infinite loop (our change triggers observer)
+                patchingEnabled = false;
+                patchTextarea();
+                patchingEnabled = true;
+            });
+            observer.observe(ta, { attributes: true, attributeFilter: ['style'] });
+        }
 
         // --- DEBUG: Diagnose keyboard input ---
         document.addEventListener('mousedown', function(e) {
