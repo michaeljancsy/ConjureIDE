@@ -174,15 +174,16 @@ struct ConjureDSPExtensionMainView: View {
             }
 
             VStack(spacing: 0) {
-                // DIAGNOSTIC: Replace Monaco with placeholder to test if terminal
-                // gets keyboard input without another WKWebView competing.
-                // TODO: Restore MonacoEditorView after diagnosis.
-                Color(nsColor: .textBackgroundColor)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .border(Color.secondary.opacity(0.3), width: 1)
-                    .padding(.horizontal)
-                    .padding(.top, 8)
-                    .overlay(Text("Monaco disabled for keyboard diagnosis").foregroundColor(.secondary))
+                MonacoEditorView(
+                    text: $scriptSource,
+                    colorScheme: colorScheme,
+                    language: selectedLanguage,
+                    isEditable: true
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .border(Color.secondary.opacity(0.3), width: 1)
+                .padding(.horizontal)
+                .padding(.top, 8)
 
                 // Persistent status bar
                 HStack(spacing: 4) {

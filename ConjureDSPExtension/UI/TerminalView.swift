@@ -12,79 +12,194 @@ import WebKit
 
 private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExtension", category: "TerminalView")
 
-/// Terminal view using the same NSViewRepresentable pattern as MonacoEditorView:
-/// returns a bare WKWebView with no container wrappers.
+/// Container NSView that intercepts keyboard events for the terminal WKWebView.
+///
+/// In AU extension ViewBridge contexts, the terminal WKWebView never becomes
+/// first responder, so regular keyDown events never reach it. However,
+/// performKeyEquivalent IS called on all views in the hierarchy for every
+/// keyDown event — and we confirmed that Cmd+key events DO reach the WKWebView
+/// through this path (JS keydown fires for Cmd+A, Cmd+C, etc.).
+///
+/// This container overrides performKeyEquivalent to intercept ALL key events
+/// (not just Cmd+key) when the terminal has logical focus, converts them to
+/// terminal escape sequences, and sends them to the WebSocket via JavaScript.
+class TerminalHostView: NSView {
+    weak var webView: WKWebView?
+    var hasTerminalFocus: Bool = false
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard hasTerminalFocus, webView != nil else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        // Let Cmd+key through for app shortcuts (Cmd+S, Cmd+R, Cmd+N)
+        if event.modifierFlags.contains(.command) {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        // Capture the key for the terminal
+        if let data = terminalInputData(for: event) {
+            sendToTerminal(data)
+            return true
+        }
+
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    // MARK: - Key conversion
+
+    private func sendToTerminal(_ data: Data) {
+        guard let webView = webView else { return }
+        let b64 = data.base64EncodedString()
+        webView.evaluateJavaScript("terminalBridge.sendInputBase64('\(b64)')") { _, _ in }
+    }
+
+    /// Convert an NSEvent to terminal input bytes.
+    private func terminalInputData(for event: NSEvent) -> Data? {
+        let str: String
+
+        // Ctrl+key → control codes (Ctrl+C = 0x03, Ctrl+D = 0x04, etc.)
+        if event.modifierFlags.contains(.control) {
+            if let chars = event.charactersIgnoringModifiers?.lowercased(),
+               let c = chars.first,
+               let ascii = c.asciiValue, ascii >= 0x61, ascii <= 0x7A { // a-z
+                let ctrlCode = ascii - 0x61 + 1 // a→1, b→2, ... z→26
+                return Data([ctrlCode])
+            }
+            if let chars = event.characters, !chars.isEmpty {
+                return chars.data(using: .utf8)
+            }
+            return nil
+        }
+
+        // Special keys → terminal escape sequences
+        switch Int(event.keyCode) {
+        case 36:  str = "\r"            // Return
+        case 76:  str = "\r"            // Numpad Enter
+        case 53:  str = "\u{1b}"        // Escape
+        case 51:  str = "\u{7f}"        // Backspace
+        case 48:  str = "\t"            // Tab
+        case 123: str = "\u{1b}[D"      // Left arrow
+        case 124: str = "\u{1b}[C"      // Right arrow
+        case 125: str = "\u{1b}[B"      // Down arrow
+        case 126: str = "\u{1b}[A"      // Up arrow
+        case 115: str = "\u{1b}[H"      // Home
+        case 119: str = "\u{1b}[F"      // End
+        case 116: str = "\u{1b}[5~"     // Page Up
+        case 121: str = "\u{1b}[6~"     // Page Down
+        case 117: str = "\u{1b}[3~"     // Forward Delete
+        default:
+            guard let chars = event.characters, !chars.isEmpty else { return nil }
+            str = chars
+        }
+
+        return str.data(using: .utf8)
+    }
+}
+
 struct TerminalView: NSViewRepresentable {
     var colorScheme: ColorScheme
 
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> TerminalHostView {
+        let container = TerminalHostView()
+
         let config = WKWebViewConfiguration()
         let contentController = WKUserContentController()
         contentController.add(context.coordinator, name: "terminalBridge")
         config.userContentController = contentController
 
-        // Allow local file access for xterm.js resources
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
+        webView.translatesAutoresizingMaskIntoConstraints = false
         context.coordinator.webView = webView
+        context.coordinator.hostView = container
+        container.webView = webView
 
-        // Transparent background
         webView.setValue(false, forKey: "drawsBackground")
 
-        // Load terminal HTML from extension bundle
+        container.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+
         let bundle = Bundle(for: Coordinator.self)
         if let terminalDir = bundle.url(forResource: "terminal", withExtension: nil),
            let terminalURL = bundle.url(forResource: "index", withExtension: "html", subdirectory: "terminal") {
-            log.info("Loading terminal from \(terminalURL.path, privacy: .public)")
             webView.loadFileURL(terminalURL, allowingReadAccessTo: terminalDir)
         } else {
-            log.error("Terminal resources not found in bundle \(bundle.bundlePath, privacy: .public)")
+            log.error("Terminal resources not found in bundle")
         }
 
-        return webView
+        return container
     }
 
-    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
-        log.info("TerminalView dismantled")
+    static func dismantleNSView(_ container: TerminalHostView, coordinator: Coordinator) {
         coordinator.disconnect()
-        let controller = webView.configuration.userContentController
-        controller.removeScriptMessageHandler(forName: "terminalBridge")
+        coordinator.removeEventMonitor()
+        if let webView = container.webView {
+            webView.configuration.userContentController.removeScriptMessageHandler(forName: "terminalBridge")
+        }
         coordinator.webView = nil
+        coordinator.hostView = nil
+        container.webView = nil
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {
+    func updateNSView(_ container: TerminalHostView, context: Context) {
         let coordinator = context.coordinator
-
         guard coordinator.isTerminalReady else {
             coordinator.pendingTheme = colorScheme
             return
         }
-
-        // Update theme
         let theme = colorScheme == .dark ? "dark" : "light"
         if coordinator.lastTheme != theme {
             coordinator.lastTheme = theme
-            webView.evaluateJavaScript("terminalBridge.setTheme('\(theme)')") { _, _ in }
+            container.webView?.evaluateJavaScript("terminalBridge.setTheme('\(theme)')") { _, _ in }
         }
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     // MARK: - Coordinator
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         weak var webView: WKWebView?
+        weak var hostView: TerminalHostView?
         var isTerminalReady = false
         var lastTheme: String?
         var pendingTheme: ColorScheme?
+        private var eventMonitor: Any?
 
-        /// Write first responder diagnostics directly to the terminal so they're
-        /// visible without needing system Console.app (extension logs don't appear
-        /// in Xcode's console for AU extensions).
+        deinit { removeEventMonitor() }
+
+        func removeEventMonitor() {
+            if let m = eventMonitor { NSEvent.removeMonitor(m); eventMonitor = nil }
+        }
+
+        /// Track clicks outside the terminal to clear logical focus.
+        private func installEventMonitor() {
+            guard eventMonitor == nil else { return }
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                guard let self = self,
+                      let webView = self.webView,
+                      let hostView = self.hostView else { return event }
+                // If click is outside the terminal WKWebView, clear focus
+                if let window = webView.window {
+                    let point = webView.convert(event.locationInWindow, from: nil)
+                    if !webView.bounds.contains(point) {
+                        hostView.hasTerminalFocus = false
+                    }
+                }
+                return event
+            }
+        }
+
         private func writeResponderDiagnostics() {
             guard let webView = webView else { return }
 
@@ -94,12 +209,10 @@ struct TerminalView: NSViewRepresentable {
             let windowType = window.map { String(describing: type(of: $0)) } ?? "nil"
             let isKey = window?.isKeyWindow ?? false
 
-            // Try to make the WKWebView first responder
             let makeResult = window?.makeFirstResponder(webView) ?? false
             let frAfter = window?.firstResponder
             let frAfterType = frAfter.map { String(describing: type(of: $0)) } ?? "nil"
 
-            // Walk responder chain
             var chain: [String] = []
             var resp: NSResponder? = webView
             while let r = resp, chain.count < 8 {
@@ -107,30 +220,28 @@ struct TerminalView: NSViewRepresentable {
                 resp = r.nextResponder
             }
 
-            // Also try making the hit-tested subview first responder
             let center = NSPoint(x: webView.bounds.midX, y: webView.bounds.midY)
             let hitView = webView.hitTest(center)
             let hitType = hitView.map { String(describing: type(of: $0)) } ?? "nil"
-            var hitResult = false
-            if let hv = hitView, let w = window {
-                hitResult = w.makeFirstResponder(hv)
-            }
-            let frAfterHit = window?.firstResponder
-            let frAfterHitType = frAfterHit.map { String(describing: type(of: $0)) } ?? "nil"
 
-            let lines = [
-                "\\x1b[36m--- RESPONDER DIAGNOSTICS ---\\x1b[0m",
-                "window: \\(windowType)  isKey: \\(isKey)",
-                "firstResponder BEFORE: \\(frType)",
-                "makeFirstResponder(webView): \\(makeResult)  FR after: \\(frAfterType)",
-                "hitTest center: \\(hitType)",
-                "makeFirstResponder(hitView): \\(hitResult)  FR after: \\(frAfterHitType)",
-                "chain: \\(chain.joined(separator: \" → \"))",
-                "\\x1b[36m----------------------------\\x1b[0m",
-            ]
-            let escaped = lines.joined(separator: "\\r\\n")
-            let js = "terminalBridge.write('\\r\\n\(escaped)\\r\\n')"
-            webView.evaluateJavaScript(js) { _, _ in }
+            // Build diagnostic lines with Swift interpolation FIRST
+            var lines: [String] = []
+            lines.append("--- RESPONDER DIAGNOSTICS ---")
+            lines.append("window: \(windowType)  isKey: \(isKey)")
+            lines.append("firstResponder BEFORE: \(frType)")
+            lines.append("makeFirstResponder(webView): \(makeResult)  FR after: \(frAfterType)")
+            lines.append("hitTest center: \(hitType)")
+            lines.append("chain: \(chain.joined(separator: " > "))")
+            lines.append("-----------------------------")
+
+            // Escape for JS string literal, then write to terminal
+            let text = lines.joined(separator: "\r\n")
+            let escaped = text
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+                .replacingOccurrences(of: "\r", with: "\\r")
+                .replacingOccurrences(of: "\n", with: "\\n")
+            webView.evaluateJavaScript("terminalBridge.write('\\r\\n\\x1b[36m\(escaped)\\x1b[0m\\r\\n')") { _, _ in }
         }
 
         func disconnect() {
@@ -139,50 +250,42 @@ struct TerminalView: NSViewRepresentable {
 
         // MARK: - WKScriptMessageHandler
 
-        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let body = message.body as? [String: Any],
                   let event = body["event"] as? String else { return }
-
             let data = body["data"] as? [String: Any] ?? [:]
 
             switch event {
             case "terminalReady":
                 isTerminalReady = true
-                log.info("Terminal ready")
 
-                // Apply pending theme
                 if let theme = pendingTheme {
-                    let themeName = theme == .dark ? "dark" : "light"
-                    lastTheme = themeName
-                    webView?.evaluateJavaScript("terminalBridge.setTheme('\(themeName)')") { _, _ in }
+                    let name = theme == .dark ? "dark" : "light"
+                    lastTheme = name
+                    webView?.evaluateJavaScript("terminalBridge.setTheme('\(name)')") { _, _ in }
                 }
-
-                // Fit terminal
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
                     self?.webView?.evaluateJavaScript("terminalBridge.fit()") { _, _ in }
                 }
 
-                // Read WebSocket port from App Group and connect
+                installEventMonitor()
                 connectToWebSocket()
 
             case "connected":
-                log.info("Terminal connected to WebSocket")
                 webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
 
             case "disconnected":
                 let code = data["code"] as? Int ?? 0
-                log.info("Terminal disconnected from WebSocket (code: \(code))")
+                log.info("Terminal disconnected (code: \(code))")
 
             case "resize":
-                if let cols = data["cols"] as? Int, let rows = data["rows"] as? Int {
-                    log.debug("Terminal resized: \(cols)x\(rows)")
-                }
+                break
 
             case "debug":
                 let msg = data["message"] as? String ?? ""
-                log.info("Terminal debug: \(msg, privacy: .public)")
-                // On click, write responder diagnostics directly to the terminal
+                // JS click callback → set logical focus on the host view
                 if msg.contains("[click]") {
+                    hostView?.hasTerminalFocus = true
                     writeResponderDiagnostics()
                 }
 
@@ -191,40 +294,30 @@ struct TerminalView: NSViewRepresentable {
             }
         }
 
-        // MARK: - WebSocket Connection
+        // MARK: - WebSocket
 
         private func connectToWebSocket() {
-            guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP") else {
-                log.warning("Failed to get App Group container URL")
-                showFallbackMessage()
-                return
+            guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP") else {
+                showFallbackMessage(); return
             }
-
-            let portFileURL = containerURL.appendingPathComponent("terminal-server-port")
-            guard let portString = try? String(contentsOf: portFileURL, encoding: .utf8),
-                  let port = UInt16(portString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                log.info("No terminal server port found — host app may not be running")
-                showFallbackMessage()
-                return
+            let portFile = url.appendingPathComponent("terminal-server-port")
+            guard let s = try? String(contentsOf: portFile, encoding: .utf8),
+                  let port = UInt16(s.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                showFallbackMessage(); return
             }
-
-            log.info("Connecting terminal to WebSocket on port \(port)")
             webView?.evaluateJavaScript("terminalBridge.connect(\(port))") { _, _ in }
         }
 
         private func showFallbackMessage() {
-            let message = "\\r\\n  \\x1b[33mClaude Code terminal requires the ConjureDSP host app.\\x1b[0m\\r\\n  \\x1b[90mOpen ConjureDSP.app to enable the AI terminal.\\x1b[0m\\r\\n"
-            webView?.evaluateJavaScript("terminalBridge.write('\(message)')") { _, _ in }
+            let msg = "\\r\\n  \\x1b[33mClaude Code terminal requires the ConjureDSP host app.\\x1b[0m\\r\\n  \\x1b[90mOpen ConjureDSP.app to enable the AI terminal.\\x1b[0m\\r\\n"
+            webView?.evaluateJavaScript("terminalBridge.write('\(msg)')") { _, _ in }
         }
 
         // MARK: - WKNavigationDelegate
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            log.info("Terminal HTML loaded")
-        }
-
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {}
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            log.error("Terminal navigation failed: \(error.localizedDescription, privacy: .public)")
+            log.error("Navigation failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
