@@ -41,8 +41,6 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     }
 
     private var hostingView: SafeHostingView<ConjureDSPExtensionMainView>?
-    private var aiService: AIService?
-    private var chatService: ChatService?
     private var captureManager: AudioCaptureManager?
     private var parameterState: ParameterState?
     private var licenseManager: LicenseManager?
@@ -166,25 +164,6 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             initialScript = "# Default preset not found in bundle\n"
             initialLanguage = .python
             initialBenchmark = nil
-        }
-
-        if aiService == nil {
-            aiService = AIService()
-        }
-        let ai = aiService!
-
-        if chatService == nil {
-            chatService = ChatService(aiService: ai)
-        }
-        let chat = chatService!
-        chat.toolExecutor.audioUnit = au
-        chat.toolExecutor.presetManager = pm
-        chat.toolExecutor.onScriptChanged = { [weak au] source, processTimeMs, budgetMs in
-            au?.scriptSourceDidChange.send(
-                ConjureDSPExtensionAudioUnit.ScriptSourceChange(
-                    source: source, processTimeMs: processTimeMs, budgetMs: budgetMs
-                )
-            )
         }
 
         if captureManager == nil {
@@ -458,8 +437,6 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             extensionBundle: extensionBundle,
             scriptSourcePublisher: scriptPublisher,
             presetManager: pm,
-            aiService: ai,
-            chatService: chat,
             captureManager: capture,
             parameterState: ps,
             licenseManager: lm,
