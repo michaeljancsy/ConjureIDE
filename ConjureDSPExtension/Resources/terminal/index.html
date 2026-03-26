@@ -45,6 +45,22 @@
 
         /* Override xterm background for transparency */
         .xterm { background: transparent !important; }
+
+        /* Reposition xterm.js's hidden textarea over the terminal area.
+           By default xterm.js places it at left:-9999em, which means WebKit
+           doesn't recognize the terminal as an editable surface and won't
+           make the WKWebView first responder on click. Placing it over the
+           terminal (transparent, full-size) triggers WebKit's text input
+           mode so the WKWebView claims first responder like Monaco does. */
+        .xterm-helper-textarea {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            opacity: 0 !important;
+            z-index: 5 !important;
+        }
     </style>
 </head>
 <body>
