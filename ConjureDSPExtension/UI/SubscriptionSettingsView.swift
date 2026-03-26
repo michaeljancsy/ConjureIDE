@@ -128,6 +128,7 @@ struct SubscriptionSettingsView: View {
             Button("Restart Demo") {
                 subscriptionManager.restartDemo()
             }
+            .disabled(subscriptionManager.demoSecondsRemaining > 0)
             .accessibilityIdentifier("restartDemoButton")
 
         case .noSubscription:
@@ -141,6 +142,7 @@ struct SubscriptionSettingsView: View {
             Button("Restart Demo") {
                 subscriptionManager.restartDemo()
             }
+            .disabled(subscriptionManager.demoSecondsRemaining > 0)
             .accessibilityIdentifier("restartDemoButton")
         }
     }
