@@ -290,6 +290,22 @@
         },
         focus: function() {
             if (terminal) terminal.focus();
+        },
+        // Send raw input data to the WebSocket (bypasses xterm.js keyboard handling).
+        // Used when the WKWebView doesn't receive keyboard events due to
+        // AU extension ViewBridge first responder issues.
+        sendInput: function(data) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(data);
+            }
+        },
+        // Send base64-encoded input data to the WebSocket.
+        // Called from Swift's performKeyEquivalent to inject keyboard input.
+        sendInputBase64: function(b64) {
+            var binary = atob(b64);
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(binary);
+            }
         }
     };
 
