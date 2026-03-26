@@ -1,8 +1,9 @@
 import numpy as np
+from conjuredsp.params import param
 
 PARAMS = {
-    "bit_depth":  {"min": 1, "max": 16, "unit": "bits", "default": 8},
-    "downsample": {"min": 1, "max": 16, "unit": "x",    "default": 1},
+    "bit_depth":  param(1, 16, unit="bits", default=8),
+    "downsample": param(1, 16, unit="x", default=1),
 }
 
 

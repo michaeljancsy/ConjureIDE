@@ -31,3 +31,4 @@ DerivedData/
 # Xcode user-specific files
 *.xcuserstate
 xcuserdata/
+rust/conjuredsp/__pycache__/

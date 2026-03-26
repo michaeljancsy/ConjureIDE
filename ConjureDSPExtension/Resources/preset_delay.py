@@ -1,18 +1,18 @@
 import numpy as np
-import math
+from conjuredsp.params import param, mix as mix_param
+from conjuredsp.buffers import DelayLine
 
 PARAMS = {
-    "time":     {"min": 10.0,  "max": 500.0, "unit": "ms", "default": 250.0},
-    "feedback": {"min": 0.0,   "max": 0.95,  "unit": "",   "default": 0.4},
-    "mix":      {"min": 0.0,   "max": 1.0,   "unit": "",   "default": 0.5},
+    "time":     param(10, 500, unit="ms", default=250),
+    "feedback": param(0, 0.95, default=0.4),
+    "mix":      mix_param(default=0.5),
 }
 
 # Max delay in samples (supports 500 ms at 96 kHz)
 MAX_DELAY = 48000
 
 # Persistent state
-_delay_buf = None
-_write_pos = 0
+_delays = None
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -29,7 +29,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         feedback: Feedback amount (0.0–0.95)
         mix:      Wet/dry mix (0.0 = dry, 1.0 = wet)
     """
-    global _delay_buf, _write_pos
+    global _delays
 
     delay_ms = params["time"]
     feedback = params["feedback"]
@@ -37,27 +37,15 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
     n_ch = len(inputs)
 
-    if _delay_buf is None or len(_delay_buf) != n_ch:
-        _delay_buf = [np.zeros(MAX_DELAY, dtype=np.float32) for _ in range(n_ch)]
+    if _delays is None or len(_delays) != n_ch:
+        _delays = [DelayLine(MAX_DELAY) for _ in range(n_ch)]
 
     delay_samples = int(delay_ms * 0.001 * sample_rate)
     if delay_samples >= MAX_DELAY:
         delay_samples = MAX_DELAY - 1
 
-    wp = _write_pos
-
     for i in range(frame_count):
-        rp = (wp - delay_samples + MAX_DELAY) % MAX_DELAY
-
         for ch in range(n_ch):
-            delayed = _delay_buf[ch][rp]
-
-            # Write input + feedback to delay line
-            _delay_buf[ch][wp] = inputs[ch][i] + delayed * feedback
-
-            # Mix dry + wet
+            delayed = _delays[ch].tap(delay_samples)
+            _delays[ch].write(inputs[ch][i] + delayed * feedback)
             outputs[ch][i] = inputs[ch][i] * (1.0 - mix) + delayed * mix
-
-        wp = (wp + 1) % MAX_DELAY
-
-    _write_pos = wp

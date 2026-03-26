@@ -1,7 +1,8 @@
-import numpy as np
+import math
+from conjuredsp.params import param
 
 PARAMS = {
-    "cutoff": {"min": 4.0, "max": 70.0, "unit": "Hz", "default": 4.0},
+    "cutoff": param(4, 70, unit="Hz", default=4),
 }
 
 # Persistent state per channel: [prev_x, prev_y]
@@ -23,7 +24,6 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     """
     global _state
 
-    import math
     cutoff_hz = params["cutoff"]
     r = math.exp(-2.0 * math.pi * cutoff_hz / sample_rate)
 

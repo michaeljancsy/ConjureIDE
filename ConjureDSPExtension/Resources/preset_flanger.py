@@ -1,20 +1,20 @@
-import numpy as np
 import math
+from conjuredsp.params import param, mix as mix_param
+from conjuredsp.buffers import DelayLine
 
 PARAMS = {
-    "rate":     {"min": 0.1, "max": 5.0, "unit": "Hz", "default": 0.5},
-    "depth":    {"min": 0.5, "max": 5.0, "unit": "ms", "default": 2.0},
-    "delay":    {"min": 1.0, "max": 5.0, "unit": "ms", "default": 2.0},
-    "feedback": {"min": 0.0, "max": 1.0, "unit": "",   "default": 0.5},
-    "mix":      {"min": 0.0, "max": 1.0, "unit": "",   "default": 0.5},
+    "rate":     param(0.1, 5, unit="Hz", default=0.5),
+    "depth":    param(0.5, 5, unit="ms", default=2),
+    "delay":    param(1, 5, unit="ms", default=2),
+    "feedback": param(0, 1, default=0.5),
+    "mix":      mix_param(default=0.5),
 }
 
 # Max delay in samples (supports up to 96 kHz)
 MAX_DELAY = 1024
 
 # Persistent state
-_delay_buf = None
-_write_pos = 0
+_delays = None
 _lfo_phase = 0.0
 
 
@@ -34,7 +34,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         feedback: Feedback amount (0.0–1.0)
         mix:      Wet/dry mix (0.0 = dry, 1.0 = wet)
     """
-    global _delay_buf, _write_pos, _lfo_phase
+    global _delays, _lfo_phase
 
     rate_hz = params["rate"]
     depth_ms = params["depth"]
@@ -44,35 +44,21 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
     n_ch = len(inputs)
 
-    if _delay_buf is None or len(_delay_buf) != n_ch:
-        _delay_buf = [np.zeros(MAX_DELAY, dtype=np.float32) for _ in range(n_ch)]
+    if _delays is None or len(_delays) != n_ch:
+        _delays = [DelayLine(MAX_DELAY) for _ in range(n_ch)]
 
     two_pi = 2.0 * math.pi
     lfo_inc = two_pi * rate_hz / sample_rate
     phase = _lfo_phase
-    wp = _write_pos
 
     for i in range(frame_count):
         delay_samples = (base_delay_ms + depth_ms * math.sin(phase)) * sample_rate / 1000.0
 
         for ch in range(n_ch):
-            # Read with linear interpolation
-            read_pos = wp - delay_samples
-            if read_pos < 0.0:
-                read_pos += MAX_DELAY
-            idx0 = int(read_pos) % MAX_DELAY
-            idx1 = (idx0 + 1) % MAX_DELAY
-            frac = read_pos - int(read_pos)
-            delayed = _delay_buf[ch][idx0] * (1.0 - frac) + _delay_buf[ch][idx1] * frac
-
-            # Write input + feedback to delay line
-            _delay_buf[ch][wp] = inputs[ch][i] + delayed * feedback
-
-            # Mix dry + wet
+            delayed = _delays[ch].read(delay_samples)
+            _delays[ch].write(inputs[ch][i] + delayed * feedback)
             outputs[ch][i] = inputs[ch][i] * (1.0 - mix) + delayed * mix
 
         phase += lfo_inc
-        wp = (wp + 1) % MAX_DELAY
 
     _lfo_phase = phase % two_pi
-    _write_pos = wp

@@ -1,10 +1,11 @@
 import numpy as np
-import math
+from conjuredsp.params import db, param
+from conjuredsp.dsp import db_to_gain, smooth_coeff
 
 PARAMS = {
-    "threshold": {"min": -20.0, "max": 0.0,   "unit": "dB", "default": -6.0},
-    "attack":    {"min": 0.01,  "max": 1.0,   "unit": "ms", "default": 0.1},
-    "release":   {"min": 10.0,  "max": 500.0, "unit": "ms", "default": 100.0},
+    "threshold": db(-20, 0, default=-6),
+    "attack":    param(0.01, 1, unit="ms", default=0.1),
+    "release":   param(10, 500, unit="ms", default=100),
 }
 
 # Persistent envelope follower state
@@ -33,9 +34,9 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     attack_ms = params["attack"]
     release_ms = params["release"]
 
-    threshold = 10.0 ** (threshold_db / 20.0)
-    attack_coeff = math.exp(-1.0 / (attack_ms * 0.001 * sample_rate))
-    release_coeff = math.exp(-1.0 / (release_ms * 0.001 * sample_rate))
+    threshold = db_to_gain(threshold_db)
+    attack_coeff = smooth_coeff(attack_ms, sample_rate)
+    release_coeff = smooth_coeff(release_ms, sample_rate)
 
     gain = np.ones(frame_count, dtype=np.float32)
     env = _envelope

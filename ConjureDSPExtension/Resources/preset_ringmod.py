@@ -1,11 +1,13 @@
 import numpy as np
+from conjuredsp import freq
+from conjuredsp.osc import LFO
 
 PARAMS = {
-    "frequency": {"min": 20.0, "max": 20000.0, "unit": "Hz", "default": 440.0, "curve": "log"},
+    "frequency": freq(20, 20000, default=440),
 }
 
-# Persistent phase across callbacks
-_phase = 0.0
+# Persistent LFO
+_lfo = None
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -21,15 +23,15 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     Params:
         frequency: Carrier frequency (20–20000 Hz)
     """
-    global _phase
+    global _lfo
 
     carrier_hz = params["frequency"]
 
-    t = np.arange(frame_count, dtype=np.float32) / sample_rate
-    carrier = np.sin(2.0 * np.pi * carrier_hz * t + _phase)
+    if _lfo is None:
+        _lfo = LFO(sample_rate, freq=carrier_hz)
+    _lfo.set_freq(carrier_hz)
+
+    carrier = _lfo.tick_n(frame_count)
 
     for ch in range(len(inputs)):
         np.multiply(inputs[ch][:frame_count], carrier, out=outputs[ch][:frame_count])
-
-    _phase += 2.0 * np.pi * carrier_hz * frame_count / sample_rate
-    _phase %= 2.0 * np.pi

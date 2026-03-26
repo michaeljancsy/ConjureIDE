@@ -1,18 +1,19 @@
 import numpy as np
+from conjuredsp.params import param, mix as mix_param
+from conjuredsp.buffers import DelayLine
 
 PARAMS = {
-    "time":     {"min": 50.0, "max": 500.0, "unit": "ms", "default": 250.0},
-    "feedback": {"min": 0.0,  "max": 0.95,  "unit": "",   "default": 0.4},
-    "mix":      {"min": 0.0,  "max": 1.0,   "unit": "",   "default": 0.5},
+    "time":     param(50, 500, unit="ms", default=250),
+    "feedback": param(0, 0.95, default=0.4),
+    "mix":      mix_param(default=0.5),
 }
 
 # Max delay in samples (supports 500 ms at 96 kHz)
 MAX_DELAY = 48000
 
 # Persistent state
-_left_buf = None
-_right_buf = None
-_write_pos = 0
+_left_dl = None
+_right_dl = None
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
@@ -30,7 +31,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         feedback: Cross-feedback (0.0–0.95)
         mix:      Wet/dry mix (0.0 = dry, 1.0 = wet)
     """
-    global _left_buf, _right_buf, _write_pos
+    global _left_dl, _right_dl
 
     delay_ms = params["time"]
     feedback = params["feedback"]
@@ -38,41 +39,31 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
     n_ch = len(inputs)
 
-    if _left_buf is None:
-        _left_buf = np.zeros(MAX_DELAY, dtype=np.float32)
-        _right_buf = np.zeros(MAX_DELAY, dtype=np.float32)
+    if _left_dl is None:
+        _left_dl = DelayLine(MAX_DELAY)
+        _right_dl = DelayLine(MAX_DELAY)
 
     delay_samples = int(delay_ms * 0.001 * sample_rate)
     if delay_samples >= MAX_DELAY:
         delay_samples = MAX_DELAY - 1
 
-    wp = _write_pos
-
     if n_ch < 2:
         # Mono: simple delay with feedback
         for i in range(frame_count):
-            rp = (wp + MAX_DELAY - delay_samples) % MAX_DELAY
-            delayed = _left_buf[rp]
-            _left_buf[wp] = inputs[0][i] + delayed * feedback
+            delayed = _left_dl.tap(delay_samples)
+            _left_dl.write(inputs[0][i] + delayed * feedback)
             outputs[0][i] = inputs[0][i] * (1.0 - mix) + delayed * mix
-            wp = (wp + 1) % MAX_DELAY
     else:
         # Stereo: ping-pong
         for i in range(frame_count):
-            rp = (wp + MAX_DELAY - delay_samples) % MAX_DELAY
-
-            left_delayed = _left_buf[rp]
-            right_delayed = _right_buf[rp]
+            left_delayed = _left_dl.tap(delay_samples)
+            right_delayed = _right_dl.tap(delay_samples)
 
             # Input goes to left, left feeds right, right feeds back to left
             mono_in = (inputs[0][i] + inputs[1][i]) * 0.5
-            _left_buf[wp] = mono_in + right_delayed * feedback
-            _right_buf[wp] = left_delayed * feedback
+            _left_dl.write(mono_in + right_delayed * feedback)
+            _right_dl.write(left_delayed * feedback)
 
             # Mix dry + wet
             outputs[0][i] = inputs[0][i] * (1.0 - mix) + left_delayed * mix
             outputs[1][i] = inputs[1][i] * (1.0 - mix) + right_delayed * mix
-
-            wp = (wp + 1) % MAX_DELAY
-
-    _write_pos = wp

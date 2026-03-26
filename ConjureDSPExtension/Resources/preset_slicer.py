@@ -1,7 +1,8 @@
 import numpy as np
+from conjuredsp.params import param
 
 PARAMS = {
-    "rate": {"min": 10.0, "max": 500.0, "unit": "ms", "default": 100.0},
+    "rate": param(10, 500, unit="ms", default=100),
 }
 
 # Max chunk size in samples (supports 500 ms at 96 kHz)

@@ -180,6 +180,31 @@ const bridge = {
                         'from scipy.fft import rfft, irfft, rfftfreq',
                         'Import scipy FFT functions', false),
 
+                    // ── conjuredsp imports ──
+                    sug('from conjuredsp import', Kind.Module,
+                        'from conjuredsp import ${1|freq,db,time_ms,mix,pct,param,toggle,ratio|}',
+                        'Import conjuredsp parameter helpers (pre-installed in ConjureDSP runtime)', true),
+
+                    sug('from conjuredsp import params', Kind.Module,
+                        'from conjuredsp import freq, db, time_ms, mix, pct, param',
+                        'Import all parameter shorthand builders from conjuredsp', false),
+
+                    sug('from conjuredsp.dsp import', Kind.Module,
+                        'from conjuredsp.dsp import db_to_gain, gain_to_db, ms_to_samples, smooth_coeff',
+                        'Import DSP utility functions', false),
+
+                    sug('from conjuredsp.buffers import DelayLine', Kind.Module,
+                        'from conjuredsp.buffers import DelayLine',
+                        'Import DelayLine — pre-allocated circular buffer for delay effects', false),
+
+                    sug('from conjuredsp.filters import', Kind.Module,
+                        'from conjuredsp.filters import Biquad, BiquadCoeffs',
+                        'Import biquad filter — coefficient calculation + stateful filtering', false),
+
+                    sug('from conjuredsp.osc import LFO', Kind.Module,
+                        'from conjuredsp.osc import LFO',
+                        'Import LFO — low-frequency oscillator with sine/triangle/saw/square waveforms', false),
+
                     // ── Persistent state pattern ──
                     sug('global state', Kind.Snippet,
                         [
@@ -454,6 +479,36 @@ const bridge = {
                         sug('math.pi', Kind.Constant, 'pi', '3.14159... Angular frequency: w0 = 2*math.pi*freq/sr', false),
                         sug('math.sqrt', Kind.Function, 'sqrt(${1:x})', 'Square root (scalar).', true),
                         sug('math.pow', Kind.Function, 'pow(${1:base}, ${2:exp})', 'Power (scalar).', true),
+                    ].map(s => ({ ...s, range })) };
+                }
+
+                // BiquadCoeffs. completions
+                if (textBefore.match(/\bBiquadCoeffs\.\w*$/)) {
+                    return { suggestions: [
+                        sug('BiquadCoeffs.lowpass', Kind.Function,
+                            'lowpass(${1:freq}, ${2:q}, ${3:sample_rate})',
+                            'Low-pass biquad coefficients. Passes frequencies below cutoff.', true),
+                        sug('BiquadCoeffs.highpass', Kind.Function,
+                            'highpass(${1:freq}, ${2:q}, ${3:sample_rate})',
+                            'High-pass biquad coefficients. Passes frequencies above cutoff.', true),
+                        sug('BiquadCoeffs.bandpass', Kind.Function,
+                            'bandpass(${1:freq}, ${2:q}, ${3:sample_rate})',
+                            'Band-pass biquad coefficients.', true),
+                        sug('BiquadCoeffs.notch', Kind.Function,
+                            'notch(${1:freq}, ${2:q}, ${3:sample_rate})',
+                            'Notch (band-reject) biquad coefficients.', true),
+                        sug('BiquadCoeffs.peak', Kind.Function,
+                            'peak(${1:freq}, ${2:q}, ${3:gain_db}, ${4:sample_rate})',
+                            'Peaking EQ biquad coefficients. Boost or cut at center frequency.', true),
+                        sug('BiquadCoeffs.lowshelf', Kind.Function,
+                            'lowshelf(${1:freq}, ${2:q}, ${3:gain_db}, ${4:sample_rate})',
+                            'Low shelf biquad coefficients.', true),
+                        sug('BiquadCoeffs.highshelf', Kind.Function,
+                            'highshelf(${1:freq}, ${2:q}, ${3:gain_db}, ${4:sample_rate})',
+                            'High shelf biquad coefficients.', true),
+                        sug('BiquadCoeffs.allpass', Kind.Function,
+                            'allpass(${1:freq}, ${2:q}, ${3:sample_rate})',
+                            'All-pass biquad coefficients. Shifts phase without changing amplitude.', true),
                     ].map(s => ({ ...s, range })) };
                 }
 

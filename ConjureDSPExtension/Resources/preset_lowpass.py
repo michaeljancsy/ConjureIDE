@@ -1,8 +1,8 @@
-import numpy as np
 import math
+from conjuredsp import freq
 
 PARAMS = {
-    "cutoff": {"min": 20.0, "max": 20000.0, "unit": "Hz", "default": 1000.0, "curve": "log"},
+    "cutoff": freq(),
 }
 
 # Persistent state: previous output per channel
