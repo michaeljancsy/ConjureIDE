@@ -3,29 +3,46 @@ from conjuredsp.params import param
 from conjuredsp.osc import LFO
 
 PARAMS = {
-    "rate":  param(0.5, 20, unit="Hz", default=5),
-    "depth": param(0, 1, default=0.5),
+    "sync":     param(0, 1, default=0),
+    "rate":     param(0.5, 20, unit="Hz", default=5),
+    "division": param(0, 6, default=2),
+    "depth":    param(0, 1, default=0.5),
 }
+
+# Division mapping: 0=1/1, 1=1/2, 2=1/4, 3=1/8, 4=1/16, 5=1/4T, 6=1/8T
+# Values are in beats (quarter notes)
+DIVISIONS = [4.0, 2.0, 1.0, 0.5, 0.25, 2.0 / 3.0, 1.0 / 3.0]
 
 # Persistent LFO
 _lfo = None
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, transport):
     """
     Tremolo — sine-based amplitude modulation.
 
     Modulates the audio amplitude with a low-frequency sine oscillator (LFO).
-    The LFO phase is tracked across callbacks for seamless modulation.
+    Supports free-running Hz rate or BPM-synced note divisions.
 
     Params:
-        rate:  LFO rate (0.5–20 Hz)
-        depth: Tremolo depth (0.0 = no effect, 1.0 = full tremolo)
+        sync:     0 = free Hz, 1 = BPM sync
+        rate:     LFO rate in free mode (0.5–20 Hz)
+        division: Note division in BPM mode (0=1/1 .. 6=1/8T)
+        depth:    Tremolo depth (0.0 = no effect, 1.0 = full tremolo)
     """
     global _lfo
 
-    rate_hz = params["rate"]
     depth = params["depth"]
+    tempo = transport["tempo"]
+
+    # Determine LFO rate
+    if params["sync"] > 0.5 and tempo > 0:
+        div_idx = int(round(params["division"]))
+        div_idx = max(0, min(div_idx, len(DIVISIONS) - 1))
+        beats = DIVISIONS[div_idx]
+        rate_hz = tempo / 60.0 / beats
+    else:
+        rate_hz = params["rate"]
 
     if _lfo is None:
         _lfo = LFO(sample_rate, freq=rate_hz)

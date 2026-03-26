@@ -22,7 +22,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ ! -d \"ConjureDSPExtension/Resources/monaco/vs\" ]; then ./scripts/setup-monaco.sh; fi",
+            "command": "if [ ! -d \"ConjureDSPExtension/Resources/monaco/vs\" ]; then MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ -n \"$MAIN_WT\" ] && [ -d \"$MAIN_WT/ConjureDSPExtension/Resources/monaco/vs\" ]; then mkdir -p ConjureDSPExtension/Resources/monaco && ln -s \"$MAIN_WT/ConjureDSPExtension/Resources/monaco/vs\" ConjureDSPExtension/Resources/monaco/vs && echo \"Symlinked Monaco from main worktree\"; else ./scripts/setup-monaco.sh; fi; fi",
             "timeout": 60,
             "statusMessage": "Setting up Monaco editor..."
           }
@@ -35,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "WORKTREE_DIR=$(python3 -c 'import sys,json;print(json.load(sys.stdin)[\"cwd\"])') && cd \"$WORKTREE_DIR\" && ./scripts/setup-monaco.sh",
+            "command": "WORKTREE_DIR=$(python3 -c 'import sys,json;print(json.load(sys.stdin)[\"cwd\"])') && cd \"$WORKTREE_DIR\" && if [ ! -d \"ConjureDSPExtension/Resources/monaco/vs\" ]; then MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ -n \"$MAIN_WT\" ] && [ -d \"$MAIN_WT/ConjureDSPExtension/Resources/monaco/vs\" ]; then mkdir -p ConjureDSPExtension/Resources/monaco && ln -s \"$MAIN_WT/ConjureDSPExtension/Resources/monaco/vs\" ConjureDSPExtension/Resources/monaco/vs && echo \"Symlinked Monaco from main worktree\"; else ./scripts/setup-monaco.sh; fi; fi",
             "timeout": 60,
             "statusMessage": "Setting up Monaco editor..."
           }

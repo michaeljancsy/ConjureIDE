@@ -15,6 +15,16 @@ static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
 static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
 
+// Host transport state (BPM sync). Written by host if get_transport_ptr is exported.
+// Layout: [tempo, beat_position, is_playing (0/1), time_sig_num, time_sig_den, sample_position]
+static mut TRANSPORT_BUF: [f32; 6] = [0.0; 6];
+const T_TEMPO: usize = 0;
+const T_BEAT: usize = 1;
+const T_PLAYING: usize = 2;
+const T_TIME_SIG_NUM: usize = 3;
+const T_TIME_SIG_DEN: usize = 4;
+const T_SAMPLE_POS: usize = 5;
+
 // Parameter indices
 const GAIN: usize = 0; // -24 to +12 dB
 
@@ -33,6 +43,11 @@ pub extern "C" fn get_output_ptr() -> i32 {
 #[no_mangle]
 pub extern "C" fn get_params_ptr() -> i32 {
     unsafe { PARAMS_BUF.as_ptr() as i32 }
+}
+
+#[no_mangle]
+pub extern "C" fn get_transport_ptr() -> i32 {
+    unsafe { TRANSPORT_BUF.as_ptr() as i32 }
 }
 
 #[no_mangle]

@@ -1,4 +1,5 @@
 use crate::backend::Backend;
+use crate::kernel::TransportState;
 use crate::params::{ParamMetadata, PARAM_COUNT};
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
@@ -20,6 +21,9 @@ pub struct PythonBackend {
     /// Rich parameter metadata from `PARAMS` dict. When present, process()
     /// passes a dict of denormalized values instead of a list of 0–1 floats.
     param_metadata: Option<Vec<ParamMetadata>>,
+    /// Cached arity of the Python `process()` function.
+    /// 6 = with transport dict, 5 = with params, 4 = legacy.
+    process_arity: usize,
 }
 
 impl PythonBackend {
@@ -38,7 +42,7 @@ impl PythonBackend {
         // AU bundle's Resources/python-dist/, which corrupts the code signature.
         std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
 
-        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>), PyErr> =
+        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, usize), PyErr> =
             Python::with_gil(|py| {
                 let code = std::fs::read_to_string(script_path)
                     .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
@@ -59,17 +63,24 @@ impl PythonBackend {
                 let module = PyModule::from_code(py, &code_c, &path_c, &module_name)?;
                 let process_fn = module.getattr("process")?;
 
+                // Detect process() arity via __code__.co_argcount for fast dispatch.
+                // 6 = with transport, 5 = with params, 4 = legacy.
+                let arity: usize = process_fn
+                    .getattr("__code__")?
+                    .getattr("co_argcount")?
+                    .extract()?;
+
                 // Try PARAMS dict first (rich metadata):
                 //   PARAMS = {"threshold": {"min": -40, "max": -3, "unit": "dB", "default": -20}, ...}
                 let (param_names, param_metadata) =
                     Self::extract_params(py, &module);
 
-                Ok((process_fn.unbind(), param_names, param_metadata))
+                Ok((process_fn.unbind(), param_names, param_metadata, arity))
             });
 
         match result {
-            Ok((process_fn, param_names, param_metadata)) => {
-                eprintln!("ConjureDSP-Rust: Python script loaded successfully");
+            Ok((process_fn, param_names, param_metadata, arity)) => {
+                eprintln!("ConjureDSP-Rust: Python script loaded successfully (arity={})", arity);
                 Ok(Self {
                     py_process_fn: process_fn,
                     py_input_arrays: Vec::new(),
@@ -78,6 +89,7 @@ impl PythonBackend {
                     last_error: None,
                     param_names,
                     param_metadata,
+                    process_arity: arity,
                 })
             }
             Err(e) => {
@@ -237,7 +249,9 @@ impl PythonBackend {
         frame_count: usize,
         sample_rate: f64,
         params: &[f32; PARAM_COUNT],
+        transport: &TransportState,
     ) -> bool {
+        let arity = self.process_arity;
         let result: Result<(), PyErr> = Python::with_gil(|py| {
             // Copy input audio data into pre-allocated numpy arrays
             for ch in 0..channel_count {
@@ -267,21 +281,35 @@ impl PythonBackend {
                 PyList::new(py, params.iter())?.into_any()
             };
 
-            // Try 5-arg call first: process(inputs, outputs, frame_count, sample_rate, params)
-            // Fall back to 4-arg call for backward compatibility with old scripts.
-            let call_result = self.py_process_fn
-                .call1(py, (input_list.clone(), output_list.clone(), frame_count as u32, sample_rate, params_obj));
-
-            match call_result {
-                Ok(_) => {}
-                Err(e) => {
-                    // Check if this is a TypeError from wrong arg count — fall back to 4-arg
-                    if e.is_instance_of::<pyo3::exceptions::PyTypeError>(py) {
-                        self.py_process_fn
-                            .call1(py, (input_list, output_list, frame_count as u32, sample_rate))?;
-                    } else {
-                        return Err(e);
-                    }
+            // Dispatch by cached arity (detected at load time):
+            // 6-arg: process(inputs, outputs, frame_count, sample_rate, params, transport)
+            // 5-arg: process(inputs, outputs, frame_count, sample_rate, params)
+            // 4-arg: process(inputs, outputs, frame_count, sample_rate)  [legacy]
+            match arity {
+                6.. => {
+                    let transport_dict = PyDict::new(py);
+                    transport_dict.set_item("tempo", transport.tempo)?;
+                    transport_dict.set_item("beat", transport.beat_position)?;
+                    transport_dict.set_item("playing", transport.is_playing)?;
+                    transport_dict.set_item("time_sig_num", transport.time_sig_numerator)?;
+                    transport_dict.set_item("time_sig_den", transport.time_sig_denominator)?;
+                    transport_dict.set_item("sample_position", transport.sample_position)?;
+                    self.py_process_fn.call1(
+                        py,
+                        (input_list, output_list, frame_count as u32, sample_rate, params_obj, transport_dict),
+                    )?;
+                }
+                5 => {
+                    self.py_process_fn.call1(
+                        py,
+                        (input_list, output_list, frame_count as u32, sample_rate, params_obj),
+                    )?;
+                }
+                _ => {
+                    self.py_process_fn.call1(
+                        py,
+                        (input_list, output_list, frame_count as u32, sample_rate),
+                    )?;
                 }
             }
 
@@ -331,12 +359,13 @@ impl Backend for PythonBackend {
         frame_count: usize,
         sample_rate: f64,
         params: &[f32; PARAM_COUNT],
+        transport: &TransportState,
     ) -> bool {
         if self.py_input_arrays.is_empty() {
             self.last_error = Some("Python arrays not allocated — initialize() not called or failed".to_string());
             return false;
         }
-        self.process_with_python(inputs, outputs, channel_count, frame_count, sample_rate, params)
+        self.process_with_python(inputs, outputs, channel_count, frame_count, sample_rate, params, transport)
     }
 
     fn last_error(&self) -> Option<&str> {

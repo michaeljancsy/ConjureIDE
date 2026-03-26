@@ -1,4 +1,5 @@
 use crate::backend::Backend;
+use crate::kernel::TransportState;
 use crate::params::PARAM_COUNT;
 use std::collections::HashMap;
 use wasmtime::*;
@@ -34,10 +35,12 @@ pub struct WasmBackend {
     get_input_ptr_fn: Option<TypedFunc<(), i32>>,
     get_output_ptr_fn: Option<TypedFunc<(), i32>>,
     get_params_ptr_fn: Option<TypedFunc<(), i32>>,
+    get_transport_ptr_fn: Option<TypedFunc<(), i32>>,
     buffer_mode: BufferMode,
     input_offset: i32,
     output_offset: i32,
     params_offset: i32,
+    transport_offset: i32,
     channel_count: usize,
     max_frames: u32,
     fuel_per_callback: u64,
@@ -112,6 +115,9 @@ impl WasmBackend {
         let get_params_ptr_fn = instance
             .get_typed_func::<(), i32>(&mut store, "get_params_ptr")
             .ok();
+        let get_transport_ptr_fn = instance
+            .get_typed_func::<(), i32>(&mut store, "get_transport_ptr")
+            .ok();
 
         let buffer_mode =
             if get_input_ptr_fn.is_some() && get_output_ptr_fn.is_some() {
@@ -152,10 +158,12 @@ impl WasmBackend {
             get_input_ptr_fn,
             get_output_ptr_fn,
             get_params_ptr_fn,
+            get_transport_ptr_fn,
             buffer_mode,
             input_offset: 0,
             output_offset: 0,
             params_offset: 0,
+            transport_offset: 0,
             channel_count: 0,
             max_frames: 0,
             fuel_per_callback,
@@ -471,6 +479,12 @@ impl Backend for WasmBackend {
                             self.params_offset = ptr;
                         }
                     }
+                    // Optional: get transport buffer address
+                    if let Some(get_transport) = self.get_transport_ptr_fn.clone() {
+                        if let Ok(ptr) = get_transport.call(&mut self.store, ()) {
+                            self.transport_offset = ptr;
+                        }
+                    }
                 }
             }
             BufferMode::FixedOffset => {
@@ -503,6 +517,7 @@ impl Backend for WasmBackend {
         self.input_offset = 0;
         self.output_offset = 0;
         self.params_offset = 0;
+        self.transport_offset = 0;
     }
 
     unsafe fn process(
@@ -513,6 +528,7 @@ impl Backend for WasmBackend {
         frame_count: usize,
         sample_rate: f64,
         params: &[f32; PARAM_COUNT],
+        transport: &TransportState,
     ) -> bool {
         if self.input_offset == 0 || channel_count == 0 || frame_count == 0 {
             return false;
@@ -557,6 +573,27 @@ impl Backend for WasmBackend {
                         params[i]
                     };
                     let offset = params_byte_offset + i * 4;
+                    mem_data[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
+                }
+            }
+        }
+
+        // Write transport data into WASM memory if the module exports get_transport_ptr.
+        // Layout: [tempo_f32, beat_position_f32, is_playing_f32 (0/1), time_sig_num_f32, time_sig_den_f32, sample_position_f32]
+        if self.transport_offset != 0 {
+            let transport_byte_offset = self.transport_offset as usize;
+            let transport_end = transport_byte_offset + 6 * 4;
+            if transport_end <= mem_data.len() {
+                let vals: [f32; 6] = [
+                    transport.tempo as f32,
+                    transport.beat_position as f32,
+                    if transport.is_playing { 1.0 } else { 0.0 },
+                    transport.time_sig_numerator as f32,
+                    transport.time_sig_denominator as f32,
+                    transport.sample_position as f32,
+                ];
+                for (i, &val) in vals.iter().enumerate() {
+                    let offset = transport_byte_offset + i * 4;
                     mem_data[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
                 }
             }
@@ -731,6 +768,7 @@ mod tests {
                 4,
                 44100.0,
                 &[0.0; PARAM_COUNT],
+                &TransportState::default(),
             )
         };
         assert!(ok, "process should succeed");
@@ -756,6 +794,7 @@ mod tests {
                 4,
                 44100.0,
                 &[0.0; PARAM_COUNT],
+                &TransportState::default(),
             )
         };
         assert!(ok, "process should succeed");
@@ -780,6 +819,7 @@ mod tests {
                 4,
                 44100.0,
                 &[0.0; PARAM_COUNT],
+                &TransportState::default(),
             )
         };
         assert!(ok);
@@ -841,6 +881,7 @@ mod tests {
                 4,
                 44100.0,
                 &[0.0; PARAM_COUNT],
+                &TransportState::default(),
             )
         };
         assert!(!ok, "Infinite loop should fail due to fuel exhaustion");
@@ -867,6 +908,7 @@ mod tests {
                 4,
                 44100.0,
                 &[0.0; PARAM_COUNT],
+                &TransportState::default(),
             )
         };
         assert!(!ok, "Should fail without initialize");
@@ -890,6 +932,7 @@ mod tests {
                     4,
                     48000.0,
                     &[0.0; PARAM_COUNT],
+                    &TransportState::default(),
                 )
             };
             assert!(ok);
@@ -919,6 +962,7 @@ mod tests {
                     4,
                     44100.0,
                     &[0.0; PARAM_COUNT],
+                    &TransportState::default(),
                 )
             };
             assert!(ok, "Callback {} should succeed", i);
@@ -1058,6 +1102,7 @@ mod tests {
                 4,
                 44100.0,
                 &[0.0; PARAM_COUNT],
+                &TransportState::default(),
             )
         };
         assert!(ok, "WASI module should process audio");
@@ -1081,6 +1126,7 @@ mod tests {
                 4,
                 44100.0,
                 &[0.0; PARAM_COUNT],
+                &TransportState::default(),
             )
         };
         assert!(ok, "Module calling environ_sizes_get should work");
@@ -1140,6 +1186,7 @@ mod tests {
                 4,
                 44100.0,
                 &[0.0; PARAM_COUNT],
+                &TransportState::default(),
             )
         };
         assert!(ok, "Module with buffer getters should process audio");

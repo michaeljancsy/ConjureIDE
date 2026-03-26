@@ -44,6 +44,7 @@
 
 ## Done
 
+- BPM sync: host transport (tempo, beat, time sig, playing) piped through entire pipeline to Python/WASM scripts + tempo-synced delay preset (2026-03-25)
 - Monaco numpy/scipy/signal autocomplete in editor-bridge.js (2026-03-25)
 - Add Stereo Width Optimized preset alongside original (2026-03-25)
 - Replace app icons with new designs + full-res source icons (2026-03-25)

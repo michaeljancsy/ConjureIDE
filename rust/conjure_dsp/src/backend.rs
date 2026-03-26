@@ -1,3 +1,4 @@
+use crate::kernel::TransportState;
 use crate::params::{ParamMetadata, PARAM_COUNT};
 use std::collections::HashMap;
 
@@ -34,6 +35,7 @@ pub trait Backend {
         frame_count: usize,
         sample_rate: f64,
         params: &[f32; PARAM_COUNT],
+        transport: &TransportState,
     ) -> bool;
 
     /// Returns the last error message, if any.
