@@ -146,11 +146,13 @@ struct ConjureDSPExtensionMainView: View {
 
             ZStack {
             HStack(spacing: 0) {
-            // Claude Code terminal sidebar (collapsible, left side)
-            if showChat {
-                TerminalView(colorScheme: colorScheme)
-                .frame(width: chatWidth)
+            // Claude Code terminal sidebar — always rendered to preserve WKWebView state,
+            // hidden via frame(width: 0) when collapsed to avoid destroying the WebSocket connection.
+            TerminalView(colorScheme: colorScheme)
+                .frame(width: showChat ? chatWidth : 0)
+                .clipped()
 
+            if showChat {
                 // Resizable divider
                 Rectangle()
                     .fill(Color.secondary.opacity(0.2))
