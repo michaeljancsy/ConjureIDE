@@ -257,6 +257,9 @@ struct PresetComparisonTests {
             throw TestError("Failed to load Python preset \(presetName): \(msg)")
         }
 
+        // Set transport so BPM-synced presets get consistent tempo data
+        dsp_kernel_set_transport(kernel, 120.0, 0.0, true, 4, 4, 0.0)
+
         // Set all params to 0.5 (normalized) so Python scripts with PARAMS metadata
         // start from the same state as WASM scripts that use raw 0-1 values.
         // Using 0.5 rather than 0.0 avoids asymmetry for presets with inverted mappings
@@ -293,6 +296,9 @@ struct PresetComparisonTests {
             let msg = errPtr != nil ? String(cString: errPtr!) : "Unknown error"
             throw TestError("Failed to load WASM for preset \(presetName): \(msg)")
         }
+
+        // Set transport so BPM-synced presets get consistent tempo data
+        dsp_kernel_set_transport(kernel, 120.0, 0.0, true, 4, 4, 0.0)
 
         // Set all params to 0.5 (normalized) to match the Python test setup
         for i in 0..<16 {
