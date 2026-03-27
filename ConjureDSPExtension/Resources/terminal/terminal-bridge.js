@@ -182,6 +182,12 @@
                 case 'PageUp':     data = '\x1b[5~'; break;
                 case 'PageDown':   data = '\x1b[6~'; break;
                 case 'Delete':     data = '\x1b[3~'; break;
+                default:
+                    // Regular printable character — send directly
+                    if (e.key.length === 1) {
+                        data = e.key;
+                    }
+                    break;
                 }
             }
 
