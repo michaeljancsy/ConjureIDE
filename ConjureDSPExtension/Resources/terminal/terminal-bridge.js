@@ -195,6 +195,10 @@
                 e.preventDefault();
                 if (socket && socket.readyState === WebSocket.OPEN) {
                     socket.send(data);
+                    // DEBUG: confirm data was sent
+                    if (terminal) terminal.write('\x1b[33m[sent:' + JSON.stringify(data) + ']\x1b[0m');
+                } else {
+                    if (terminal) terminal.write('\x1b[31m[socket not open: ' + (socket ? socket.readyState : 'null') + ']\x1b[0m');
                 }
             }
         });
