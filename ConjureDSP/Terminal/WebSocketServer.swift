@@ -194,10 +194,10 @@ final class WebSocketServer {
                 return
             }
 
-            // Continue receiving
-            if !isComplete {
-                self.receiveFromClient(connection, id: id)
-            }
+            // Continue receiving. For WebSocket, isComplete means the message
+            // (frame) is complete, NOT that the connection is done. We must
+            // always re-register to receive the next message.
+            self.receiveFromClient(connection, id: id)
         }
     }
 }
