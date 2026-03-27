@@ -195,30 +195,9 @@
                 e.preventDefault();
                 if (socket && socket.readyState === WebSocket.OPEN) {
                     socket.send(data);
-                    // DEBUG: confirm data was sent
-                    if (terminal) terminal.write('\x1b[33m[sent:' + JSON.stringify(data) + ']\x1b[0m');
-                } else {
-                    if (terminal) terminal.write('\x1b[31m[socket not open: ' + (socket ? socket.readyState : 'null') + ']\x1b[0m');
                 }
             }
         });
-
-        // --- DEBUG: Diagnose keyboard input ---
-        document.addEventListener('mousedown', function(e) {
-            var ta = document.querySelector('.xterm-helper-textarea');
-            var info = '[click] activeElement=' + (document.activeElement ? document.activeElement.className || document.activeElement.tagName : 'none');
-            info += ' textarea=' + (ta ? 'exists' : 'MISSING');
-            info += ' hasFocus=' + document.hasFocus();
-            if (terminal) terminal.write('\r\n\x1b[33m' + info + '\x1b[0m\r\n');
-            postToSwift('debug', { message: info });
-        });
-
-        document.addEventListener('keydown', function(e) {
-            var info = '[keydown] key=' + e.key + ' activeElement=' + (document.activeElement ? document.activeElement.className || document.activeElement.tagName : 'none');
-            if (terminal) terminal.write('\r\n\x1b[32m' + info + '\x1b[0m\r\n');
-            postToSwift('debug', { message: info });
-        });
-        // --- END DEBUG ---
 
         // Notify Swift that terminal is ready
         postToSwift('terminalReady', {});
@@ -373,22 +352,6 @@
         focus: function() {
             if (terminal) terminal.focus();
         },
-        // Send raw input data to the WebSocket (bypasses xterm.js keyboard handling).
-        // Used when the WKWebView doesn't receive keyboard events due to
-        // AU extension ViewBridge first responder issues.
-        sendInput: function(data) {
-            if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(data);
-            }
-        },
-        // Send base64-encoded input data to the WebSocket.
-        // Called from Swift's performKeyEquivalent to inject keyboard input.
-        sendInputBase64: function(b64) {
-            var binary = atob(b64);
-            if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(binary);
-            }
-        }
     };
 
     // --- Initialize on load ---

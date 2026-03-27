@@ -158,15 +158,8 @@ final class WebSocketServer {
         connection.receiveMessage { [weak self] data, context, isComplete, error in
             guard let self else { return }
 
-            // DEBUG: log every receive callback
-            let dataLen = data?.count ?? 0
-            let hasError = error != nil
-            log.info("WS receive: \(dataLen) bytes, isComplete=\(isComplete), hasError=\(hasError)")
-
             if let data, !data.isEmpty {
-                // Check if it's a WebSocket message
                 if let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata {
-                    log.info("WS opcode: \(String(describing: metadata.opcode))")
                     switch metadata.opcode {
                     case .text, .binary:
                         DispatchQueue.main.async {

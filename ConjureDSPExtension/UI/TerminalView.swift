@@ -103,10 +103,6 @@ struct TerminalView: NSViewRepresentable {
             case "resize":
                 break
 
-            case "debug":
-                let msg = data["message"] as? String ?? ""
-                log.info("Terminal debug: \(msg, privacy: .public)")
-
             default:
                 break
             }
