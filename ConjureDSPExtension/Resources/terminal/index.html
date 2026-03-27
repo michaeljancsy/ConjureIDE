@@ -50,6 +50,14 @@
 <body>
     <div id="terminal-container">
         <div id="terminal"></div>
+        <!-- Invisible contentEditable that triggers WebKit's NSTextInputClient
+             session. Required because the AU ViewBridge only forwards keyboard
+             input for contentEditable surfaces (same mechanism as Monaco). -->
+        <div id="input-proxy" contenteditable="true" autocorrect="off"
+             autocapitalize="off" spellcheck="false"
+             style="position:absolute; top:0; left:0; width:1px; height:1px;
+                    opacity:0.01; overflow:hidden; z-index:-1; outline:none;
+                    caret-color:transparent; pointer-events:none;"></div>
         <div id="status-overlay">
             <div class="status-text" id="status-text">Connecting...</div>
             <div class="status-hint" id="status-hint"></div>

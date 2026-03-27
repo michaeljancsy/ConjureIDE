@@ -116,40 +116,82 @@
         });
         resizeObserver.observe(document.getElementById('terminal-container'));
 
-        // --- Patch xterm.js textarea for AU ViewBridge compatibility ---
-        // The AU ViewBridge doesn't forward plain keyDown events to extensions.
-        // It DOES forward text input for editable elements via NSTextInputClient
-        // (this is how Monaco editor works in DAWs). xterm.js hides its textarea
-        // at left:-9999em with width:0 height:0, which prevents WebKit from
-        // establishing a text input session for it.
+        // --- Input proxy for AU ViewBridge keyboard input ---
+        // The AU ViewBridge only forwards keyboard input for contentEditable
+        // surfaces via NSTextInputClient (same mechanism as Monaco editor).
+        // xterm.js's hidden textarea doesn't trigger this pathway.
         //
-        // Fix: use a MutationObserver to keep the textarea positioned within the
-        // viewport with nonzero dimensions. xterm.js's _syncTextArea() resets
-        // inline styles on every cursor move, so we must continuously override.
-        // This preserves xterm.js's native input handling (onData, key conversion,
-        // IME support) — no duplicate event handlers or overlay elements needed.
-        var ta = document.querySelector('.xterm-helper-textarea');
-        if (ta) {
-            var patchTextarea = function() {
-                ta.style.setProperty('left', '0px', 'important');
-                ta.style.setProperty('top', '0px', 'important');
-                ta.style.setProperty('width', '4px', 'important');
-                ta.style.setProperty('height', '4px', 'important');
-                ta.style.setProperty('opacity', '0.01', 'important');
-                ta.style.setProperty('z-index', '0', 'important');
-            };
-            patchTextarea();
+        // A small contentEditable div acts as the input proxy: it receives text
+        // input from WebKit, forwards it to the WebSocket, then clears itself.
+        // Special keys (Enter, Escape, arrows, etc.) are handled via keydown.
+        // xterm.js handles display — all output comes back through the WebSocket.
+        var inputProxy = document.getElementById('input-proxy');
 
-            var patchingEnabled = true;
-            var observer = new MutationObserver(function() {
-                if (!patchingEnabled) return;
-                // Temporarily disable to avoid infinite loop (our change triggers observer)
-                patchingEnabled = false;
-                patchTextarea();
-                patchingEnabled = true;
-            });
-            observer.observe(ta, { attributes: true, attributeFilter: ['style'] });
-        }
+        // Focus the proxy on terminal click (pointer-events:none means we
+        // must focus programmatically — mouse events pass through to xterm.js)
+        document.getElementById('terminal-container').addEventListener('mousedown', function() {
+            inputProxy.focus();
+        });
+
+        // Regular character input
+        inputProxy.addEventListener('input', function() {
+            var text = inputProxy.textContent || '';
+            if (text && socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(text);
+            }
+            inputProxy.textContent = '';
+        });
+
+        // Special keys and modifier combinations
+        inputProxy.addEventListener('keydown', function(e) {
+            // Cmd+C: copy terminal selection to clipboard
+            if (e.metaKey && e.key === 'c') {
+                var sel = terminal ? terminal.getSelection() : '';
+                if (sel) {
+                    navigator.clipboard.writeText(sel);
+                    e.preventDefault();
+                }
+                return;
+            }
+            // Cmd+A: select all terminal content
+            if (e.metaKey && e.key === 'a') {
+                if (terminal) terminal.selectAll();
+                e.preventDefault();
+                return;
+            }
+            // Other Cmd+key: pass through for app shortcuts (Cmd+S, Cmd+R, Cmd+N)
+            if (e.metaKey) return;
+
+            var data = null;
+
+            if (e.ctrlKey && e.key.length === 1) {
+                var code = e.key.toLowerCase().charCodeAt(0) - 96;
+                if (code >= 1 && code <= 26) data = String.fromCharCode(code);
+            } else {
+                switch (e.key) {
+                case 'Enter':      data = '\r'; break;
+                case 'Escape':     data = '\x1b'; break;
+                case 'Backspace':  data = '\x7f'; break;
+                case 'Tab':        data = '\t'; e.preventDefault(); break;
+                case 'ArrowUp':    data = '\x1b[A'; break;
+                case 'ArrowDown':  data = '\x1b[B'; break;
+                case 'ArrowRight': data = '\x1b[C'; break;
+                case 'ArrowLeft':  data = '\x1b[D'; break;
+                case 'Home':       data = '\x1b[H'; break;
+                case 'End':        data = '\x1b[F'; break;
+                case 'PageUp':     data = '\x1b[5~'; break;
+                case 'PageDown':   data = '\x1b[6~'; break;
+                case 'Delete':     data = '\x1b[3~'; break;
+                }
+            }
+
+            if (data !== null) {
+                e.preventDefault();
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(data);
+                }
+            }
+        });
 
         // --- DEBUG: Diagnose keyboard input ---
         document.addEventListener('mousedown', function(e) {
