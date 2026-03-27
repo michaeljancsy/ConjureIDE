@@ -53,6 +53,10 @@ final class TerminalServer {
 
         // 4. Wire WebSocket input → pty (intercept control messages like resize)
         webSocketServer.onClientInput = { [weak self] data in
+            // DEBUG: log all incoming WebSocket data
+            let preview = String(data: data.prefix(50), encoding: .utf8) ?? data.prefix(50).map { String(format: "%02x", $0) }.joined()
+            log.info("WS input (\(data.count) bytes): \(preview, privacy: .public)")
+
             // Check for resize control messages from xterm.js
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let type = json["type"] as? String, type == "resize",
