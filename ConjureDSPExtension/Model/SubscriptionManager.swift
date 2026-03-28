@@ -81,8 +81,8 @@ class SubscriptionManager: ObservableObject {
 
     // MARK: - Refresh Intervals
 
-    /// How often to refresh when subscription is active (6 hours).
-    private static let activeRefreshInterval: TimeInterval = 6 * 60 * 60
+    /// How often to refresh when subscription is active (15 minutes).
+    private static let activeRefreshInterval: TimeInterval = 15 * 60
 
     /// How often to refresh during grace period (1 hour).
     private static let graceRefreshInterval: TimeInterval = 1 * 60 * 60

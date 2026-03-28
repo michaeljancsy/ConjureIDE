@@ -91,8 +91,12 @@ async function handleSubscriptionEvent(
     .run();
 }
 
+/** Maximum age of a webhook timestamp before it's rejected (5 minutes). */
+const WEBHOOK_TOLERANCE_SECONDS = 300;
+
 /**
  * Verify Paddle webhook signature (ts=timestamp;h1=hmac).
+ * Rejects replayed webhooks older than WEBHOOK_TOLERANCE_SECONDS.
  */
 async function verifyPaddleSignature(
   body: string,
@@ -110,6 +114,13 @@ async function verifyPaddleSignature(
     const ts = parts["ts"];
     const h1 = parts["h1"];
     if (!ts || !h1) return false;
+
+    // Reject stale timestamps to prevent replay attacks
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const tsSeconds = parseInt(ts, 10);
+    if (isNaN(tsSeconds) || Math.abs(nowSeconds - tsSeconds) > WEBHOOK_TOLERANCE_SECONDS) {
+      return false;
+    }
 
     // Compute HMAC-SHA256 of "ts:body"
     const key = await crypto.subtle.importKey(
