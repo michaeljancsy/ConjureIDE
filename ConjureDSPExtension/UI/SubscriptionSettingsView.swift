@@ -21,8 +21,7 @@ struct SubscriptionSettingsView: View {
 
             actionSection
         }
-        .padding()
-        .frame(width: 280)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder

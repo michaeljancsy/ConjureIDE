@@ -43,6 +43,17 @@ struct ConjureDSPApp: App {
             }
         }
     }
+
+    private func handleURL(_ url: URL) {
+        guard url.scheme == "conjuredsp" else { return }
+
+        switch url.host {
+        case "subscribe":
+            checkoutManager.startCheckout()
+        default:
+            break
+        }
+    }
 }
 
 /// A SwiftUI view that wraps Sparkle's check-for-updates action as a menu item.
@@ -69,16 +80,5 @@ final class CheckForUpdatesViewModel: ObservableObject {
     init(updater: SPUUpdater) {
         cancellable = updater.publisher(for: \.canCheckForUpdates)
             .assign(to: \.canCheckForUpdates, on: self)
-    }
-
-    private func handleURL(_ url: URL) {
-        guard url.scheme == "conjuredsp" else { return }
-
-        switch url.host {
-        case "subscribe":
-            checkoutManager.startCheckout()
-        default:
-            break
-        }
     }
 }

@@ -53,8 +53,7 @@ struct GitHubSettingsView: View {
                     .foregroundColor(.red)
             }
         }
-        .padding()
-        .frame(minWidth: 340)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
             if let existing = gitHubService.token {
                 tokenInput = existing
