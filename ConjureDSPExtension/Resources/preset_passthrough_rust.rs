@@ -3,27 +3,8 @@
 // The simplest possible Rust DSP script. Each sample is copied from the input
 // buffer to the output buffer with no modification.
 
-const MAX_CH: usize = 2;
-const MAX_FR: usize = 4096;
-
-static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
-
-#[no_mangle]
-pub extern "C" fn get_input_ptr() -> i32 {
-    unsafe { INPUT_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_output_ptr() -> i32 {
-    unsafe { OUTPUT_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_params_ptr() -> i32 {
-    unsafe { PARAMS_BUF.as_ptr() as i32 }
-}
+use conjuredsp::*;
+setup!();
 
 /// Passthrough — copies input to output unchanged.
 ///
@@ -38,12 +19,10 @@ pub extern "C" fn process(
     frame_count: i32,
     _sample_rate: f32,
 ) {
-    let n = (channels * frame_count) as usize;
-    unsafe {
-        let inp = std::slice::from_raw_parts(input, n);
-        let out = std::slice::from_raw_parts_mut(output, n);
-        for i in 0..n {
-            out[i] = inp[i];
+    let ctx = ctx(input, output, channels, frame_count, _sample_rate);
+    for c in 0..ctx.channels() {
+        for i in 0..ctx.frames() {
+            ctx.set_output(c, i, ctx.input(c, i));
         }
     }
 }

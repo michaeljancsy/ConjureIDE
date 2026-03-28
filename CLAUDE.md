@@ -89,6 +89,21 @@ Scripts can be written in Python (instant load) or Rust (compiled to WASM). `Scr
 3. I/O buffers are shared via WASM exports (`get_input_ptr`/`get_output_ptr`) or fixed memory offsets
 4. Parameter metadata is extracted from `get_param_metadata_json`/`get_param_metadata_len` WASM exports
 
+### conjuredsp Libraries (Python + Rust)
+Both Python and Rust DSP scripts can use a `conjuredsp` library that provides DSP building blocks and eliminates boilerplate. The two libraries have equivalent APIs:
+
+**Python** (`rust/conjuredsp/`): Installed into bundled Python's site-packages by `setup-python.sh`. User scripts `from conjuredsp import freq, db, ...`.
+
+**Rust** (`rust/conjuredsp-rs/`): Compiled to an rlib for `wasm32-wasip1` by `setup-rustc.sh` (or auto-rebuilt during the "Copy Rust Compiler" Xcode build phase). Bundled at `rustc-dist/lib/libconjuredsp.rlib`. `RustCompiler.swift` passes `--extern conjuredsp=<path>` to rustc. User scripts `use conjuredsp::*;`.
+
+Rust API overview:
+- `setup!()` — declares INPUT/OUTPUT/PARAMS/TRANSPORT buffers, MAX_CH/MAX_FR, get_*_ptr exports, ctx() helper
+- `params! { NAME = builder() }` — generates parameter index constants + METADATA JSON at compile time
+- Parameter builders: `freq()`, `db()`, `time_ms()`, `mix()`, `pct()`, `toggle()`, `ratio()`, `param(min, max)` — all support `.min()`, `.max()`, `.default()`, `.unit()`, `.curve()` modifiers
+- `ctx()` — safe buffer access: `ctx.input(ch, frame)`, `ctx.set_output(ch, frame, val)`, `ctx.param(INDEX)`
+- DSP utils: `db_to_gain`, `gain_to_db`, `smooth_coeff`, `ms_to_samples`, `soft_clip`, `lerp`, `crossfade`
+- `BiquadCoeffs` (8 filter types) + `Biquad` (stateful DF2T), `DelayLine<SIZE>`, `Lfo` + `Waveform`
+
 ### Monaco Editor
 The code editor uses Monaco Editor (VS Code's editor) loaded in a WKWebView. It auto-detects Python vs Rust, applies light/dark themes, and communicates with Swift via `WKUserContentController` message handlers. Downloaded by `scripts/setup-monaco.sh` to `Resources/monaco/vs/` (gitignored).
 
@@ -157,6 +172,16 @@ rust/                        Rust DSP crate
   build-rust.sh              Xcode build phase script
   setup-python.sh            Downloads free-threaded Python 3.14 + numpy + scipy
   setup-wasm-target.sh       Installs wasm32-wasip1 target for Rust compiler
+  conjuredsp/                Python DSP library (installed into bundled Python site-packages)
+  conjuredsp-rs/             Rust DSP library (compiled to rlib for wasm32-wasip1)
+    src/lib.rs               setup!(), params!() macros, re-exports
+    src/dsp.rs               db_to_gain, smooth_coeff, soft_clip, lerp, crossfade
+    src/filters.rs           BiquadCoeffs (8 filter types) + Biquad (stateful DF2T)
+    src/buffers.rs           DelayLine<SIZE> with linear/cubic interpolation
+    src/osc.rs               Lfo + Waveform enum + waveform functions
+    src/params.rs            ParamSpec struct + const fn builders (freq, db, time_ms, etc.)
+    src/json.rs              Const-fn JSON serialization for compile-time metadata
+    src/context.rs           Context struct for safe buffer access
   python-dist/               Bundled Python runtime (gitignored)
 scripts/                     Build and setup scripts
   setup-rustc.sh             Downloads standalone Rust compiler for WASM compilation

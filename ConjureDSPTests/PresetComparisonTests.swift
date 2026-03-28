@@ -196,7 +196,7 @@ struct PresetComparisonTests {
 
         let process = Process()
         process.executableURL = rustc
-        process.arguments = [
+        var args = [
             "--sysroot", sysroot.path,
             "--target", "wasm32-wasip1",
             "--edition", "2021",
@@ -205,6 +205,14 @@ struct PresetComparisonTests {
             "-o", outputFile.path,
             inputFile.path,
         ]
+
+        // Link conjuredsp rlib if available
+        let rlibPath = sysroot.appendingPathComponent("lib/libconjuredsp.rlib").path
+        if FileManager.default.fileExists(atPath: rlibPath) {
+            args = ["--extern", "conjuredsp=\(rlibPath)"] + args
+        }
+
+        process.arguments = args
 
         var env = ProcessInfo.processInfo.environment
         env["DYLD_LIBRARY_PATH"] = sysroot.appendingPathComponent("lib").path

@@ -10,49 +10,20 @@
 //   1 (Feedback): Feedback amount — 0.0 to 0.95
 //   2 (Mix):      Dry/wet mix — 0.0 to 1.0
 
-const MAX_CH: usize = 2;
-const MAX_FR: usize = 4096;
+use conjuredsp::*;
+setup!();
+
 const MAX_DELAY: usize = 48000;
 
-static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
-
-// Parameter indices
-const TIME: usize = 0;     // 10–500 ms
-const FEEDBACK: usize = 1; // 0.0–0.95
-const MIX: usize = 2;      // 0.0–1.0
+params! {
+    TIME = param(10.0, 500.0).unit("ms").default(250.0),
+    FEEDBACK = param(0.0, 0.95).default(0.5),
+    MIX = mix(),
+}
 
 // Persistent state
 static mut DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH];
 static mut WRITE_POS: usize = 0;
-
-static METADATA: &str = r#"[{"name":"Time","min":10.0,"max":500.0,"unit":"ms","default":250.0},{"name":"Feedback","min":0.0,"max":0.95,"unit":"","default":0.5},{"name":"Mix","min":0.0,"max":1.0,"unit":"","default":0.5}]"#;
-
-#[no_mangle]
-pub extern "C" fn get_input_ptr() -> i32 {
-    unsafe { INPUT_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_output_ptr() -> i32 {
-    unsafe { OUTPUT_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_params_ptr() -> i32 {
-    unsafe { PARAMS_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_param_metadata_ptr() -> i32 {
-    METADATA.as_ptr() as i32
-}
-
-#[no_mangle]
-pub extern "C" fn get_param_metadata_len() -> i32 {
-    METADATA.len() as i32
-}
 
 #[no_mangle]
 pub extern "C" fn process(
@@ -62,35 +33,31 @@ pub extern "C" fn process(
     frame_count: i32,
     sample_rate: f32,
 ) {
-    let ch = channels as usize;
-    let frames = frame_count as usize;
+    let ctx = ctx(input, output, channels, frame_count, sample_rate);
 
     unsafe {
-        let delay_ms = PARAMS_BUF[TIME];
-        let feedback = PARAMS_BUF[FEEDBACK];
-        let mix = PARAMS_BUF[MIX];
+        let delay_ms = ctx.param(TIME);
+        let feedback = ctx.param(FEEDBACK);
+        let mix = ctx.param(MIX);
 
         let mut delay_samples = (delay_ms * 0.001 * sample_rate) as usize;
         if delay_samples >= MAX_DELAY {
             delay_samples = MAX_DELAY - 1;
         }
 
-        let inp = std::slice::from_raw_parts(input, ch * frames);
-        let out = std::slice::from_raw_parts_mut(output, ch * frames);
         let mut wp = WRITE_POS;
 
-        for i in 0..frames {
+        for i in 0..ctx.frames() {
             let rp = (wp + MAX_DELAY - delay_samples) % MAX_DELAY;
 
-            for c in 0..ch {
-                let idx = c * frames + i;
+            for c in 0..ctx.channels() {
                 let delayed = DELAY_BUF[c][rp];
 
                 // Write input + feedback to delay line
-                DELAY_BUF[c][wp] = inp[idx] + delayed * feedback;
+                DELAY_BUF[c][wp] = ctx.input(c, i) + delayed * feedback;
 
                 // Mix dry + wet
-                out[idx] = inp[idx] * (1.0 - mix) + delayed * mix;
+                ctx.set_output(c, i, ctx.input(c, i) * (1.0 - mix) + delayed * mix);
             }
 
             wp = (wp + 1) % MAX_DELAY;

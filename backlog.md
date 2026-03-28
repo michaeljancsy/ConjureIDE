@@ -17,8 +17,6 @@
 - Phase 5: Polish & validation (integration tests, edge cases, documentation)
 
 ### DSP & Audio
-- DSP utility libraries for both Python and Rust/WASM (filters, envelopes, oscillators)
-- 3-band EQ factory preset (Python + Rust)
 - Process function profiler: real-time stats on `process()` duration (median, peak, % budget). Two `mach_absolute_time()` calls around `dsp_kernel_process` (~50 ns overhead), atomics to main thread. No locks or allocations on audio thread.
 - Memory leak detection: periodic resident memory sampling via `task_info` from main thread. Flag monotonic growth as likely script leak. Zero audio-thread overhead.
 - Latency reporting: measure processing latency, report via `AUAudioUnit.latency` for DAW compensation
@@ -45,6 +43,7 @@
 
 - Claude Code terminal integration — MCP server in extension, companion app for PTY, xterm.js terminal UI, contentEditable keyboard input for ViewBridge (2026-03-27)
 - Fix flaky `extensionPlistContainsBuildID` test — use Info.plist preprocessing instead of post-hoc stamping (2026-03-26)
+- conjuredsp Rust library: rlib for wasm32-wasip1 with setup!/params! macros, DSP building blocks (Biquad, DelayLine, Lfo), and utility functions. All 25 factory Rust presets migrated. Parity tests pass. (2026-03-26)
 - BPM sync: host transport (tempo, beat, time sig, playing) piped through entire pipeline to Python/WASM scripts + tempo-synced delay preset (2026-03-25)
 - Monaco numpy/scipy/signal autocomplete in editor-bridge.js (2026-03-25)
 - Add Stereo Width Optimized preset alongside original (2026-03-25)

@@ -3,88 +3,36 @@
 // This script is compiled to WebAssembly and runs in the audio render callback.
 // The `process` function is called once per audio buffer.
 //
-// Rich parameters: Declare metadata so the host shows real ranges and units.
-// PARAMS_BUF receives actual denormalized values (not 0–1).
+// Quick start:
+//   - setup!() declares all required buffers and WASM exports
+//   - params! {} declares parameters with rich metadata
+//   - ctx() provides safe access to input/output buffers and parameters
 //
-// Safety: avoid allocations, I/O, or panics in `process()`.
+// Safety: avoid allocations, I/O, or panics in process().
 
-const MAX_CH: usize = 2;
-const MAX_FR: usize = 4096;
+use conjuredsp::*;
+setup!();
 
-static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
-
-// Host transport state (BPM sync). Written by host if get_transport_ptr is exported.
-// Layout: [tempo, beat_position, is_playing (0/1), time_sig_num, time_sig_den, sample_position]
-static mut TRANSPORT_BUF: [f32; 6] = [0.0; 6];
-const T_TEMPO: usize = 0;
-const T_BEAT: usize = 1;
-const T_PLAYING: usize = 2;
-const T_TIME_SIG_NUM: usize = 3;
-const T_TIME_SIG_DEN: usize = 4;
-const T_SAMPLE_POS: usize = 5;
-
-// Parameter indices
-const GAIN: usize = 0; // -24 to +12 dB
-
-static METADATA: &str = r#"[{"name":"Gain","min":-24.0,"max":12.0,"unit":"dB","default":0.0}]"#;
-
-#[no_mangle]
-pub extern "C" fn get_input_ptr() -> i32 {
-    unsafe { INPUT_BUF.as_ptr() as i32 }
+// Declare parameters — the host shows real ranges, units, and sliders.
+// Builders: freq(), db(), time_ms(), mix(), pct(), toggle(), ratio(), param(min, max)
+params! {
+    GAIN = db().min(-24.0).max(12.0).default(0.0),
 }
 
-#[no_mangle]
-pub extern "C" fn get_output_ptr() -> i32 {
-    unsafe { OUTPUT_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_params_ptr() -> i32 {
-    unsafe { PARAMS_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_transport_ptr() -> i32 {
-    unsafe { TRANSPORT_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_param_metadata_ptr() -> i32 {
-    METADATA.as_ptr() as i32
-}
-
-#[no_mangle]
-pub extern "C" fn get_param_metadata_len() -> i32 {
-    METADATA.len() as i32
-}
-
-/// Process audio buffers.
-///
-/// Called once per audio render callback. Input samples are channel-sequential
-/// in INPUT_BUF (channels × frame_count). Results go to OUTPUT_BUF in the same
-/// layout. Parameters in PARAMS_BUF are actual values (e.g. dB, Hz, ms).
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
     output: *mut f32,
     channels: i32,
     frame_count: i32,
-    _sample_rate: f32,
+    sample_rate: f32,
 ) {
-    let ch = channels as usize;
-    let frames = frame_count as usize;
+    let ctx = ctx(input, output, channels, frame_count, sample_rate);
+    let gain = db_to_gain(ctx.param(GAIN) as f64) as f32;
 
-    unsafe {
-        let gain_db = PARAMS_BUF[GAIN];
-        let gain = (10.0_f32).powf(gain_db / 20.0);
-
-        let inp = std::slice::from_raw_parts(input, ch * frames);
-        let out = std::slice::from_raw_parts_mut(output, ch * frames);
-
-        for i in 0..(ch * frames) {
-            out[i] = inp[i] * gain;
+    for c in 0..ctx.channels() {
+        for i in 0..ctx.frames() {
+            ctx.set_output(c, i, ctx.input(c, i) * gain);
         }
     }
 }

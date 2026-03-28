@@ -9,41 +9,11 @@
 // Params:
 //   0 (Width): Stereo width — 0.0 to 2.0
 
-const MAX_CH: usize = 2;
-const MAX_FR: usize = 4096;
+use conjuredsp::*;
+setup!();
 
-static mut INPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
-static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
-
-// Parameter indices
-const WIDTH: usize = 0; // 0.0–2.0
-
-static METADATA: &str = r#"[{"name":"Width","min":0.0,"max":2.0,"unit":"","default":1.0}]"#;
-
-#[no_mangle]
-pub extern "C" fn get_input_ptr() -> i32 {
-    unsafe { INPUT_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_output_ptr() -> i32 {
-    unsafe { OUTPUT_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_params_ptr() -> i32 {
-    unsafe { PARAMS_BUF.as_ptr() as i32 }
-}
-
-#[no_mangle]
-pub extern "C" fn get_param_metadata_ptr() -> i32 {
-    METADATA.as_ptr() as i32
-}
-
-#[no_mangle]
-pub extern "C" fn get_param_metadata_len() -> i32 {
-    METADATA.len() as i32
+params! {
+    WIDTH = param(0.0, 2.0).default(1.0),
 }
 
 #[no_mangle]
@@ -54,25 +24,22 @@ pub extern "C" fn process(
     frame_count: i32,
     _sample_rate: f32,
 ) {
-    let ch = channels as usize;
-    let frames = frame_count as usize;
+    let ctx = ctx(input, output, channels, frame_count, _sample_rate);
 
     unsafe {
-        let width = PARAMS_BUF[WIDTH];
-        let inp = std::slice::from_raw_parts(input, ch * frames);
-        let out = std::slice::from_raw_parts_mut(output, ch * frames);
+        let width = ctx.param(WIDTH);
 
-        if ch < 2 {
+        if ctx.channels() < 2 {
             // Mono: passthrough
-            for i in 0..frames {
-                out[i] = inp[i];
+            for i in 0..ctx.frames() {
+                ctx.set_output(0, i, ctx.input(0, i));
             }
             return;
         }
 
-        for i in 0..frames {
-            let left = inp[i];
-            let right = inp[frames + i];
+        for i in 0..ctx.frames() {
+            let left = ctx.input(0, i);
+            let right = ctx.input(1, i);
 
             // Encode to mid/side
             let mid = (left + right) * 0.5;
@@ -82,8 +49,8 @@ pub extern "C" fn process(
             let side_scaled = side * width;
 
             // Decode back to L/R
-            out[i] = mid + side_scaled;
-            out[frames + i] = mid - side_scaled;
+            ctx.set_output(0, i, mid + side_scaled);
+            ctx.set_output(1, i, mid - side_scaled);
         }
     }
 }
