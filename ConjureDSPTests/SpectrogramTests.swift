@@ -113,9 +113,20 @@ struct SpectrogramBitmapBufferTests {
         let image = try #require(buffer.makeImage())
         let pixels = readPixels(from: image)
 
-        // Every pixel should be opaque black (0, 0, 0, 255)
+        // Every pixel should be opaque black (0, 0, 0, 255) by default
         for pixel in pixels {
             #expect(pixel == SIMD4<UInt8>(0, 0, 0, 255))
+        }
+    }
+
+    @Test func pixelsAreInitializedToCustomFillColor() throws {
+        let fill = SIMD4<UInt8>(51, 51, 51, 255)
+        let buffer = SpectrogramBitmapBuffer(width: 4, height: 4, fillColor: fill)!
+        let image = try #require(buffer.makeImage())
+        let pixels = readPixels(from: image)
+
+        for pixel in pixels {
+            #expect(pixel == fill)
         }
     }
 

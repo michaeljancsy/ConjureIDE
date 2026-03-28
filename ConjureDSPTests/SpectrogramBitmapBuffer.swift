@@ -18,7 +18,7 @@ final class SpectrogramBitmapBuffer {
     private let baseAddress: UnsafeMutablePointer<UInt8>
     private let bytesPerRow: Int
 
-    init?(width: Int, height: Int) {
+    init?(width: Int, height: Int, fillColor: SIMD4<UInt8> = SIMD4<UInt8>(0, 0, 0, 255)) {
         guard width > 0 && height > 0 else { return nil }
         self.width = width
         self.height = height
@@ -42,10 +42,10 @@ final class SpectrogramBitmapBuffer {
 
         let totalBytes = bytesPerRow * height
         for i in stride(from: 0, to: totalBytes, by: 4) {
-            baseAddress[i] = 0
-            baseAddress[i + 1] = 0
-            baseAddress[i + 2] = 0
-            baseAddress[i + 3] = 255
+            baseAddress[i] = fillColor.x
+            baseAddress[i + 1] = fillColor.y
+            baseAddress[i + 2] = fillColor.z
+            baseAddress[i + 3] = fillColor.w
         }
     }
 
