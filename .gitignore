@@ -37,3 +37,6 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 rust/conjuredsp/__pycache__/
+
+# Claude Code worktrees
+.claude/worktrees/
