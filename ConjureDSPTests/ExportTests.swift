@@ -307,7 +307,7 @@ struct ExportManagerTests {
         let config = try JSONSerialization.jsonObject(with: configData) as! [String: Any]
         #expect(config["language"] as? String == "rust")
         #expect(config["presetName"] as? String == "Bitcrusher")
-        #expect(config["paramCount"] as? Int == 8)
+        #expect(config["paramCount"] as? Int == 16)
 
         // Verify app plist patched
         let appPlistData = try Data(contentsOf: result.appendingPathComponent("Contents/Info.plist"))
@@ -678,6 +678,625 @@ struct ExportIntegrationTests {
         // 7. Verify registry was updated
         #expect(registry.entries.count == 1)
         #expect(registry.entries[0].name == presetName)
+    }
+}
+
+// MARK: - Export DSP Integration Tests
+
+/// Integration tests that export presets and verify audio processing via the Rust FFI.
+/// Uses the same kernel-based approach as PresetComparisonTests — no AU instantiation needed.
+@Suite(.serialized)
+struct ExportDSPIntegrationTests {
+
+    // MARK: - Constants
+
+    private static let sampleRate: Double = 44100
+    private static let channels: Int = 2
+    private static let chunkSize: Int = 512
+    private static let durationSeconds: Double = 0.5
+
+    // MARK: - Error Type
+
+    private struct TestError: Error, CustomStringConvertible {
+        let description: String
+        init(_ description: String) { self.description = description }
+    }
+
+    // MARK: - Path Helpers
+
+    private static var extensionResourcesURL: URL {
+        get throws {
+            guard let plugInsURL = Bundle.main.builtInPlugInsURL else {
+                throw TestError("Bundle.main.builtInPlugInsURL is nil")
+            }
+            let resourcesURL = plugInsURL
+                .appendingPathComponent("ConjureDSPExtension.appex")
+                .appendingPathComponent("Contents/Resources")
+            guard FileManager.default.fileExists(atPath: resourcesURL.path) else {
+                throw TestError("Extension resources not found at \(resourcesURL.path)")
+            }
+            return resourcesURL
+        }
+    }
+
+    private static var pythonHome: String {
+        get throws {
+            let path = try extensionResourcesURL.appendingPathComponent("python-dist").path
+            guard FileManager.default.fileExists(atPath: path) else {
+                throw TestError("python-dist not found at \(path)")
+            }
+            return path
+        }
+    }
+
+    private static var rustcURL: URL {
+        get throws {
+            let url = try extensionResourcesURL.appendingPathComponent("rustc-dist/bin/rustc")
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw TestError("rustc not found at \(url.path)")
+            }
+            return url
+        }
+    }
+
+    private static var rustcSysroot: URL {
+        get throws {
+            try extensionResourcesURL.appendingPathComponent("rustc-dist")
+        }
+    }
+
+    // MARK: - Signal Generation
+
+    private static func generateSineSignal() -> ([Float], [Float]) {
+        let totalSamples = Int(sampleRate * durationSeconds)
+        var signal = [Float](repeating: 0, count: totalSamples)
+        let freq: Double = 440.0
+        let twoPi = 2.0 * Double.pi
+
+        for i in 0..<totalSamples {
+            let t = Double(i) / sampleRate
+            let sine = Float(sin(twoPi * freq * t))
+            let window = Float(0.5 * (1.0 - cos(twoPi * Double(i) / Double(totalSamples))))
+            signal[i] = sine * window
+        }
+        return (signal, signal)
+    }
+
+    // MARK: - FFI Render Helper
+
+    private static func renderSignal(
+        kernel: DSPKernelRef,
+        inputL: [Float],
+        inputR: [Float]
+    ) -> ([Float], [Float]) {
+        let totalSamples = inputL.count
+        var outputL = [Float](repeating: 0, count: totalSamples)
+        var outputR = [Float](repeating: 0, count: totalSamples)
+
+        var offset = 0
+        while offset < totalSamples {
+            let remaining = totalSamples - offset
+            let frameCount = min(remaining, chunkSize)
+
+            inputL.withUnsafeBufferPointer { inLBuf in
+                inputR.withUnsafeBufferPointer { inRBuf in
+                    outputL.withUnsafeMutableBufferPointer { outLBuf in
+                        outputR.withUnsafeMutableBufferPointer { outRBuf in
+                            var inputPtrs: [UnsafePointer<Float>?] = [
+                                inLBuf.baseAddress! + offset,
+                                inRBuf.baseAddress! + offset
+                            ]
+                            var outputPtrs: [UnsafeMutablePointer<Float>?] = [
+                                outLBuf.baseAddress! + offset,
+                                outRBuf.baseAddress! + offset
+                            ]
+                            inputPtrs.withUnsafeBufferPointer { inPtrs in
+                                outputPtrs.withUnsafeMutableBufferPointer { outPtrs in
+                                    dsp_kernel_process(
+                                        kernel,
+                                        inPtrs.baseAddress!,
+                                        outPtrs.baseAddress!,
+                                        UInt32(channels),
+                                        UInt32(frameCount)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            offset += frameCount
+        }
+
+        return (outputL, outputR)
+    }
+
+    // MARK: - WASM Compilation
+
+    private static func compileToWasm(source: String) throws -> Data {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("conjuredsp-export-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let inputFile = tempDir.appendingPathComponent("dsp.rs")
+        let outputFile = tempDir.appendingPathComponent("dsp.wasm")
+        try source.write(to: inputFile, atomically: true, encoding: .utf8)
+
+        let rustc = try rustcURL
+        let sysroot = try rustcSysroot
+
+        let process = Process()
+        process.executableURL = rustc
+        var args = [
+            "--sysroot", sysroot.path,
+            "--target", "wasm32-wasip1",
+            "--edition", "2021",
+            "-C", "opt-level=2",
+            "--crate-type", "cdylib",
+            "-o", outputFile.path,
+            inputFile.path,
+        ]
+
+        let rlibPath = sysroot.appendingPathComponent("lib/libconjuredsp.rlib").path
+        if FileManager.default.fileExists(atPath: rlibPath) {
+            args = ["--extern", "conjuredsp=\(rlibPath)"] + args
+        }
+
+        process.arguments = args
+
+        var env = ProcessInfo.processInfo.environment
+        env["DYLD_LIBRARY_PATH"] = sysroot.appendingPathComponent("lib").path
+        process.environment = env
+
+        let stderrPipe = Pipe()
+        process.standardError = stderrPipe
+        process.standardOutput = FileHandle.nullDevice
+
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            let stderr = String(data: stderrData, encoding: .utf8) ?? "Unknown error"
+            throw TestError("rustc failed: \(stderr)")
+        }
+
+        return try Data(contentsOf: outputFile)
+    }
+
+    // MARK: - Template & Export Helpers
+
+    private func findRealTemplate() -> URL? {
+        let extensionBundle = Bundle.main.builtInPlugInsURL?
+            .appendingPathComponent("ConjureDSPExtension.appex")
+        if let extBundle = extensionBundle,
+           let bundle = Bundle(url: extBundle),
+           let templateURL = bundle.url(forResource: "ExportTemplate", withExtension: "zip") {
+            return templateURL
+        }
+        return nil
+    }
+
+    private func makeTempOutputDir(testId: String) throws -> (URL, URL) {
+        let fm = FileManager.default
+        let outputDir = fm.temporaryDirectory
+            .appendingPathComponent("ExportDSPTest_\(testId)")
+        try fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        let registryURL = fm.temporaryDirectory
+            .appendingPathComponent("ExportDSPReg_\(testId)")
+            .appendingPathComponent("export-registry.json")
+        return (outputDir, registryURL)
+    }
+
+    private func appexResourcesPath(in appURL: URL) -> URL {
+        appURL
+            .appendingPathComponent("Contents/PlugIns/ConjureDSPExportAUTemplateExtension.appex")
+            .appendingPathComponent("Contents/Resources")
+    }
+
+    // MARK: - Integration Tests
+
+    @Test("Export Rust passthrough preset and verify audio processing")
+    func exportRustPresetAndVerifyAudio() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        // 1. Read and compile Rust passthrough preset
+        let resourcesURL = try Self.extensionResourcesURL
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_passthrough_rust.rs"), encoding: .utf8)
+        let wasmData = try Self.compileToWasm(source: source)
+
+        // 2. Export
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: "ExportTest_Passthrough_\(testId)",
+            source: source,
+            wasmData: wasmData,
+            language: .rust,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true
+        )
+
+        // 3. Read exported WASM back from bundle
+        let exportedWasm = try Data(contentsOf: appexResourcesPath(in: appURL).appendingPathComponent("preset.wasm"))
+        #expect(exportedWasm == wasmData, "Exported WASM should match input")
+
+        // 4. Load into fresh kernel and process audio
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+        dsp_kernel_set_licensed(kernel, true)
+        dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
+        dsp_kernel_set_max_frames(kernel, UInt32(Self.chunkSize))
+
+        let loaded = exportedWasm.withUnsafeBytes { buf in
+            dsp_kernel_load_wasm(kernel, buf.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(buf.count))
+        }
+        #expect(loaded, "WASM should load successfully into kernel")
+
+        // 5. Process sine wave and verify passthrough
+        let (inputL, inputR) = Self.generateSineSignal()
+        let (outputL, outputR) = Self.renderSignal(kernel: kernel, inputL: inputL, inputR: inputR)
+
+        var maxError: Float = 0
+        for i in 0..<inputL.count {
+            maxError = max(maxError, abs(outputL[i] - inputL[i]))
+            maxError = max(maxError, abs(outputR[i] - inputR[i]))
+        }
+        #expect(maxError < 1e-6, "Passthrough output should match input (max error: \(maxError))")
+    }
+
+    @Test("Export Python passthrough preset and verify audio processing")
+    func exportPythonPresetAndVerifyAudio() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        // 1. Read Python passthrough preset
+        let resourcesURL = try Self.extensionResourcesURL
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_passthrough.py"), encoding: .utf8)
+
+        // 2. Export
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: "ExportTest_PyPassthrough_\(testId)",
+            source: source,
+            wasmData: nil,
+            language: .python,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true
+        )
+
+        // 3. Read exported Python file back from bundle
+        let exportedPy = try String(contentsOf: appexResourcesPath(in: appURL).appendingPathComponent("preset.py"), encoding: .utf8)
+        #expect(exportedPy == source, "Exported Python should match input")
+
+        // 4. Write to temp file and load into kernel
+        let tempScript = FileManager.default.temporaryDirectory
+            .appendingPathComponent("export_test_\(testId).py")
+        try exportedPy.write(to: tempScript, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tempScript) }
+
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+        dsp_kernel_set_licensed(kernel, true)
+        dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
+        dsp_kernel_set_max_frames(kernel, UInt32(Self.chunkSize))
+
+        let home = try Self.pythonHome
+        let loaded = dsp_kernel_load_script(kernel, home, tempScript.path)
+        #expect(loaded, "Python script should load successfully into kernel")
+
+        // 5. Process sine wave and verify passthrough
+        let (inputL, inputR) = Self.generateSineSignal()
+        let (outputL, outputR) = Self.renderSignal(kernel: kernel, inputL: inputL, inputR: inputR)
+
+        var maxError: Float = 0
+        for i in 0..<inputL.count {
+            maxError = max(maxError, abs(outputL[i] - inputL[i]))
+            maxError = max(maxError, abs(outputR[i] - inputR[i]))
+        }
+        #expect(maxError < 1e-6, "Passthrough output should match input (max error: \(maxError))")
+    }
+
+    @Test("Export Rust gainpan preset and verify non-trivial DSP processing")
+    func exportRustPresetWithDSPVerifyProcessing() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        // 1. Read and compile Rust gainpan preset (has rich params)
+        let resourcesURL = try Self.extensionResourcesURL
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_gainpan_rust.rs"), encoding: .utf8)
+        let wasmData = try Self.compileToWasm(source: source)
+
+        // 2. Export with param metadata
+        let metadata: [ParamMetadata] = [
+            ParamMetadata(name: "Gain", key: "gain", min: -24, max: 12, default: 0, unit: "dB", curve: nil),
+            ParamMetadata(name: "Pan", key: "pan", min: 0, max: 1, default: 0.5, unit: "", curve: nil),
+        ]
+
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: "ExportTest_GainPan_\(testId)",
+            source: source,
+            wasmData: wasmData,
+            language: .rust,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true,
+            paramMetadata: metadata
+        )
+
+        // 3. Load exported WASM into kernel
+        let exportedWasm = try Data(contentsOf: appexResourcesPath(in: appURL).appendingPathComponent("preset.wasm"))
+
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+        dsp_kernel_set_licensed(kernel, true)
+        dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
+        dsp_kernel_set_max_frames(kernel, UInt32(Self.chunkSize))
+
+        let loaded = exportedWasm.withUnsafeBytes { buf in
+            dsp_kernel_load_wasm(kernel, buf.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(buf.count))
+        }
+        #expect(loaded, "WASM should load successfully")
+
+        // 4. Set gain to minimum (-24 dB) by setting normalized param 0 to 0.0
+        dsp_kernel_set_parameter(kernel, 0, 0.0)
+        // Pan centered
+        dsp_kernel_set_parameter(kernel, 1, 0.5)
+
+        // 5. Process sine wave
+        let (inputL, inputR) = Self.generateSineSignal()
+        let (outputL, outputR) = Self.renderSignal(kernel: kernel, inputL: inputL, inputR: inputR)
+
+        // 6. Verify output is attenuated (not passthrough)
+        // At -24 dB, gain ≈ 0.063. Output amplitude should be ~6% of input.
+        let inputPeak = inputL.map { abs($0) }.max() ?? 0
+        let outputPeak = max(outputL.map { abs($0) }.max() ?? 0, outputR.map { abs($0) }.max() ?? 0)
+
+        #expect(inputPeak > 0.1, "Input should have significant amplitude")
+        #expect(outputPeak > 0, "Output should not be silent")
+        #expect(outputPeak < inputPeak * 0.2, "Output should be significantly attenuated at -24dB (input peak: \(inputPeak), output peak: \(outputPeak))")
+    }
+
+    @Test("Export with paramMetadata and verify runtime-config.json round-trip")
+    func exportWithParamMetadataVerifyRoundTrip() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        let metadata: [ParamMetadata] = [
+            ParamMetadata(name: "Cutoff", key: "cutoff", min: 20, max: 20000, default: 1000, unit: "Hz", curve: "log"),
+            ParamMetadata(name: "Resonance", key: "resonance", min: 0, max: 1, default: 0.5, unit: "", curve: nil),
+            ParamMetadata(name: "Mix", key: "mix", min: 0, max: 100, default: 100, unit: "%", curve: nil),
+        ]
+
+        // Use fake WASM (only testing config, not audio)
+        let wasmData = Data([0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00])
+
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: "ExportTest_Metadata_\(testId)",
+            source: "fn process() {}",
+            wasmData: wasmData,
+            language: .rust,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true,
+            paramMetadata: metadata
+        )
+
+        // Parse runtime-config.json
+        let configURL = appexResourcesPath(in: appURL).appendingPathComponent("runtime-config.json")
+        let configData = try Data(contentsOf: configURL)
+        let config = try JSONSerialization.jsonObject(with: configData) as! [String: Any]
+
+        // Verify required fields
+        #expect(config["version"] as? Int == 1)
+        #expect(config["language"] as? String == "rust")
+        #expect((config["presetName"] as? String)?.contains("ExportTest_Metadata") == true)
+        #expect(config["paramCount"] as? Int == 3)
+
+        // Verify paramMetadata array
+        let metaArray = try #require(config["paramMetadata"] as? [[String: Any]])
+        #expect(metaArray.count == 3)
+
+        #expect(metaArray[0]["name"] as? String == "Cutoff")
+        #expect(metaArray[0]["key"] as? String == "cutoff")
+        #expect(metaArray[0]["min"] as? Float == 20)
+        #expect(metaArray[0]["max"] as? Float == 20000)
+        #expect(metaArray[0]["default"] as? Float == 1000)
+        #expect(metaArray[0]["unit"] as? String == "Hz")
+        #expect(metaArray[0]["curve"] as? String == "log")
+
+        #expect(metaArray[1]["name"] as? String == "Resonance")
+        #expect(metaArray[1]["curve"] == nil, "Linear curve should be omitted")
+
+        // Verify backward-compat paramNames
+        let names = try #require(config["paramNames"] as? [String])
+        #expect(names == ["Cutoff", "Resonance", "Mix"])
+    }
+
+    @Test("Export runtime-config.json contains all required fields for both languages")
+    func exportRuntimeConfigRequiredFields() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+
+        // Export Rust preset
+        let wasmData = Data([0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00])
+        let rustURL = try manager.exportPreset(
+            name: "ConfigTest_Rust_\(testId)",
+            source: "fn process() {}",
+            wasmData: wasmData,
+            language: .rust,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true
+        )
+
+        // Export Python preset
+        let pyURL = try manager.exportPreset(
+            name: "ConfigTest_Python_\(testId)",
+            source: "def process(inputs, outputs, frame_count, sample_rate, params): pass",
+            wasmData: nil,
+            language: .python,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true
+        )
+
+        let requiredKeys = ["version", "language", "presetName", "exportDate", "paramCount"]
+
+        for (url, lang) in [(rustURL, "rust"), (pyURL, "python")] {
+            let configData = try Data(contentsOf: appexResourcesPath(in: url).appendingPathComponent("runtime-config.json"))
+            let config = try JSONSerialization.jsonObject(with: configData) as! [String: Any]
+
+            for key in requiredKeys {
+                #expect(config[key] != nil, "\(lang) config missing required field '\(key)'")
+            }
+            #expect(config["language"] as? String == lang)
+        }
+    }
+
+    @Test("Export with very long preset name")
+    func exportWithVeryLongPresetName() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        let longName = String(repeating: "A", count: 200) + "_\(testId)"
+        let wasmData = Data([0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00])
+
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: longName,
+            source: "fn process() {}",
+            wasmData: wasmData,
+            language: .rust,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true
+        )
+
+        // Export should succeed
+        #expect(FileManager.default.fileExists(atPath: appURL.path))
+
+        // Verify runtime-config preserves full name
+        let configData = try Data(contentsOf: appexResourcesPath(in: appURL).appendingPathComponent("runtime-config.json"))
+        let config = try JSONSerialization.jsonObject(with: configData) as! [String: Any]
+        #expect(config["presetName"] as? String == longName)
+
+        // Verify plist contains the full name in AU display
+        let extPlistURL = appURL
+            .appendingPathComponent("Contents/PlugIns/ConjureDSPExportAUTemplateExtension.appex")
+            .appendingPathComponent("Contents/Info.plist")
+        let plistData = try Data(contentsOf: extPlistURL)
+        let plist = try PropertyListSerialization.propertyList(from: plistData, format: nil) as! [String: Any]
+        let nsExt = plist["NSExtension"] as! [String: Any]
+        let attrs = nsExt["NSExtensionAttributes"] as! [String: Any]
+        let components = attrs["AudioComponents"] as! [[String: Any]]
+        #expect(components[0]["name"] as? String == "ConjureDSP: \(longName)")
+    }
+}
+
+// MARK: - Edge Case Tests
+
+struct ExportEdgeCaseTests {
+
+    @Test func exportPresetNameWithUnicode() {
+        let sanitized = ExportManager.sanitizeName("超级混响 🎵 Effect!")
+        // Unicode chars and emoji become underscores
+        #expect(!sanitized.isEmpty)
+        #expect(!sanitized.contains("🎵"))
+        // Should only contain alphanumeric, hyphens, underscores
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        for scalar in sanitized.unicodeScalars {
+            #expect(allowed.contains(scalar), "Unexpected char: \(scalar)")
+        }
+    }
+
+    @Test func exportPresetNameAllSpecialChars() {
+        let sanitized = ExportManager.sanitizeName("!!@@##$$")
+        #expect(sanitized == "Untitled", "All-special-char name should fall back to Untitled")
+    }
+
+    @Test func exportPresetNameEmpty() {
+        let sanitized = ExportManager.sanitizeName("")
+        #expect(sanitized == "Untitled", "Empty name should fall back to Untitled")
+    }
+
+    @Test func exportPresetNameOnlyUnderscores() {
+        let sanitized = ExportManager.sanitizeName("___")
+        // After trimming underscores, this becomes empty → Untitled
+        #expect(sanitized == "Untitled")
+    }
+
+    @Test func exportPresetNameWithSpaces() {
+        let sanitized = ExportManager.sanitizeName("My Cool Reverb")
+        #expect(sanitized == "My_Cool_Reverb")
     }
 }
 

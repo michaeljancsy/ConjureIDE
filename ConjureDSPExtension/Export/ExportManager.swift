@@ -13,6 +13,7 @@ final class ExportManager {
         case plistPatchFailed(String)
         case codeSignFailed(String)
         case copyFailed(String)
+        case validationFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -21,6 +22,7 @@ final class ExportManager {
             case .plistPatchFailed(let detail): return "Failed to patch Info.plist: \(detail)"
             case .codeSignFailed(let detail): return "Code signing failed: \(detail)"
             case .copyFailed(let detail): return "Failed to copy template: \(detail)"
+            case .validationFailed(let detail): return "Export validation failed: \(detail)"
             }
         }
     }
@@ -137,6 +139,9 @@ final class ExportManager {
             exportDate: Date(),
             language: language.rawValue
         ))
+
+        // 9. Validate exported bundle
+        validateExportedBundle(at: destURL, language: language)
 
         log.info("Exported preset '\(name, privacy: .public)' as \(sanitized).app (subtype: \(subtype, privacy: .public))")
         return destURL
@@ -300,6 +305,62 @@ final class ExportManager {
         if process.terminationStatus != 0 {
             let stderr = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             throw ExportError.codeSignFailed(stderr)
+        }
+    }
+
+    // MARK: - Post-Export Validation
+
+    /// Validates the exported bundle contains a valid preset and runtime config.
+    /// Logs warnings on failure rather than throwing — the export itself succeeded.
+    private func validateExportedBundle(at appURL: URL, language: ScriptLanguage) {
+        let appexResources = appURL
+            .appendingPathComponent("Contents/PlugIns/ConjureDSPExportAUTemplateExtension.appex")
+            .appendingPathComponent("Contents/Resources")
+        let fm = FileManager.default
+
+        // Check preset file exists and is non-empty
+        let presetFile: URL
+        switch language {
+        case .rust:
+            presetFile = appexResources.appendingPathComponent("preset.wasm")
+        case .python:
+            presetFile = appexResources.appendingPathComponent("preset.py")
+        }
+
+        guard fm.fileExists(atPath: presetFile.path) else {
+            log.warning("Export validation: preset file missing at \(presetFile.lastPathComponent, privacy: .public)")
+            return
+        }
+
+        guard let presetData = try? Data(contentsOf: presetFile), !presetData.isEmpty else {
+            log.warning("Export validation: preset file is empty")
+            return
+        }
+
+        // WASM: verify magic bytes (\0asm)
+        if language == .rust {
+            let wasmMagic: [UInt8] = [0x00, 0x61, 0x73, 0x6D]
+            let header = [UInt8](presetData.prefix(4))
+            if header != wasmMagic {
+                log.warning("Export validation: WASM file missing magic bytes")
+            }
+        }
+
+        // Python: verify contains process function
+        if language == .python {
+            if let source = String(data: presetData, encoding: .utf8), !source.contains("def process") {
+                log.warning("Export validation: Python file missing 'def process'")
+            }
+        }
+
+        // Check runtime-config.json exists and is valid JSON
+        let configURL = appexResources.appendingPathComponent("runtime-config.json")
+        if let configData = try? Data(contentsOf: configURL) {
+            if (try? JSONSerialization.jsonObject(with: configData)) == nil {
+                log.warning("Export validation: runtime-config.json is not valid JSON")
+            }
+        } else {
+            log.warning("Export validation: runtime-config.json missing")
         }
     }
 
