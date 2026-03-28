@@ -38,6 +38,7 @@ UI test classes and what they cover:
 - Bundled Python runtime (one-time setup): `cd rust && ./setup-python.sh`
 - Bundled Rust compiler (one-time setup): `./scripts/setup-rustc.sh`
 - Monaco Editor (one-time setup): `./scripts/setup-monaco.sh`
+- xterm.js terminal (one-time setup): `./scripts/setup-xterm.sh`
 
 Deployment targets: macOS 26.2+.
 
@@ -91,8 +92,12 @@ Scripts can be written in Python (instant load) or Rust (compiled to WASM). `Scr
 ### Monaco Editor
 The code editor uses Monaco Editor (VS Code's editor) loaded in a WKWebView. It auto-detects Python vs Rust, applies light/dark themes, and communicates with Swift via `WKUserContentController` message handlers. Downloaded by `scripts/setup-monaco.sh` to `Resources/monaco/vs/` (gitignored).
 
-### AI Chat Sidebar
-An in-plugin AI assistant powered by Anthropic's Claude API with SSE streaming. Exposes 9 tools the AI can invoke: `compile_and_run`, `get_script`, `get_error`, `set_parameter`, `get_parameters`, `get_audio_state`, `list_presets`, `save_preset`, and `toggle_bypass`. API keys stored in Keychain.
+### Claude Code Terminal
+An in-plugin terminal running Claude Code CLI via a companion app architecture. The AU extension runs an MCP server (HTTP, direct AU access) exposing 9 tools: `compile_and_run`, `get_script`, `get_error`, `set_parameter`, `get_parameters`, `get_audio_state`, `list_presets`, `save_preset`, and `toggle_bypass`. The terminal UI uses xterm.js in a WKWebView with a contentEditable input proxy for keyboard input through the AU ViewBridge.
+
+**ConjureDSPTerminal** is a companion app that runs the Claude Code CLI process (PTY) and WebSocket relay outside the AU extension sandbox. The extension cannot fork external binaries due to sandbox restrictions. Communication uses the App Group container for port discovery and lifecycle signaling. The companion app detects AU restarts via MCP port changes and health checks.
+
+Setup: `scripts/setup-xterm.sh` downloads xterm.js to `Resources/terminal/xterm/` (gitignored).
 
 ### GitHub Integration
 Two workflows: **CommunityPresetStore** for browsing community presets via public GitHub search, and **PersonalRepoSync** for two-way sync with a user's private preset repository (PAT-based). Repos are validated via a `conjuredsp.json` marker file. Auto-syncs preset saves/deletes via callbacks into PresetManager.
@@ -113,7 +118,7 @@ ConjureDSP/                  Host app — loads and tests the AU extension
   SentrySetup.swift          Sentry crash reporting initialization
   ValidationView.swift       Debug UI for AU validation output
 ConjureDSPExtension/         The AU plugin itself
-  AI/                        AI chat sidebar — AnthropicProvider, ChatTools (9 tools), ToolExecutor, SSEParser, KeychainHelper
+  Terminal/                  MCPServer (HTTP+JSON-RPC), MCPProtocol (9 tools), TerminalServer (lifecycle)
   Analytics.swift            Mixpanel analytics wrapper
   Audio/                     AudioCaptureManager — reads ring buffers for spectrogram FFT
   Compilation/               RustCompiler (bundled rustc → WASM), ScriptCompiler, ScriptLanguage (auto-detect), WasmCache (SHA256)
@@ -121,12 +126,17 @@ ConjureDSPExtension/         The AU plugin itself
   GitHub/                    GitHubService, GitHubClient, CommunityPresetStore, PersonalRepoSync, GitHubModels
   Model/                     LicenseManager (Ed25519 + demo), Preset, PresetManager
   Parameters/                Parameter addresses (Swift enum)
-  UI/                        MonacoEditorView, SpectrogramView, ChatSidebarView, CommunityBrowserView,
+  UI/                        MonacoEditorView, SpectrogramView, TerminalView, CommunityBrowserView,
                              PresetBrowserView, ParameterSlidersView, GitHubSettingsView, ExportPopover, and more
   Resources/                 Factory presets (.py + .wasm), process.py, monaco/ (gitignored)
   Common/Audio Unit/         ConjureDSPExtensionAudioUnit.swift — AUAudioUnit subclass + render block
   Common/UI/                 AudioUnitViewController
-  Common/Utility/            CrossPlatform.swift, SentrySetup.swift, String+Utils.swift
+  Common/Utility/            CrossPlatform.swift, SentrySetup.swift, String+Utils.swift, KeychainHelper.swift
+ConjureDSPTerminal/          Companion app — runs Claude Code CLI outside sandbox
+  ConjureDSPTerminalApp.swift  App entry point, TerminalAppServer (lifecycle, health checks)
+  PTYManager.swift           forkpty + execve for Claude Code, MCP config writing
+  WebSocketServer.swift      NWListener WebSocket relay (PTY I/O → xterm.js)
+ConjureDSPHelper/            Deprecated stub target (replaced by ConjureDSPTerminal)
 ConjureDSPExportAUTemplate/  Standalone export AU template project
   ConjureDSPExportAUTemplate/          Host app for template
   ConjureDSPExportAUTemplateExtension/ AU extension template
@@ -162,6 +172,7 @@ scripts/                     Build and setup scripts
   backup-keypair.sh          Backs up Ed25519 license keypair
   restore-keypair.sh         Restores Ed25519 license keypair
   rebuild-and-copy-export-template.sh  Builds export AU template and copies into main app
+  setup-xterm.sh             Downloads xterm.js for terminal UI
 assets/                      App icons (app-icon.png, export-icon.png)
 tools/generate-license/      Rust CLI for generating license keys
 plans/                       Implementation plans (ai-assisted-coding, host-app-daw-controls, etc.)

@@ -27,9 +27,8 @@
 ### UI & Editor
 - Investigate ACP (Audio Code Protocol) and more full-fledged IDE features for the editor
 - AI-powered autocomplete (context-aware LLM suggestions)
-- AI chat sidebar polish: markdown rendering, code block copy/insert buttons, conversation persistence, keyboard shortcut to toggle
+- Claude Code terminal polish: auto-launch companion app, terminal reconnect UX, DAW testing
 - Audio visualization polish: persist spectrogram preferences in UserDefaults, add spectrogram to host app
-- Host app DAW controls: preset selection and bypass button
 - Full-screen text editor mode
 - Make scrolling smoother
 
@@ -44,6 +43,7 @@
 
 ## Done
 
+- Claude Code terminal integration — MCP server in extension, companion app for PTY, xterm.js terminal UI, contentEditable keyboard input for ViewBridge (2026-03-27)
 - Fix flaky `extensionPlistContainsBuildID` test — use Info.plist preprocessing instead of post-hoc stamping (2026-03-26)
 - BPM sync: host transport (tempo, beat, time sig, playing) piped through entire pipeline to Python/WASM scripts + tempo-synced delay preset (2026-03-25)
 - Monaco numpy/scipy/signal autocomplete in editor-bridge.js (2026-03-25)
