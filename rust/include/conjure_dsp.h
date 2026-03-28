@@ -332,4 +332,28 @@ uint32_t dsp_kernel_profiler_avg_us(DSPKernelRef kernel);
  */
 uint32_t dsp_kernel_profiler_peak_us(DSPKernelRef kernel);
 
+/**
+ * Get the current process resident memory in bytes via mach task_info.
+ * Does not require a kernel — measures process-wide RSS.
+ * Returns 0 on failure. Safe to call from any thread (~1µs).
+ */
+uint64_t dsp_kernel_process_resident_bytes(void);
+
+/**
+ * Get the process RSS baseline recorded when the current script was loaded.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+uint64_t dsp_kernel_memory_baseline_bytes(DSPKernelRef kernel);
+
+/**
+ * Get the current WASM linear memory size in bytes.
+ * Returns 0 if the current backend is not WASM.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+uint64_t dsp_kernel_wasm_memory_bytes(DSPKernelRef kernel);
+
 #endif  /* CONJURE_DSP_H */

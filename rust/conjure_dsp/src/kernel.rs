@@ -96,6 +96,71 @@ pub struct DSPKernel {
     /// Unix timestamp when grace period ends (valid_until + 7 days).
     /// Used by UI to show "X days remaining" warnings.
     grace_deadline_unix: AtomicI64,
+    /// Process RSS baseline in bytes, captured when a script is loaded.
+    /// Used by MemoryMonitor to detect growth relative to script load time.
+    memory_baseline_bytes: AtomicU64,
+    /// Current WASM linear memory size in bytes (0 if Python backend).
+    /// Updated after each process() call on the audio thread.
+    wasm_memory_bytes: AtomicU64,
+}
+
+/// Get the current process resident memory in bytes via mach task_info.
+/// Returns 0 on failure. Safe to call from any thread (~1µs).
+pub(crate) fn process_resident_bytes() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        // mach_task_basic_info is the modern replacement for task_basic_info.
+        // Layout: virtual_size(u64), resident_size(u64), resident_size_max(u64),
+        //         user_time(time_value_t=8), system_time(time_value_t=8), policy(i32), suspend_count(i32)
+        // Total = 24 + 16 + 8 = 48 bytes = 12 natural_t words
+        const MACH_TASK_BASIC_INFO: u32 = 20;
+        const MACH_TASK_BASIC_INFO_COUNT: u32 = 12; // 48 bytes / 4 bytes per natural_t
+
+        extern "C" {
+            fn mach_task_self() -> u32;
+            fn task_info(
+                target_task: u32,
+                flavor: u32,
+                task_info_out: *mut u8,
+                task_info_count: *mut u32,
+            ) -> i32;
+        }
+
+        #[repr(C)]
+        struct MachTaskBasicInfo {
+            virtual_size: u64,
+            resident_size: u64,
+            resident_size_max: u64,
+            user_time_seconds: i32,
+            user_time_microseconds: i32,
+            system_time_seconds: i32,
+            system_time_microseconds: i32,
+            policy: i32,
+            suspend_count: i32,
+        }
+
+        let mut info: MachTaskBasicInfo = unsafe { std::mem::zeroed() };
+        let mut count = MACH_TASK_BASIC_INFO_COUNT;
+
+        let kr = unsafe {
+            task_info(
+                mach_task_self(),
+                MACH_TASK_BASIC_INFO,
+                &mut info as *mut MachTaskBasicInfo as *mut u8,
+                &mut count,
+            )
+        };
+
+        if kr == 0 {
+            // KERN_SUCCESS = 0
+            info.resident_size
+        } else {
+            0
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    0
 }
 
 impl DSPKernel {
@@ -124,6 +189,8 @@ impl DSPKernel {
             profiler_peak_us: AtomicU32::new(0),
             subscription_status: AtomicU8::new(SubscriptionStatus::NoSubscription as u8),
             grace_deadline_unix: AtomicI64::new(0),
+            memory_baseline_bytes: AtomicU64::new(0),
+            wasm_memory_bytes: AtomicU64::new(0),
         }
     }
 
@@ -166,6 +233,8 @@ impl DSPKernel {
                 self.update_param_names_cache(names);
                 self.update_param_metadata_cache(metadata);
                 self.reset_profiler();
+                self.memory_baseline_bytes.store(process_resident_bytes(), Ordering::Relaxed);
+                self.wasm_memory_bytes.store(0, Ordering::Relaxed);
                 self.last_error = None;
                 true
             }
@@ -194,6 +263,13 @@ impl DSPKernel {
                 self.update_param_names_cache(names);
                 self.update_param_metadata_cache(metadata);
                 self.reset_profiler();
+                self.memory_baseline_bytes.store(process_resident_bytes(), Ordering::Relaxed);
+                // Store initial WASM memory size
+                if let Ok(guard) = self.backend.lock() {
+                    if let Some(ref b) = *guard {
+                        self.wasm_memory_bytes.store(b.memory_bytes(), Ordering::Relaxed);
+                    }
+                }
                 self.last_error = None;
                 true
             }
@@ -277,6 +353,16 @@ impl DSPKernel {
         let prev_peak = self.profiler_peak_us.load(Ordering::Relaxed);
         let decayed = ((prev_peak as u64 * 1023) / 1024) as u32;
         self.profiler_peak_us.store(elapsed_us.max(decayed), Ordering::Relaxed);
+    }
+
+    /// Get the process RSS baseline recorded when the current script was loaded.
+    pub fn memory_baseline_bytes(&self) -> u64 {
+        self.memory_baseline_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Get the current WASM linear memory size in bytes (0 if Python backend).
+    pub fn wasm_memory_bytes(&self) -> u64 {
+        self.wasm_memory_bytes.load(Ordering::Relaxed)
     }
 
     /// Reset profiler statistics. Called when a new script/WASM is loaded.
@@ -653,6 +739,11 @@ impl DSPKernel {
                 // Ensure at least 1µs so sub-microsecond calls are still visible
                 let elapsed_us = (t0.elapsed().as_micros() as u32).max(1);
                 self.update_profiler(elapsed_us);
+                // Track WASM linear memory size (single pointer read, ~0 overhead)
+                let mem = backend.memory_bytes();
+                if mem > 0 {
+                    self.wasm_memory_bytes.store(mem, Ordering::Relaxed);
+                }
                 if ok {
                     Self::safety_clamp(outputs, channel_count, frame_count);
                     // Cast output pointers to const (used for capture and demo gating)

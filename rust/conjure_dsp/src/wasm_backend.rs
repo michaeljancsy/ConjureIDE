@@ -647,6 +647,10 @@ impl Backend for WasmBackend {
     fn param_metadata(&self) -> Option<&[crate::params::ParamMetadata]> {
         self.param_metadata.as_deref()
     }
+
+    fn memory_bytes(&self) -> u64 {
+        self.memory.data_size(&self.store) as u64
+    }
 }
 
 #[cfg(test)]

@@ -446,6 +446,35 @@ pub unsafe extern "C" fn dsp_kernel_profiler_peak_us(kernel: DSPKernelRef) -> u3
     (*kernel).profiler_peak_us.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+// --- Memory monitoring FFI ---
+
+/// Get the current process resident memory in bytes via mach task_info.
+/// Does not require a kernel — measures process-wide RSS.
+/// Returns 0 on failure. Safe to call from any thread (~1µs).
+#[no_mangle]
+pub extern "C" fn dsp_kernel_process_resident_bytes() -> u64 {
+    kernel::process_resident_bytes()
+}
+
+/// Get the process RSS baseline recorded when the current script was loaded.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_memory_baseline_bytes(kernel: DSPKernelRef) -> u64 {
+    (*kernel).memory_baseline_bytes()
+}
+
+/// Get the current WASM linear memory size in bytes.
+/// Returns 0 if the current backend is not WASM.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_wasm_memory_bytes(kernel: DSPKernelRef) -> u64 {
+    (*kernel).wasm_memory_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
