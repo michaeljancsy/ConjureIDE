@@ -12,7 +12,6 @@
 - Paddle account setup + pre-generate license key batch
 - Landing page (static site with Buy + Download)
 - In-app "Buy" link for unlicensed users
-- Fix flaky `extensionPlistContainsBuildID` test (build phase timing)
 
 ### Export Preset as Standalone AUv3
 - Phase 5: Polish & validation (integration tests, edge cases, documentation)
@@ -45,6 +44,7 @@
 
 ## Done
 
+- Fix flaky `extensionPlistContainsBuildID` test — use Info.plist preprocessing instead of post-hoc stamping (2026-03-26)
 - BPM sync: host transport (tempo, beat, time sig, playing) piped through entire pipeline to Python/WASM scripts + tempo-synced delay preset (2026-03-25)
 - Monaco numpy/scipy/signal autocomplete in editor-bridge.js (2026-03-25)
 - Add Stereo Width Optimized preset alongside original (2026-03-25)
