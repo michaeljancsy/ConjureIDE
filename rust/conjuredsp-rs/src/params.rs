@@ -1,7 +1,7 @@
 /// Specification for a single parameter.
 ///
 /// Use the builder functions ([`freq`], [`db`], [`time_ms`], [`mix`], [`pct`],
-/// [`toggle`], [`ratio`], [`param`]) to create specs, then customize with
+/// [`toggle`], [`ratio`], [`choice`], [`param`]) to create specs, then customize with
 /// `.min()`, `.max()`, `.default()`, `.unit()`, `.curve()`.
 #[derive(Clone, Copy)]
 pub struct ParamSpec {
@@ -10,6 +10,10 @@ pub struct ParamSpec {
     pub unit_str: &'static str,
     pub default_val: f64,
     pub curve_str: &'static str,
+    /// Display style: "slider" (default), "toggle", or "choice".
+    pub style_str: &'static str,
+    /// Option labels for "choice" style parameters.
+    pub options: &'static [&'static str],
 }
 
 impl ParamSpec {
@@ -53,6 +57,8 @@ pub const fn freq() -> ParamSpec {
         unit_str: "Hz",
         default_val: 1000.0,
         curve_str: "log",
+        style_str: "slider",
+        options: &[],
     }
 }
 
@@ -65,6 +71,8 @@ pub const fn db() -> ParamSpec {
         unit_str: "dB",
         default_val: 0.0,
         curve_str: "linear",
+        style_str: "slider",
+        options: &[],
     }
 }
 
@@ -77,6 +85,8 @@ pub const fn time_ms() -> ParamSpec {
         unit_str: "ms",
         default_val: 100.0,
         curve_str: "log",
+        style_str: "slider",
+        options: &[],
     }
 }
 
@@ -89,6 +99,8 @@ pub const fn mix() -> ParamSpec {
         unit_str: "",
         default_val: 0.5,
         curve_str: "linear",
+        style_str: "slider",
+        options: &[],
     }
 }
 
@@ -101,11 +113,13 @@ pub const fn pct() -> ParamSpec {
         unit_str: "%",
         default_val: 50.0,
         curve_str: "linear",
+        style_str: "slider",
+        options: &[],
     }
 }
 
 /// On/off toggle parameter (0 or 1).
-/// Default value: 0 (off).
+/// Default value: 0 (off). Renders as a switch in the UI.
 pub const fn toggle() -> ParamSpec {
     ParamSpec {
         min_val: 0.0,
@@ -113,6 +127,25 @@ pub const fn toggle() -> ParamSpec {
         unit_str: "",
         default_val: 0.0,
         curve_str: "linear",
+        style_str: "toggle",
+        options: &[],
+    }
+}
+
+/// Enum parameter rendered as a dropdown menu.
+///
+/// `options` is a slice of label strings. Min is 0, max is len-1.
+/// The script receives the selected index as a float (0.0, 1.0, 2.0...).
+/// Default value is 0 (first option). Customize with `.default()`.
+pub const fn choice(options: &'static [&'static str]) -> ParamSpec {
+    ParamSpec {
+        min_val: 0.0,
+        max_val: options.len() as f64 - 1.0,
+        unit_str: "",
+        default_val: 0.0,
+        curve_str: "linear",
+        style_str: "choice",
+        options,
     }
 }
 
@@ -125,6 +158,8 @@ pub const fn ratio() -> ParamSpec {
         unit_str: ":1",
         default_val: 4.0,
         curve_str: "linear",
+        style_str: "slider",
+        options: &[],
     }
 }
 
@@ -137,6 +172,8 @@ pub const fn param(min: f64, max: f64) -> ParamSpec {
         unit_str: "",
         default_val: min,
         curve_str: "linear",
+        style_str: "slider",
+        options: &[],
     }
 }
 
@@ -203,6 +240,25 @@ mod tests {
         assert!(approx_eq(p.min_val, 0.0, 1e-10));
         assert!(approx_eq(p.max_val, 1.0, 1e-10));
         assert!(approx_eq(p.default_val, 0.0, 1e-10));
+        assert_eq!(p.style_str, "toggle");
+    }
+
+    #[test]
+    fn test_choice_defaults() {
+        let p = choice(&["Low", "Mid", "High"]);
+        assert!(approx_eq(p.min_val, 0.0, 1e-10));
+        assert!(approx_eq(p.max_val, 2.0, 1e-10));
+        assert!(approx_eq(p.default_val, 0.0, 1e-10));
+        assert_eq!(p.style_str, "choice");
+        assert_eq!(p.options, &["Low", "Mid", "High"]);
+    }
+
+    #[test]
+    fn test_choice_with_default() {
+        let p = choice(&["1/1", "1/2", "1/4", "1/8"]).default(2.0);
+        assert!(approx_eq(p.max_val, 3.0, 1e-10));
+        assert!(approx_eq(p.default_val, 2.0, 1e-10));
+        assert_eq!(p.style_str, "choice");
     }
 
     #[test]

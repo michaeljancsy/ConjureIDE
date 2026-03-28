@@ -17,9 +17,9 @@ setup!();
 
 params! {
     THRESHOLD = db().min(-80.0).max(-20.0).default(-40.0),
-    ATTACK = param(0.1, 10.0).unit("ms").default(1.0),
-    RELEASE = param(10.0, 500.0).unit("ms").default(100.0),
-    HOLD = param(0.0, 100.0).unit("ms").default(10.0),
+    ATTACK = time_ms().min(0.1).max(10.0).default(1.0),
+    RELEASE = time_ms().min(10.0).max(500.0).default(100.0),
+    HOLD = time_ms().min(0.1).max(100.0).default(10.0),
 }
 
 // Persistent state

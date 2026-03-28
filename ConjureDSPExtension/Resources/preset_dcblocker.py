@@ -1,8 +1,8 @@
 import math
-from conjuredsp.params import param
+from conjuredsp.params import freq
 
 PARAMS = {
-    "cutoff": param(4, 70, unit="Hz", default=4),
+    "cutoff": freq(min=4, max=70, default=4),
 }
 
 # Persistent state per channel: [prev_x, prev_y]

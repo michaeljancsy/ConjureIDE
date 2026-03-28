@@ -17,8 +17,8 @@ setup!();
 
 params! {
     THRESHOLD = db().min(-20.0).max(0.0).default(-6.0),
-    ATTACK = param(0.01, 1.0).unit("ms").default(0.1),
-    RELEASE = param(10.0, 500.0).unit("ms").default(100.0),
+    ATTACK = time_ms().min(0.01).max(1.0).default(0.1),
+    RELEASE = time_ms().min(10.0).max(500.0).default(100.0),
 }
 
 // Persistent envelope follower state

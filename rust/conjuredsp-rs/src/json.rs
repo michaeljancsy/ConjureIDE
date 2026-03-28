@@ -156,6 +156,23 @@ impl JsonBuf {
     }
 }
 
+/// Check if a string equals a target via byte comparison (const-compatible).
+const fn str_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// Write a single ParamSpec as a JSON object into the buffer.
 /// `name` is the SCREAMING_SNAKE_CASE identifier from the macro.
 pub const fn write_param_json(buf: JsonBuf, name: &str, spec: &crate::ParamSpec) -> JsonBuf {
@@ -171,22 +188,47 @@ pub const fn write_param_json(buf: JsonBuf, name: &str, spec: &crate::ParamSpec)
     let s = s.push_f64(spec.default_val);
 
     // Only include curve if non-linear
-    let is_linear = spec.curve_str.as_bytes().len() == 6
-        && spec.curve_str.as_bytes()[0] == b'l'
-        && spec.curve_str.as_bytes()[1] == b'i'
-        && spec.curve_str.as_bytes()[2] == b'n'
-        && spec.curve_str.as_bytes()[3] == b'e'
-        && spec.curve_str.as_bytes()[4] == b'a'
-        && spec.curve_str.as_bytes()[5] == b'r';
+    let is_linear = str_eq(spec.curve_str, "linear");
 
-    if is_linear {
-        s.push_byte(b'}')
+    let s = if is_linear {
+        s
     } else {
         let s = s.push_str(r#","curve":""#);
         let s = s.push_str(spec.curve_str);
-        let s = s.push_str(r#""}"#);
+        s.push_byte(b'"')
+    };
+
+    // Include style if not "slider" (default)
+    let is_slider = str_eq(spec.style_str, "slider");
+
+    let s = if is_slider {
         s
-    }
+    } else {
+        let s = s.push_str(r#","style":""#);
+        let s = s.push_str(spec.style_str);
+        s.push_byte(b'"')
+    };
+
+    // Include options for choice style
+    let s = if spec.options.len() > 0 {
+        let s = s.push_str(r#","options":["#);
+        let mut s = s;
+        let mut i = 0;
+        while i < spec.options.len() {
+            if i > 0 {
+                s = s.push_byte(b',');
+            }
+            s = s.push_byte(b'"');
+            s = s.push_str(spec.options[i]);
+            s = s.push_byte(b'"');
+            i += 1;
+        }
+        s.push_byte(b']')
+    } else {
+        s
+    };
+
+    s.push_byte(b'}')
 }
 
 #[cfg(test)]
@@ -268,11 +310,15 @@ mod tests {
             unit_str: "%",
             default_val: 50.0,
             curve_str: "linear",
+            style_str: "slider",
+            options: &[],
         };
         let buf = write_param_json(JsonBuf::new(), "MIX", &spec);
         let s = buf_to_string(&buf);
         // Linear curve should NOT include "curve" key
         assert!(!s.contains("curve"), "linear param should omit curve, got: {}", s);
+        // Slider style should NOT include "style" key
+        assert!(!s.contains("style"), "slider param should omit style, got: {}", s);
         assert!(s.contains(r#""name":"Mix""#), "got: {}", s);
         assert!(s.contains(r#""min":0.0"#), "got: {}", s);
         assert!(s.contains(r#""max":100.0"#), "got: {}", s);
@@ -288,11 +334,32 @@ mod tests {
             unit_str: "Hz",
             default_val: 1000.0,
             curve_str: "log",
+            style_str: "slider",
+            options: &[],
         };
         let buf = write_param_json(JsonBuf::new(), "CUTOFF", &spec);
         let s = buf_to_string(&buf);
         // Log curve should include "curve":"log"
         assert!(s.contains(r#""curve":"log""#), "log param should include curve, got: {}", s);
         assert!(s.contains(r#""name":"Cutoff""#), "got: {}", s);
+    }
+
+    #[test]
+    fn test_write_param_json_toggle() {
+        let spec = crate::toggle();
+        let buf = write_param_json(JsonBuf::new(), "BYPASS", &spec);
+        let s = buf_to_string(&buf);
+        assert!(s.contains(r#""style":"toggle""#), "toggle param should include style, got: {}", s);
+        assert!(!s.contains("options"), "toggle should not have options, got: {}", s);
+    }
+
+    #[test]
+    fn test_write_param_json_choice() {
+        let spec = crate::choice(&["Low", "Mid", "High"]).default(1.0);
+        let buf = write_param_json(JsonBuf::new(), "MODE", &spec);
+        let s = buf_to_string(&buf);
+        assert!(s.contains(r#""style":"choice""#), "choice param should include style, got: {}", s);
+        assert!(s.contains(r#""options":["Low","Mid","High"]"#), "choice should have options, got: {}", s);
+        assert!(s.contains(r#""max":2.0"#), "max should be len-1, got: {}", s);
     }
 }

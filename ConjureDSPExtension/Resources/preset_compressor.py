@@ -1,12 +1,12 @@
 import numpy as np
-from conjuredsp.params import db, ratio, param
+from conjuredsp.params import db, ratio, time_ms
 from conjuredsp.dsp import db_to_gain, smooth_coeff
 
 PARAMS = {
     "threshold": db(-40, -3, default=-20),
     "ratio":     ratio(2, 20, default=4),
-    "attack":    param(0.5, 50, unit="ms", default=5),
-    "release":   param(10, 500, unit="ms", default=50),
+    "attack":    time_ms(min=0.5, max=50, default=5),
+    "release":   time_ms(min=10, max=500, default=50),
     "makeup":    db(0, 20, default=0),
 }
 

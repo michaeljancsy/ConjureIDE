@@ -1,12 +1,12 @@
 import numpy as np
-from conjuredsp.params import db, param
+from conjuredsp.params import db, time_ms
 from conjuredsp.dsp import db_to_gain, smooth_coeff
 
 PARAMS = {
     "threshold": db(-80, -20, default=-40),
-    "attack":    param(0.1, 10, unit="ms", default=1),
-    "release":   param(10, 500, unit="ms", default=100),
-    "hold":      param(0, 100, unit="ms", default=20),
+    "attack":    time_ms(min=0.1, max=10, default=1),
+    "release":   time_ms(min=10, max=500, default=100),
+    "hold":      time_ms(min=0.1, max=100, default=20),
 }
 
 # Persistent state

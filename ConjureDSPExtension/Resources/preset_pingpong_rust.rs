@@ -17,7 +17,7 @@ setup!();
 const MAX_DELAY: usize = 48000;
 
 params! {
-    TIME = param(50.0, 500.0).unit("ms").default(250.0),
+    TIME = time_ms().min(50.0).max(500.0).default(250.0),
     FEEDBACK = param(0.0, 0.95).default(0.5),
     MIX = mix(),
 }

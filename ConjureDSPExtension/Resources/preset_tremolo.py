@@ -1,11 +1,11 @@
 import numpy as np
-from conjuredsp.params import param
+from conjuredsp.params import param, toggle, choice
 from conjuredsp.osc import LFO
 
 PARAMS = {
-    "sync":     param(0, 1, default=0),
+    "sync":     toggle(),
     "rate":     param(0.5, 20, unit="Hz", default=5),
-    "division": param(0, 6, default=2),
+    "division": choice("1/1", "1/2", "1/4", "1/8", "1/16", "1/4T", "1/8T", default="1/4"),
     "depth":    param(0, 1, default=0.5),
 }
 

@@ -13,7 +13,7 @@ use conjuredsp::*;
 setup!();
 
 params! {
-    CUTOFF = param(4.0, 70.0).unit("Hz").default(4.0),
+    CUTOFF = freq().min(4.0).max(70.0).default(4.0),
 }
 
 // Persistent state per channel: [prev_x, prev_y]

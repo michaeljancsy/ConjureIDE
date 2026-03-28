@@ -22,8 +22,8 @@ setup!();
 params! {
     THRESHOLD = db().min(-40.0).max(-3.0).default(-20.0),
     RATIO = ratio().min(2.0).max(20.0).default(4.0),
-    ATTACK = param(0.5, 50.0).unit("ms").default(5.0),
-    RELEASE = param(10.0, 500.0).unit("ms").default(50.0),
+    ATTACK = time_ms().min(0.5).max(50.0).default(5.0),
+    RELEASE = time_ms().min(10.0).max(500.0).default(50.0),
     MAKEUP = db().min(0.0).max(20.0).default(0.0),
 }
 

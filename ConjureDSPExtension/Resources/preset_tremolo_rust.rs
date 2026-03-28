@@ -13,9 +13,9 @@ use conjuredsp::*;
 setup!();
 
 params! {
-    SYNC = param(0.0, 1.0),
+    SYNC = toggle(),
     RATE = param(0.5, 20.0).unit("Hz").default(5.0),
-    DIVISION = param(0.0, 6.0).default(2.0),
+    DIVISION = choice(&["1/1", "1/2", "1/4", "1/8", "1/16", "1/4T", "1/8T"]).default(2.0),
     DEPTH = param(0.0, 1.0).default(0.5),
 }
 

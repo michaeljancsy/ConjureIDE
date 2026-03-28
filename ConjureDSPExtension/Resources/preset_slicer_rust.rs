@@ -15,7 +15,7 @@ setup!();
 const MAX_CHUNK: usize = 19200;
 
 params! {
-    RATE = param(10.0, 500.0).unit("ms").default(100.0),
+    RATE = time_ms().min(10.0).max(500.0).default(100.0),
 }
 
 // Double buffers for record and playback

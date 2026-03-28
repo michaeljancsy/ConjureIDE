@@ -20,8 +20,8 @@ const MAX_STAGES: usize = 6;
 
 params! {
     RATE = param(0.1, 5.0).unit("Hz").default(1.0),
-    MIN_FREQ = param(50.0, 500.0).unit("Hz").default(200.0),
-    MAX_FREQ = param(500.0, 10000.0).unit("Hz").default(5000.0),
+    MIN_FREQ = freq().min(50.0).max(500.0).default(200.0),
+    MAX_FREQ = freq().min(500.0).max(10000.0).default(5000.0),
     STAGES = param(2.0, 6.0).default(4.0),
     MIX = mix(),
 }

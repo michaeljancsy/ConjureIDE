@@ -1,9 +1,9 @@
 import numpy as np
-from conjuredsp.params import param, mix as mix_param
+from conjuredsp.params import param, mix as mix_param, time_ms
 from conjuredsp.buffers import DelayLine
 
 PARAMS = {
-    "time":     param(50, 500, unit="ms", default=250),
+    "time":     time_ms(min=50, max=500, default=250),
     "feedback": param(0, 0.95, default=0.4),
     "mix":      mix_param(default=0.5),
 }

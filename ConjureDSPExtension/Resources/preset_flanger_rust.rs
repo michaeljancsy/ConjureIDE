@@ -19,8 +19,8 @@ const MAX_DELAY: usize = 1024;
 
 params! {
     RATE = param(0.1, 5.0).unit("Hz").default(1.0),
-    DEPTH = param(0.5, 5.0).unit("ms").default(2.0),
-    DELAY = param(1.0, 5.0).unit("ms").default(2.0),
+    DEPTH = time_ms().min(0.5).max(5.0).default(2.0),
+    DELAY = time_ms().min(1.0).max(5.0).default(2.0),
     FEEDBACK = param(0.0, 1.0).default(0.5),
     MIX = mix(),
 }
