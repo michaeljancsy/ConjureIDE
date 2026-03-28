@@ -1,5 +1,7 @@
 # Python Package Management — Design & Implementation Plan
 
+> **Note:** Phases 2B and 3 of this document have been superseded by the revised design at `docs/per-preset-package-requirements.md`. Key changes: in-script `REQUIREMENTS` metadata (not sidecar files), per-preset isolated environments, companion app as primary installer, optional vendored exports, configurable Python path for exported AUs. Phase 2A (uv bundling + sys.path wiring) remains relevant as infrastructure.
+
 ## Context
 
 Users can currently only import numpy, scipy, and the Python stdlib in their DSP scripts. This feature lets users install additional Python packages from **PyPI**, **GitHub repos**, or **local paths** through the ConjureDSP host app. The AU extension is sandboxed in DAWs and cannot run subprocesses, so all package management happens in the unsandboxed host app. Packages are installed into a shared directory that the Rust/pyo3 layer adds to `sys.path`.
