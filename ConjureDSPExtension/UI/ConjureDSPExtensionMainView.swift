@@ -34,6 +34,7 @@ struct ConjureDSPExtensionMainView: View {
     var onDeletePreset: () -> Void
     var onNew: (ScriptLanguage) -> ScriptSaveResult
     var onExport: (String) async -> ExportResult
+    var currentSize: (() -> CGSize)?
     var onResize: ((CGSize) -> Void)?
     var defaultBenchmark: (processTimeMs: Double, budgetMs: Double)?
 
@@ -250,6 +251,7 @@ struct ConjureDSPExtensionMainView: View {
                         Text(verbatim: "Build \(buildID)")
                             .foregroundColor(.secondary)
                             .accessibilityIdentifier("buildIDLabel")
+                            .padding(.trailing, 20)
                     }
                 }
                 .font(.caption.monospaced())
@@ -349,10 +351,11 @@ struct ConjureDSPExtensionMainView: View {
             } // ZStack
         }
         .overlay(alignment: .bottomTrailing) {
-            if let onResize {
+            if let onResize, let currentSize {
                 ResizeHandle(
                     minSize: NSSize(width: 400, height: 300),
                     maxSize: NSSize(width: 2560, height: 1600),
+                    currentSize: currentSize,
                     onResize: onResize
                 )
             }
