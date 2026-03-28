@@ -89,6 +89,17 @@ struct ConjureDSPExtensionMainView: View {
         return String(format: "%.1fms (%d frames)", ms, Int(frames.rounded()))
     }
 
+    private static let buildIDFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    private static func formatBuildID(_ epochSeconds: Int) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(epochSeconds))
+        return buildIDFormatter.string(from: date)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Preset toolbar
@@ -246,7 +257,7 @@ struct ConjureDSPExtensionMainView: View {
                     Spacer()
 
                     if buildID != 0 {
-                        Text(verbatim: "Build \(buildID)")
+                        Text(verbatim: "Build \(Self.formatBuildID(buildID))")
                             .foregroundColor(.secondary)
                             .accessibilityIdentifier("buildIDLabel")
                     }
