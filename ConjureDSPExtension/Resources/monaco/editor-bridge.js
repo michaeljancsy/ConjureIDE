@@ -289,6 +289,34 @@ const bridge = {
             if (f.rustSig) rustHoverDocs[f.name] = '```rust\nconst fn ' + f.name + f.rustSig + '\n```\n' + f.doc;
         });
 
+        // numpy / scipy / math hover docs
+        pyHoverDocs['numpy'] = '`numpy` — N-dimensional array library for numerical computing. Pre-installed in ConjureDSP runtime.\n\nCommon: `np.zeros()`, `np.clip()`, `np.sin()`, `np.fft.rfft()`';
+        pyHoverDocs['np'] = pyHoverDocs['numpy'];
+        pyHoverDocs['scipy'] = '`scipy` — Scientific computing library. Pre-installed in ConjureDSP runtime.\n\nUseful submodules: `scipy.signal` (filters, windows), `scipy.fft` (FFT)';
+        pyHoverDocs['signal'] = '`scipy.signal` — Signal processing module.\n\nFilter design: `butter()`, `cheby1()`, `iirfilter()`, `firwin()`\nFilter application: `sosfilt()`, `lfilter()`, `fftconvolve()`\nAnalysis: `stft()`, `hilbert()`\nWindows: `windows.hann()`, `windows.hamming()`';
+        pyHoverDocs['math'] = '`math` — Python standard math module.\n\nConstants: `pi`, `e`\nFunctions: `sin()`, `cos()`, `exp()`, `log()`, `log10()`, `sqrt()`, `pow()`';
+
+        // Common numpy functions
+        pyHoverDocs['zeros'] = '```python\nnp.zeros(shape, dtype=np.float32)\n```\nCreate array of zeros.';
+        pyHoverDocs['ones'] = '```python\nnp.ones(shape, dtype=np.float32)\n```\nCreate array of ones.';
+        pyHoverDocs['clip'] = '```python\nnp.clip(array, min, max)\n```\nClip values to range. Essential for preventing overflow.';
+        pyHoverDocs['linspace'] = '```python\nnp.linspace(start, stop, num)\n```\nEvenly spaced values over interval. Useful for frequency axes, LFO phases.';
+        pyHoverDocs['convolve'] = '```python\nnp.convolve(signal, kernel, mode="full")\n```\nConvolution of two arrays. mode: "full", "same", or "valid".';
+        pyHoverDocs['tanh'] = '```python\nnp.tanh(array)\n```\nElement-wise hyperbolic tangent. Useful for soft clipping/saturation.';
+        pyHoverDocs['roll'] = '```python\nnp.roll(array, shift)\n```\nRoll array elements. Useful for circular buffer operations.';
+        pyHoverDocs['rfft'] = '```python\nnp.fft.rfft(signal)\n```\nReal FFT. Returns complex spectrum (positive frequencies only).';
+        pyHoverDocs['irfft'] = '```python\nnp.fft.irfft(spectrum)\n```\nInverse real FFT. Converts spectrum back to time domain.';
+        pyHoverDocs['rfftfreq'] = '```python\nnp.fft.rfftfreq(n, d=1.0/sample_rate)\n```\nFrequency bins for rfft output.';
+
+        // Common scipy.signal functions
+        pyHoverDocs['butter'] = '```python\nsignal.butter(order, cutoff_hz, btype="low", fs=sample_rate, output="sos")\n```\nButterworth filter design. Use output="sos" for numerical stability.\nbtype: "low", "high", "band", "bandstop"';
+        pyHoverDocs['sosfilt'] = '```python\nsignal.sosfilt(sos, signal)\n```\nApply SOS filter to signal. For real-time, use sosfilt_zi for initial conditions.';
+        pyHoverDocs['sosfilt_zi'] = '```python\nsignal.sosfilt_zi(sos)\n```\nInitial conditions for sosfilt to avoid transient at start.\n`zi = signal.sosfilt_zi(sos); out, zi = signal.sosfilt(sos, x, zi=zi)`';
+        pyHoverDocs['firwin'] = '```python\nsignal.firwin(num_taps, cutoff_hz, fs=sample_rate, pass_zero="lowpass")\n```\nFIR filter design using window method.';
+        pyHoverDocs['stft'] = '```python\nsignal.stft(signal, fs=sample_rate, nperseg=1024)\n```\nShort-time Fourier transform. Returns (frequencies, times, Zxx).';
+        pyHoverDocs['hilbert'] = '```python\nsignal.hilbert(signal)\n```\nAnalytic signal via Hilbert transform. `np.abs(result)` gives envelope.';
+        pyHoverDocs['fftconvolve'] = '```python\nsignal.fftconvolve(signal, kernel, mode="same")\n```\nFFT-based convolution. Faster than convolve for long kernels.';
+
         rustHoverDocs['setup'] = '```rust\nsetup!()\n```\nDeclares INPUT_BUF, OUTPUT_BUF, PARAMS_BUF, TRANSPORT_BUF, MAX_CH, MAX_FR, get_*_ptr() exports, and `ctx()` helper.';
         rustHoverDocs['params'] = '```rust\nparams! { NAME = builder(), ... }\n```\nDeclares parameter index constants, METADATA JSON, and get_param_metadata_ptr/len exports.';
         rustHoverDocs['latency'] = '```rust\nlatency!(samples)\n```\nDeclares algorithmic latency for DAW delay compensation. Generates `get_latency_samples()` export.';
