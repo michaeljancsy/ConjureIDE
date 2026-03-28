@@ -163,12 +163,28 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     @MainActor
     private func mcpGetAudioState() -> (String, Bool) {
         let outputBus = outputBusses[0]
-        let response: [String: Any] = [
+        var response: [String: Any] = [
             "sample_rate": outputBus.format.sampleRate,
             "channel_count": Int(outputBus.format.channelCount),
             "max_frames": Int(maximumFramesToRender),
             "bypassed": shouldBypassEffect,
         ]
+
+        // Memory monitoring fields
+        let residentBytes = dsp_kernel_process_resident_bytes()
+        let residentMB = Double(residentBytes) / 1_048_576.0
+        response["resident_memory_mb"] = round(residentMB * 10) / 10
+
+        if let k = kernelReference {
+            let baselineBytes = dsp_kernel_memory_baseline_bytes(k)
+            let baselineMB = Double(baselineBytes) / 1_048_576.0
+            response["memory_growth_mb"] = round((residentMB - baselineMB) * 10) / 10
+
+            let wasmBytes = dsp_kernel_wasm_memory_bytes(k)
+            if wasmBytes > 0 {
+                response["wasm_memory_mb"] = round(Double(wasmBytes) / 1_048_576.0 * 10) / 10
+            }
+        }
         return (jsonStr(response), false)
     }
 

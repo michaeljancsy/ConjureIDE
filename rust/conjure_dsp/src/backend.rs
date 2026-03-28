@@ -53,4 +53,10 @@ pub trait Backend {
     fn param_metadata(&self) -> Option<&[ParamMetadata]> {
         None
     }
+
+    /// Returns the backend's current memory usage in bytes.
+    /// WASM returns linear memory size; Python returns 0 (use process RSS instead).
+    fn memory_bytes(&self) -> u64 {
+        0
+    }
 }

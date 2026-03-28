@@ -24,6 +24,7 @@ struct ConjureDSPExtensionMainView: View {
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var captureManager: AudioCaptureManager
     @ObservedObject var processProfiler: ProcessProfiler
+    @ObservedObject var memoryMonitor: MemoryMonitor
     @ObservedObject var parameterState: ParameterState
     @ObservedObject var subscriptionManager: SubscriptionManager
     @ObservedObject var gitHubService: GitHubService
@@ -235,9 +236,16 @@ struct ConjureDSPExtensionMainView: View {
                         }
                         .buttonStyle(.borderless)
                     } else if processProfiler.isActive {
-                        Text("avg \(formatTimeWithFrames(processProfiler.avgMs)) | peak \(formatTimeWithFrames(processProfiler.peakMs)) | budget \(formatTimeWithFrames(processProfiler.budgetMs))")
-                            .foregroundColor(timingColor)
-                            .accessibilityIdentifier("profilerStatus")
+                        HStack(spacing: 4) {
+                            Text("avg \(formatTimeWithFrames(processProfiler.avgMs)) | peak \(formatTimeWithFrames(processProfiler.peakMs)) | budget \(formatTimeWithFrames(processProfiler.budgetMs))")
+                                .foregroundColor(timingColor)
+                                .accessibilityIdentifier("profilerStatus")
+                            if memoryMonitor.leakStatus != .ok {
+                                Text("| mem +\(String(format: "%.0f", memoryMonitor.growthMB))MB")
+                                    .foregroundColor(memoryMonitor.leakStatus == .critical ? .red : .orange)
+                                    .accessibilityIdentifier("memoryWarning")
+                            }
+                        }
                     } else if let benchmark = lastBenchmark {
                         Text(String(format: "%.1fms / %.1fms budget", benchmark.processTimeMs, benchmark.budgetMs))
                             .foregroundColor(timingColor)

@@ -43,6 +43,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var hostingView: SafeHostingView<ConjureDSPExtensionMainView>?
     private var captureManager: AudioCaptureManager?
     private var processProfiler: ProcessProfiler?
+    private var memoryMonitor: MemoryMonitor?
     private var parameterState: ParameterState?
     private var subscriptionManager: SubscriptionManager?
     private var gitHubService: GitHubService?
@@ -186,6 +187,13 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         profiler.sampleRate = sr > 0 ? sr : 44100.0
         profiler.maxFrames = au.maximumFramesToRender > 0 ? au.maximumFramesToRender : 512
         profiler.start()
+
+        if memoryMonitor == nil {
+            memoryMonitor = MemoryMonitor()
+        }
+        let memMon = memoryMonitor!
+        memMon.kernel = au.kernelReference
+        memMon.start()
 
         if parameterState == nil {
             parameterState = ParameterState()
@@ -472,6 +480,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             presetManager: pm,
             captureManager: capture,
             processProfiler: profiler,
+            memoryMonitor: memMon,
             parameterState: ps,
             subscriptionManager: lm,
             gitHubService: gh,
