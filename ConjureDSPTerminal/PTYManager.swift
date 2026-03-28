@@ -140,10 +140,14 @@ final class PTYManager {
             self?.readFromPTY()
         }
         source.setCancelHandler { [weak self] in
-            // Only close if masterFD hasn't been replaced by a new session
-            if self?.masterFD == fd {
+            // Close if self is deallocated (deinit path) or fd hasn't been replaced
+            guard let self else {
                 close(fd)
-                self?.masterFD = -1
+                return
+            }
+            if self.masterFD == fd {
+                close(fd)
+                self.masterFD = -1
             }
         }
         source.resume()
