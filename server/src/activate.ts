@@ -141,7 +141,7 @@ async function fetchPaddleSubscription(
   env: Env
 ): Promise<PaddleSubscription | null> {
   const res = await fetch(
-    `${env.PADDLE_API_BASE}/subscriptions/${subscriptionId}`,
+    `${env.PADDLE_API_BASE}/subscriptions/${subscriptionId}?include=customer`,
     {
       headers: {
         Authorization: `Bearer ${env.PADDLE_API_KEY}`,

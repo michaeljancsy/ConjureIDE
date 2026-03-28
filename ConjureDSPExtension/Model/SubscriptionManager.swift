@@ -124,12 +124,13 @@ class SubscriptionManager: ObservableObject {
         }
 
         let newStatus = SubscriptionStatus(rawValue: rawStatus) ?? .noSubscription
+        let previousStatus = status
         status = newStatus
 
         if newStatus.isLicensed {
             log.info("Subscription status: \(newStatus.displayName, privacy: .public)")
             stopDemoTimer()
-            if newStatus == .gracePeriod {
+            if newStatus == .gracePeriod && previousStatus != .gracePeriod {
                 Analytics.track(.subscriptionActivate, properties: ["status": "grace_period"])
             }
         } else {
