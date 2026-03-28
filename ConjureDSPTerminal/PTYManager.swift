@@ -462,7 +462,9 @@ final class PTYManager {
     - No file I/O or network calls in process() — runs on the real-time audio thread
     - Up to 16 parameters per script
     - Use `compile_and_run` to load scripts, `get_parameters` to check state, `toggle_bypass` for A/B
-    - Python is faster for iteration; Rust compiles to WASM (a few seconds) but runs much faster
+    - Python loads instantly; Rust compiles to WASM (a few seconds) but runs much faster
+    - **Language selection**: Write in whatever language the user asks for. If the user doesn't specify, \
+    call `get_script` to check the currently loaded script and write in the same language.
     - IMPORTANT: The user may change scripts via the editor at any time. Never assume a previous script \
     is still loaded — always call `get_script` to check before deciding whether to modify or replace. \
     Do not rely on conversation memory for what script is currently active.
