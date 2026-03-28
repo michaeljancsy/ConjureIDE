@@ -18,9 +18,6 @@ const DEMO_LIMIT_SECONDS: f64 = 60.0;
 /// and do not count against the demo time limit.
 const DEMO_SILENCE_THRESHOLD: f32 = 0.001;
 
-/// Maximum number of audio channels supported (stack-allocated pointer arrays use this).
-const MAX_CHANNELS: usize = 8;
-
 /// Host DAW transport state, updated once per render callback via `set_transport()`.
 /// All fields default to zero/false, meaning "no transport data available."
 /// Written and read on the render thread only — no synchronization needed.
@@ -762,20 +759,13 @@ impl DSPKernel {
                 }
                 if ok {
                     Self::safety_clamp(outputs, channel_count, frame_count);
-                    // Cast output pointers to const (stack-allocated, no heap alloc on audio thread)
-                    let clamped_ch = channel_count.min(MAX_CHANNELS);
-                    let mut out_as_const = [std::ptr::null::<f32>(); MAX_CHANNELS];
-                    for i in 0..clamped_ch {
-                        out_as_const[i] = outputs[i] as *const f32;
-                    }
-                    let out_slice = &out_as_const[..clamped_ch];
                     // Capture output audio for spectrogram (after processing)
                     if capturing {
-                        self.capture_to_ring(out_slice, channel_count, frame_count, &self.output_ring);
+                        self.capture_to_ring(Self::as_const_ptrs(outputs), channel_count, frame_count, &self.output_ring);
                     }
                     // Increment demo counter only if output is non-silent
                     if !self.licensed.load(Ordering::Relaxed)
-                        && Self::buffer_peak(out_slice, channel_count, frame_count)
+                        && Self::buffer_peak(Self::as_const_ptrs(outputs), channel_count, frame_count)
                             >= DEMO_SILENCE_THRESHOLD
                     {
                         self.demo_samples_processed
@@ -797,18 +787,12 @@ impl DSPKernel {
             self.capture_to_ring(inputs, channel_count, frame_count, &self.output_ring);
         }
         // Increment demo counter only if output is non-silent
-        if !self.licensed.load(Ordering::Relaxed) {
-            let clamped_ch = channel_count.min(MAX_CHANNELS);
-            let mut out_as_const = [std::ptr::null::<f32>(); MAX_CHANNELS];
-            for i in 0..clamped_ch {
-                out_as_const[i] = outputs[i] as *const f32;
-            }
-            if Self::buffer_peak(&out_as_const[..clamped_ch], clamped_ch, frame_count)
+        if !self.licensed.load(Ordering::Relaxed)
+            && Self::buffer_peak(Self::as_const_ptrs(outputs), channel_count, frame_count)
                 >= DEMO_SILENCE_THRESHOLD
-            {
-                self.demo_samples_processed
-                    .fetch_add(frame_count as u64, Ordering::Relaxed);
-            }
+        {
+            self.demo_samples_processed
+                .fetch_add(frame_count as u64, Ordering::Relaxed);
         }
     }
 
@@ -840,6 +824,13 @@ impl DSPKernel {
             }
         }
         peak
+    }
+
+    /// Reinterpret a `&[*mut f32]` slice as `&[*const f32]` (same layout, no allocation).
+    #[inline]
+    fn as_const_ptrs(outputs: &[*mut f32]) -> &[*const f32] {
+        // SAFETY: *mut T and *const T have identical layout per Rust reference.
+        unsafe { std::slice::from_raw_parts(outputs.as_ptr() as *const *const f32, outputs.len()) }
     }
 
     /// Copy input to output unchanged.
