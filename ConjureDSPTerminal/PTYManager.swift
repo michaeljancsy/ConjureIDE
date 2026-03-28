@@ -145,12 +145,12 @@ final class PTYManager {
 
         // Auto-launch Claude Code after shell initializes
         if let claudePath {
-            var cmd = "\(claudePath) --dangerously-skip-permissions"
+            var cmd = "\(shellQuote(claudePath)) --dangerously-skip-permissions"
             if let contextPath = contextFilePath {
-                cmd += " --append-system-prompt-file \(contextPath)"
+                cmd += " --append-system-prompt-file \(shellQuote(contextPath))"
             }
             if let mcpPath = mcpConfigPath {
-                cmd += " --mcp-config \(mcpPath)"
+                cmd += " --mcp-config \(shellQuote(mcpPath))"
             }
             cmd += "\n"
             let launchCmd = cmd
@@ -503,6 +503,11 @@ final class PTYManager {
     is still loaded — always call `get_script` to check before deciding whether to modify or replace. \
     Do not rely on conversation memory for what script is currently active.
     """
+
+    /// Shell-escape a path by wrapping in single quotes (handles spaces, parens, etc.).
+    private func shellQuote(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
 
     /// Write a temporary MCP config file for Claude Code to discover the local MCP server.
     private func writeMCPConfig(port: UInt16) {
