@@ -21,6 +21,16 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Only used by AudioCaptureManager on the UI thread.
 	var kernelReference: DSPKernelRef? { kernel }
 
+	// MARK: - User-Installed Packages
+
+	/// Global directory for user-installed Python packages.
+	/// Shared by all presets; prepended to sys.path on every script load.
+	static let userPackagesURL: URL = {
+		let appSupport = FileManager.default
+			.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+		return appSupport.appendingPathComponent("ConjureDSP/user-packages", isDirectory: true)
+	}()
+
 	// MARK: - Parameter Tree (up to 16 parameters, with optional rich metadata)
 
 	static let paramCount = 16
@@ -320,6 +330,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 
 		pluginLog.info("Loading Python script. pythonHome=\(pythonHome, privacy: .public) scriptPath=\(scriptPath, privacy: .public)")
+
+		// Point sys.path at the global user-packages directory so user-installed
+		// Python packages are importable by any preset.
+		dsp_kernel_set_extra_site_packages(kernel, Self.userPackagesURL.path)
+
 		let success = dsp_kernel_load_script(kernel, pythonHome, scriptPath)
 		if success {
 			pluginLog.info("Python DSP script loaded successfully")
@@ -503,6 +518,9 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		defer {
 			try? FileManager.default.removeItem(at: tempFile)
 		}
+
+		// Ensure user-packages directory is in sys.path for hot-reload too
+		dsp_kernel_set_extra_site_packages(kernel, Self.userPackagesURL.path)
 
 		let success = dsp_kernel_load_script(kernel, pythonHome, tempFile.path)
 

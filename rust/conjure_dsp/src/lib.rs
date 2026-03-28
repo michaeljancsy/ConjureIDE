@@ -162,6 +162,25 @@ pub unsafe extern "C" fn dsp_kernel_load_script(
     (*kernel).load_script(python_home, script_path)
 }
 
+/// Set the user-packages directory for Python sys.path injection.
+/// Call before `dsp_kernel_load_script()`. The path is prepended to `sys.path`
+/// so user-installed packages are importable. Pass null to clear.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+/// - `path` must be a valid null-terminated C string, or null.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_set_extra_site_packages(
+    kernel: DSPKernelRef,
+    path: *const c_char,
+) {
+    if path.is_null() {
+        (*kernel).clear_extra_site_packages();
+    } else if let Ok(s) = CStr::from_ptr(path).to_str() {
+        (*kernel).set_extra_site_packages(s);
+    }
+}
+
 /// Load a WASM module for DSP processing.
 ///
 /// The module must export a `process` function with signature

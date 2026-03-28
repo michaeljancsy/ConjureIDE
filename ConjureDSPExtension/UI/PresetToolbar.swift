@@ -75,6 +75,11 @@ struct PresetToolbar: View {
     @State private var renameName = ""
     @State private var renameError: String?
     @State private var showingSettings = false
+    @State private var showingPackages = false
+    @State private var packageInstallManager = PackageInstallManager(
+        pythonHomePath: Bundle(for: ConjureDSPExtensionAudioUnit.self)
+            .path(forResource: "python-dist", ofType: nil)
+    )
     @State private var showingExport = false
     @State private var showingPresetBrowser = false
     @State private var showingCommunityBrowser = false
@@ -367,6 +372,20 @@ struct PresetToolbar: View {
                         .cornerRadius(3)
                 }
                 .accessibilityIdentifier("demoIndicator")
+            }
+
+            // Python packages
+            Button(action: { showingPackages = true }) {
+                Image(systemName: "shippingbox")
+            }
+            .buttonStyle(.borderless)
+            .toolbarTooltip("Packages")
+            .accessibilityIdentifier("packagesButton")
+            .popover(isPresented: $showingPackages) {
+                PackageManagerView(
+                    installManager: packageInstallManager,
+                    onDone: { showingPackages = false }
+                )
             }
 
             // Settings (License + AI)

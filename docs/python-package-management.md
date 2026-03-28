@@ -1,6 +1,6 @@
 # Python Package Management — Design & Implementation Plan
 
-> **Note:** Phases 2B and 3 of this document have been superseded by the revised design at `docs/per-preset-package-requirements.md`. Key changes: in-script `REQUIREMENTS` metadata (not sidecar files), per-preset isolated environments, companion app as primary installer, optional vendored exports, configurable Python path for exported AUs. Phase 2A (uv bundling + sys.path wiring) remains relevant as infrastructure.
+> **Note:** This document has been superseded by the revised design at `docs/per-preset-package-requirements.md`. Key changes: global `user-packages/` directory (not per-preset isolation), package manager UI in AU extension, companion app installer via `uv`, no in-script metadata. Phase 2A infrastructure (sys.path wiring, Rust FFI) has been implemented.
 
 ## Context
 

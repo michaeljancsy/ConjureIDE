@@ -44,12 +44,24 @@ class TerminalAppServer {
     private var currentMCPPort: UInt16 = 0
     private var healthCheckFailCount = 0
     private let healthCheckThreshold = 3  // consecutive failures before reset
+    private var packageInstaller: PackageInstaller?
 
     private let appGroupID = "group.com.MichaelJancsy.ConjureDSP"
 
     func start() {
         log.info("ConjureDSP Terminal starting")
         status = "Waiting for ConjureDSP plugin..."
+
+        // Initialize package installer if App Group is available
+        if let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: appGroupID
+        ) {
+            packageInstaller = PackageInstaller(appGroupURL: containerURL)
+            if packageInstaller != nil {
+                log.info("Package installer ready")
+            }
+        }
+
         startWatching()
     }
 
@@ -86,7 +98,12 @@ class TerminalAppServer {
                     }
                 }
 
-                // 3. Health check (every ~3 seconds when running)
+                // 3. Check for package install/uninstall requests
+                if let installer = self.packageInstaller {
+                    await installer.checkForRequests()
+                }
+
+                // 4. Health check (every ~3 seconds when running)
                 if self.isRunning, tickCount % 6 == 0 {
                     let healthy = await self.checkMCPHealth()
                     if healthy {

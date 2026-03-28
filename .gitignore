@@ -7,6 +7,9 @@ rust/python-dist/
 # Bundled Rust compiler distribution (created by scripts/setup-rustc.sh)
 rustc-dist/
 
+# Bundled uv package manager (created by scripts/setup-uv.sh)
+uv-dist/
+
 # License key generation tool build artifacts and private key
 tools/generate-license/target/
 tools/generate-license/keypair.bin

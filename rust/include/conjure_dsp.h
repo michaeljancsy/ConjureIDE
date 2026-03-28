@@ -138,6 +138,17 @@ void dsp_kernel_set_transport(DSPKernelRef kernel,
 bool dsp_kernel_load_script(DSPKernelRef kernel, const char *python_home, const char *script_path);
 
 /**
+ * Set the user-packages directory for Python sys.path injection.
+ * Call before `dsp_kernel_load_script()`. The path is prepended to `sys.path`
+ * so user-installed packages are importable. Pass null to clear.
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * - `path` must be a valid null-terminated C string, or null.
+ */
+void dsp_kernel_set_extra_site_packages(DSPKernelRef kernel, const char *path);
+
+/**
  * Load a WASM module for DSP processing.
  *
  * The module must export a `process` function with signature
