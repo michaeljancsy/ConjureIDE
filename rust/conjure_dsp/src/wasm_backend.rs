@@ -51,6 +51,8 @@ pub struct WasmBackend {
     /// with existing modules that allocate `[f32; 8]`. Modules with rich metadata
     /// may declare more.
     param_write_count: usize,
+    /// Script-declared algorithmic latency in samples (from `get_latency_samples` export).
+    latency_samples: u32,
 }
 
 /// Base offset in WASM linear memory to avoid the null page.
@@ -138,6 +140,17 @@ impl WasmBackend {
             &memory,
         );
 
+        // Probe for optional get_latency_samples() export
+        let latency_samples = instance
+            .get_typed_func::<(), i32>(&mut store, "get_latency_samples")
+            .ok()
+            .and_then(|f| {
+                let _ = store.set_fuel(COMPILED_FUEL);
+                f.call(&mut store, ()).ok()
+            })
+            .map(|v| v as u32)
+            .unwrap_or(0);
+
         // Determine how many params to write: metadata count, or 8 for backward compat
         let param_write_count = param_metadata
             .as_ref()
@@ -171,6 +184,7 @@ impl WasmBackend {
             param_names,
             param_metadata,
             param_write_count,
+            latency_samples,
         })
     }
 
@@ -646,6 +660,10 @@ impl Backend for WasmBackend {
 
     fn param_metadata(&self) -> Option<&[crate::params::ParamMetadata]> {
         self.param_metadata.as_deref()
+    }
+
+    fn latency_samples(&self) -> u32 {
+        self.latency_samples
     }
 
     fn memory_bytes(&self) -> u64 {

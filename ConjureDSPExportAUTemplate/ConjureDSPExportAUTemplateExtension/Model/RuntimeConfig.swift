@@ -55,6 +55,9 @@ struct RuntimeConfig: Codable {
     /// Rich parameter metadata (name, min, max, unit, default, curve).
     /// When present, the AU builds parameters with real ranges instead of 0–1.
     let paramMetadata: [ExportParamMetadata]?
+    /// Algorithmic latency in samples (0 = no latency).
+    /// Used by the AU to report `AUAudioUnit.latency` for DAW delay compensation.
+    let latencySamples: UInt32?
 
     /// Load from the given bundle's Resources.
     static func load(from bundle: Bundle) -> RuntimeConfig? {

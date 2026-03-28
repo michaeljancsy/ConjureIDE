@@ -116,6 +116,8 @@ enum FactoryPresetRegistry {
         Entry(name: "Noise Gate (Rust)", number: 25, resourceName: "preset_noisegate_rust", language: .rust, category: .dynamics),
         Entry(name: "De-esser (Python)", number: 47, resourceName: "preset_deesser", language: .python, category: .dynamics),
         Entry(name: "De-esser (Rust)", number: 48, resourceName: "preset_deesser_rust", language: .rust, category: .dynamics),
+        Entry(name: "Lookahead Limiter (Python)", number: 51, resourceName: "preset_lookahead_limiter", language: .python, category: .dynamics),
+        Entry(name: "Lookahead Limiter (Rust)", number: 52, resourceName: "preset_lookahead_limiter_rust", language: .rust, category: .dynamics),
 
         // Modulation
         Entry(name: "Tremolo (Python)", number: 26, resourceName: "preset_tremolo", language: .python, category: .modulation),

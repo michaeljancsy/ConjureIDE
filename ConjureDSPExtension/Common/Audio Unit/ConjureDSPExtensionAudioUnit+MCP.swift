@@ -97,6 +97,9 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 let percent = (processTimeMs / budgetMs) * 100
                 response["budget_percent"] = String(format: "%.1f%%", percent)
             }
+            if _latencySamples > 0 {
+                response["latency_samples"] = Int(_latencySamples)
+            }
             return (jsonStr(response), false)
         } else {
             mcpLastError = result.error
@@ -163,12 +166,17 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     @MainActor
     private func mcpGetAudioState() -> (String, Bool) {
         let outputBus = outputBusses[0]
+        let sr = outputBus.format.sampleRate
         var response: [String: Any] = [
-            "sample_rate": outputBus.format.sampleRate,
+            "sample_rate": sr,
             "channel_count": Int(outputBus.format.channelCount),
             "max_frames": Int(maximumFramesToRender),
             "bypassed": shouldBypassEffect,
+            "latency_samples": Int(_latencySamples),
         ]
+        if _latencySamples > 0 {
+            response["latency_seconds"] = Double(_latencySamples) / sr
+        }
 
         // Memory monitoring fields
         let residentBytes = dsp_kernel_process_resident_bytes()
@@ -260,6 +268,10 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         }
         if !paramDescs.isEmpty {
             parts.append("Params: \(paramDescs.joined(separator: ", ")).")
+        }
+
+        if _latencySamples > 0 {
+            parts.append("Latency: \(_latencySamples) samples.")
         }
 
         return parts.joined(separator: " ")

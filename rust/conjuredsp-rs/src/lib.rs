@@ -180,6 +180,31 @@ macro_rules! params {
     };
 }
 
+/// Declares algorithmic latency in samples for DAW delay compensation.
+///
+/// Generates a `get_latency_samples() -> i32` WASM export that the host
+/// reads at load time and reports via `AUAudioUnit.latency`.
+///
+/// Use this for lookahead processing, FFT windowing, oversampling, or any
+/// algorithm that delays the output relative to the input. Do NOT use for
+/// creative delay effects (delay lines, chorus, reverb) — those are
+/// intentional and should not be compensated by the DAW.
+///
+/// # Example
+///
+/// ```ignore
+/// latency!(256);  // 256 samples of lookahead
+/// ```
+#[macro_export]
+macro_rules! latency {
+    ($samples:expr) => {
+        #[no_mangle]
+        pub extern "C" fn get_latency_samples() -> i32 {
+            $samples as i32
+        }
+    };
+}
+
 /// Internal helper: generates sequential index constants.
 #[macro_export]
 #[doc(hidden)]

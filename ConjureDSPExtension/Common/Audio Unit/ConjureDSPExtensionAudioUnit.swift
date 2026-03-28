@@ -72,6 +72,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Fires after every script load with the new param metadata (or nil).
 	public let paramMetadataDidChange = PassthroughSubject<[ParamMetadata]?, Never>()
 
+	/// Script-declared algorithmic latency in samples (0 = no latency).
+	/// Updated after each script load from the Rust kernel FFI.
+	private(set) var _latencySamples: UInt32 = 0
+
 	private func buildParameterTree() {
 		var params: [AUParameter] = []
 		for i in 0..<Self.paramCount {
@@ -421,6 +425,9 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Called after every successful script/WASM load.
 	/// When rich metadata is present, rebuilds the parameter tree with real ranges.
 	private func readParamNames() {
+		// Read algorithmic latency (always valid after load, 0 if not declared)
+		_latencySamples = dsp_kernel_latency_samples(kernel)
+
 		// Try rich metadata first
 		if let metaPtr = dsp_kernel_param_metadata_json(kernel) {
 			let metaJson = String(cString: metaPtr)
@@ -677,6 +684,13 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	public override var outputBusses: AUAudioUnitBusArray {
 		return _outputBusses
+	}
+
+	/// Algorithmic latency reported to the DAW for delay compensation.
+	/// Declared by scripts via `LATENCY = <samples>` (Python) or `latency!(<samples>)` (Rust).
+	public override var latency: TimeInterval {
+		let sr = _outputBusses[0].format.sampleRate
+		return TimeInterval(_latencySamples) / sr
 	}
 
 	public override var channelCapabilities: [NSNumber] {

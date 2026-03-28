@@ -463,6 +463,21 @@ final class PTYManager {
     `biquad.process_sample(sample as f64) as f32`). In Python, this is handled automatically since \
     Python floats are 64-bit.
 
+    ## Latency Reporting
+
+    Scripts that introduce algorithmic latency (lookahead, FFT windowing, oversampling) \
+    should declare it so the DAW can compensate by delaying other tracks.
+
+    **Python:** `LATENCY = 256` (module-level constant, in samples)
+    **Rust:** `latency!(256);` (macro that generates a WASM export)
+
+    Do NOT declare latency for creative delay effects (delay lines, chorus, reverb) — \
+    those are intentional and should not be compensated.
+
+    Example: a lookahead limiter delays input by 256 samples to detect peaks before they \
+    arrive, enabling transparent gain reduction. The DAW delays other tracks by 256 samples \
+    to keep everything in sync.
+
     ## Conventions
 
     - No file I/O or network calls in process() — runs on the real-time audio thread

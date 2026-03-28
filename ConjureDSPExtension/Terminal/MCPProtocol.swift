@@ -143,7 +143,7 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "get_audio_state",
-            description: "Get the current audio engine state: sample rate, channel count, max frames per buffer, and bypass state.",
+            description: "Get the current audio engine state: sample rate, channel count, max frames per buffer, bypass state, and algorithmic latency (samples + seconds).",
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
         ToolDefinition(
