@@ -23,6 +23,7 @@ struct ConjureDSPExtensionMainView: View {
     var scriptSourcePublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.ScriptSourceChange, Never>?
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var captureManager: AudioCaptureManager
+    @ObservedObject var processProfiler: ProcessProfiler
     @ObservedObject var parameterState: ParameterState
     @ObservedObject var licenseManager: LicenseManager
     @ObservedObject var gitHubService: GitHubService
@@ -38,6 +39,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var scriptSource: String = ""
     @State private var selectedLanguage: ScriptLanguage = .python
     @State private var errorMessage: String?
+    @State private var editorMarkers: [MonacoEditorView.Marker] = []
     @State private var showingSaveAs = false
     @State private var saveAsName = ""
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
@@ -55,14 +57,36 @@ struct ConjureDSPExtensionMainView: View {
     @State private var spectrogramFFTSizeIndex: Int = 2 // default: 2048
     @State private var spectrogramShowNoteNames: Bool = false
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("editorTheme") private var selectedTheme: String = "auto"
 
-    /// Color for the benchmark timing based on how close to budget.
-    private var benchmarkColor: Color {
-        guard let benchmark = lastBenchmark else { return .green }
-        let ratio = benchmark.processTimeMs / benchmark.budgetMs
+    /// Resolved Monaco theme ID based on user preference and system appearance.
+    private var resolvedTheme: String {
+        if selectedTheme == "auto" {
+            return colorScheme == .dark ? "vs-dark" : "vs"
+        }
+        return selectedTheme
+    }
+
+    /// Color for the timing display based on how close to budget.
+    /// Uses profiler peak when live data is available, otherwise static benchmark.
+    private var timingColor: Color {
+        let ratio: Double
+        if processProfiler.isActive && processProfiler.budgetMs > 0 {
+            ratio = processProfiler.peakMs / processProfiler.budgetMs
+        } else if let benchmark = lastBenchmark, benchmark.budgetMs > 0 {
+            ratio = benchmark.processTimeMs / benchmark.budgetMs
+        } else {
+            return .green
+        }
         if ratio > 1.0 { return .red }
         if ratio > 0.5 { return .orange }
         return .green
+    }
+
+    /// Format milliseconds with frame equivalent, e.g. "0.3ms (13 frames)"
+    private func formatTimeWithFrames(_ ms: Double) -> String {
+        let frames = ms / 1000.0 * processProfiler.sampleRate
+        return String(format: "%.1fms (%d frames)", ms, Int(frames.rounded()))
     }
 
     var body: some View {
@@ -176,9 +200,10 @@ struct ConjureDSPExtensionMainView: View {
             VStack(spacing: 0) {
                 MonacoEditorView(
                     text: $scriptSource,
-                    colorScheme: colorScheme,
+                    theme: resolvedTheme,
                     language: selectedLanguage,
-                    isEditable: true
+                    isEditable: true,
+                    markers: editorMarkers
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .border(Color.secondary.opacity(0.3), width: 1)
@@ -205,9 +230,13 @@ struct ConjureDSPExtensionMainView: View {
                             Image(systemName: "doc.on.doc")
                         }
                         .buttonStyle(.borderless)
+                    } else if processProfiler.isActive {
+                        Text("avg \(formatTimeWithFrames(processProfiler.avgMs)) | peak \(formatTimeWithFrames(processProfiler.peakMs)) | budget \(formatTimeWithFrames(processProfiler.budgetMs))")
+                            .foregroundColor(timingColor)
+                            .accessibilityIdentifier("profilerStatus")
                     } else if let benchmark = lastBenchmark {
                         Text(String(format: "%.1fms / %.1fms budget", benchmark.processTimeMs, benchmark.budgetMs))
-                            .foregroundColor(benchmarkColor)
+                            .foregroundColor(timingColor)
                             .accessibilityIdentifier("successStatus")
                     } else {
                         Text("Ready")
@@ -340,6 +369,7 @@ struct ConjureDSPExtensionMainView: View {
             selectedLanguage = ScriptLanguage.detect(from: change.source)
             // Clear error — this fires after successful compile (preset select, AI fix, fullState restore)
             errorMessage = nil
+            editorMarkers = []
             if let processTimeMs = change.processTimeMs, let budgetMs = change.budgetMs {
                 lastBenchmark = (processTimeMs, budgetMs)
             }
@@ -395,6 +425,7 @@ struct ConjureDSPExtensionMainView: View {
     private func handleResult(_ result: ScriptSaveResult) {
         if result.success {
             errorMessage = nil
+            editorMarkers = []
             if let processTimeMs = result.processTimeMs, let budgetMs = result.budgetMs {
                 lastBenchmark = (processTimeMs, budgetMs)
             } else {
@@ -402,7 +433,17 @@ struct ConjureDSPExtensionMainView: View {
             }
         } else {
             lastBenchmark = nil
-            errorMessage = result.error ?? "Unknown error"
+            let errorStr = result.error ?? "Unknown error"
+            errorMessage = errorStr
+            let parsed = ErrorLineParser.parse(errorStr, language: selectedLanguage)
+            editorMarkers = parsed.map { m in
+                MonacoEditorView.Marker(
+                    startLine: m.line,
+                    startColumn: m.column,
+                    message: m.message,
+                    severity: m.severity
+                )
+            }
         }
     }
 }

@@ -39,6 +39,11 @@ const bridge = {
                 );
             });
 
+            // Register custom color themes
+            if (typeof registerConjureDSPThemes === 'function') {
+                registerConjureDSPThemes();
+            }
+
             // Register DSP-specific completions
             this._registerCompletions();
 

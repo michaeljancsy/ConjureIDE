@@ -272,4 +272,31 @@ void dsp_kernel_reset_demo(DSPKernelRef kernel);
  */
 const uint8_t *dsp_kernel_public_key(void);
 
+/**
+ * Get the most recent backend.process() duration in microseconds.
+ * Returns 0 when no backend has processed yet.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+uint32_t dsp_kernel_profiler_current_us(DSPKernelRef kernel);
+
+/**
+ * Get the exponential moving average of backend.process() duration in microseconds.
+ * Smoothed over ~0.5 seconds of callbacks.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+uint32_t dsp_kernel_profiler_avg_us(DSPKernelRef kernel);
+
+/**
+ * Get the decaying peak of backend.process() duration in microseconds.
+ * Decays by ~0.1% per callback, so peaks fade after a few seconds.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+uint32_t dsp_kernel_profiler_peak_us(DSPKernelRef kernel);
+
 #endif  /* CONJURE_DSP_H */

@@ -789,4 +789,118 @@ struct ConjureDSPTests {
                    "Param \(param.displayName): expected \(expected), got \(param.value)")
         }
     }
+
+    // MARK: - Process Profiler (via C FFI directly)
+
+    @Test func profilerInitiallyZero() {
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+        #expect(dsp_kernel_profiler_current_us(kernel) == 0)
+        #expect(dsp_kernel_profiler_avg_us(kernel) == 0)
+        #expect(dsp_kernel_profiler_peak_us(kernel) == 0)
+    }
+
+    @Test func profilerUpdatesAfterRendering() async throws {
+        // Use the full AU pipeline so the default Python script is loaded
+        let (_, au) = try await Self.instantiateAU()
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        try au.inputBusses[0].setFormat(format)
+        try au.outputBusses[0].setFormat(format)
+        au.maximumFramesToRender = 512
+        try au.allocateRenderResources()
+
+        let renderBlock = au.renderBlock
+        let frameCount: UInt32 = 128
+        let outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+        outputBuffer.frameLength = frameCount
+
+        let inputData: [Float] = (0..<Int(frameCount)).map { Float($0) / Float(frameCount) }
+        let pullInput: AURenderPullInputBlock = { _, _, inFrameCount, _, inputBuf in
+            let buf = UnsafeMutableAudioBufferListPointer(inputBuf)
+            guard let data = buf[0].mData?.assumingMemoryBound(to: Float.self) else {
+                return kAudioUnitErr_NoConnection
+            }
+            for i in 0..<Int(inFrameCount) {
+                data[i] = inputData[i]
+            }
+            buf[0].mDataByteSize = inFrameCount * UInt32(MemoryLayout<Float>.size)
+            return noErr
+        }
+
+        var flags = AudioUnitRenderActionFlags()
+        var timestamp = AudioTimeStamp()
+        timestamp.mSampleTime = 0
+        timestamp.mFlags = .sampleTimeValid
+
+        let status = renderBlock(&flags, &timestamp, frameCount, 0,
+                                outputBuffer.mutableAudioBufferList, pullInput)
+        #expect(status == noErr)
+
+        // The AU has a default Python script loaded, so the profiler should update.
+        // We can't access kernelReference from the test target, but we can verify
+        // indirectly: if the render succeeded and output is non-zero, the backend ran.
+        // The profiler tests at the Rust FFI level (3 tests in lib.rs) cover the
+        // atomic update mechanics directly.
+        let outputPtr = outputBuffer.floatChannelData![0]
+        let hasOutput = (0..<Int(frameCount)).contains { outputPtr[$0] != 0 }
+        #expect(hasOutput, "Backend should have produced non-zero output (profiler ran)")
+
+        au.deallocateRenderResources()
+    }
+
+    @Test func profilerBypassDoesNotUpdate() {
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+
+        dsp_kernel_initialize(kernel, 1, 1, 44100)
+        dsp_kernel_set_bypassed(kernel, true)
+
+        var input: [Float] = [0.1, 0.2, 0.3, 0.4]
+        var output: [Float] = [0, 0, 0, 0]
+        input.withUnsafeBufferPointer { inBuf in
+            output.withUnsafeMutableBufferPointer { outBuf in
+                var inPtr: UnsafePointer<Float>? = inBuf.baseAddress
+                var outPtr: UnsafeMutablePointer<Float>? = outBuf.baseAddress
+                withUnsafePointer(to: &inPtr) { ip in
+                    withUnsafeMutablePointer(to: &outPtr) { op in
+                        dsp_kernel_process(kernel, ip, op, 1, 4)
+                    }
+                }
+            }
+        }
+
+        #expect(dsp_kernel_profiler_current_us(kernel) == 0,
+               "Profiler should not update during bypass")
+        #expect(dsp_kernel_profiler_avg_us(kernel) == 0,
+               "Profiler avg should not update during bypass")
+    }
+
+    @Test func profilerPassthroughDoesNotUpdate() {
+        // With no backend loaded, process() falls through to passthrough
+        // and the profiler should not update
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+
+        dsp_kernel_initialize(kernel, 1, 1, 44100)
+
+        var input: [Float] = [0.1, 0.2, 0.3, 0.4]
+        var output: [Float] = [0, 0, 0, 0]
+        input.withUnsafeBufferPointer { inBuf in
+            output.withUnsafeMutableBufferPointer { outBuf in
+                var inPtr: UnsafePointer<Float>? = inBuf.baseAddress
+                var outPtr: UnsafeMutablePointer<Float>? = outBuf.baseAddress
+                withUnsafePointer(to: &inPtr) { ip in
+                    withUnsafeMutablePointer(to: &outPtr) { op in
+                        dsp_kernel_process(kernel, ip, op, 1, 4)
+                    }
+                }
+            }
+        }
+
+        // Passthrough (no backend) should not update profiler
+        #expect(dsp_kernel_profiler_current_us(kernel) == 0,
+               "Profiler should not update during passthrough (no backend)")
+        // But output should still be passthrough
+        #expect(output == [0.1, 0.2, 0.3, 0.4], "Passthrough should copy input to output")
+    }
 }
