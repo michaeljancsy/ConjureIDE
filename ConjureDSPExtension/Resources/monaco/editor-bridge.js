@@ -336,6 +336,8 @@ const bridge = {
                     startColumn: word.startColumn,
                     endColumn: word.endColumn,
                 };
+                const lineContent = model.getLineContent(position.lineNumber);
+                const isImportLine = /^\s*(from|import)\s/.test(lineContent);
                 return { suggestions: [
                     // ── ConjureDSP API ──
                     sug('process', Kind.Function,
@@ -528,35 +530,37 @@ const bridge = {
                         'One-pole smoothing coefficient from cutoff frequency.\nUse as: y = coeff * y + (1 - coeff) * x',
                         true),
 
-                    // ── conjuredsp function completions ──
-                    ...dspFunctions.map(f =>
-                        sug(f.name, Kind.Function, f.insert, f.doc, true)),
-                    ...paramBuilders.map(f =>
-                        sug(f.name, Kind.Function, f.insert, f.doc, true)),
+                    // ── conjuredsp function completions (suppressed on import lines) ──
+                    ...(isImportLine ? [] : [
+                        ...dspFunctions.map(f =>
+                            sug(f.name, Kind.Function, f.insert, f.doc, true)),
+                        ...paramBuilders.map(f =>
+                            sug(f.name, Kind.Function, f.insert, f.doc, true)),
 
-                    // ── Constructor completions ──
-                    sug('Biquad', Kind.Function,
-                        'Biquad(${1:coeffs})',
-                        'Create a stateful biquad filter. Pass BiquadCoeffs or omit for passthrough.\nMethods: set_coeffs(), process_sample(), reset()',
-                        true),
-                    sug('DelayLine', Kind.Function,
-                        'DelayLine(${1:max_samples})',
-                        'Create a circular delay buffer.\nMethods: write(), read(), read_cubic(), tap(), clear()\nProperty: max_samples',
-                        true),
-                    sug('LFO', Kind.Function,
-                        'LFO(${1:sample_rate}, freq=${2:1.0}, waveform="${3:sine}")',
-                        'Create a low-frequency oscillator.\nWaveforms: "sine", "triangle", "saw", "square"\nMethods: set_freq(), set_waveform(), tick(), tick_n(), reset()\nProperty: value',
-                        true),
+                        // ── Constructor completions ──
+                        sug('Biquad', Kind.Function,
+                            'Biquad(${1:coeffs})',
+                            'Create a stateful biquad filter. Pass BiquadCoeffs or omit for passthrough.\nMethods: set_coeffs(), process_sample(), reset()',
+                            true),
+                        sug('DelayLine', Kind.Function,
+                            'DelayLine(${1:max_samples})',
+                            'Create a circular delay buffer.\nMethods: write(), read(), read_cubic(), tap(), clear()\nProperty: max_samples',
+                            true),
+                        sug('LFO', Kind.Function,
+                            'LFO(${1:sample_rate}, freq=${2:1.0}, waveform="${3:sine}")',
+                            'Create a low-frequency oscillator.\nWaveforms: "sine", "triangle", "saw", "square"\nMethods: set_freq(), set_waveform(), tick(), tick_n(), reset()\nProperty: value',
+                            true),
 
-                    // ── Stateless oscillator functions ──
-                    sug('sine', Kind.Function, 'sine(${1:phase})',
-                        'Sine wave from phase [0, 1). Returns [-1, 1].', true),
-                    sug('triangle', Kind.Function, 'triangle(${1:phase})',
-                        'Triangle wave from phase [0, 1). Returns [-1, 1].', true),
-                    sug('saw', Kind.Function, 'saw(${1:phase})',
-                        'Sawtooth wave from phase [0, 1). Returns [-1, 1].', true),
-                    sug('advance_phase', Kind.Function, 'advance_phase(${1:phase}, ${2:freq}, ${3:sample_rate})',
-                        'Advance phase by one sample with wrapping. Returns new phase.', true),
+                        // ── Stateless oscillator functions ──
+                        sug('sine', Kind.Function, 'sine(${1:phase})',
+                            'Sine wave from phase [0, 1). Returns [-1, 1].', true),
+                        sug('triangle', Kind.Function, 'triangle(${1:phase})',
+                            'Triangle wave from phase [0, 1). Returns [-1, 1].', true),
+                        sug('saw', Kind.Function, 'saw(${1:phase})',
+                            'Sawtooth wave from phase [0, 1). Returns [-1, 1].', true),
+                        sug('advance_phase', Kind.Function, 'advance_phase(${1:phase}, ${2:freq}, ${3:sample_rate})',
+                            'Advance phase by one sample with wrapping. Returns new phase.', true),
+                    ]),
 
                 ].map(s => ({ ...s, range })) };
             },
