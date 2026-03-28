@@ -461,12 +461,22 @@ These are configured via per-configuration build settings (`CD_AU_SUBTYPE`, `CD_
 
 ## Export Preset as Standalone AUv3
 
-Export ConjureDSP presets as standalone AUv3 plugins. Phases 1–4 complete; Phase 5 (polish & validation) remaining. Full implementation plan in `docs/export-au-plan.md`, design Q&A in `docs/export-au-questions.md`. Key points:
+Export ConjureDSP presets as standalone AUv3 plugins. All 5 phases complete. Full implementation plan in `docs/export-au-plan.md`, design Q&A in `docs/export-au-questions.md`. Key points:
 - Both Python (.py) and Rust (.wasm) presets exportable
 - Pre-built template AU (`ConjureDSPExportAUTemplate/`) — copy, patch plist, inject preset, ad-hoc sign
 - App Group container for sandbox-safe writes from DAW-hosted AU extension
 - Shared Python runtime at `~/Library/Application Support/ConjureDSP/PythonRuntime-3.14/`
 - Licensed users only can export; exported AUs run freely
+- Post-export validation: checks preset file integrity (WASM magic bytes, Python `def process`), runtime-config.json validity
+- Rich parameter metadata flows through export: `ParamMetadata` → `runtime-config.json` → exported AU parameter tree
+
+### Export Integration Tests
+
+The test target (`ConjureDSPTests`) has its own copy of `ExportManager.swift` with a local `ParamMetadata` struct (since the test target cannot import the AU extension module). Integration tests in `ExportDSPIntegrationTests` use the Rust FFI directly — no AU instantiation needed:
+1. Export a preset via `ExportManager` (with `skipSigning: true`)
+2. Read the exported preset file (`.wasm` or `.py`) back from the bundle
+3. Load into a fresh `DSPKernel` via `dsp_kernel_load_wasm()` or `dsp_kernel_load_script()`
+4. Process a sine wave and verify output (passthrough match or expected attenuation)
 
 ## Backlog Management
 

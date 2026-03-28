@@ -3,6 +3,18 @@ import os.log
 
 private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "ExportManager")
 
+/// Parameter metadata for export (mirrors ConjureDSPExtensionAudioUnit.ParamMetadata).
+/// Defined locally because the test target cannot import the AU extension module.
+struct ParamMetadata: Codable {
+    let name: String
+    let key: String?
+    let min: Float
+    let max: Float
+    let `default`: Float
+    let unit: String
+    let curve: String?
+}
+
 /// Produces a standalone AUv3 .app bundle from a ConjureDSP preset.
 ///
 /// Pipeline: copy template → inject preset → patch plists → code sign → register.
@@ -13,6 +25,7 @@ final class ExportManager {
         case plistPatchFailed(String)
         case codeSignFailed(String)
         case copyFailed(String)
+        case validationFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -21,6 +34,7 @@ final class ExportManager {
             case .plistPatchFailed(let detail): return "Failed to patch Info.plist: \(detail)"
             case .codeSignFailed(let detail): return "Code signing failed: \(detail)"
             case .copyFailed(let detail): return "Failed to copy template: \(detail)"
+            case .validationFailed(let detail): return "Export validation failed: \(detail)"
             }
         }
     }
@@ -57,7 +71,8 @@ final class ExportManager {
         templateURL: URL,
         outputDirectory: URL,
         skipSigning: Bool = false,
-        paramNames: [Int: String]? = nil
+        paramNames: [Int: String]? = nil,
+        paramMetadata: [ParamMetadata]? = nil
     ) throws -> URL {
         guard FileManager.default.fileExists(atPath: templateURL.path) else {
             throw ExportError.templateNotFound
@@ -95,7 +110,7 @@ final class ExportManager {
         }
 
         // 4. Write runtime-config.json
-        let config = makeRuntimeConfig(name: name, language: language, paramNames: paramNames)
+        let config = makeRuntimeConfig(name: name, language: language, paramNames: paramNames, paramMetadata: paramMetadata)
         try config.write(to: appexResourcesURL.appendingPathComponent("runtime-config.json"))
 
         // 5. Patch host app Info.plist
@@ -136,6 +151,9 @@ final class ExportManager {
             exportDate: Date(),
             language: language.rawValue
         ))
+
+        // 9. Validate exported bundle
+        validateExportedBundle(at: destURL, language: language)
 
         log.info("Exported preset '\(name, privacy: .public)' as \(sanitized).app (subtype: \(subtype, privacy: .public))")
         return destURL
@@ -178,15 +196,39 @@ final class ExportManager {
         }
     }
 
-    private func makeRuntimeConfig(name: String, language: ScriptLanguage, paramNames: [Int: String]?) -> Data {
+    private func makeRuntimeConfig(
+        name: String,
+        language: ScriptLanguage,
+        paramNames: [Int: String]?,
+        paramMetadata: [ParamMetadata]? = nil
+    ) -> Data {
         var config: [String: Any] = [
             "version": 1,
             "language": language.rawValue,
             "presetName": name,
             "exportDate": ISO8601DateFormatter().string(from: Date()),
-            "paramCount": 8,
+            "paramCount": 16,
         ]
-        if let paramNames = paramNames, !paramNames.isEmpty {
+
+        // Include rich metadata if available (v2 format)
+        if let metadata = paramMetadata, !metadata.isEmpty {
+            let metaArray: [[String: Any]] = metadata.map { m in
+                var dict: [String: Any] = [
+                    "name": m.name,
+                    "min": m.min,
+                    "max": m.max,
+                    "default": m.default,
+                    "unit": m.unit,
+                ]
+                if let key = m.key { dict["key"] = key }
+                if let curve = m.curve, curve != "linear" { dict["curve"] = curve }
+                return dict
+            }
+            config["paramMetadata"] = metaArray
+            config["paramCount"] = metadata.count
+            // Also include paramNames for backward compat with older exported AU templates
+            config["paramNames"] = metadata.map { $0.name }
+        } else if let paramNames = paramNames, !paramNames.isEmpty {
             let maxIndex = paramNames.keys.max() ?? 0
             var namesArray: [String] = []
             for i in 0...maxIndex {
@@ -195,6 +237,7 @@ final class ExportManager {
             config["paramNames"] = namesArray
             config["paramCount"] = namesArray.count
         }
+
         // swiftlint:disable:next force_try
         return try! JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
     }
@@ -274,6 +317,62 @@ final class ExportManager {
         if process.terminationStatus != 0 {
             let stderr = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             throw ExportError.codeSignFailed(stderr)
+        }
+    }
+
+    // MARK: - Post-Export Validation
+
+    /// Validates the exported bundle contains a valid preset and runtime config.
+    /// Logs warnings on failure rather than throwing — the export itself succeeded.
+    private func validateExportedBundle(at appURL: URL, language: ScriptLanguage) {
+        let appexResources = appURL
+            .appendingPathComponent("Contents/PlugIns/ConjureDSPExportAUTemplateExtension.appex")
+            .appendingPathComponent("Contents/Resources")
+        let fm = FileManager.default
+
+        // Check preset file exists and is non-empty
+        let presetFile: URL
+        switch language {
+        case .rust:
+            presetFile = appexResources.appendingPathComponent("preset.wasm")
+        case .python:
+            presetFile = appexResources.appendingPathComponent("preset.py")
+        }
+
+        guard fm.fileExists(atPath: presetFile.path) else {
+            log.warning("Export validation: preset file missing at \(presetFile.lastPathComponent, privacy: .public)")
+            return
+        }
+
+        guard let presetData = try? Data(contentsOf: presetFile), !presetData.isEmpty else {
+            log.warning("Export validation: preset file is empty")
+            return
+        }
+
+        // WASM: verify magic bytes (\0asm)
+        if language == .rust {
+            let wasmMagic: [UInt8] = [0x00, 0x61, 0x73, 0x6D]
+            let header = [UInt8](presetData.prefix(4))
+            if header != wasmMagic {
+                log.warning("Export validation: WASM file missing magic bytes")
+            }
+        }
+
+        // Python: verify contains process function
+        if language == .python {
+            if let source = String(data: presetData, encoding: .utf8), !source.contains("def process") {
+                log.warning("Export validation: Python file missing 'def process'")
+            }
+        }
+
+        // Check runtime-config.json exists and is valid JSON
+        let configURL = appexResources.appendingPathComponent("runtime-config.json")
+        if let configData = try? Data(contentsOf: configURL) {
+            if (try? JSONSerialization.jsonObject(with: configData)) == nil {
+                log.warning("Export validation: runtime-config.json is not valid JSON")
+            }
+        } else {
+            log.warning("Export validation: runtime-config.json missing")
         }
     }
 

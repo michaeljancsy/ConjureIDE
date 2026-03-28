@@ -12,8 +12,6 @@
 - Landing page (static site with Buy + Download)
 - In-app "Buy" link for unlicensed users
 
-### Export Preset as Standalone AUv3
-- Phase 5: Polish & validation (integration tests, edge cases, documentation)
 
 ### DSP & Audio
 - Process function profiler: real-time stats on `process()` duration (median, peak, % budget). Two `mach_absolute_time()` calls around `dsp_kernel_process` (~50 ns overhead), atomics to main thread. No locks or allocations on audio thread.
@@ -39,6 +37,7 @@
 
 ## Done
 
+- Export AUv3 Phase 5: integration tests (export → FFI kernel → process audio for both Rust and Python), post-export validation (WASM magic bytes, Python process fn, JSON config), param metadata round-trip tests, edge case tests, documentation (2026-03-27)
 - Claude Code terminal integration — MCP server in extension, companion app for PTY, xterm.js terminal UI, contentEditable keyboard input for ViewBridge (2026-03-27)
 - GitHub integration — ETag HTTP caching, retry/backoff, unit tests (2026-03-26)
 - Fix flaky `extensionPlistContainsBuildID` test — use Info.plist preprocessing instead of post-hoc stamping (2026-03-26)
