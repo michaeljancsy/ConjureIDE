@@ -249,6 +249,9 @@ struct PresetToolbar: View {
                         }
                     )
                 }
+                .onChange(of: presetManager.currentPreset) { _, _ in
+                    if showingRename { showingRename = false }
+                }
 
                 Button(action: { showDeleteConfirm = true }) {
                     Image(systemName: "trash")
