@@ -62,8 +62,12 @@ final class PTYManager {
         }
 
         // Clean up stale dispatch sources from a previous session (e.g. restarting
-        // from .exited state). The old readSource's cancel handler would otherwise
-        // close the new masterFD, corrupting the new session.
+        // from .exited state). Close the old fd eagerly BEFORE cancelling the source,
+        // since the cancel handler runs async and would race with the new session's fd.
+        if masterFD >= 0 {
+            close(masterFD)
+            masterFD = -1
+        }
         readSource?.cancel()
         readSource = nil
         waitSource?.cancel()
@@ -130,12 +134,14 @@ final class PTYManager {
         fcntl(masterFD, F_SETFL, flags | O_NONBLOCK)
 
         // Read output from pty
-        let source = DispatchSource.makeReadSource(fileDescriptor: masterFD, queue: .global(qos: .userInteractive))
+        let fd = masterFD
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global(qos: .userInteractive))
         source.setEventHandler { [weak self] in
             self?.readFromPTY()
         }
         source.setCancelHandler { [weak self] in
-            if let fd = self?.masterFD, fd >= 0 {
+            // Only close if masterFD hasn't been replaced by a new session
+            if self?.masterFD == fd {
                 close(fd)
                 self?.masterFD = -1
             }
