@@ -221,6 +221,7 @@ struct PresetToolbar: View {
             if currentIsMutable {
                 Button(action: {
                     renameName = presetManager.currentPreset?.name ?? ""
+                    renameError = nil
                     showingRename = true
                 }) {
                     Image(systemName: "pencil")
