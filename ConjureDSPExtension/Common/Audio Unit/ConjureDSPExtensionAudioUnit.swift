@@ -425,8 +425,14 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Called after every successful script/WASM load.
 	/// When rich metadata is present, rebuilds the parameter tree with real ranges.
 	private func readParamNames() {
-		// Read algorithmic latency (always valid after load, 0 if not declared)
-		_latencySamples = dsp_kernel_latency_samples(kernel)
+		// Read algorithmic latency (always valid after load, 0 if not declared).
+		// Trigger KVO so the DAW host re-reads the latency property for delay compensation.
+		let newLatency = dsp_kernel_latency_samples(kernel)
+		if newLatency != _latencySamples {
+			willChangeValue(forKey: "latency")
+			_latencySamples = newLatency
+			didChangeValue(forKey: "latency")
+		}
 
 		// Try rich metadata first
 		if let metaPtr = dsp_kernel_param_metadata_json(kernel) {
