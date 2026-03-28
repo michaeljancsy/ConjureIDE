@@ -1317,4 +1317,54 @@ mod tests {
             "Simple modules should get default fuel budget"
         );
     }
+
+    #[test]
+    fn test_wasm_memory_bytes_initial() {
+        let wasm = wat_to_wasm(GAIN_HALF_WAT);
+        let backend = WasmBackend::load(&wasm).unwrap();
+        // GAIN_HALF_WAT declares (memory 1) = 1 page = 64KB
+        assert_eq!(backend.memory_bytes(), 65536);
+    }
+
+    #[test]
+    fn test_wasm_memory_bytes_grows() {
+        // Module that grows memory by 1 page each process() call
+        let wat = r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "process")
+                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                (drop (memory.grow (i32.const 1)))
+              )
+            )
+        "#;
+        let wasm = wat_to_wasm(wat);
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+        backend.initialize(1, 44100.0, 1024);
+
+        assert_eq!(backend.memory_bytes(), 65536);
+
+        let input: [f32; 4] = [0.0; 4];
+        let mut output: [f32; 4] = [0.0; 4];
+        let params = [0.0f32; PARAM_COUNT];
+        let transport = TransportState::default();
+
+        unsafe {
+            backend.process(
+                &[input.as_ptr()],
+                &[output.as_mut_ptr()],
+                1, 4, 44100.0, &params, &transport,
+            );
+        }
+        assert_eq!(backend.memory_bytes(), 65536 * 2, "should grow by 1 page after process");
+
+        unsafe {
+            backend.process(
+                &[input.as_ptr()],
+                &[output.as_mut_ptr()],
+                1, 4, 44100.0, &params, &transport,
+            );
+        }
+        assert_eq!(backend.memory_bytes(), 65536 * 3, "should grow by another page");
+    }
 }

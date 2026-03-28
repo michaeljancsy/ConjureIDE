@@ -1061,6 +1061,132 @@ mod tests {
         }
     }
 
+    // --- Memory monitoring tests ---
+
+    #[test]
+    fn test_ffi_process_resident_bytes_nonzero() {
+        // Any running process has nonzero RSS
+        let bytes = dsp_kernel_process_resident_bytes();
+        assert!(bytes > 0, "process resident bytes should be nonzero, got {bytes}");
+    }
+
+    #[test]
+    fn test_ffi_memory_baseline_initially_zero() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            assert_eq!(dsp_kernel_memory_baseline_bytes(kernel), 0);
+            assert_eq!(dsp_kernel_wasm_memory_bytes(kernel), 0);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_memory_baseline_set_on_wasm_load() {
+        let wasm = passthrough_wasm_bytes();
+        let kernel = dsp_kernel_create();
+        unsafe {
+            assert_eq!(dsp_kernel_memory_baseline_bytes(kernel), 0);
+
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+            assert!(dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32));
+
+            // After loading WASM, baseline should be set to current RSS
+            let baseline = dsp_kernel_memory_baseline_bytes(kernel);
+            assert!(baseline > 0, "baseline should be nonzero after WASM load, got {baseline}");
+
+            // WASM memory should also be tracked (1 page = 64KB)
+            let wasm_mem = dsp_kernel_wasm_memory_bytes(kernel);
+            assert!(wasm_mem > 0, "WASM memory should be nonzero after load, got {wasm_mem}");
+            assert_eq!(wasm_mem, 65536, "passthrough WAT has 1 page = 64KB");
+
+            dsp_kernel_deinitialize(kernel);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_memory_baseline_resets_on_new_load() {
+        let wasm = passthrough_wasm_bytes();
+        let kernel = dsp_kernel_create();
+        unsafe {
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+            assert!(dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32));
+            let baseline1 = dsp_kernel_memory_baseline_bytes(kernel);
+
+            // Load again — baseline should be updated
+            assert!(dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32));
+            let baseline2 = dsp_kernel_memory_baseline_bytes(kernel);
+
+            // Both should be nonzero; they may differ slightly due to allocations
+            assert!(baseline1 > 0);
+            assert!(baseline2 > 0);
+
+            dsp_kernel_deinitialize(kernel);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_wasm_memory_grows_with_memory_grow() {
+        // WAT module that calls memory.grow(1) each process() call
+        let wat = r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "process")
+                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                ;; Grow memory by 1 page (64KB) each call
+                (drop (memory.grow (i32.const 1)))
+              )
+            )
+        "#;
+        let wasm = wat::parse_str(wat).expect("WAT parse failed");
+        let kernel = dsp_kernel_create();
+
+        unsafe {
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+            assert!(dsp_kernel_load_wasm(kernel, wasm.as_ptr(), wasm.len() as u32));
+
+            let initial_wasm_mem = dsp_kernel_wasm_memory_bytes(kernel);
+            assert_eq!(initial_wasm_mem, 65536, "initial: 1 page = 64KB");
+
+            // Process a few times — each call should grow by 64KB
+            let input: [f32; 4] = [0.0; 4];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+
+            for i in 1..=5 {
+                dsp_kernel_process(kernel, &ip, &op, 1, 4);
+                let mem = dsp_kernel_wasm_memory_bytes(kernel);
+                let expected = 65536 * (1 + i as u64);
+                assert_eq!(mem, expected, "after {i} process calls, expected {expected} bytes, got {mem}");
+            }
+
+            dsp_kernel_deinitialize(kernel);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_wasm_memory_zero_for_no_backend() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+
+            // No backend loaded — process should be passthrough, WASM memory stays 0
+            let input: [f32; 4] = [1.0; 4];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+
+            assert_eq!(dsp_kernel_wasm_memory_bytes(kernel), 0);
+
+            dsp_kernel_deinitialize(kernel);
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
     #[test]
     fn test_ffi_param_names_json_wasm_without_names() {
         // Load a WASM module that does NOT export get_param_names_json
