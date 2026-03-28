@@ -7,6 +7,7 @@
 
 import AVFoundation
 import Combine
+import CoreAudioKit
 import os.log
 
 private let pluginLog = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "DSP")
@@ -70,6 +71,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	/// Fires after every script load with the new param metadata (or nil).
 	public let paramMetadataDidChange = PassthroughSubject<[ParamMetadata]?, Never>()
+
+	/// Script-declared algorithmic latency in samples (0 = no latency).
+	/// Updated after each script load from the Rust kernel FFI.
+	private(set) var _latencySamples: UInt32 = 0
 
 	private func buildParameterTree() {
 		var params: [AUParameter] = []
@@ -420,6 +425,15 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Called after every successful script/WASM load.
 	/// When rich metadata is present, rebuilds the parameter tree with real ranges.
 	private func readParamNames() {
+		// Read algorithmic latency (always valid after load, 0 if not declared).
+		// Trigger KVO so the DAW host re-reads the latency property for delay compensation.
+		let newLatency = dsp_kernel_latency_samples(kernel)
+		if newLatency != _latencySamples {
+			willChangeValue(forKey: "latency")
+			_latencySamples = newLatency
+			didChangeValue(forKey: "latency")
+		}
+
 		// Try rich metadata first
 		if let metaPtr = dsp_kernel_param_metadata_json(kernel) {
 			let metaJson = String(cString: metaPtr)
@@ -678,9 +692,23 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		return _outputBusses
 	}
 
+	/// Algorithmic latency reported to the DAW for delay compensation.
+	/// Declared by scripts via `LATENCY = <samples>` (Python) or `latency!(<samples>)` (Rust).
+	public override var latency: TimeInterval {
+		let sr = _outputBusses[0].format.sampleRate
+		guard sr > 0 else { return 0 }
+		return TimeInterval(_latencySamples) / sr
+	}
+
 	public override var channelCapabilities: [NSNumber] {
 		return [NSNumber(value: 1), NSNumber(value: 1),
 				NSNumber(value: 2), NSNumber(value: 2)]
+	}
+
+	public override func supportedViewConfigurations(
+		_ availableViewConfigurations: [AUAudioUnitViewConfiguration]
+	) -> IndexSet {
+		IndexSet(integersIn: 0..<availableViewConfigurations.count)
 	}
 
 	public override var maximumFramesToRender: AUAudioFrameCount {

@@ -275,6 +275,7 @@ Parameters are passed to Python scripts as a 5th argument (dict or list) and to 
 - Bypass copies input to output unchanged
 - Event processing loop lives in Swift alongside the render block
 - Errors from Rust/Python are passed to Swift via `dsp_kernel_last_error()` and logged with `os_log`
+- Scripts that introduce algorithmic latency (lookahead, FFT, oversampling) declare `LATENCY = <samples>` (Python) or `latency!(<samples>)` (Rust). The AU reports this to the DAW via `AUAudioUnit.latency` for delay compensation. Creative effects (delay, chorus) should NOT declare latency.
 
 ## Worktrees
 

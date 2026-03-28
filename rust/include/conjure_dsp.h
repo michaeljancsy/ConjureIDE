@@ -193,6 +193,16 @@ const char *dsp_kernel_param_names_json(DSPKernelRef kernel);
 const char *dsp_kernel_param_metadata_json(DSPKernelRef kernel);
 
 /**
+ * Returns the script-declared algorithmic latency in samples.
+ * Zero means no latency. Used by the AU host to report
+ * `AUAudioUnit.latency` for DAW delay compensation.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+uint32_t dsp_kernel_latency_samples(DSPKernelRef kernel);
+
+/**
  * Enable or disable audio capture for spectrogram visualization.
  * When disabled, ring buffers are not written to (saves CPU on audio thread).
  *

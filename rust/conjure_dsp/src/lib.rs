@@ -243,6 +243,17 @@ pub unsafe extern "C" fn dsp_kernel_param_metadata_json(kernel: DSPKernelRef) ->
     (*kernel).param_metadata_json_ptr()
 }
 
+/// Returns the script-declared algorithmic latency in samples.
+/// Zero means no latency. Used by the AU host to report
+/// `AUAudioUnit.latency` for DAW delay compensation.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_latency_samples(kernel: DSPKernelRef) -> u32 {
+    (*kernel).latency_samples()
+}
+
 /// Enable or disable audio capture for spectrogram visualization.
 /// When disabled, ring buffers are not written to (saves CPU on audio thread).
 ///

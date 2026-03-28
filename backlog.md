@@ -14,7 +14,6 @@
 ### DSP & Audio
 - Process function profiler: real-time stats on `process()` duration (median, peak, % budget). Two `mach_absolute_time()` calls around `dsp_kernel_process` (~50 ns overhead), atomics to main thread. No locks or allocations on audio thread.
 - Memory leak detection: periodic resident memory sampling via `task_info` from main thread. Flag monotonic growth as likely script leak. Zero audio-thread overhead.
-- Latency reporting: measure processing latency, report via `AUAudioUnit.latency` for DAW compensation
 - Preset comparison tests: tighten tolerance (investigate native Rust compilation instead of WASM to eliminate libm differences)
 
 ### UI & Editor
@@ -27,7 +26,6 @@
 
 ### Post-Launch
 - Python package management: Phase 2 (bundle uv + host-app install UI) and Phase 3 (per-preset requirements.txt). Design doc at `docs/python-package-management.md`.
-- GitHub preset integration Phase 5 polish (UI/UX improvements, Phases 1–4 complete)
 
 ### Other
 - AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration)
@@ -35,6 +33,7 @@
 
 ## Done
 
+- Latency reporting for DAW compensation — scripts declare `LATENCY` (Python) or `latency!()` (Rust), AU reports via `AUAudioUnit.latency`, export pipeline includes in runtime-config.json, MCP tools report latency, Claude Code context guide documents the feature, lookahead limiter factory presets (Python + Rust) with parity tests (2026-03-27)
 - Export AUv3 Phase 5: integration tests (export → FFI kernel → process audio for both Rust and Python), post-export validation (WASM magic bytes, Python process fn, JSON config), param metadata round-trip tests, edge case tests, documentation (2026-03-27)
 - Claude Code terminal integration — MCP server in extension, companion app for PTY, xterm.js terminal UI, contentEditable keyboard input for ViewBridge (2026-03-27)
 - GitHub integration — ETag HTTP caching, retry/backoff, unit tests (2026-03-26)

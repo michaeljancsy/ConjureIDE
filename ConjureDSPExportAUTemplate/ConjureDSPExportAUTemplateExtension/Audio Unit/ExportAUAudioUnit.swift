@@ -374,6 +374,15 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         return _outputBusses
     }
 
+    /// Algorithmic latency for DAW delay compensation.
+    /// Reads from runtime-config.json (set at export time), falling back to kernel FFI.
+    public override var latency: TimeInterval {
+        let samples = config?.latencySamples ?? dsp_kernel_latency_samples(kernel)
+        let sr = _outputBusses[0].format.sampleRate
+        guard sr > 0 else { return 0 }
+        return TimeInterval(samples) / sr
+    }
+
     public override var channelCapabilities: [NSNumber] {
         return [NSNumber(value: 1), NSNumber(value: 1),
                 NSNumber(value: 2), NSNumber(value: 2)]
