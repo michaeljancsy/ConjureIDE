@@ -188,3 +188,111 @@ pub const fn write_param_json(buf: JsonBuf, name: &str, spec: &crate::ParamSpec)
         s
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use std::string::String;
+
+    fn buf_to_string(buf: &JsonBuf) -> String {
+        String::from_utf8(buf.as_bytes().to_vec()).unwrap()
+    }
+
+    #[test]
+    fn test_new_empty() {
+        let buf = JsonBuf::new();
+        assert_eq!(buf.len, 0);
+    }
+
+    #[test]
+    fn test_push_str() {
+        let buf = JsonBuf::new().push_str("hello");
+        assert_eq!(buf_to_string(&buf), "hello");
+    }
+
+    #[test]
+    fn test_push_f64_zero() {
+        let buf = JsonBuf::new().push_f64(0.0);
+        assert_eq!(buf_to_string(&buf), "0.0");
+    }
+
+    #[test]
+    fn test_push_f64_1_5() {
+        let buf = JsonBuf::new().push_f64(1.5);
+        assert_eq!(buf_to_string(&buf), "1.5");
+    }
+
+    #[test]
+    fn test_push_f64_negative() {
+        let buf = JsonBuf::new().push_f64(-3.14);
+        let s = buf_to_string(&buf);
+        assert!(s.starts_with("-3.14"), "expected -3.14..., got {}", s);
+    }
+
+    #[test]
+    fn test_push_f64_1000() {
+        let buf = JsonBuf::new().push_f64(1000.0);
+        assert_eq!(buf_to_string(&buf), "1000.0");
+    }
+
+    #[test]
+    fn test_push_f64_0_1() {
+        let buf = JsonBuf::new().push_f64(0.1);
+        assert_eq!(buf_to_string(&buf), "0.1");
+    }
+
+    #[test]
+    fn test_push_title_case_single_word() {
+        let buf = JsonBuf::new().push_title_case("CUTOFF");
+        assert_eq!(buf_to_string(&buf), "Cutoff");
+    }
+
+    #[test]
+    fn test_push_title_case_multi_word() {
+        let buf = JsonBuf::new().push_title_case("LOW_GAIN");
+        assert_eq!(buf_to_string(&buf), "Low Gain");
+    }
+
+    #[test]
+    fn test_push_title_case_short() {
+        let buf = JsonBuf::new().push_title_case("HI");
+        assert_eq!(buf_to_string(&buf), "Hi");
+    }
+
+    #[test]
+    fn test_write_param_json_linear() {
+        let spec = crate::ParamSpec {
+            min_val: 0.0,
+            max_val: 100.0,
+            unit_str: "%",
+            default_val: 50.0,
+            curve_str: "linear",
+        };
+        let buf = write_param_json(JsonBuf::new(), "MIX", &spec);
+        let s = buf_to_string(&buf);
+        // Linear curve should NOT include "curve" key
+        assert!(!s.contains("curve"), "linear param should omit curve, got: {}", s);
+        assert!(s.contains(r#""name":"Mix""#), "got: {}", s);
+        assert!(s.contains(r#""min":0.0"#), "got: {}", s);
+        assert!(s.contains(r#""max":100.0"#), "got: {}", s);
+        assert!(s.contains(r#""unit":"%""#), "got: {}", s);
+        assert!(s.contains(r#""default":50.0"#), "got: {}", s);
+    }
+
+    #[test]
+    fn test_write_param_json_log() {
+        let spec = crate::ParamSpec {
+            min_val: 20.0,
+            max_val: 20000.0,
+            unit_str: "Hz",
+            default_val: 1000.0,
+            curve_str: "log",
+        };
+        let buf = write_param_json(JsonBuf::new(), "CUTOFF", &spec);
+        let s = buf_to_string(&buf);
+        // Log curve should include "curve":"log"
+        assert!(s.contains(r#""curve":"log""#), "log param should include curve, got: {}", s);
+        assert!(s.contains(r#""name":"Cutoff""#), "got: {}", s);
+    }
+}

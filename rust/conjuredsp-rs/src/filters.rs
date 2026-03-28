@@ -199,3 +199,131 @@ impl Biquad {
         self.z2 = 0.0;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use crate::dsp::db_to_gain;
+
+    const FREQ: f64 = 1000.0;
+    const Q: f64 = 0.707;
+    const SR: f64 = 44100.0;
+    const N: usize = 1000;
+
+    /// Process N samples of constant DC=1.0 through a filter and return the last output.
+    fn dc_response(coeffs: BiquadCoeffs) -> f64 {
+        let mut f = Biquad::new();
+        f.set_coeffs(coeffs);
+        let mut out = 0.0;
+        for _ in 0..N {
+            out = f.process_sample(1.0);
+        }
+        out
+    }
+
+    #[test]
+    fn test_lowpass_passes_dc() {
+        let out = dc_response(BiquadCoeffs::lowpass(FREQ, Q, SR));
+        assert!((out - 1.0).abs() < 1e-4, "lowpass DC response: {}", out);
+    }
+
+    #[test]
+    fn test_highpass_rejects_dc() {
+        let out = dc_response(BiquadCoeffs::highpass(FREQ, Q, SR));
+        assert!(out.abs() < 1e-4, "highpass DC response: {}", out);
+    }
+
+    #[test]
+    fn test_bandpass_rejects_dc() {
+        let out = dc_response(BiquadCoeffs::bandpass(FREQ, Q, SR));
+        assert!(out.abs() < 1e-4, "bandpass DC response: {}", out);
+    }
+
+    #[test]
+    fn test_notch_passes_dc() {
+        let out = dc_response(BiquadCoeffs::notch(FREQ, Q, SR));
+        assert!((out - 1.0).abs() < 1e-4, "notch DC response: {}", out);
+    }
+
+    #[test]
+    fn test_allpass_passes_dc() {
+        let out = dc_response(BiquadCoeffs::allpass(FREQ, Q, SR));
+        assert!((out - 1.0).abs() < 1e-4, "allpass DC response: {}", out);
+    }
+
+    #[test]
+    fn test_peak_0db_passes_dc() {
+        let out = dc_response(BiquadCoeffs::peak(FREQ, Q, 0.0, SR));
+        assert!((out - 1.0).abs() < 1e-4, "peak 0dB DC response: {}", out);
+    }
+
+    #[test]
+    fn test_lowshelf_boost_dc() {
+        let gain_db = 6.0;
+        let out = dc_response(BiquadCoeffs::lowshelf(FREQ, Q, gain_db, SR));
+        let expected = db_to_gain(gain_db);
+        assert!(
+            (out - expected).abs() < 0.1,
+            "lowshelf +6dB DC response: {} (expected ~{})",
+            out,
+            expected
+        );
+    }
+
+    #[test]
+    fn test_highshelf_no_boost_dc() {
+        let out = dc_response(BiquadCoeffs::highshelf(FREQ, Q, 6.0, SR));
+        // DC should not be boosted by high shelf — should be near 1.0
+        assert!(
+            (out - 1.0).abs() < 0.1,
+            "highshelf +6dB DC response: {} (expected ~1.0)",
+            out
+        );
+    }
+
+    #[test]
+    fn test_biquad_new_is_passthrough() {
+        let mut f = Biquad::new();
+        for i in 0..10 {
+            let input = i as f64 * 0.1;
+            let output = f.process_sample(input);
+            assert!(
+                (output - input).abs() < 1e-10,
+                "passthrough failed at sample {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_biquad_reset_zeros_state() {
+        let mut f = Biquad::new();
+        f.set_coeffs(BiquadCoeffs::lowpass(FREQ, Q, SR));
+        // Feed some signal
+        for _ in 0..100 {
+            f.process_sample(1.0);
+        }
+        f.reset();
+        // After reset, internal state is zero. Feed 0.0 and expect 0.0 output.
+        let out = f.process_sample(0.0);
+        assert!(out.abs() < 1e-10, "after reset, expected 0.0, got {}", out);
+    }
+
+    #[test]
+    fn test_impulse_convergence() {
+        let mut f = Biquad::new();
+        f.set_coeffs(BiquadCoeffs::lowpass(FREQ, Q, SR));
+        // Feed impulse: 1 sample of 1.0, then 999 of 0.0
+        f.process_sample(1.0);
+        let mut last = 0.0;
+        for _ in 0..999 {
+            last = f.process_sample(0.0);
+        }
+        assert!(
+            last.abs() < 1e-4,
+            "impulse response should converge near 0, got {}",
+            last
+        );
+    }
+}
