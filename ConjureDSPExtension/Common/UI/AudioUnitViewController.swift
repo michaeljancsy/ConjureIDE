@@ -21,6 +21,10 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSPExtension", cat
 /// down SwiftUI's rendering pipeline. Skipping `super` in that case prevents
 /// interference with the new VC's view.
 private class SafeHostingView<Content: View>: NSHostingView<Content> {
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+
     override func viewDidMoveToWindow() {
         if self.window != nil {
             super.viewDidMoveToWindow()
@@ -93,6 +97,13 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     public override func viewDidLoad() {
         super.viewDidLoad()
         log.info("viewDidLoad called, audioUnit=\(self.audioUnit == nil ? "nil" : "set", privacy: .public)")
+    }
+
+    public override func viewDidLayout() {
+        super.viewDidLayout()
+        if self.view.frame.size != self.preferredContentSize {
+            self.preferredContentSize = self.view.frame.size
+        }
     }
 
     public override func viewWillAppear() {
@@ -495,6 +506,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             defaultBenchmark: initialBenchmark
         )
         let hv = SafeHostingView(rootView: content)
+        hv.sizingOptions = []
         hv.translatesAutoresizingMaskIntoConstraints = false
         self.view.addSubview(hv)
         NSLayoutConstraint.activate([
