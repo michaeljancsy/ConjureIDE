@@ -79,10 +79,11 @@ final class ConjureDSPUITests: XCTestCase {
         let text = buildIDLabel.value as? String ?? ""
         XCTAssertTrue(text.hasPrefix("Build "),
                       "Build ID label should start with 'Build ', got '\(text)'")
-        let numberStr = text.replacingOccurrences(of: "Build ", with: "")
-        let number = Int(numberStr)
-        XCTAssertNotNil(number, "Build ID should contain an integer, got '\(numberStr)'")
-        XCTAssertGreaterThan(number!, 0, "Build ID should be positive")
+        let dateStr = text.replacingOccurrences(of: "Build ", with: "")
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let date = formatter.date(from: dateStr)
+        XCTAssertNotNil(date, "Build ID should be an ISO 8601 timestamp, got '\(dateStr)'")
     }
 
     // Note: testLanguagePickerExists was removed because SwiftUI segmented pickers
