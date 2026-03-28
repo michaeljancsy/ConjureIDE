@@ -25,6 +25,7 @@
 - Preset comparison tests: tighten tolerance (investigate native Rust compilation instead of WASM to eliminate libm differences)
 
 ### UI & Editor
+- Investigate ACP (Audio Code Protocol) and more full-fledged IDE features for the editor
 - AI-powered autocomplete (context-aware LLM suggestions)
 - AI chat sidebar polish: markdown rendering, code block copy/insert buttons, conversation persistence, keyboard shortcut to toggle
 - Audio visualization polish: persist spectrogram preferences in UserDefaults, add spectrogram to host app

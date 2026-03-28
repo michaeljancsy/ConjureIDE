@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="xterm.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+        #terminal-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+        #terminal { width: 100%; height: 100%; }
+
+        /* Connection status overlay */
+        #status-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 12px;
+            z-index: 10;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        #status-overlay.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        #status-overlay .status-text {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 14px;
+            color: #888;
+        }
+        #status-overlay .status-hint {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 12px;
+            color: #666;
+        }
+
+        /* Override xterm background for transparency */
+        .xterm { background: transparent !important; }
+    </style>
+</head>
+<body>
+    <div id="terminal-container">
+        <div id="terminal"></div>
+        <!-- Invisible contentEditable that triggers WebKit's NSTextInputClient
+             session. Required because the AU ViewBridge only forwards keyboard
+             input for contentEditable surfaces (same mechanism as Monaco). -->
+        <div id="input-proxy" contenteditable="true" autocorrect="off"
+             autocapitalize="off" spellcheck="false"
+             style="position:absolute; top:0; left:0; width:1px; height:1px;
+                    opacity:0.01; overflow:hidden; z-index:-1; outline:none;
+                    caret-color:transparent; pointer-events:none;"></div>
+        <div id="status-overlay">
+            <div class="status-text" id="status-text">Connecting...</div>
+            <div class="status-hint" id="status-hint"></div>
+        </div>
+    </div>
+
+    <script src="xterm.js"></script>
+    <script src="addon-fit.js"></script>
+    <script src="addon-web-links.js"></script>
+    <script src="terminal-bridge.js"></script>
+</body>
+</html>

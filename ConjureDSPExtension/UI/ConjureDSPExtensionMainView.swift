@@ -22,8 +22,6 @@ struct ConjureDSPExtensionMainView: View {
     var extensionBundle: Bundle
     var scriptSourcePublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.ScriptSourceChange, Never>?
     @ObservedObject var presetManager: PresetManager
-    @ObservedObject var aiService: AIService
-    @ObservedObject var chatService: ChatService
     @ObservedObject var captureManager: AudioCaptureManager
     @ObservedObject var parameterState: ParameterState
     @ObservedObject var licenseManager: LicenseManager
@@ -72,7 +70,6 @@ struct ConjureDSPExtensionMainView: View {
             // Preset toolbar
             PresetToolbar(
                 presetManager: presetManager,
-                aiService: aiService,
                 licenseManager: licenseManager,
                 gitHubService: gitHubService,
                 isCompiling: isCompiling,
@@ -115,7 +112,6 @@ struct ConjureDSPExtensionMainView: View {
                     selectedLanguage = language
                     let result = onNew(language)
                     handleResult(result)
-                    chatService.clearConversation()
                     if language == .rust && result.success {
                         handleCmdR()
                     }
@@ -150,9 +146,11 @@ struct ConjureDSPExtensionMainView: View {
 
             ZStack {
             HStack(spacing: 0) {
-            // Chat sidebar (collapsible, left side)
+            // Claude Code terminal sidebar — conditional rendering matching
+            // MonacoEditorView's pattern (bare WKWebView, simple frame).
+            // WKWebView is recreated on toggle; WebSocket reconnects automatically.
             if showChat {
-                ChatSidebarView(chatService: chatService)
+                TerminalView(colorScheme: colorScheme)
                     .frame(width: chatWidth)
 
                 // Resizable divider

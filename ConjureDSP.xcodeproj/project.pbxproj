@@ -15,9 +15,13 @@
 		25BC19432F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		25BC19442F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		25BC19452F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
+		25E930F62F773AC300D36258 /* ConjureDSPHelper in CopyFiles */ = {isa = PBXBuildFile; fileRef = 25E930E32F7733EE00D36258 /* ConjureDSPHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		25FE99E52F75CECC0004DC3A /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000200000001SPARKLE /* Sparkle */; };
 		AA11000100000001MIXPANEL /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000200000001MIXPANEL /* Mixpanel */; };
 		AA11000300000001MIXPANEL /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000400000001MIXPANEL /* Mixpanel */; };
 		AA11000600000001MIXPANEL /* Analytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000700000001MIXPANEL /* Analytics.swift */; };
+		AA22000200000001SHARED /* MCPToolProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22000100000001SHARED /* MCPToolProvider.swift */; };
+		AA22000300000001SHARED /* MCPToolProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22000100000001SHARED /* MCPToolProvider.swift */; };
 		AA5E00012F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00022F5013850036AAB6 /* Sentry */; };
 		AA5E00032F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00042F5013850036AAB6 /* Sentry */; };
 /* End PBXBuildFile section */
@@ -44,6 +48,27 @@
 			remoteGlobalIDString = 2579117D2F5013850036AAB6;
 			remoteInfo = ConjureDSPExtension;
 		};
+		25E930F32F773A9900D36258 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 257911382F5013840036AAB6 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 25E930E22F7733EE00D36258;
+			remoteInfo = ConjureDSPHelper;
+		};
+		25E9310A2F773DC300D36258 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 257911382F5013840036AAB6 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 25E930FA2F773DC200D36258;
+			remoteInfo = ConjureDSPTerminal;
+		};
+		25E931142F773DC300D36258 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 257911382F5013840036AAB6 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 25E930FA2F773DC200D36258;
+			remoteInfo = ConjureDSPTerminal;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -58,6 +83,25 @@
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		25E930E12F7733EE00D36258 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		25E930F52F773AA100D36258 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 6;
+			files = (
+				25E930F62F773AC300D36258 /* ConjureDSPHelper in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
@@ -69,7 +113,12 @@
 		257911722F5013850036AAB6 /* ConjureDSPUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2579117E2F5013850036AAB6 /* ConjureDSPExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConjureDSPExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		25BC19412F563DB20009EA0D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = ConjureDSP/Assets.xcassets; sourceTree = "<group>"; };
+		25E930E32F7733EE00D36258 /* ConjureDSPHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ConjureDSPHelper; sourceTree = BUILT_PRODUCTS_DIR; };
+		25E930FB2F773DC200D36258 /* ConjureDSPTerminal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ConjureDSPTerminal.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		25E931092F773DC300D36258 /* ConjureDSPTerminalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPTerminalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		25E931132F773DC300D36258 /* ConjureDSPTerminalUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPTerminalUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA11000700000001MIXPANEL /* Analytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Analytics.swift; path = ConjureDSPExtension/Analytics.swift; sourceTree = "<group>"; };
+		AA22000100000001SHARED /* MCPToolProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPToolProvider.swift; sourceTree = "<group>"; };
 		AABB00022F5013850036AAB6 /* rust */ = {isa = PBXFileReference; lastKnownFileType = folder; path = rust; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -80,6 +129,8 @@
 				Info.plist,
 				"Resources/monaco/editor-bridge.js",
 				Resources/monaco/index.html,
+				Resources/terminal/index.html,
+				"Resources/terminal/terminal-bridge.js",
 			);
 			target = 2579117D2F5013850036AAB6 /* ConjureDSPExtension */;
 		};
@@ -109,6 +160,26 @@
 			path = ConjureDSPExtension;
 			sourceTree = "<group>";
 		};
+		25E930E42F7733EE00D36258 /* ConjureDSPHelper */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ConjureDSPHelper;
+			sourceTree = "<group>";
+		};
+		25E930FC2F773DC200D36258 /* ConjureDSPTerminal */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ConjureDSPTerminal;
+			sourceTree = "<group>";
+		};
+		25E9310C2F773DC300D36258 /* ConjureDSPTerminalTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ConjureDSPTerminalTests;
+			sourceTree = "<group>";
+		};
+		25E931162F773DC300D36258 /* ConjureDSPTerminalUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ConjureDSPTerminalUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -116,6 +187,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				25FE99E52F75CECC0004DC3A /* Sparkle in Frameworks */,
 				AA5E00012F5013850036AAB6 /* Sentry in Frameworks */,
 				AA11000100000001MIXPANEL /* Mixpanel in Frameworks */,
 			);
@@ -144,6 +216,34 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		25E930E02F7733EE00D36258 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25E930F82F773DC200D36258 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25E931062F773DC300D36258 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25E931102F773DC300D36258 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -158,6 +258,11 @@
 				257911752F5013850036AAB6 /* ConjureDSPUITests */,
 				257911822F5013850036AAB6 /* ConjureDSPExtension */,
 				AABB00022F5013850036AAB6 /* rust */,
+				AA22000400000001SHARED /* Shared */,
+				25E930E42F7733EE00D36258 /* ConjureDSPHelper */,
+				25E930FC2F773DC200D36258 /* ConjureDSPTerminal */,
+				25E9310C2F773DC300D36258 /* ConjureDSPTerminalTests */,
+				25E931162F773DC300D36258 /* ConjureDSPTerminalUITests */,
 				257911412F5013840036AAB6 /* Products */,
 				25BC19412F563DB20009EA0D /* Assets.xcassets */,
 				25F5C9B42F737A0E0022143A /* Recovered References */,
@@ -171,6 +276,10 @@
 				257911682F5013850036AAB6 /* ConjureDSPTests.xctest */,
 				257911722F5013850036AAB6 /* ConjureDSPUITests.xctest */,
 				2579117E2F5013850036AAB6 /* ConjureDSPExtension.appex */,
+				25E930E32F7733EE00D36258 /* ConjureDSPHelper */,
+				25E930FB2F773DC200D36258 /* ConjureDSPTerminal.app */,
+				25E931092F773DC300D36258 /* ConjureDSPTerminalTests.xctest */,
+				25E931132F773DC300D36258 /* ConjureDSPTerminalUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -181,6 +290,14 @@
 				AA11000700000001MIXPANEL /* Analytics.swift */,
 			);
 			name = "Recovered References";
+			sourceTree = "<group>";
+		};
+		AA22000400000001SHARED /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				AA22000100000001SHARED /* MCPToolProvider.swift */,
+			);
+			path = Shared;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -274,12 +391,15 @@
 				AABB00032F5013850036AAB6 /* Copy Python Runtime */,
 				AABB00092F5013850036AAB6 /* Copy Rust Compiler */,
 				AABB0010000000MONACO0001 /* Copy Monaco Editor */,
+				AABB0020000000XTERM0001 /* Copy Terminal (xterm.js) */,
 				AABB000B2F5013850036AAB6 /* Copy Export Template */,
 				AABB000D2F5013850036AAB6 /* Generate Test Serial */,
+				25E930F52F773AA100D36258 /* CopyFiles */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				25E930F42F773A9900D36258 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				257911822F5013850036AAB6 /* ConjureDSPExtension */,
@@ -292,6 +412,96 @@
 			productName = ConjureDSPExtension;
 			productReference = 2579117E2F5013850036AAB6 /* ConjureDSPExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
+		};
+		25E930E22F7733EE00D36258 /* ConjureDSPHelper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 25E930E72F7733EE00D36258 /* Build configuration list for PBXNativeTarget "ConjureDSPHelper" */;
+			buildPhases = (
+				25E930DF2F7733EE00D36258 /* Sources */,
+				25E930E02F7733EE00D36258 /* Frameworks */,
+				25E930E12F7733EE00D36258 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				25E930E42F7733EE00D36258 /* ConjureDSPHelper */,
+			);
+			name = ConjureDSPHelper;
+			packageProductDependencies = (
+			);
+			productName = ConjureDSPHelper;
+			productReference = 25E930E32F7733EE00D36258 /* ConjureDSPHelper */;
+			productType = "com.apple.product-type.tool";
+		};
+		25E930FA2F773DC200D36258 /* ConjureDSPTerminal */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 25E9311B2F773DC300D36258 /* Build configuration list for PBXNativeTarget "ConjureDSPTerminal" */;
+			buildPhases = (
+				25E930F72F773DC200D36258 /* Sources */,
+				25E930F82F773DC200D36258 /* Frameworks */,
+				25E930F92F773DC200D36258 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				25E930FC2F773DC200D36258 /* ConjureDSPTerminal */,
+			);
+			name = ConjureDSPTerminal;
+			packageProductDependencies = (
+			);
+			productName = ConjureDSPTerminal;
+			productReference = 25E930FB2F773DC200D36258 /* ConjureDSPTerminal.app */;
+			productType = "com.apple.product-type.application";
+		};
+		25E931082F773DC300D36258 /* ConjureDSPTerminalTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 25E9311E2F773DC300D36258 /* Build configuration list for PBXNativeTarget "ConjureDSPTerminalTests" */;
+			buildPhases = (
+				25E931052F773DC300D36258 /* Sources */,
+				25E931062F773DC300D36258 /* Frameworks */,
+				25E931072F773DC300D36258 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				25E9310B2F773DC300D36258 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				25E9310C2F773DC300D36258 /* ConjureDSPTerminalTests */,
+			);
+			name = ConjureDSPTerminalTests;
+			packageProductDependencies = (
+			);
+			productName = ConjureDSPTerminalTests;
+			productReference = 25E931092F773DC300D36258 /* ConjureDSPTerminalTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		25E931122F773DC300D36258 /* ConjureDSPTerminalUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 25E931212F773DC300D36258 /* Build configuration list for PBXNativeTarget "ConjureDSPTerminalUITests" */;
+			buildPhases = (
+				25E9310F2F773DC300D36258 /* Sources */,
+				25E931102F773DC300D36258 /* Frameworks */,
+				25E931112F773DC300D36258 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				25E931152F773DC300D36258 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				25E931162F773DC300D36258 /* ConjureDSPTerminalUITests */,
+			);
+			name = ConjureDSPTerminalUITests;
+			packageProductDependencies = (
+			);
+			productName = ConjureDSPTerminalUITests;
+			productReference = 25E931132F773DC300D36258 /* ConjureDSPTerminalUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
 
@@ -316,6 +526,20 @@
 					};
 					2579117D2F5013850036AAB6 = {
 						CreatedOnToolsVersion = 26.2;
+					};
+					25E930E22F7733EE00D36258 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					25E930FA2F773DC200D36258 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					25E931082F773DC300D36258 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 25E930FA2F773DC200D36258;
+					};
+					25E931122F773DC300D36258 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 25E930FA2F773DC200D36258;
 					};
 				};
 			};
@@ -342,6 +566,10 @@
 				257911672F5013850036AAB6 /* ConjureDSPTests */,
 				257911712F5013850036AAB6 /* ConjureDSPUITests */,
 				2579117D2F5013850036AAB6 /* ConjureDSPExtension */,
+				25E930E22F7733EE00D36258 /* ConjureDSPHelper */,
+				25E930FA2F773DC200D36258 /* ConjureDSPTerminal */,
+				25E931082F773DC300D36258 /* ConjureDSPTerminalTests */,
+				25E931122F773DC300D36258 /* ConjureDSPTerminalUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -379,6 +607,27 @@
 			buildActionMask = 2147483647;
 			files = (
 				25BC19432F563DB20009EA0D /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25E930F92F773DC200D36258 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25E931072F773DC300D36258 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25E931112F773DC300D36258 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -544,7 +793,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "# Copy Monaco Editor resources into the extension bundle\nMONACO_SRC=\"${SRCROOT}/ConjureDSPExtension/Resources/monaco\"\nMONACO_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/monaco\"\n\nif [ ! -d \"${MONACO_SRC}/vs\" ]; then\n    echo \"warning: Monaco Editor not found at ${MONACO_SRC}/vs. Run scripts/setup-monaco.sh first.\" >&2\n    # Still copy index.html and editor-bridge.js so the build doesn't fail\n    mkdir -p \"${MONACO_DST}\"\n    cp -f \"${MONACO_SRC}/index.html\" \"${MONACO_DST}/\" 2>/dev/null || true\n    cp -f \"${MONACO_SRC}/editor-bridge.js\" \"${MONACO_DST}/\" 2>/dev/null || true\n    exit 0\nfi\n\n# Skip if no source file is newer than the last copy\nSTAMP=\"${MONACO_DST}/.copy-stamp\"\nif [ -f \"$STAMP\" ] && [ -z \"$(find \"${MONACO_SRC}\" -type f -newer \"$STAMP\" -print -quit 2>/dev/null)\" ]; then\n    echo \"note: Monaco Editor unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${MONACO_DST}\"\nrsync -a --delete \"${MONACO_SRC}/\" \"${MONACO_DST}/\"\n\ntouch \"$STAMP\"\n";
+			shellScript = "# Copy Monaco Editor resources into the extension bundle\nMONACO_SRC=\"${SRCROOT}/ConjureDSPExtension/Resources/monaco\"\nMONACO_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/monaco\"\n\nif [ ! -d \"${MONACO_SRC}/vs\" ]; then\n    echo \"warning: Monaco Editor not found at ${MONACO_SRC}/vs. Run scripts/setup-monaco.sh first.\" >&2\n    # Still copy index.html and editor-bridge.js so the build doesn't fail\n    mkdir -p \"${MONACO_DST}\"\n    cp -f \"${MONACO_SRC}/index.html\" \"${MONACO_DST}/\" 2>/dev/null || true\n    cp -f \"${MONACO_SRC}/editor-bridge.js\" \"${MONACO_DST}/\" 2>/dev/null || true\n    exit 0\nfi\n\n# Skip if no source file is newer than the last copy\nSTAMP=\"${MONACO_DST}/.copy-stamp\"\nif [ -f \"$STAMP\" ] && [ -z \"$(find -L \"${MONACO_SRC}\" -type f -newer \"$STAMP\" -print -quit 2>/dev/null)\" ]; then\n    echo \"note: Monaco Editor unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${MONACO_DST}\"\nrsync -aL --delete \"${MONACO_SRC}/\" \"${MONACO_DST}/\"\n\ntouch \"$STAMP\"\n";
 		};
 		AABB00112F5013850036AAB6 /* Pre-Build Clean */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -585,6 +834,26 @@
 			shellPath = /bin/bash;
 			shellScript = "\"${SRCROOT}/scripts/upload-dsyms.sh\"\n";
 		};
+		AABB0020000000XTERM0001 /* Copy Terminal (xterm.js) */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/ConjureDSPExtension/Resources/terminal/index.html",
+			);
+			name = "Copy Terminal (xterm.js)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/terminal/index.html",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# Copy terminal resources into the extension bundle, auto-downloading xterm.js if needed\nTERM_SRC=\"${SRCROOT}/ConjureDSPExtension/Resources/terminal\"\nTERM_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/terminal\"\n\n# Auto-download xterm.js if missing\nif [ ! -f \"${TERM_SRC}/xterm.js\" ]; then\n    echo \"note: xterm.js not found, downloading...\" >&2\n    \"${SRCROOT}/scripts/setup-xterm.sh\" || {\n        echo \"warning: Failed to download xterm.js. Terminal will not work.\" >&2\n        # Still copy checked-in files so build doesn't fail\n        mkdir -p \"${TERM_DST}\"\n        cp -f \"${TERM_SRC}/index.html\" \"${TERM_DST}/\" 2>/dev/null || true\n        cp -f \"${TERM_SRC}/terminal-bridge.js\" \"${TERM_DST}/\" 2>/dev/null || true\n        exit 0\n    }\nfi\n\n# Skip if no source file is newer than the last copy\nSTAMP=\"${TERM_DST}/.copy-stamp\"\nif [ -f \"$STAMP\" ] && [ -z \"$(find -L \"${TERM_SRC}\" -type f -newer \"$STAMP\" -print -quit 2>/dev/null)\" ]; then\n    echo \"note: Terminal resources unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${TERM_DST}\"\nrsync -aL --delete \"${TERM_SRC}/\" \"${TERM_DST}/\"\n\ntouch \"$STAMP\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -593,6 +862,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA11000600000001MIXPANEL /* Analytics.swift in Sources */,
+				AA22000200000001SHARED /* MCPToolProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -611,6 +881,35 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		2579117A2F5013850036AAB6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA22000300000001SHARED /* MCPToolProvider.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25E930DF2F7733EE00D36258 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25E930F72F773DC200D36258 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25E931052F773DC300D36258 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		25E9310F2F773DC300D36258 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -634,6 +933,21 @@
 			isa = PBXTargetDependency;
 			target = 2579117D2F5013850036AAB6 /* ConjureDSPExtension */;
 			targetProxy = 257911802F5013850036AAB6 /* PBXContainerItemProxy */;
+		};
+		25E930F42F773A9900D36258 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 25E930E22F7733EE00D36258 /* ConjureDSPHelper */;
+			targetProxy = 25E930F32F773A9900D36258 /* PBXContainerItemProxy */;
+		};
+		25E9310B2F773DC300D36258 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 25E930FA2F773DC200D36258 /* ConjureDSPTerminal */;
+			targetProxy = 25E9310A2F773DC300D36258 /* PBXContainerItemProxy */;
+		};
+		25E931152F773DC300D36258 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 25E930FA2F773DC200D36258 /* ConjureDSPTerminal */;
+			targetProxy = 25E931142F773DC300D36258 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -879,6 +1193,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = ConjureDSP/ConjureDSP.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
@@ -912,6 +1227,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSP.debug;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -932,6 +1248,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = ConjureDSP/ConjureDSP.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
@@ -967,6 +1284,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSP;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1111,6 +1429,192 @@
 			};
 			name = Release;
 		};
+		25E930E82F7733EE00D36258 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ConjureDSPHelper/ConjureDSPHelper.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = A4R63LAVLS;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		25E930E92F7733EE00D36258 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ConjureDSPHelper/ConjureDSPHelper.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = A4R63LAVLS;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		25E9311C2F773DC300D36258 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ConjureDSPTerminal/ConjureDSPTerminal.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = A4R63LAVLS;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminal;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		25E9311D2F773DC300D36258 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ConjureDSPTerminal/ConjureDSPTerminal.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = A4R63LAVLS;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminal;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		25E9311F2F773DC300D36258 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = A4R63LAVLS;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminalTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ConjureDSPTerminal.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ConjureDSPTerminal";
+			};
+			name = Debug;
+		};
+		25E931202F773DC300D36258 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = A4R63LAVLS;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminalTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ConjureDSPTerminal.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ConjureDSPTerminal";
+			};
+			name = Release;
+		};
+		25E931222F773DC300D36258 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = A4R63LAVLS;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminalUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = ConjureDSPTerminal;
+			};
+			name = Debug;
+		};
+		25E931232F773DC300D36258 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = A4R63LAVLS;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminalUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = ConjureDSPTerminal;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1159,6 +1663,42 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		25E930E72F7733EE00D36258 /* Build configuration list for PBXNativeTarget "ConjureDSPHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				25E930E82F7733EE00D36258 /* Debug */,
+				25E930E92F7733EE00D36258 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		25E9311B2F773DC300D36258 /* Build configuration list for PBXNativeTarget "ConjureDSPTerminal" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				25E9311C2F773DC300D36258 /* Debug */,
+				25E9311D2F773DC300D36258 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		25E9311E2F773DC300D36258 /* Build configuration list for PBXNativeTarget "ConjureDSPTerminalTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				25E9311F2F773DC300D36258 /* Debug */,
+				25E931202F773DC300D36258 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		25E931212F773DC300D36258 /* Build configuration list for PBXNativeTarget "ConjureDSPTerminalUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				25E931222F773DC300D36258 /* Debug */,
+				25E931232F773DC300D36258 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -1170,20 +1710,20 @@
 				minimumVersion = 4.3.0;
 			};
 		};
-		AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 9.0.0;
-			};
-		};
 		AA11000500000001SPARKLE /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 2.0.0;
+			};
+		};
+		AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.0.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -1193,6 +1733,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA11000500000001MIXPANEL /* XCRemoteSwiftPackageReference "mixpanel-swift" */;
 			productName = Mixpanel;
+		};
+		AA11000200000001SPARKLE /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA11000500000001SPARKLE /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 		AA11000400000001MIXPANEL /* Mixpanel */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -1208,11 +1753,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
 			productName = Sentry;
-		};
-		AA11000200000001SPARKLE /* Sparkle */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = AA11000500000001SPARKLE /* XCRemoteSwiftPackageReference "Sparkle" */;
-			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

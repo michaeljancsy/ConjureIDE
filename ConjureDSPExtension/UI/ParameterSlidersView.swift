@@ -60,7 +60,21 @@ struct ParameterSliderRow: View {
                 .frame(width: 80, alignment: .leading)
                 .lineLimit(1)
 
-            if let meta = metadata {
+            if let meta = metadata, meta.isToggle {
+                Spacer()
+                Toggle("", isOn: toggleBinding)
+                    .labelsHidden()
+                    .accessibilityIdentifier("\(label)Toggle")
+            } else if let meta = metadata, meta.isChoice, let options = meta.options {
+                Spacer()
+                Picker("", selection: choiceBinding(optionCount: options.count)) {
+                    ForEach(Array(options.enumerated()), id: \.offset) { idx, opt in
+                        Text(opt).tag(idx)
+                    }
+                }
+                .labelsHidden()
+                .accessibilityIdentifier("\(label)Picker")
+            } else if let meta = metadata {
                 Slider(value: $value, in: meta.min...meta.max)
                     .accessibilityIdentifier("\(label)Slider")
             } else {
@@ -75,7 +89,35 @@ struct ParameterSliderRow: View {
         }
     }
 
+    /// Bridge Float 0/1 to Bool for SwiftUI Toggle.
+    private var toggleBinding: Binding<Bool> {
+        Binding<Bool>(
+            get: { value >= 0.5 },
+            set: { value = $0 ? 1.0 : 0.0 }
+        )
+    }
+
+    /// Bridge Float index to Int for SwiftUI Picker.
+    private func choiceBinding(optionCount: Int) -> Binding<Int> {
+        Binding<Int>(
+            get: {
+                let idx = Int(value.rounded())
+                return max(0, min(idx, optionCount - 1))
+            },
+            set: { value = Float($0) }
+        )
+    }
+
     private var formattedValue: String {
+        if let meta = metadata, meta.isToggle {
+            return value >= 0.5 ? "On" : "Off"
+        }
+        if let meta = metadata, meta.isChoice, let options = meta.options {
+            let idx = Int(value.rounded())
+            if idx >= 0, idx < options.count {
+                return options[idx]
+            }
+        }
         guard let meta = metadata else {
             return String(format: "%.3f", value)
         }

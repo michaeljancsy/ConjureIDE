@@ -41,17 +41,18 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     }
 
     private var hostingView: SafeHostingView<ConjureDSPExtensionMainView>?
-    private var aiService: AIService?
-    private var chatService: ChatService?
     private var captureManager: AudioCaptureManager?
     private var parameterState: ParameterState?
     private var licenseManager: LicenseManager?
     private var gitHubService: GitHubService?
+    private var terminalServer: TerminalServer?
     private var paramNamesCancellable: AnyCancellable?
     private var paramMetadataCancellable: AnyCancellable?
 
 	deinit {
-        log.info("deinit called")
+        terminalServer?.stop()
+        terminalServer = nil
+        log.info("deinit — terminal server stopped")
 	}
 
     /// Provide a fresh NSView container each time the system creates this VC.
@@ -166,25 +167,6 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             initialScript = "# Default preset not found in bundle\n"
             initialLanguage = .python
             initialBenchmark = nil
-        }
-
-        if aiService == nil {
-            aiService = AIService()
-        }
-        let ai = aiService!
-
-        if chatService == nil {
-            chatService = ChatService(aiService: ai)
-        }
-        let chat = chatService!
-        chat.toolExecutor.audioUnit = au
-        chat.toolExecutor.presetManager = pm
-        chat.toolExecutor.onScriptChanged = { [weak au] source, processTimeMs, budgetMs in
-            au?.scriptSourceDidChange.send(
-                ConjureDSPExtensionAudioUnit.ScriptSourceChange(
-                    source: source, processTimeMs: processTimeMs, budgetMs: budgetMs
-                )
-            )
         }
 
         if captureManager == nil {
@@ -458,8 +440,6 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             extensionBundle: extensionBundle,
             scriptSourcePublisher: scriptPublisher,
             presetManager: pm,
-            aiService: ai,
-            chatService: chat,
             captureManager: capture,
             parameterState: ps,
             licenseManager: lm,
@@ -483,6 +463,15 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             hv.bottomAnchor.constraint(equalTo: self.view.bottomAnchor)
         ])
         hostingView = hv
+
+        // Start terminal/MCP infrastructure — direct access to the real AU, no proxy
+        if terminalServer == nil {
+            let ts = TerminalServer()
+            ts.mcpServer.toolProvider = au  // Set before start so first connection sees it
+            ts.start()
+            terminalServer = ts
+            log.info("Terminal server started with direct AU access")
+        }
 
         log.info("configureSwiftUIView done")
     }

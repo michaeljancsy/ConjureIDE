@@ -27,6 +27,8 @@ class ParamSpec(TypedDict, total=False):
     unit: str
     default: float
     curve: Literal["linear", "log"]
+    style: Literal["slider", "toggle", "choice"]
+    options: list[str]
 
 
 # Type alias for the full PARAMS dict
