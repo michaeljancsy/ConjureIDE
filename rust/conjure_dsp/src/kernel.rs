@@ -255,8 +255,14 @@ impl DSPKernel {
     fn update_profiler(&self, elapsed_us: u32) {
         self.profiler_current_us.store(elapsed_us, Ordering::Relaxed);
         // EMA: new = (5*current + 251*prev) / 256 (~0.5s smoothing)
+        // Seed with current value when starting from zero to avoid integer
+        // truncation keeping avg stuck at 0 (e.g. (5*1 + 251*0)/256 = 0).
         let prev_avg = self.profiler_avg_us.load(Ordering::Relaxed);
-        let new_avg = ((5u64 * elapsed_us as u64 + 251u64 * prev_avg as u64) / 256) as u32;
+        let new_avg = if prev_avg == 0 {
+            elapsed_us
+        } else {
+            ((5u64 * elapsed_us as u64 + 251u64 * prev_avg as u64) / 256) as u32
+        };
         self.profiler_avg_us.store(new_avg, Ordering::Relaxed);
         // Decaying peak: peak * 1023/1024, then max with current
         let prev_peak = self.profiler_peak_us.load(Ordering::Relaxed);
@@ -529,6 +535,10 @@ impl DSPKernel {
                 }
             }
         }
+
+        // Reset profiler — benchmark calls process() which updates profiler
+        // atomics with artificial data that would contaminate live stats.
+        self.reset_profiler();
 
         Some(max_time)
     }

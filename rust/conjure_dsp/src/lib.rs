@@ -922,7 +922,11 @@ mod tests {
             let ip: *const f32 = input.as_ptr();
             let op: *mut f32 = output.as_mut_ptr();
 
-            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+            // Process multiple times so EMA accumulates (integer division
+            // means a single 1µs sample gives avg=0: (5*1+251*0)/256=0)
+            for _ in 0..100 {
+                dsp_kernel_process(kernel, &ip, &op, 1, 4);
+            }
 
             // After processing with a backend, profiler should have non-zero values
             assert!(dsp_kernel_profiler_current_us(kernel) > 0);

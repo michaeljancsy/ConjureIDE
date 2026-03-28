@@ -42,6 +42,8 @@ final class ProcessProfiler: ObservableObject {
         didSet { updateBudget() }
     }
 
+    deinit { stop() }
+
     // MARK: - Timer
 
     private var timer: Timer?
