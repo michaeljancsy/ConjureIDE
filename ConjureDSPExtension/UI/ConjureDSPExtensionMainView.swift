@@ -92,6 +92,7 @@ struct ConjureDSPExtensionMainView: View {
     private static let buildIDFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
+        f.timeZone = .current
         return f
     }()
 
