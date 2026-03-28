@@ -2,7 +2,7 @@
 
 ## In Progress
 
-- **GitHub preset integration**: Phases 1–4 complete. Rate limit detection, time-based catalog cache (1hr TTL), and offline fallback all working. Community repo created. Remaining: ETag HTTP caching, automatic retry/backoff, unit tests.
+- **GitHub preset integration**: Phases 1–4 complete plus ETag HTTP caching, automatic retry/backoff (exponential 1–32s with ±20% jitter, 7 attempts), and unit tests. Remaining: polish (Phase 5).
 - **Monaco editor**: Remaining: wire inline error markers from Swift → existing JS bridge (parse line numbers from Python/Rust errors), custom color themes.
 
 ## To Do
@@ -32,7 +32,7 @@
 
 ### Post-Launch
 - Python package management: Phase 2 (bundle uv + host-app install UI) and Phase 3 (per-preset requirements.txt). Design doc at `docs/python-package-management.md`.
-- GitHub integration Phase 5 polish (ETag HTTP caching, retry/backoff, unit tests)
+- GitHub integration Phase 5 polish (remaining UI/UX improvements)
 - Monaco custom color themes
 
 ### Other
@@ -42,6 +42,7 @@
 ## Done
 
 - Claude Code terminal integration — MCP server in extension, companion app for PTY, xterm.js terminal UI, contentEditable keyboard input for ViewBridge (2026-03-27)
+- GitHub integration — ETag HTTP caching, retry/backoff, unit tests (2026-03-26)
 - Fix flaky `extensionPlistContainsBuildID` test — use Info.plist preprocessing instead of post-hoc stamping (2026-03-26)
 - conjuredsp Rust library: rlib for wasm32-wasip1 with setup!/params! macros, DSP building blocks (Biquad, DelayLine, Lfo), and utility functions. All 25 factory Rust presets migrated. Parity tests pass. (2026-03-26)
 - BPM sync: host transport (tempo, beat, time sig, playing) piped through entire pipeline to Python/WASM scripts + tempo-synced delay preset (2026-03-25)
