@@ -347,6 +347,8 @@ struct PresetToolbar: View {
                         presetManager: presetManager,
                         onDone: { showingSettings = false }
                     )
+                    Divider()
+                    EditorSettingsView()
                 }
             }
         }

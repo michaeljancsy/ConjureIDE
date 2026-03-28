@@ -39,6 +39,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var scriptSource: String = ""
     @State private var selectedLanguage: ScriptLanguage = .python
     @State private var errorMessage: String?
+    @State private var editorMarkers: [MonacoEditorView.Marker] = []
     @State private var showingSaveAs = false
     @State private var saveAsName = ""
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
@@ -56,6 +57,15 @@ struct ConjureDSPExtensionMainView: View {
     @State private var spectrogramFFTSizeIndex: Int = 2 // default: 2048
     @State private var spectrogramShowNoteNames: Bool = false
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("editorTheme") private var selectedTheme: String = "auto"
+
+    /// Resolved Monaco theme ID based on user preference and system appearance.
+    private var resolvedTheme: String {
+        if selectedTheme == "auto" {
+            return colorScheme == .dark ? "vs-dark" : "vs"
+        }
+        return selectedTheme
+    }
 
     /// Color for the timing display based on how close to budget.
     /// Uses profiler peak when live data is available, otherwise static benchmark.
@@ -190,9 +200,10 @@ struct ConjureDSPExtensionMainView: View {
             VStack(spacing: 0) {
                 MonacoEditorView(
                     text: $scriptSource,
-                    colorScheme: colorScheme,
+                    theme: resolvedTheme,
                     language: selectedLanguage,
-                    isEditable: true
+                    isEditable: true,
+                    markers: editorMarkers
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .border(Color.secondary.opacity(0.3), width: 1)
@@ -358,6 +369,7 @@ struct ConjureDSPExtensionMainView: View {
             selectedLanguage = ScriptLanguage.detect(from: change.source)
             // Clear error — this fires after successful compile (preset select, AI fix, fullState restore)
             errorMessage = nil
+            editorMarkers = []
             if let processTimeMs = change.processTimeMs, let budgetMs = change.budgetMs {
                 lastBenchmark = (processTimeMs, budgetMs)
             }
@@ -413,6 +425,7 @@ struct ConjureDSPExtensionMainView: View {
     private func handleResult(_ result: ScriptSaveResult) {
         if result.success {
             errorMessage = nil
+            editorMarkers = []
             if let processTimeMs = result.processTimeMs, let budgetMs = result.budgetMs {
                 lastBenchmark = (processTimeMs, budgetMs)
             } else {
@@ -420,7 +433,17 @@ struct ConjureDSPExtensionMainView: View {
             }
         } else {
             lastBenchmark = nil
-            errorMessage = result.error ?? "Unknown error"
+            let errorStr = result.error ?? "Unknown error"
+            errorMessage = errorStr
+            let parsed = ErrorLineParser.parse(errorStr, language: selectedLanguage)
+            editorMarkers = parsed.map { m in
+                MonacoEditorView.Marker(
+                    startLine: m.line,
+                    startColumn: m.column,
+                    message: m.message,
+                    severity: m.severity
+                )
+            }
         }
     }
 }

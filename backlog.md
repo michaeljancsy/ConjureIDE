@@ -3,7 +3,6 @@
 ## In Progress
 
 - **GitHub preset integration**: Phases 1–4 complete plus ETag HTTP caching, automatic retry/backoff (exponential 1–32s with ±20% jitter, 7 attempts), and unit tests. Remaining: polish (Phase 5).
-- **Monaco editor**: Remaining: wire inline error markers from Swift → existing JS bridge (parse line numbers from Python/Rust errors), custom color themes.
 
 ## To Do
 
@@ -33,7 +32,6 @@
 ### Post-Launch
 - Python package management: Phase 2 (bundle uv + host-app install UI) and Phase 3 (per-preset requirements.txt). Design doc at `docs/python-package-management.md`.
 - GitHub integration Phase 5 polish (remaining UI/UX improvements)
-- Monaco custom color themes
 
 ### Other
 - AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration)
@@ -45,6 +43,7 @@
 - GitHub integration — ETag HTTP caching, retry/backoff, unit tests (2026-03-26)
 - Fix flaky `extensionPlistContainsBuildID` test — use Info.plist preprocessing instead of post-hoc stamping (2026-03-26)
 - conjuredsp Rust library: rlib for wasm32-wasip1 with setup!/params! macros, DSP building blocks (Biquad, DelayLine, Lfo), and utility functions. All 25 factory Rust presets migrated. Parity tests pass. (2026-03-26)
+- Monaco inline error markers (Python/Rust line parsing → squiggly underlines) + 6 custom color themes with settings picker (2026-03-26)
 - BPM sync: host transport (tempo, beat, time sig, playing) piped through entire pipeline to Python/WASM scripts + tempo-synced delay preset (2026-03-25)
 - Monaco numpy/scipy/signal autocomplete in editor-bridge.js (2026-03-25)
 - Add Stereo Width Optimized preset alongside original (2026-03-25)
