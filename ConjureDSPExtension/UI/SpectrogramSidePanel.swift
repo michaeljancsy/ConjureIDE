@@ -19,6 +19,7 @@ struct SpectrogramSidePanel: View {
     @State private var showOutput = true
     @State private var showDifference = true
     @State private var showNormalizedDiff = true
+    @State private var isPaused = false
 
     static let fftSizes = [512, 1024, 2048, 4096]
 
@@ -60,6 +61,16 @@ struct SpectrogramSidePanel: View {
                     }
                     .buttonStyle(.plain)
                     .help(showNoteNames ? "Show Hz labels" : "Show note names")
+
+                    // Pause / Resume
+                    Button {
+                        isPaused.toggle()
+                    } label: {
+                        Image(systemName: isPaused ? "play.fill" : "pause.fill")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .help(isPaused ? "Resume spectrogram" : "Pause spectrogram")
                 }
                 .padding(.horizontal, 6)
                 .frame(width: geo.size.width, height: geo.size.height)
@@ -114,7 +125,8 @@ struct SpectrogramSidePanel: View {
                 SpectrogramView(
                     captureManager: captureManager,
                     channel: channel,
-                    frequencyScale: frequencyScale
+                    frequencyScale: frequencyScale,
+                    isPaused: isPaused
                 )
                 .overlay(alignment: .leading) {
                     FrequencyAxisView(

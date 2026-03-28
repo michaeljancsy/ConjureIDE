@@ -24,6 +24,7 @@ struct SpectrogramView: View {
     @ObservedObject var captureManager: AudioCaptureManager
     let channel: SpectrogramChannel
     var frequencyScale: FrequencyScale = .log
+    var isPaused: Bool = false
     var isDivergingMap: Bool { channel == .difference || channel == .normalizedDifference }
 
     @State private var bitmapBuffer: SpectrogramBitmapBuffer?
@@ -87,8 +88,22 @@ struct SpectrogramView: View {
                 }
             }
             .onChange(of: captureManager.updateCounter) { _, _ in
-                ensureBuffer(width: width, height: height)
-                drainPendingColumns(height: height)
+                // Always drain to prevent unbounded accumulation,
+                // but only append to the bitmap when not paused.
+                if isPaused {
+                    _ = captureManager.drainColumns(for: channel)
+                } else {
+                    ensureBuffer(width: width, height: height)
+                    drainPendingColumns(height: height)
+                }
+            }
+            .onChange(of: isPaused) { _, newValue in
+                if !newValue {
+                    // Clear the buffer on unpause so the spectrogram starts fresh
+                    if width > 0 && height > 0 {
+                        bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height)
+                    }
+                }
             }
             .onChange(of: geometry.size) { _, newSize in
                 let w = Int(newSize.width)
