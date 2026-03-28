@@ -2,8 +2,9 @@
 //  PTYManager.swift
 //  ConjureDSP
 //
-//  Manages a pseudo-terminal (pty) running Claude Code CLI.
-//  Handles process lifecycle, I/O, and environment configuration.
+//  Manages a pseudo-terminal (pty) running the user's shell.
+//  Auto-launches Claude Code CLI on startup; the shell remains
+//  usable after Claude exits.
 //
 
 import Foundation
@@ -11,7 +12,7 @@ import os.log
 
 private let ptyLog = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "PTYManager")
 
-/// Manages a Claude Code CLI process running in a pseudo-terminal.
+/// Manages a pseudo-terminal running the user's shell, with optional auto-launch of Claude Code.
 final class PTYManager {
 
     enum State {
@@ -50,19 +51,13 @@ final class PTYManager {
 
     // MARK: - Lifecycle
 
-    /// Start Claude Code in a pty.
+    /// Start the user's shell in a pty, then auto-launch Claude Code.
     func start() {
-        guard case .idle = state else {
+        switch state {
+        case .idle, .exited(_):
+            break  // OK to start
+        case .running, .error:
             ptyLog.warning("PTY already running or in error state")
-            return
-        }
-
-        // Find claude CLI
-        guard let claudePath = findClaudeCLI() else {
-            let errorMsg = "Claude Code CLI not found. Install it from https://claude.ai/download"
-            state = .error(errorMsg)
-            onStateChange?(.error(errorMsg))
-            ptyLog.error("\(errorMsg, privacy: .public)")
             return
         }
 
@@ -72,16 +67,18 @@ final class PTYManager {
         }
         writeContextFile()
 
-        // Prepare C strings before fork (avoid Swift allocations in child)
+        // Find claude CLI for auto-launch (non-fatal if missing — shell still starts)
+        let claudePath = findClaudeCLI()
+
+        // Determine user's shell
         let env = buildEnvironment()
-        var args = [claudePath, "--dangerously-skip-permissions"]
-        if let contextPath = contextFilePath {
-            args += ["--append-system-prompt-file", contextPath]
-        }
-        if let mcpPath = mcpConfigPath {
-            args += ["--mcp-config", mcpPath]
-        }
-        let cPath = strdup(claudePath)!
+        let shellPath = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+
+        // Login shell: argv[0] prefixed with "-" tells the shell to source login profiles
+        let shellName = "-" + (shellPath as NSString).lastPathComponent
+        let args = [shellName]
+
+        let cPath = strdup(shellPath)!
         var cArgs: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) }
         cArgs.append(nil)
         var cEnv: [UnsafeMutablePointer<CChar>?] = env.map { strdup($0) }
@@ -97,7 +94,6 @@ final class PTYManager {
             state = .error(errorMsg)
             onStateChange?(.error(errorMsg))
             ptyLog.error("\(errorMsg, privacy: .public)")
-            // Clean up strdup'd memory
             free(cPath)
             cArgs.forEach { if let p = $0 { free(p) } }
             cEnv.forEach { if let p = $0 { free(p) } }
@@ -116,11 +112,10 @@ final class PTYManager {
         cArgs.forEach { if let p = $0 { free(p) } }
         cEnv.forEach { if let p = $0 { free(p) } }
 
-        // Parent process
         childPID = pid
         state = .running
         onStateChange?(.running)
-        ptyLog.info("Started Claude Code (PID \(pid)) on pty fd \(self.masterFD)")
+        ptyLog.info("Started shell (PID \(pid)) on pty fd \(self.masterFD)")
 
         // Set non-blocking on master fd
         let flags = fcntl(masterFD, F_GETFL)
@@ -147,6 +142,24 @@ final class PTYManager {
         }
         waitSrc.resume()
         waitSource = waitSrc
+
+        // Auto-launch Claude Code after shell initializes
+        if let claudePath {
+            var cmd = "\(claudePath) --dangerously-skip-permissions"
+            if let contextPath = contextFilePath {
+                cmd += " --append-system-prompt-file \(contextPath)"
+            }
+            if let mcpPath = mcpConfigPath {
+                cmd += " --mcp-config \(mcpPath)"
+            }
+            cmd += "\n"
+            let launchCmd = cmd
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.write(launchCmd)
+            }
+        } else {
+            ptyLog.warning("Claude Code CLI not found — shell started without auto-launch")
+        }
     }
 
     /// Stop the Claude Code process.
@@ -247,7 +260,7 @@ final class PTYManager {
         // WIFEXITED/WEXITSTATUS are C macros not available in Swift — inline the logic
         let normalExit = (status & 0x7f) == 0
         let exitCode: Int32 = normalExit ? ((status >> 8) & 0xff) : -1
-        ptyLog.info("Claude Code exited with code \(exitCode)")
+        ptyLog.info("Shell exited with code \(exitCode)")
         childPID = 0
         state = .exited(exitCode)
         onStateChange?(.exited(exitCode))
