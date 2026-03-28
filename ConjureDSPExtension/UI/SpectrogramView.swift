@@ -153,29 +153,36 @@ struct SpectrogramView: View {
         let binCount = magnitudes.count
         guard binCount > 0 && height > 0 else { return }
 
-        // Build a column of pixels (bottom to top: index 0 = lowest frequency)
-        var column = [SIMD4<UInt8>](repeating: .zero, count: height)
+        // Write pixels directly to bitmap in a single pass (no intermediate array)
+        let col = buffer.writeColumn
+        let baseAddress = buffer.baseAddress
+        let bytesPerRow = buffer.bytesPerRow
 
         for y in 0..<height {
-            // Map pixel y (0 = bottom) to FFT bin using frequency scale
             let normalizedY = Float(y) / Float(height)
-
-            // Inverse map from display position to frequency bin
             let bin = inverseBinMapping(displayPos: normalizedY, binCount: binCount)
             let binIndex = min(max(Int(bin), 0), binCount - 1)
-
             let value = magnitudes[binIndex]
 
+            let pixel: SIMD4<UInt8>
             if channel == .normalizedDifference {
-                column[y] = SpectrogramColorMap.divergingForDB(value, range: 1.0)
+                pixel = SpectrogramColorMap.divergingForDB(value, range: 1.0)
             } else if isDivergingMap {
-                column[y] = SpectrogramColorMap.divergingForDB(value, range: 40.0)
+                pixel = SpectrogramColorMap.divergingForDB(value, range: 40.0)
             } else {
-                column[y] = SpectrogramColorMap.magmaForDB(value, floor: AudioCaptureManager.floorDB)
+                pixel = SpectrogramColorMap.magmaForDB(value, floor: AudioCaptureManager.floorDB)
             }
+
+            // Write directly to bitmap (y=0 is bottom, bitmap row 0 is top)
+            let row = height - 1 - y
+            let offset = row * bytesPerRow + col * 4
+            baseAddress[offset] = pixel.x
+            baseAddress[offset + 1] = pixel.y
+            baseAddress[offset + 2] = pixel.z
+            baseAddress[offset + 3] = pixel.w
         }
 
-        buffer.appendColumn(column)
+        buffer.advanceWriteColumn()
     }
 
     /// Map a display position (0...1, bottom to top) back to an FFT bin index.
@@ -221,8 +228,8 @@ final class SpectrogramBitmapBuffer {
     private(set) var writeColumn: Int = 0
 
     private let context: CGContext
-    private let baseAddress: UnsafeMutablePointer<UInt8>
-    private let bytesPerRow: Int
+    let baseAddress: UnsafeMutablePointer<UInt8>
+    let bytesPerRow: Int
 
     init?(width: Int, height: Int, fillColor: SIMD4<UInt8> = SIMD4<UInt8>(0, 0, 0, 255)) {
         guard width > 0 && height > 0 else { return nil }
@@ -276,6 +283,11 @@ final class SpectrogramBitmapBuffer {
         }
 
         writeColumn = (col + 1) % width
+    }
+
+    /// Advance the write cursor without writing a full column (used when caller writes directly).
+    func advanceWriteColumn() {
+        writeColumn = (writeColumn + 1) % width
     }
 
     /// Create a CGImage snapshot from the persistent bitmap context.

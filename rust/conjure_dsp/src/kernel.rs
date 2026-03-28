@@ -18,6 +18,9 @@ const DEMO_LIMIT_SECONDS: f64 = 60.0;
 /// and do not count against the demo time limit.
 const DEMO_SILENCE_THRESHOLD: f32 = 0.001;
 
+/// Maximum number of audio channels supported (stack-allocated pointer arrays use this).
+const MAX_CHANNELS: usize = 8;
+
 /// Host DAW transport state, updated once per render callback via `set_transport()`.
 /// All fields default to zero/false, meaning "no transport data available."
 /// Written and read on the render thread only — no synchronization needed.
@@ -746,15 +749,19 @@ impl DSPKernel {
                 }
                 if ok {
                     Self::safety_clamp(outputs, channel_count, frame_count);
-                    // Cast output pointers to const (used for capture and demo gating)
-                    let out_as_const: Vec<*const f32> = outputs.iter().map(|p| *p as *const f32).collect();
+                    // Cast output pointers to const (stack-allocated, no heap alloc on audio thread)
+                    let mut out_as_const = [std::ptr::null::<f32>(); MAX_CHANNELS];
+                    for i in 0..channel_count {
+                        out_as_const[i] = outputs[i] as *const f32;
+                    }
+                    let out_slice = &out_as_const[..channel_count];
                     // Capture output audio for spectrogram (after processing)
                     if capturing {
-                        self.capture_to_ring(&out_as_const, channel_count, frame_count, &self.output_ring);
+                        self.capture_to_ring(out_slice, channel_count, frame_count, &self.output_ring);
                     }
                     // Increment demo counter only if output is non-silent
                     if !self.licensed.load(Ordering::Relaxed)
-                        && Self::buffer_peak(&out_as_const, channel_count, frame_count)
+                        && Self::buffer_peak(out_slice, channel_count, frame_count)
                             >= DEMO_SILENCE_THRESHOLD
                     {
                         self.demo_samples_processed
@@ -777,9 +784,11 @@ impl DSPKernel {
         }
         // Increment demo counter only if output is non-silent
         if !self.licensed.load(Ordering::Relaxed) {
-            let out_as_const: Vec<*const f32> =
-                outputs.iter().map(|p| *p as *const f32).collect();
-            if Self::buffer_peak(&out_as_const, channel_count, frame_count)
+            let mut out_as_const = [std::ptr::null::<f32>(); MAX_CHANNELS];
+            for i in 0..channel_count {
+                out_as_const[i] = outputs[i] as *const f32;
+            }
+            if Self::buffer_peak(&out_as_const[..channel_count], channel_count, frame_count)
                 >= DEMO_SILENCE_THRESHOLD
             {
                 self.demo_samples_processed

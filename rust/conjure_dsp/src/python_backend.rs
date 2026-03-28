@@ -24,6 +24,14 @@ pub struct PythonBackend {
     /// Cached arity of the Python `process()` function.
     /// 6 = with transport dict, 5 = with params, 4 = legacy.
     process_arity: usize,
+    /// Cached PyList wrapping py_input_arrays (rebuilt on channel count change).
+    py_input_list: Option<Py<PyAny>>,
+    /// Cached PyList wrapping py_output_arrays (rebuilt on channel count change).
+    py_output_list: Option<Py<PyAny>>,
+    /// Cached PyDict for transport state (created once, values updated in-place).
+    py_transport_dict: Option<Py<PyAny>>,
+    /// Cached PyDict for params when using rich metadata (created once, values updated in-place).
+    py_params_dict: Option<Py<PyAny>>,
 }
 
 impl PythonBackend {
@@ -90,6 +98,10 @@ impl PythonBackend {
                     param_names,
                     param_metadata,
                     process_arity: arity,
+                    py_input_list: None,
+                    py_output_list: None,
+                    py_transport_dict: None,
+                    py_params_dict: None,
                 })
             }
             Err(e) => {
@@ -231,6 +243,7 @@ impl PythonBackend {
     }
 
     /// Allocate numpy arrays for the given channel count, sized to max_frames.
+    /// Also pre-builds cached PyList/PyDict objects to avoid per-callback allocations.
     fn allocate_py_arrays(&mut self, channel_count: usize, max_frames: usize) {
         Python::with_gil(|py| {
             self.py_input_arrays = (0..channel_count)
@@ -248,6 +261,39 @@ impl PythonBackend {
                         .unbind()
                 })
                 .collect();
+
+            // Cache PyLists wrapping the numpy arrays (stable across callbacks)
+            if let Ok(list) =
+                PyList::new(py, self.py_input_arrays.iter().map(|a| a.bind(py)))
+            {
+                self.py_input_list = Some(list.into_any().unbind());
+            }
+            if let Ok(list) =
+                PyList::new(py, self.py_output_arrays.iter().map(|a| a.bind(py)))
+            {
+                self.py_output_list = Some(list.into_any().unbind());
+            }
+
+            // Cache transport dict (keys are stable, values updated in-place each callback)
+            if self.process_arity >= 6 {
+                let dict = PyDict::new(py);
+                let _ = dict.set_item("tempo", 120.0f64);
+                let _ = dict.set_item("beat", 0.0f64);
+                let _ = dict.set_item("playing", false);
+                let _ = dict.set_item("time_sig_num", 4.0f64);
+                let _ = dict.set_item("time_sig_den", 4.0f64);
+                let _ = dict.set_item("sample_position", 0.0f64);
+                self.py_transport_dict = Some(dict.into_any().unbind());
+            }
+
+            // Cache params dict (keys are stable, values updated in-place each callback)
+            if let Some(ref metadata) = self.param_metadata {
+                let dict = PyDict::new(py);
+                for meta in metadata.iter() {
+                    let _ = dict.set_item(&meta.key, meta.default);
+                }
+                self.py_params_dict = Some(dict.into_any().unbind());
+            }
         });
         self.py_channel_count = channel_count;
     }
@@ -275,21 +321,33 @@ impl PythonBackend {
                 py_slice[..frame_count].copy_from_slice(src);
             }
 
-            // Build Python lists referencing the pre-allocated arrays
-            let input_list =
-                PyList::new(py, self.py_input_arrays.iter().map(|a| a.bind(py)))?;
-            let output_list =
-                PyList::new(py, self.py_output_arrays.iter().map(|a| a.bind(py)))?;
+            // Use cached Python lists (rebuilt only on channel count change)
+            let input_list = match self.py_input_list {
+                Some(ref cached) => cached.bind(py).clone(),
+                None => PyList::new(py, self.py_input_arrays.iter().map(|a| a.bind(py)))?.into_any(),
+            };
+            let output_list = match self.py_output_list {
+                Some(ref cached) => cached.bind(py).clone(),
+                None => PyList::new(py, self.py_output_arrays.iter().map(|a| a.bind(py)))?.into_any(),
+            };
 
-            // Build params: dict with actual values (if PARAMS metadata present)
-            // or list of raw 0–1 floats (backward compat).
+            // Update params: use cached dict (update values in-place) or create list for legacy mode
             let params_obj: Bound<'_, PyAny> = if let Some(ref metadata) = self.param_metadata {
-                let dict = PyDict::new(py);
-                for (i, meta) in metadata.iter().enumerate() {
-                    let actual = meta.denormalize(params[i]);
-                    dict.set_item(&meta.key, actual)?;
+                if let Some(ref cached) = self.py_params_dict {
+                    let dict = cached.bind(py);
+                    for (i, meta) in metadata.iter().enumerate() {
+                        let actual = meta.denormalize(params[i]);
+                        dict.set_item(&meta.key, actual)?;
+                    }
+                    dict.clone()
+                } else {
+                    let dict = PyDict::new(py);
+                    for (i, meta) in metadata.iter().enumerate() {
+                        let actual = meta.denormalize(params[i]);
+                        dict.set_item(&meta.key, actual)?;
+                    }
+                    dict.into_any()
                 }
-                dict.into_any()
             } else {
                 PyList::new(py, params.iter())?.into_any()
             };
@@ -300,16 +358,29 @@ impl PythonBackend {
             // 4-arg: process(inputs, outputs, frame_count, sample_rate)  [legacy]
             match arity {
                 6.. => {
-                    let transport_dict = PyDict::new(py);
-                    transport_dict.set_item("tempo", transport.tempo)?;
-                    transport_dict.set_item("beat", transport.beat_position)?;
-                    transport_dict.set_item("playing", transport.is_playing)?;
-                    transport_dict.set_item("time_sig_num", transport.time_sig_numerator)?;
-                    transport_dict.set_item("time_sig_den", transport.time_sig_denominator)?;
-                    transport_dict.set_item("sample_position", transport.sample_position)?;
+                    // Update cached transport dict values in-place
+                    let transport_obj = if let Some(ref cached) = self.py_transport_dict {
+                        let dict = cached.bind(py);
+                        dict.set_item("tempo", transport.tempo)?;
+                        dict.set_item("beat", transport.beat_position)?;
+                        dict.set_item("playing", transport.is_playing)?;
+                        dict.set_item("time_sig_num", transport.time_sig_numerator)?;
+                        dict.set_item("time_sig_den", transport.time_sig_denominator)?;
+                        dict.set_item("sample_position", transport.sample_position)?;
+                        dict.clone()
+                    } else {
+                        let dict = PyDict::new(py);
+                        dict.set_item("tempo", transport.tempo)?;
+                        dict.set_item("beat", transport.beat_position)?;
+                        dict.set_item("playing", transport.is_playing)?;
+                        dict.set_item("time_sig_num", transport.time_sig_numerator)?;
+                        dict.set_item("time_sig_den", transport.time_sig_denominator)?;
+                        dict.set_item("sample_position", transport.sample_position)?;
+                        dict.into_any()
+                    };
                     self.py_process_fn.call1(
                         py,
-                        (input_list, output_list, frame_count as u32, sample_rate, params_obj, transport_dict),
+                        (input_list, output_list, frame_count as u32, sample_rate, params_obj, transport_obj),
                     )?;
                 }
                 5 => {
@@ -360,6 +431,10 @@ impl Backend for PythonBackend {
             Python::with_gil(|_py| {
                 self.py_input_arrays.clear();
                 self.py_output_arrays.clear();
+                self.py_input_list = None;
+                self.py_output_list = None;
+                self.py_transport_dict = None;
+                self.py_params_dict = None;
             });
         }
     }

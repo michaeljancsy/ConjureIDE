@@ -1027,23 +1027,17 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	) {
 		let count = Int(channelCount)
 
-		// Build contiguous arrays of channel buffer pointers (optional to match C import)
-		var inputPtrs = [UnsafePointer<Float>?]()
-		inputPtrs.reserveCapacity(count)
-		var outputPtrs = [UnsafeMutablePointer<Float>?]()
-		outputPtrs.reserveCapacity(count)
+		// Stack-allocate channel buffer pointer arrays (no heap allocation on audio thread)
+		withUnsafeTemporaryAllocation(of: UnsafePointer<Float>?.self, capacity: count) { inputBuf in
+			withUnsafeTemporaryAllocation(of: UnsafeMutablePointer<Float>?.self, capacity: count) { outputBuf in
+				for ch in 0..<count {
+					let baseIn = inABL[ch].mData!.assumingMemoryBound(to: Float.self)
+					inputBuf[ch] = UnsafePointer(baseIn.advanced(by: Int(frameOffset)))
 
-		for ch in 0..<count {
-			let baseIn = inABL[ch].mData!.assumingMemoryBound(to: Float.self)
-			inputPtrs.append(UnsafePointer(baseIn.advanced(by: Int(frameOffset))))
-
-			let baseOut = outABL[ch].mData!.assumingMemoryBound(to: Float.self)
-			outputPtrs.append(baseOut.advanced(by: Int(frameOffset)))
-		}
-
-		inputPtrs.withUnsafeBufferPointer { inBuf in
-			outputPtrs.withUnsafeBufferPointer { outBuf in
-				dsp_kernel_process(kernel, inBuf.baseAddress!, outBuf.baseAddress!, channelCount, frameCount)
+					let baseOut = outABL[ch].mData!.assumingMemoryBound(to: Float.self)
+					outputBuf[ch] = baseOut.advanced(by: Int(frameOffset))
+				}
+				dsp_kernel_process(kernel, inputBuf.baseAddress!, outputBuf.baseAddress!, channelCount, frameCount)
 			}
 		}
 	}
