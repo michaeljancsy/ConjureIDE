@@ -151,7 +151,7 @@ struct SpectrogramView: View {
     private func appendColumn(magnitudes: [Float], height: Int) {
         guard let buffer = bitmapBuffer else { return }
         let binCount = magnitudes.count
-        guard binCount > 0 && height > 0 else { return }
+        guard binCount > 0 && height > 0 && height <= buffer.height else { return }
 
         // Write pixels directly to bitmap in a single pass (no intermediate array)
         let col = buffer.writeColumn

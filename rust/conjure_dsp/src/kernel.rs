@@ -763,11 +763,12 @@ impl DSPKernel {
                 if ok {
                     Self::safety_clamp(outputs, channel_count, frame_count);
                     // Cast output pointers to const (stack-allocated, no heap alloc on audio thread)
+                    let clamped_ch = channel_count.min(MAX_CHANNELS);
                     let mut out_as_const = [std::ptr::null::<f32>(); MAX_CHANNELS];
-                    for i in 0..channel_count {
+                    for i in 0..clamped_ch {
                         out_as_const[i] = outputs[i] as *const f32;
                     }
-                    let out_slice = &out_as_const[..channel_count];
+                    let out_slice = &out_as_const[..clamped_ch];
                     // Capture output audio for spectrogram (after processing)
                     if capturing {
                         self.capture_to_ring(out_slice, channel_count, frame_count, &self.output_ring);
@@ -797,11 +798,12 @@ impl DSPKernel {
         }
         // Increment demo counter only if output is non-silent
         if !self.licensed.load(Ordering::Relaxed) {
+            let clamped_ch = channel_count.min(MAX_CHANNELS);
             let mut out_as_const = [std::ptr::null::<f32>(); MAX_CHANNELS];
-            for i in 0..channel_count {
+            for i in 0..clamped_ch {
                 out_as_const[i] = outputs[i] as *const f32;
             }
-            if Self::buffer_peak(&out_as_const[..channel_count], channel_count, frame_count)
+            if Self::buffer_peak(&out_as_const[..clamped_ch], clamped_ch, frame_count)
                 >= DEMO_SILENCE_THRESHOLD
             {
                 self.demo_samples_processed
