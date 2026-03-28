@@ -86,21 +86,21 @@ enum SpectrogramColorMap {
         return colors
     }()
 
-    /// Blue (cut) → dark gray (neutral) → red (boost)
+    /// Blue (cut) → black (neutral) → red (boost)
     private static func divergingColor(_ t: Float) -> (Float, Float, Float) {
         if t < 0.5 {
-            // Blue (cut) → dark gray
+            // Blue (cut) → black
             let s = t / 0.5
-            let r = s * 0.2
-            let g = s * 0.2
-            let b = 0.6 + s * (0.2 - 0.6)
+            let r: Float = 0
+            let g: Float = 0
+            let b = 0.6 * (1.0 - s)
             return (r, g, b)
         } else {
-            // Dark gray → red (boost)
+            // Black → red (boost)
             let s = (t - 0.5) / 0.5
-            let r = 0.2 + s * 0.7
-            let g = 0.2 - s * 0.15
-            let b = 0.2 - s * 0.15
+            let r = s * 0.9
+            let g: Float = 0
+            let b: Float = 0
             return (r, g, b)
         }
     }

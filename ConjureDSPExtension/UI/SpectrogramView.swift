@@ -101,7 +101,7 @@ struct SpectrogramView: View {
                 if !newValue {
                     // Clear the buffer on unpause so the spectrogram starts fresh
                     if width > 0 && height > 0 {
-                        bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height, fillColor: silenceFillColor)
+                        bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height)
                     }
                 }
             }
@@ -109,12 +109,12 @@ struct SpectrogramView: View {
                 let w = Int(newSize.width)
                 let h = Int(newSize.height)
                 if w > 0 && h > 0 {
-                    bitmapBuffer = SpectrogramBitmapBuffer(width: w, height: h, fillColor: silenceFillColor)
+                    bitmapBuffer = SpectrogramBitmapBuffer(width: w, height: h)
                 }
             }
             .onAppear {
                 if width > 0 && height > 0 {
-                    bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height, fillColor: silenceFillColor)
+                    bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height)
                 }
             }
         }
@@ -142,19 +142,9 @@ struct SpectrogramView: View {
         }
     }
 
-    private var silenceFillColor: SIMD4<UInt8> {
-        if channel == .normalizedDifference {
-            return SpectrogramColorMap.divergingForDB(0, range: 1.0)
-        } else if isDivergingMap {
-            return SpectrogramColorMap.divergingForDB(0, range: 40.0)
-        } else {
-            return SIMD4<UInt8>(0, 0, 0, 255)
-        }
-    }
-
     private func ensureBuffer(width: Int, height: Int) {
         if bitmapBuffer == nil && width > 0 && height > 0 {
-            bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height, fillColor: silenceFillColor)
+            bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height)
         }
     }
 
