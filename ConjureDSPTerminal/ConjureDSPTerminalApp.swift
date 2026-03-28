@@ -134,10 +134,12 @@ class TerminalAppServer {
         self.wsServer = ws
         self.pty = p
 
-        // Start WebSocket server
+        // Start WebSocket server — write port file only after listener confirms ready
         let wsPort: UInt16 = 19836
+        ws.onReady = { [weak self] confirmedPort in
+            self?.writeWebSocketPort(confirmedPort)
+        }
         ws.start(port: wsPort)
-        writeWebSocketPort(wsPort)
 
         // Configure PTY
         p.mcpServerPort = mcpPort

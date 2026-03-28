@@ -205,7 +205,8 @@ final class MCPServer {
 
         let method = String(parts[0])
         let path = String(parts[1])
-        let body: String? = contentLength > 0 ? String(bodyStart.prefix(contentLength)) : nil
+        // Content-Length is in bytes, so slice on UTF-8 view (not String.prefix which counts characters)
+        let body: String? = contentLength > 0 ? String(decoding: Array(bodyStart.utf8.prefix(contentLength)), as: UTF8.self) : nil
 
         // Route
         switch (method, path) {

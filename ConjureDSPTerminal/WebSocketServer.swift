@@ -24,6 +24,9 @@ final class WebSocketServer {
     /// Called when a client connects or disconnects.
     var onClientCountChange: ((Int) -> Void)?
 
+    /// Called when the listener is ready and the port is available.
+    var onReady: ((UInt16) -> Void)?
+
     private var listener: NWListener?
     private var clients: [ObjectIdentifier: NWConnection] = [:]
 
@@ -117,6 +120,7 @@ final class WebSocketServer {
             if let listenerPort = listener?.port?.rawValue {
                 self.port = listenerPort
                 wsLog.info("WebSocket server listening on port \(listenerPort)")
+                onReady?(listenerPort)
             }
         case .failed(let error):
             wsLog.error("WebSocket listener failed: \(error.localizedDescription, privacy: .public)")

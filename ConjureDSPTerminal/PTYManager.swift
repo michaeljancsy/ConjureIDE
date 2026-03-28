@@ -157,12 +157,27 @@ final class PTYManager {
         waitSource = nil
 
         if childPID > 0 {
-            kill(childPID, SIGTERM)
-            // Give it a moment, then force kill
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [pid = childPID] in
-                kill(pid, SIGKILL)
-            }
+            let pid = childPID
             childPID = 0
+            kill(pid, SIGTERM)
+            // Reap child in background: wait up to 2s for graceful exit, then SIGKILL
+            DispatchQueue.global().async {
+                var status: Int32 = 0
+                var waited = false
+                // Poll for up to 2 seconds
+                for _ in 0..<20 {
+                    let result = waitpid(pid, &status, WNOHANG)
+                    if result == pid {
+                        waited = true
+                        break
+                    }
+                    usleep(100_000) // 100ms
+                }
+                if !waited {
+                    kill(pid, SIGKILL)
+                    waitpid(pid, &status, 0) // blocking wait after SIGKILL
+                }
+            }
         }
 
         // masterFD is closed by the readSource cancel handler — don't close here
