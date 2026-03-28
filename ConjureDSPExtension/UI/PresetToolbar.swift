@@ -387,6 +387,8 @@ struct PresetToolbar: View {
                     )
                     Divider()
                     EditorSettingsView()
+                    Divider()
+                    ThirdPartyLicensesView()
                 }
                 .padding()
                 .frame(width: 360)

@@ -1,0 +1,10 @@
+[
+{{#each overview.used_by}}
+  {
+    "name": "{{value.name}}",
+    "version": "{{value.version}}",
+    "license": "{{value.license}}",
+    "text": {{json value.text}}
+  }{{#unless @last}},{{/unless}}
+{{/each}}
+]
