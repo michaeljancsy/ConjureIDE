@@ -250,8 +250,9 @@ struct PackageManagerView: View {
         Task {
             defer { isSearching = false }
 
-            // Use PyPI JSON API to search for a specific package
-            guard let url = URL(string: "https://pypi.org/pypi/\(query)/json") else { return }
+            // Use PyPI JSON API to look up a specific package
+            guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                  let url = URL(string: "https://pypi.org/pypi/\(encoded)/json") else { return }
             do {
                 let (data, response) = try await URLSession.shared.data(from: url)
                 guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {

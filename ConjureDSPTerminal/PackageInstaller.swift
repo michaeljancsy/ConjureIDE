@@ -56,7 +56,7 @@ final class PackageInstaller {
         }
 
         // Fallback: check if uv is on PATH
-        let whichResult = Self.runProcess("/usr/bin/which", arguments: ["uv"])
+        let whichResult = Self.runProcessSync("/usr/bin/which", arguments: ["uv"])
         if let path = whichResult.output?.trimmingCharacters(in: .whitespacesAndNewlines),
            !path.isEmpty {
             self.uvPath = path
@@ -153,7 +153,7 @@ final class PackageInstaller {
                     "--python", pythonBin]
         args.append(contentsOf: request.packages)
 
-        let result = Self.runProcess(uvPath, arguments: args)
+        let result = await Self.runProcess(uvPath, arguments: args)
 
         if result.exitCode != 0 {
             let errMsg = result.output ?? "uv exited with code \(result.exitCode)"
@@ -161,7 +161,7 @@ final class PackageInstaller {
         }
 
         // Code-sign any .so and .dylib files for hardened runtime
-        try codeSignDynamicLibraries(in: URL(fileURLWithPath: request.targetPath))
+        try await codeSignDynamicLibraries(in: URL(fileURLWithPath: request.targetPath))
     }
 
     // MARK: - Uninstall
@@ -193,7 +193,7 @@ final class PackageInstaller {
 
     // MARK: - Code signing
 
-    private func codeSignDynamicLibraries(in directory: URL) throws {
+    private func codeSignDynamicLibraries(in directory: URL) async throws {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey]) else {
             return
@@ -202,7 +202,7 @@ final class PackageInstaller {
         for case let fileURL as URL in enumerator {
             let ext = fileURL.pathExtension
             if ext == "so" || ext == "dylib" {
-                let result = Self.runProcess("/usr/bin/codesign",
+                let result = await Self.runProcess("/usr/bin/codesign",
                     arguments: ["--force", "--sign", "-", fileURL.path])
                 if result.exitCode != 0 {
                     log.warning("Code-sign failed for \(fileURL.lastPathComponent, privacy: .public): \(result.output ?? "", privacy: .public)")
@@ -222,23 +222,45 @@ final class PackageInstaller {
 
     // MARK: - Process execution
 
-    private static func runProcess(_ path: String, arguments: [String]) -> (exitCode: Int32, output: String?) {
+    /// Synchronous variant for use during init (before async context is available).
+    private static func runProcessSync(_ path: String, arguments: [String]) -> (exitCode: Int32, output: String?) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments
-
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
-
         do {
             try process.run()
             process.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8)
-            return (process.terminationStatus, output)
+            return (process.terminationStatus, String(data: data, encoding: .utf8))
         } catch {
             return (-1, error.localizedDescription)
+        }
+    }
+
+    private static func runProcess(_ path: String, arguments: [String]) async -> (exitCode: Int32, output: String?) {
+        await withCheckedContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = arguments
+
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+
+            process.terminationHandler = { _ in
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8)
+                continuation.resume(returning: (process.terminationStatus, output))
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: (-1, error.localizedDescription))
+            }
         }
     }
 
