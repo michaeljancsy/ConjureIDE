@@ -164,10 +164,10 @@ class TerminalAppServer {
                 switch state {
                 case .running:
                     self.claudeState = "Running"
-                    self.wsServer?.broadcastText("\u{1b}[32m● Claude Code connected\u{1b}[0m\r\n")
+                    self.wsServer?.broadcastText("\u{1b}[32m● Terminal ready\u{1b}[0m\r\n")
                 case .exited(let code):
                     self.claudeState = "Exited (code \(code))"
-                    self.wsServer?.broadcastText("\r\n\u{1b}[33m● Claude Code exited (code \(code)).\u{1b}[0m\r\n")
+                    self.wsServer?.broadcastText("\r\n\u{1b}[33m● Terminal session ended (code \(code)).\u{1b}[0m\r\n")
                 case .error(let msg):
                     self.claudeState = "Error: \(msg)"
                     self.wsServer?.broadcastText("\r\n\u{1b}[31m● Error: \(msg)\u{1b}[0m\r\n")
@@ -180,12 +180,15 @@ class TerminalAppServer {
         ws.onClientCountChange = { [weak p] count in
             guard let p else { return }
             if count > 0 {
-                if case .idle = p.state {
+                switch p.state {
+                case .idle, .exited(_):
                     p.start()
-                } else if case .running = p.state {
+                case .running:
                     // New client connected to an already-running PTY — send SIGWINCH
-                    // to make Claude Code redraw its screen for the fresh xterm.js
+                    // to redraw the screen for the fresh xterm.js
                     p.sendSIGWINCH()
+                case .error:
+                    break
                 }
             }
         }
@@ -269,7 +272,7 @@ struct TerminalStatusView: View {
                     Circle()
                         .fill(server.claudeState == "Running" ? .green : .orange)
                         .frame(width: 8, height: 8)
-                    Text("Claude Code: \(server.claudeState)")
+                    Text("Terminal: \(server.claudeState)")
                         .font(.caption)
                 }
             }

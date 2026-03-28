@@ -2,8 +2,9 @@
 //  PTYManager.swift
 //  ConjureDSP
 //
-//  Manages a pseudo-terminal (pty) running Claude Code CLI.
-//  Handles process lifecycle, I/O, and environment configuration.
+//  Manages a pseudo-terminal (pty) running the user's shell.
+//  Auto-launches Claude Code CLI on startup; the shell remains
+//  usable after Claude exits.
 //
 
 import Foundation
@@ -11,7 +12,7 @@ import os.log
 
 private let ptyLog = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "PTYManager")
 
-/// Manages a Claude Code CLI process running in a pseudo-terminal.
+/// Manages a pseudo-terminal running the user's shell, with optional auto-launch of Claude Code.
 final class PTYManager {
 
     enum State {
@@ -41,6 +42,7 @@ final class PTYManager {
 
     private var masterFD: Int32 = -1
     private var childPID: pid_t = 0
+    private var sessionGeneration: UInt64 = 0  // distinguishes fd reuse across sessions
     private var readSource: DispatchSourceRead?
     private var waitSource: DispatchSourceProcess?
 
@@ -50,21 +52,28 @@ final class PTYManager {
 
     // MARK: - Lifecycle
 
-    /// Start Claude Code in a pty.
+    /// Start the user's shell in a pty, then auto-launch Claude Code.
     func start() {
-        guard case .idle = state else {
+        switch state {
+        case .idle, .exited(_):
+            break  // OK to start
+        case .running, .error:
             ptyLog.warning("PTY already running or in error state")
             return
         }
 
-        // Find claude CLI
-        guard let claudePath = findClaudeCLI() else {
-            let errorMsg = "Claude Code CLI not found. Install it from https://claude.ai/download"
-            state = .error(errorMsg)
-            onStateChange?(.error(errorMsg))
-            ptyLog.error("\(errorMsg, privacy: .public)")
-            return
+        // Clean up stale dispatch sources from a previous session (e.g. restarting
+        // from .exited state). Close the old fd eagerly BEFORE cancelling the source,
+        // since the cancel handler runs async and would race with the new session's fd.
+        if masterFD >= 0 {
+            close(masterFD)
+            masterFD = -1
         }
+        readSource?.cancel()
+        readSource = nil
+        waitSource?.cancel()
+        waitSource = nil
+        sessionGeneration &+= 1
 
         // Write MCP config and context file BEFORE fork — Foundation APIs are not fork-safe
         if let port = mcpServerPort {
@@ -72,16 +81,18 @@ final class PTYManager {
         }
         writeContextFile()
 
-        // Prepare C strings before fork (avoid Swift allocations in child)
+        // Find claude CLI for auto-launch (non-fatal if missing — shell still starts)
+        let claudePath = findClaudeCLI()
+
+        // Determine user's shell
         let env = buildEnvironment()
-        var args = [claudePath, "--dangerously-skip-permissions"]
-        if let contextPath = contextFilePath {
-            args += ["--append-system-prompt-file", contextPath]
-        }
-        if let mcpPath = mcpConfigPath {
-            args += ["--mcp-config", mcpPath]
-        }
-        let cPath = strdup(claudePath)!
+        let shellPath = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+
+        // Login shell: argv[0] prefixed with "-" tells the shell to source login profiles
+        let shellName = "-" + (shellPath as NSString).lastPathComponent
+        let args = [shellName]
+
+        let cPath = strdup(shellPath)!
         var cArgs: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) }
         cArgs.append(nil)
         var cEnv: [UnsafeMutablePointer<CChar>?] = env.map { strdup($0) }
@@ -97,7 +108,6 @@ final class PTYManager {
             state = .error(errorMsg)
             onStateChange?(.error(errorMsg))
             ptyLog.error("\(errorMsg, privacy: .public)")
-            // Clean up strdup'd memory
             free(cPath)
             cArgs.forEach { if let p = $0 { free(p) } }
             cEnv.forEach { if let p = $0 { free(p) } }
@@ -116,25 +126,32 @@ final class PTYManager {
         cArgs.forEach { if let p = $0 { free(p) } }
         cEnv.forEach { if let p = $0 { free(p) } }
 
-        // Parent process
         childPID = pid
         state = .running
         onStateChange?(.running)
-        ptyLog.info("Started Claude Code (PID \(pid)) on pty fd \(self.masterFD)")
+        ptyLog.info("Started shell (PID \(pid)) on pty fd \(self.masterFD)")
 
         // Set non-blocking on master fd
         let flags = fcntl(masterFD, F_GETFL)
         fcntl(masterFD, F_SETFL, flags | O_NONBLOCK)
 
-        // Read output from pty
-        let source = DispatchSource.makeReadSource(fileDescriptor: masterFD, queue: .global(qos: .userInteractive))
+        // Read output from pty — capture generation to detect fd reuse across sessions
+        let fd = masterFD
+        let gen = sessionGeneration
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global(qos: .userInteractive))
         source.setEventHandler { [weak self] in
             self?.readFromPTY()
         }
         source.setCancelHandler { [weak self] in
-            if let fd = self?.masterFD, fd >= 0 {
+            // Close if self is deallocated (deinit path) or this is still the active session.
+            // Using generation counter instead of fd comparison to handle fd number reuse.
+            guard let self else {
                 close(fd)
-                self?.masterFD = -1
+                return
+            }
+            if self.sessionGeneration == gen {
+                close(fd)
+                self.masterFD = -1
             }
         }
         source.resume()
@@ -147,6 +164,25 @@ final class PTYManager {
         }
         waitSrc.resume()
         waitSource = waitSrc
+
+        // Auto-launch Claude Code after shell initializes.
+        // Define a shell alias so re-typing `claude` after exit reconnects to MCP.
+        if let claudePath {
+            var fullCmd = "\(shellQuote(claudePath)) --dangerously-skip-permissions"
+            if let contextPath = contextFilePath {
+                fullCmd += " --append-system-prompt-file \(shellQuote(contextPath))"
+            }
+            if let mcpPath = mcpConfigPath {
+                fullCmd += " --mcp-config \(shellQuote(mcpPath))"
+            }
+            let aliasCmd = "alias claude=\(shellQuote(fullCmd))\n"
+            let launchCmd = aliasCmd + "claude\n"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.write(launchCmd)
+            }
+        } else {
+            ptyLog.warning("Claude Code CLI not found — shell started without auto-launch")
+        }
     }
 
     /// Stop the Claude Code process.
@@ -247,7 +283,7 @@ final class PTYManager {
         // WIFEXITED/WEXITSTATUS are C macros not available in Swift — inline the logic
         let normalExit = (status & 0x7f) == 0
         let exitCode: Int32 = normalExit ? ((status >> 8) & 0xff) : -1
-        ptyLog.info("Claude Code exited with code \(exitCode)")
+        ptyLog.info("Shell exited with code \(exitCode)")
         childPID = 0
         state = .exited(exitCode)
         onStateChange?(.exited(exitCode))
@@ -490,6 +526,11 @@ final class PTYManager {
     is still loaded — always call `get_script` to check before deciding whether to modify or replace. \
     Do not rely on conversation memory for what script is currently active.
     """
+
+    /// Shell-escape a path by wrapping in single quotes (handles spaces, parens, etc.).
+    private func shellQuote(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
 
     /// Write a temporary MCP config file for Claude Code to discover the local MCP server.
     private func writeMCPConfig(port: UInt16) {
