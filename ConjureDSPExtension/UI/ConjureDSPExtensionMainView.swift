@@ -34,6 +34,7 @@ struct ConjureDSPExtensionMainView: View {
     var onDeletePreset: () -> Void
     var onNew: (ScriptLanguage) -> ScriptSaveResult
     var onExport: (String) async -> ExportResult
+    var onResize: ((CGSize) -> Void)?
     var defaultBenchmark: (processTimeMs: Double, budgetMs: Double)?
 
     @State private var scriptSource: String = ""
@@ -346,6 +347,15 @@ struct ConjureDSPExtensionMainView: View {
                 .accessibilityIdentifier("demoExpiredOverlay")
             }
             } // ZStack
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if let onResize {
+                ResizeHandle(
+                    minSize: NSSize(width: 400, height: 300),
+                    maxSize: NSSize(width: 2560, height: 1600),
+                    onResize: onResize
+                )
+            }
         }
         .alert("Export", isPresented: $showExportAlert) {
             Button("OK", role: .cancel) {}
