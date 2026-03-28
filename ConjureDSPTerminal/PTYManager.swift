@@ -165,17 +165,18 @@ final class PTYManager {
         waitSrc.resume()
         waitSource = waitSrc
 
-        // Auto-launch Claude Code after shell initializes
+        // Auto-launch Claude Code after shell initializes.
+        // Define a shell alias so re-typing `claude` after exit reconnects to MCP.
         if let claudePath {
-            var cmd = "\(shellQuote(claudePath)) --dangerously-skip-permissions"
+            var fullCmd = "\(shellQuote(claudePath)) --dangerously-skip-permissions"
             if let contextPath = contextFilePath {
-                cmd += " --append-system-prompt-file \(shellQuote(contextPath))"
+                fullCmd += " --append-system-prompt-file \(shellQuote(contextPath))"
             }
             if let mcpPath = mcpConfigPath {
-                cmd += " --mcp-config \(shellQuote(mcpPath))"
+                fullCmd += " --mcp-config \(shellQuote(mcpPath))"
             }
-            cmd += "\n"
-            let launchCmd = cmd
+            let aliasCmd = "alias claude=\(shellQuote(fullCmd))\n"
+            let launchCmd = aliasCmd + "claude\n"
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 self?.write(launchCmd)
             }
