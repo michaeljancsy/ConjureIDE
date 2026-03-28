@@ -690,6 +690,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Declared by scripts via `LATENCY = <samples>` (Python) or `latency!(<samples>)` (Rust).
 	public override var latency: TimeInterval {
 		let sr = _outputBusses[0].format.sampleRate
+		guard sr > 0 else { return 0 }
 		return TimeInterval(_latencySamples) / sr
 	}
 

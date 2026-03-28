@@ -148,7 +148,7 @@ impl WasmBackend {
                 let _ = store.set_fuel(COMPILED_FUEL);
                 f.call(&mut store, ()).ok()
             })
-            .map(|v| v as u32)
+            .map(|v| if v < 0 { 0 } else { v as u32 })
             .unwrap_or(0);
 
         // Determine how many params to write: metadata count, or 8 for backward compat

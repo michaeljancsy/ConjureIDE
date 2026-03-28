@@ -379,6 +379,7 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     public override var latency: TimeInterval {
         let samples = config?.latencySamples ?? dsp_kernel_latency_samples(kernel)
         let sr = _outputBusses[0].format.sampleRate
+        guard sr > 0 else { return 0 }
         return TimeInterval(samples) / sr
     }
 
