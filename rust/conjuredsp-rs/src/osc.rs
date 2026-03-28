@@ -116,3 +116,150 @@ pub fn saw(phase: f64) -> f64 {
 pub fn advance_phase(phase: f64, freq: f64, sample_rate: f64) -> f64 {
     (phase + freq / sample_rate) % 1.0
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+
+    fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
+        (a - b).abs() < tol
+    }
+
+    // sine tests
+    #[test]
+    fn test_sine_0() {
+        assert!(approx_eq(sine(0.0), 0.0, 1e-10));
+    }
+
+    #[test]
+    fn test_sine_quarter() {
+        assert!(approx_eq(sine(0.25), 1.0, 1e-10));
+    }
+
+    #[test]
+    fn test_sine_half() {
+        assert!(approx_eq(sine(0.5), 0.0, 1e-10));
+    }
+
+    #[test]
+    fn test_sine_three_quarter() {
+        assert!(approx_eq(sine(0.75), -1.0, 1e-10));
+    }
+
+    // triangle tests
+    #[test]
+    fn test_triangle_0() {
+        // 4.0 * |0.0 - 0.5| - 1.0 = 4.0 * 0.5 - 1.0 = 1.0
+        assert!(approx_eq(triangle(0.0), 1.0, 1e-10));
+    }
+
+    #[test]
+    fn test_triangle_quarter() {
+        // 4.0 * |0.25 - 0.5| - 1.0 = 4.0 * 0.25 - 1.0 = 0.0
+        assert!(approx_eq(triangle(0.25), 0.0, 1e-10));
+    }
+
+    #[test]
+    fn test_triangle_half() {
+        // 4.0 * |0.5 - 0.5| - 1.0 = -1.0
+        assert!(approx_eq(triangle(0.5), -1.0, 1e-10));
+    }
+
+    // saw tests
+    #[test]
+    fn test_saw_0() {
+        assert!(approx_eq(saw(0.0), -1.0, 1e-10));
+    }
+
+    #[test]
+    fn test_saw_half() {
+        assert!(approx_eq(saw(0.5), 0.0, 1e-10));
+    }
+
+    #[test]
+    fn test_saw_near_1() {
+        assert!(approx_eq(saw(0.999), 0.998, 1e-4));
+    }
+
+    // Lfo tests
+    #[test]
+    fn test_lfo_defaults() {
+        let lfo = Lfo::new();
+        assert_eq!(lfo.value, 0.0);
+        assert_eq!(lfo.freq, 1.0);
+    }
+
+    #[test]
+    fn test_lfo_phase_wraps_after_one_cycle() {
+        let mut lfo = Lfo::new();
+        lfo.init(44100.0, 1.0);
+        for _ in 0..44100 {
+            lfo.tick();
+        }
+        // After exactly one cycle at 1 Hz, phase should wrap back near 0
+        // We can't read phase directly, but the value at phase≈0 for sine should be ≈0
+        let val = lfo.tick();
+        assert!(
+            val.abs() < 0.001,
+            "after full cycle, sine LFO should be near 0, got {}",
+            val
+        );
+    }
+
+    #[test]
+    fn test_lfo_reset() {
+        let mut lfo = Lfo::new();
+        lfo.init(44100.0, 1.0);
+        for _ in 0..1000 {
+            lfo.tick();
+        }
+        lfo.reset();
+        assert_eq!(lfo.value, 0.0);
+        // First tick after reset at phase=0 for sine should give sin(0) = 0
+        let val = lfo.tick();
+        assert!(approx_eq(val, 0.0, 1e-10));
+    }
+
+    #[test]
+    fn test_lfo_set_freq() {
+        let mut lfo = Lfo::new();
+        lfo.init(44100.0, 1.0);
+        lfo.set_freq(10.0);
+        // After 4410 ticks at 10 Hz / 44100 SR, we complete one cycle
+        for _ in 0..4410 {
+            lfo.tick();
+        }
+        let val = lfo.tick();
+        assert!(
+            val.abs() < 0.01,
+            "after full cycle at 10Hz, sine should be near 0, got {}",
+            val
+        );
+    }
+
+    #[test]
+    fn test_lfo_set_waveform() {
+        let mut lfo = Lfo::new();
+        lfo.init(44100.0, 1.0);
+        lfo.set_waveform(Waveform::Square);
+        // First tick at phase=0 for square (phase < 0.5) should be 1.0
+        let val = lfo.tick();
+        assert!(approx_eq(val, 1.0, 1e-10));
+    }
+
+    // advance_phase tests
+    #[test]
+    fn test_advance_phase_basic() {
+        let phase = advance_phase(0.0, 440.0, 44100.0);
+        assert!(approx_eq(phase, 440.0 / 44100.0, 1e-10));
+    }
+
+    #[test]
+    fn test_advance_phase_wraps() {
+        let phase = advance_phase(0.999, 440.0, 44100.0);
+        // 0.999 + 440/44100 ≈ 1.0089... should wrap to ≈ 0.0089
+        assert!(phase < 1.0, "phase should wrap at 1.0, got {}", phase);
+        assert!(phase >= 0.0);
+    }
+}

@@ -70,3 +70,107 @@ impl ParamMetadata {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn linear_param(min: f32, max: f32) -> ParamMetadata {
+        ParamMetadata {
+            name: "Test".into(),
+            key: "test".into(),
+            min,
+            max,
+            default: min,
+            unit: "".into(),
+            curve: "linear".into(),
+            style: "slider".into(),
+            options: None,
+        }
+    }
+
+    fn log_param(min: f32, max: f32) -> ParamMetadata {
+        ParamMetadata {
+            name: "Freq".into(),
+            key: "freq".into(),
+            min,
+            max,
+            default: min,
+            unit: "Hz".into(),
+            curve: "log".into(),
+            style: "slider".into(),
+            options: None,
+        }
+    }
+
+    #[test]
+    fn denormalize_linear_endpoints() {
+        let p = linear_param(10.0, 100.0);
+        assert!((p.denormalize(0.0) - 10.0).abs() < 1e-5);
+        assert!((p.denormalize(1.0) - 100.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn denormalize_linear_midpoint() {
+        let p = linear_param(0.0, 200.0);
+        assert!((p.denormalize(0.5) - 100.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn denormalize_log_endpoints() {
+        let p = log_param(20.0, 20000.0);
+        assert!((p.denormalize(0.0) - 20.0).abs() < 1e-3);
+        assert!((p.denormalize(1.0) - 20000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn denormalize_log_midpoint_is_geometric_mean() {
+        let p = log_param(20.0, 20000.0);
+        let mid = p.denormalize(0.5);
+        let expected = (20.0_f32 * 20000.0).sqrt(); // geometric mean ≈ 632.45
+        assert!((mid - expected).abs() < 1.0, "mid={mid}, expected={expected}");
+    }
+
+    #[test]
+    fn normalize_linear_roundtrip() {
+        let p = linear_param(-60.0, 12.0);
+        for &n in &[0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+            let actual = p.denormalize(n);
+            let back = p.normalize(actual);
+            assert!((back - n).abs() < 1e-5, "n={n}, actual={actual}, back={back}");
+        }
+    }
+
+    #[test]
+    fn normalize_log_roundtrip() {
+        let p = log_param(20.0, 20000.0);
+        for &n in &[0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+            let actual = p.denormalize(n);
+            let back = p.normalize(actual);
+            assert!((back - n).abs() < 1e-4, "n={n}, actual={actual}, back={back}");
+        }
+    }
+
+    #[test]
+    fn normalize_linear_zero_range_returns_zero() {
+        let p = linear_param(5.0, 5.0);
+        assert_eq!(p.normalize(5.0), 0.0);
+    }
+
+    #[test]
+    fn denormalize_clamps_input() {
+        let p = linear_param(0.0, 100.0);
+        assert!((p.denormalize(-0.5) - 0.0).abs() < 1e-5);
+        assert!((p.denormalize(1.5) - 100.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn log_with_negative_min_falls_back_to_linear() {
+        let mut p = log_param(20.0, 20000.0);
+        p.min = -10.0;
+        // Should use linear since min <= 0
+        let result = p.denormalize(0.5);
+        let expected = -10.0 + 0.5 * (20000.0 - (-10.0));
+        assert!((result - expected).abs() < 1e-3);
+    }
+}

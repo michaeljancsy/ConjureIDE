@@ -82,3 +82,104 @@ impl<const SIZE: usize> DelayLine<SIZE> {
         self.write_pos = 0;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+
+    #[test]
+    fn test_new_reads_zeros() {
+        let dl: DelayLine<64> = DelayLine::new();
+        for i in 1..=64 {
+            assert_eq!(dl.tap(i), 0.0);
+        }
+    }
+
+    #[test]
+    fn test_write_then_tap1() {
+        let mut dl: DelayLine<64> = DelayLine::new();
+        dl.write(0.42);
+        assert_eq!(dl.tap(1), 0.42);
+    }
+
+    #[test]
+    fn test_write_n_then_tap_n_wraps() {
+        let mut dl: DelayLine<8> = DelayLine::new();
+        // Write 8 samples (fills entire buffer), then write 3 more to wrap
+        for i in 0..11 {
+            dl.write(i as f32);
+        }
+        // The last sample written was 10.0
+        assert_eq!(dl.tap(1), 10.0);
+        // 8 samples ago was sample 3.0
+        assert_eq!(dl.tap(8), 3.0);
+    }
+
+    #[test]
+    fn test_read_integer_delay_matches_tap() {
+        let mut dl: DelayLine<64> = DelayLine::new();
+        for i in 0..20 {
+            dl.write(i as f32 * 0.1);
+        }
+        for delay in 1..=20 {
+            let tap_val = dl.tap(delay);
+            let read_val = dl.read(delay as f64);
+            assert!(
+                (tap_val - read_val).abs() < 1e-6,
+                "delay={}: tap={} read={}",
+                delay,
+                tap_val,
+                read_val
+            );
+        }
+    }
+
+    #[test]
+    fn test_read_fractional_delay_interpolates() {
+        let mut dl: DelayLine<64> = DelayLine::new();
+        // Write a known sequence: 0, 1, 2, 3, ...
+        for i in 0..10 {
+            dl.write(i as f32);
+        }
+        // tap(1) = 9.0, tap(2) = 8.0
+        // read(1.5) should interpolate between them: 8.5
+        let val = dl.read(1.5);
+        assert!(
+            (val - 8.5).abs() < 1e-4,
+            "fractional read expected 8.5, got {}",
+            val
+        );
+    }
+
+    #[test]
+    fn test_read_cubic_integer_delay_matches_tap() {
+        let mut dl: DelayLine<64> = DelayLine::new();
+        for i in 0..20 {
+            dl.write(i as f32 * 0.1);
+        }
+        for delay in 2..=18 {
+            let tap_val = dl.tap(delay);
+            let cubic_val = dl.read_cubic(delay as f64);
+            assert!(
+                (tap_val - cubic_val).abs() < 1e-4,
+                "delay={}: tap={} cubic={}",
+                delay,
+                tap_val,
+                cubic_val
+            );
+        }
+    }
+
+    #[test]
+    fn test_clear_zeros_everything() {
+        let mut dl: DelayLine<16> = DelayLine::new();
+        for i in 0..16 {
+            dl.write((i + 1) as f32);
+        }
+        dl.clear();
+        for i in 1..=16 {
+            assert_eq!(dl.tap(i), 0.0, "tap({}) should be 0 after clear", i);
+        }
+    }
+}

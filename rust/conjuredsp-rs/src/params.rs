@@ -139,3 +139,97 @@ pub const fn param(min: f64, max: f64) -> ParamSpec {
         curve_str: "linear",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+
+    fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
+        (a - b).abs() < tol
+    }
+
+    #[test]
+    fn test_freq_defaults() {
+        let p = freq();
+        assert!(approx_eq(p.min_val, 20.0, 1e-10));
+        assert!(approx_eq(p.max_val, 20000.0, 1e-10));
+        assert_eq!(p.unit_str, "Hz");
+        assert!(approx_eq(p.default_val, 1000.0, 1e-10));
+        assert_eq!(p.curve_str, "log");
+    }
+
+    #[test]
+    fn test_db_defaults() {
+        let p = db();
+        assert!(approx_eq(p.min_val, -60.0, 1e-10));
+        assert!(approx_eq(p.max_val, 12.0, 1e-10));
+        assert_eq!(p.unit_str, "dB");
+        assert!(approx_eq(p.default_val, 0.0, 1e-10));
+        assert_eq!(p.curve_str, "linear");
+    }
+
+    #[test]
+    fn test_time_ms_defaults() {
+        let p = time_ms();
+        assert!(approx_eq(p.min_val, 0.1, 1e-10));
+        assert!(approx_eq(p.max_val, 1000.0, 1e-10));
+        assert_eq!(p.unit_str, "ms");
+        assert!(approx_eq(p.default_val, 100.0, 1e-10));
+        assert_eq!(p.curve_str, "log");
+    }
+
+    #[test]
+    fn test_mix_defaults() {
+        let p = mix();
+        assert!(approx_eq(p.min_val, 0.0, 1e-10));
+        assert!(approx_eq(p.max_val, 1.0, 1e-10));
+        assert_eq!(p.unit_str, "");
+        assert!(approx_eq(p.default_val, 0.5, 1e-10));
+    }
+
+    #[test]
+    fn test_pct_defaults() {
+        let p = pct();
+        assert!(approx_eq(p.min_val, 0.0, 1e-10));
+        assert!(approx_eq(p.max_val, 100.0, 1e-10));
+        assert_eq!(p.unit_str, "%");
+        assert!(approx_eq(p.default_val, 50.0, 1e-10));
+    }
+
+    #[test]
+    fn test_toggle_defaults() {
+        let p = toggle();
+        assert!(approx_eq(p.min_val, 0.0, 1e-10));
+        assert!(approx_eq(p.max_val, 1.0, 1e-10));
+        assert!(approx_eq(p.default_val, 0.0, 1e-10));
+    }
+
+    #[test]
+    fn test_ratio_defaults() {
+        let p = ratio();
+        assert!(approx_eq(p.min_val, 1.0, 1e-10));
+        assert!(approx_eq(p.max_val, 20.0, 1e-10));
+        assert_eq!(p.unit_str, ":1");
+        assert!(approx_eq(p.default_val, 4.0, 1e-10));
+    }
+
+    #[test]
+    fn test_param_custom() {
+        let p = param(5.0, 10.0);
+        assert!(approx_eq(p.min_val, 5.0, 1e-10));
+        assert!(approx_eq(p.max_val, 10.0, 1e-10));
+        assert!(approx_eq(p.default_val, 5.0, 1e-10));
+        assert_eq!(p.unit_str, "");
+    }
+
+    #[test]
+    fn test_chaining() {
+        let p = freq().min(100.0).max(5000.0).default(440.0);
+        assert!(approx_eq(p.min_val, 100.0, 1e-10));
+        assert!(approx_eq(p.max_val, 5000.0, 1e-10));
+        assert!(approx_eq(p.default_val, 440.0, 1e-10));
+        assert_eq!(p.unit_str, "Hz");
+        assert_eq!(p.curve_str, "log");
+    }
+}
