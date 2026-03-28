@@ -457,6 +457,12 @@ final class PTYManager {
     `lerp`, `crossfade`. `smooth_coeff(time_ms, sr)` returns alpha for: \
     `state = alpha * state + (1-alpha) * target`.
 
+    **Internal precision** — All conjuredsp library types (`Biquad`, `BiquadCoeffs`, `DelayLine`, \
+    `Lfo`, and utility functions) use `f64` internally for precision, even though WASM I/O buffers \
+    are `f32`. Cast to/from `f64` when interfacing with library types (e.g. \
+    `biquad.process_sample(sample as f64) as f32`). In Python, this is handled automatically since \
+    Python floats are 64-bit.
+
     ## Conventions
 
     - No file I/O or network calls in process() — runs on the real-time audio thread
