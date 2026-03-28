@@ -101,7 +101,7 @@ struct SpectrogramView: View {
                 if !newValue {
                     // Clear the buffer on unpause so the spectrogram starts fresh
                     if width > 0 && height > 0 {
-                        bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height)
+                        bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height, fillColor: silenceFillColor)
                     }
                 }
             }
@@ -109,12 +109,12 @@ struct SpectrogramView: View {
                 let w = Int(newSize.width)
                 let h = Int(newSize.height)
                 if w > 0 && h > 0 {
-                    bitmapBuffer = SpectrogramBitmapBuffer(width: w, height: h)
+                    bitmapBuffer = SpectrogramBitmapBuffer(width: w, height: h, fillColor: silenceFillColor)
                 }
             }
             .onAppear {
                 if width > 0 && height > 0 {
-                    bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height)
+                    bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height, fillColor: silenceFillColor)
                 }
             }
         }
@@ -142,9 +142,19 @@ struct SpectrogramView: View {
         }
     }
 
+    private var silenceFillColor: SIMD4<UInt8> {
+        if channel == .normalizedDifference {
+            return SpectrogramColorMap.divergingForDB(0, range: 1.0)
+        } else if isDivergingMap {
+            return SpectrogramColorMap.divergingForDB(0, range: 40.0)
+        } else {
+            return SIMD4<UInt8>(0, 0, 0, 255)
+        }
+    }
+
     private func ensureBuffer(width: Int, height: Int) {
         if bitmapBuffer == nil && width > 0 && height > 0 {
-            bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height)
+            bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height, fillColor: silenceFillColor)
         }
     }
 
@@ -224,7 +234,7 @@ final class SpectrogramBitmapBuffer {
     private let baseAddress: UnsafeMutablePointer<UInt8>
     private let bytesPerRow: Int
 
-    init?(width: Int, height: Int) {
+    init?(width: Int, height: Int, fillColor: SIMD4<UInt8> = SIMD4<UInt8>(0, 0, 0, 255)) {
         guard width > 0 && height > 0 else { return nil }
         self.width = width
         self.height = height
@@ -247,13 +257,13 @@ final class SpectrogramBitmapBuffer {
         self.bytesPerRow = ctx.bytesPerRow
         self.baseAddress = data.assumingMemoryBound(to: UInt8.self)
 
-        // Fill with opaque black
+        // Fill with the specified color
         let totalBytes = bytesPerRow * height
         for i in stride(from: 0, to: totalBytes, by: 4) {
-            baseAddress[i] = 0       // R
-            baseAddress[i + 1] = 0   // G
-            baseAddress[i + 2] = 0   // B
-            baseAddress[i + 3] = 255 // A
+            baseAddress[i] = fillColor.x     // R
+            baseAddress[i + 1] = fillColor.y // G
+            baseAddress[i + 2] = fillColor.z // B
+            baseAddress[i + 3] = fillColor.w // A
         }
     }
 
