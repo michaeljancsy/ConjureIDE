@@ -80,6 +80,9 @@ pub struct DSPKernel {
     /// Set after each successful script/WASM load that declares a `PARAMS` dict.
     /// None means "no rich metadata" (backward-compatible mode).
     param_metadata_json: Option<std::ffi::CString>,
+    /// Script-declared algorithmic latency in samples. Zero = no latency.
+    /// Read by Swift via FFI to report `AUAudioUnit.latency` for DAW compensation.
+    latency_samples: u32,
     /// Host DAW transport state. Updated each render callback via `set_transport()`.
     transport: TransportState,
     /// Real-time profiler: most recent backend.process() duration in microseconds.
@@ -183,6 +186,7 @@ impl DSPKernel {
             demo_limit_samples: AtomicU64::new((DEMO_LIMIT_SECONDS * 44100.0) as u64),
             param_names_json: None,
             param_metadata_json: None,
+            latency_samples: 0,
             transport: TransportState::default(),
             profiler_current_us: AtomicU32::new(0),
             profiler_avg_us: AtomicU32::new(0),
@@ -226,12 +230,14 @@ impl DSPKernel {
                 }
                 let names = pb.param_names();
                 let metadata = pb.param_metadata().map(|m| m.to_vec());
+                let latency = pb.latency_samples();
                 // Lock to swap — render thread will passthrough during this brief window
                 if let Ok(mut guard) = self.backend.lock() {
                     *guard = Some(Box::new(pb));
                 }
                 self.update_param_names_cache(names);
                 self.update_param_metadata_cache(metadata);
+                self.latency_samples = latency;
                 self.reset_profiler();
                 self.memory_baseline_bytes.store(process_resident_bytes(), Ordering::Relaxed);
                 self.wasm_memory_bytes.store(0, Ordering::Relaxed);
@@ -256,12 +262,14 @@ impl DSPKernel {
                 }
                 let names = wb.param_names();
                 let metadata = wb.param_metadata().map(|m| m.to_vec());
+                let latency = wb.latency_samples();
                 // Lock to swap — render thread will passthrough during this brief window
                 if let Ok(mut guard) = self.backend.lock() {
                     *guard = Some(Box::new(wb));
                 }
                 self.update_param_names_cache(names);
                 self.update_param_metadata_cache(metadata);
+                self.latency_samples = latency;
                 self.reset_profiler();
                 self.memory_baseline_bytes.store(process_resident_bytes(), Ordering::Relaxed);
                 // Store initial WASM memory size
@@ -556,6 +564,11 @@ impl DSPKernel {
             Some(cstr) => cstr.as_ptr(),
             None => std::ptr::null(),
         }
+    }
+
+    /// Returns script-declared algorithmic latency in samples (0 = no latency).
+    pub fn latency_samples(&self) -> u32 {
+        self.latency_samples
     }
 
     /// Capture any backend error into `last_error` so it outlives the mutex guard.

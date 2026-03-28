@@ -54,6 +54,13 @@ pub trait Backend {
         None
     }
 
+    /// Returns script-declared algorithmic latency in samples.
+    /// Zero means no latency (default for backward compatibility).
+    /// Used by the AU host to report `AUAudioUnit.latency` for DAW compensation.
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+
     /// Returns the backend's current memory usage in bytes.
     /// WASM returns linear memory size; Python returns 0 (use process RSS instead).
     fn memory_bytes(&self) -> u64 {

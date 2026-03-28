@@ -60,7 +60,8 @@ final class ExportManager {
         outputDirectory: URL,
         skipSigning: Bool = false,
         paramNames: [Int: String]? = nil,
-        paramMetadata: [ConjureDSPExtensionAudioUnit.ParamMetadata]? = nil
+        paramMetadata: [ConjureDSPExtensionAudioUnit.ParamMetadata]? = nil,
+        latencySamples: UInt32 = 0
     ) throws -> URL {
         guard FileManager.default.fileExists(atPath: templateURL.path) else {
             throw ExportError.templateNotFound
@@ -98,7 +99,7 @@ final class ExportManager {
         }
 
         // 4. Write runtime-config.json
-        let config = makeRuntimeConfig(name: name, language: language, paramNames: paramNames, paramMetadata: paramMetadata)
+        let config = makeRuntimeConfig(name: name, language: language, paramNames: paramNames, paramMetadata: paramMetadata, latencySamples: latencySamples)
         try config.write(to: appexResourcesURL.appendingPathComponent("runtime-config.json"))
 
         // 5. Patch host app Info.plist
@@ -188,7 +189,8 @@ final class ExportManager {
         name: String,
         language: ScriptLanguage,
         paramNames: [Int: String]?,
-        paramMetadata: [ConjureDSPExtensionAudioUnit.ParamMetadata]? = nil
+        paramMetadata: [ConjureDSPExtensionAudioUnit.ParamMetadata]? = nil,
+        latencySamples: UInt32 = 0
     ) -> Data {
         var config: [String: Any] = [
             "version": 1,
@@ -197,6 +199,10 @@ final class ExportManager {
             "exportDate": ISO8601DateFormatter().string(from: Date()),
             "paramCount": 16,
         ]
+
+        if latencySamples > 0 {
+            config["latencySamples"] = latencySamples
+        }
 
         // Include rich metadata if available (v2 format)
         if let metadata = paramMetadata, !metadata.isEmpty {

@@ -24,6 +24,8 @@ pub struct PythonBackend {
     /// Cached arity of the Python `process()` function.
     /// 6 = with transport dict, 5 = with params, 4 = legacy.
     process_arity: usize,
+    /// Script-declared algorithmic latency in samples (from `LATENCY` constant).
+    latency_samples: u32,
 }
 
 impl PythonBackend {
@@ -42,7 +44,7 @@ impl PythonBackend {
         // AU bundle's Resources/python-dist/, which corrupts the code signature.
         std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
 
-        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, usize), PyErr> =
+        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, usize, u32), PyErr> =
             Python::with_gil(|py| {
                 let code = std::fs::read_to_string(script_path)
                     .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
@@ -75,12 +77,19 @@ impl PythonBackend {
                 let (param_names, param_metadata) =
                     Self::extract_params(py, &module);
 
-                Ok((process_fn.unbind(), param_names, param_metadata, arity))
+                // Extract optional LATENCY constant (algorithmic latency in samples)
+                let latency: u32 = module
+                    .getattr("LATENCY")
+                    .ok()
+                    .and_then(|v| v.extract::<u32>().ok())
+                    .unwrap_or(0);
+
+                Ok((process_fn.unbind(), param_names, param_metadata, arity, latency))
             });
 
         match result {
-            Ok((process_fn, param_names, param_metadata, arity)) => {
-                eprintln!("ConjureDSP-Rust: Python script loaded successfully (arity={})", arity);
+            Ok((process_fn, param_names, param_metadata, arity, latency)) => {
+                eprintln!("ConjureDSP-Rust: Python script loaded successfully (arity={}, latency={})", arity, latency);
                 Ok(Self {
                     py_process_fn: process_fn,
                     py_input_arrays: Vec::new(),
@@ -90,6 +99,7 @@ impl PythonBackend {
                     param_names,
                     param_metadata,
                     process_arity: arity,
+                    latency_samples: latency,
                 })
             }
             Err(e) => {
@@ -391,5 +401,9 @@ impl Backend for PythonBackend {
 
     fn param_metadata(&self) -> Option<&[ParamMetadata]> {
         self.param_metadata.as_deref()
+    }
+
+    fn latency_samples(&self) -> u32 {
+        self.latency_samples
     }
 }

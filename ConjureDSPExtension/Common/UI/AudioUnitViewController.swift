@@ -454,7 +454,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                     outputDirectory: exportDir,
                     skipSigning: true,
                     paramNames: au.currentParamNames,
-                    paramMetadata: au.currentParamMetadata
+                    paramMetadata: au.currentParamMetadata,
+                    latencySamples: au._latencySamples
                 )
                 log.info("Staged preset '\(name, privacy: .public)' to App Group at \(appURL.path, privacy: .public)")
                 Analytics.track(.export, properties: [
