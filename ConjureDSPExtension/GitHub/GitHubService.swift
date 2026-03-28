@@ -59,6 +59,9 @@ final class GitHubService: ObservableObject {
         presetManager.onRepoPresetDeleted = { [weak self] name, language in
             self?.handleRepoPresetDeleted(name: name, language: language)
         }
+        presetManager.onRepoPresetRenamed = { [weak self] oldName, newName, source, language in
+            self?.handleRepoPresetRenamed(oldName: oldName, newName: newName, source: source, language: language)
+        }
     }
 
     private func handleRepoPresetSaved(name: String, source: String, language: ScriptLanguage) {
@@ -82,6 +85,22 @@ final class GitHubService: ObservableObject {
         let subdir = language == .rust ? "rust" : "python"
         personalSync.backgroundDelete(
             filename: "\(subdir)/\(name).\(ext)",
+            owner: personalRepoOwner,
+            repo: personalRepoName,
+            token: token
+        )
+    }
+
+    private func handleRepoPresetRenamed(oldName: String, newName: String, source: String, language: ScriptLanguage) {
+        guard hasPersonalRepo, let token else { return }
+        let ext = language == .rust ? "rs" : "py"
+        let subdir = language == .rust ? "rust" : "python"
+        let metadata = PresetMetadata(name: newName)
+        personalSync.backgroundRename(
+            oldFilename: "\(subdir)/\(oldName).\(ext)",
+            newFilename: "\(subdir)/\(newName).\(ext)",
+            source: source,
+            metadata: metadata,
             owner: personalRepoOwner,
             repo: personalRepoName,
             token: token
