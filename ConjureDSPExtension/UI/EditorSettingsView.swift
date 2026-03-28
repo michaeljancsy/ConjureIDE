@@ -27,6 +27,6 @@ struct EditorSettingsView: View {
             }
             .pickerStyle(.menu)
         }
-        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

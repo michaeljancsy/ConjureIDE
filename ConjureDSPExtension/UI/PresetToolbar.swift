@@ -339,7 +339,7 @@ struct PresetToolbar: View {
             .toolbarTooltip("Settings")
             .accessibilityIdentifier("settingsButton")
             .popover(isPresented: $showingSettings) {
-                VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 16) {
                     SubscriptionSettingsView(subscriptionManager: subscriptionManager)
                     Divider()
                     GitHubSettingsView(
@@ -350,6 +350,8 @@ struct PresetToolbar: View {
                     Divider()
                     EditorSettingsView()
                 }
+                .padding()
+                .frame(width: 360)
             }
         }
         .font(.system(size: 14))
