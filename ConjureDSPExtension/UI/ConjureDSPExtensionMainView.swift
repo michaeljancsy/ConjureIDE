@@ -23,6 +23,7 @@ struct ConjureDSPExtensionMainView: View {
     var scriptSourcePublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.ScriptSourceChange, Never>?
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var captureManager: AudioCaptureManager
+    @ObservedObject var processProfiler: ProcessProfiler
     @ObservedObject var parameterState: ParameterState
     @ObservedObject var licenseManager: LicenseManager
     @ObservedObject var gitHubService: GitHubService
@@ -56,13 +57,26 @@ struct ConjureDSPExtensionMainView: View {
     @State private var spectrogramShowNoteNames: Bool = false
     @Environment(\.colorScheme) private var colorScheme
 
-    /// Color for the benchmark timing based on how close to budget.
-    private var benchmarkColor: Color {
-        guard let benchmark = lastBenchmark else { return .green }
-        let ratio = benchmark.processTimeMs / benchmark.budgetMs
+    /// Color for the timing display based on how close to budget.
+    /// Uses profiler peak when live data is available, otherwise static benchmark.
+    private var timingColor: Color {
+        let ratio: Double
+        if processProfiler.isActive && processProfiler.budgetMs > 0 {
+            ratio = processProfiler.peakMs / processProfiler.budgetMs
+        } else if let benchmark = lastBenchmark, benchmark.budgetMs > 0 {
+            ratio = benchmark.processTimeMs / benchmark.budgetMs
+        } else {
+            return .green
+        }
         if ratio > 1.0 { return .red }
         if ratio > 0.5 { return .orange }
         return .green
+    }
+
+    /// Format milliseconds with frame equivalent, e.g. "0.3ms (13 frames)"
+    private func formatTimeWithFrames(_ ms: Double) -> String {
+        let frames = ms / 1000.0 * processProfiler.sampleRate
+        return String(format: "%.1fms (%d frames)", ms, Int(frames.rounded()))
     }
 
     var body: some View {
@@ -205,9 +219,13 @@ struct ConjureDSPExtensionMainView: View {
                             Image(systemName: "doc.on.doc")
                         }
                         .buttonStyle(.borderless)
+                    } else if processProfiler.isActive {
+                        Text("avg \(formatTimeWithFrames(processProfiler.avgMs)) | peak \(formatTimeWithFrames(processProfiler.peakMs)) | budget \(formatTimeWithFrames(processProfiler.budgetMs))")
+                            .foregroundColor(timingColor)
+                            .accessibilityIdentifier("profilerStatus")
                     } else if let benchmark = lastBenchmark {
                         Text(String(format: "%.1fms / %.1fms budget", benchmark.processTimeMs, benchmark.budgetMs))
-                            .foregroundColor(benchmarkColor)
+                            .foregroundColor(timingColor)
                             .accessibilityIdentifier("successStatus")
                     } else {
                         Text("Ready")

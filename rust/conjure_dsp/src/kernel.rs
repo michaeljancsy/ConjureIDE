@@ -81,6 +81,14 @@ pub struct DSPKernel {
     param_metadata_json: Option<std::ffi::CString>,
     /// Host DAW transport state. Updated each render callback via `set_transport()`.
     transport: TransportState,
+    /// Real-time profiler: most recent backend.process() duration in microseconds.
+    pub(crate) profiler_current_us: AtomicU32,
+    /// Real-time profiler: exponential moving average of process duration in microseconds.
+    /// Updated each callback as: avg = (5*current + 251*prev) / 256 (~0.5s smoothing).
+    pub(crate) profiler_avg_us: AtomicU32,
+    /// Real-time profiler: decaying peak duration in microseconds.
+    /// Each callback: peak = max(current, peak * 1023/1024).
+    pub(crate) profiler_peak_us: AtomicU32,
 }
 
 impl DSPKernel {
@@ -104,6 +112,9 @@ impl DSPKernel {
             param_names_json: None,
             param_metadata_json: None,
             transport: TransportState::default(),
+            profiler_current_us: AtomicU32::new(0),
+            profiler_avg_us: AtomicU32::new(0),
+            profiler_peak_us: AtomicU32::new(0),
         }
     }
 
@@ -145,6 +156,7 @@ impl DSPKernel {
                 }
                 self.update_param_names_cache(names);
                 self.update_param_metadata_cache(metadata);
+                self.reset_profiler();
                 self.last_error = None;
                 true
             }
@@ -172,6 +184,7 @@ impl DSPKernel {
                 }
                 self.update_param_names_cache(names);
                 self.update_param_metadata_cache(metadata);
+                self.reset_profiler();
                 self.last_error = None;
                 true
             }
@@ -235,6 +248,33 @@ impl DSPKernel {
             out[i] = f32::from_bits(self.params[i].load(Ordering::Relaxed));
         }
         out
+    }
+
+    /// Update profiler statistics after a backend.process() call.
+    /// Called from the audio thread — uses only atomics and integer math.
+    fn update_profiler(&self, elapsed_us: u32) {
+        self.profiler_current_us.store(elapsed_us, Ordering::Relaxed);
+        // EMA: new = (5*current + 251*prev) / 256 (~0.5s smoothing)
+        // Seed with current value when starting from zero to avoid integer
+        // truncation keeping avg stuck at 0 (e.g. (5*1 + 251*0)/256 = 0).
+        let prev_avg = self.profiler_avg_us.load(Ordering::Relaxed);
+        let new_avg = if prev_avg == 0 {
+            elapsed_us
+        } else {
+            ((5u64 * elapsed_us as u64 + 251u64 * prev_avg as u64) / 256) as u32
+        };
+        self.profiler_avg_us.store(new_avg, Ordering::Relaxed);
+        // Decaying peak: peak * 1023/1024, then max with current
+        let prev_peak = self.profiler_peak_us.load(Ordering::Relaxed);
+        let decayed = ((prev_peak as u64 * 1023) / 1024) as u32;
+        self.profiler_peak_us.store(elapsed_us.max(decayed), Ordering::Relaxed);
+    }
+
+    /// Reset profiler statistics. Called when a new script/WASM is loaded.
+    fn reset_profiler(&self) {
+        self.profiler_current_us.store(0, Ordering::Relaxed);
+        self.profiler_avg_us.store(0, Ordering::Relaxed);
+        self.profiler_peak_us.store(0, Ordering::Relaxed);
     }
 
     pub fn maximum_frames_to_render(&self) -> u32 {
@@ -496,6 +536,10 @@ impl DSPKernel {
             }
         }
 
+        // Reset profiler — benchmark calls process() which updates profiler
+        // atomics with artificial data that would contaminate live stats.
+        self.reset_profiler();
+
         Some(max_time)
     }
 
@@ -570,7 +614,12 @@ impl DSPKernel {
         // If the main thread is swapping backends, we fall through to passthrough.
         if let Ok(mut guard) = self.backend.try_lock() {
             if let Some(ref mut backend) = *guard {
-                if backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate, &params, &self.transport) {
+                let t0 = std::time::Instant::now();
+                let ok = backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate, &params, &self.transport);
+                // Ensure at least 1µs so sub-microsecond calls are still visible
+                let elapsed_us = (t0.elapsed().as_micros() as u32).max(1);
+                self.update_profiler(elapsed_us);
+                if ok {
                     Self::safety_clamp(outputs, channel_count, frame_count);
                     // Cast output pointers to const (used for capture and demo gating)
                     let out_as_const: Vec<*const f32> = outputs.iter().map(|p| *p as *const f32).collect();
