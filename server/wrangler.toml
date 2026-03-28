@@ -13,4 +13,4 @@ PADDLE_API_BASE = "https://api.paddle.com"
 [[d1_databases]]
 binding = "DB"
 database_name = "conjuredsp-db"
-database_id = ""  # Set after `wrangler d1 create conjuredsp-db`
+database_id = "2c4420f2-5b0c-4dc6-b22d-f9082019472c"
