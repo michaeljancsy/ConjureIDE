@@ -13,7 +13,7 @@ xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test   # runs unit +
 
 ### Testing
 
-UI tests are slow. **Do not run the full UI test suite unless explicitly asked.** Prefer running only unit tests by default. Only run UI tests when the change directly affects UI that those tests cover, and then run only the specific relevant class or method.
+UI tests are slow. **Do not run UI tests unless they specifically test something directly relevant to the most recent changes.** Always prefer running only unit tests by default. When UI tests are warranted, run only the specific relevant class or method — never the full suite.
 
 ```bash
 # Unit tests only (default — use this unless UI tests are needed)
