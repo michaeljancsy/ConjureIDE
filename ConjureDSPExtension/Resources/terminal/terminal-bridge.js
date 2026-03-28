@@ -66,6 +66,18 @@
 
     // --- Initialize terminal ---
     function initTerminal() {
+        // Check required dependencies — show visible error if missing
+        if (typeof Terminal === 'undefined') {
+            showStatus('Terminal failed to load', 'xterm.js is missing — run scripts/setup-xterm.sh');
+            postToSwift('error', { message: 'xterm.js missing' });
+            return;
+        }
+        if (typeof FitAddon === 'undefined') {
+            showStatus('Terminal failed to load', 'addon-fit.js is missing — run scripts/setup-xterm.sh');
+            postToSwift('error', { message: 'addon-fit.js missing' });
+            return;
+        }
+
         const termTheme = themes[currentTheme];
 
         terminal = new Terminal({

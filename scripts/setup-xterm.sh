@@ -12,9 +12,12 @@ XTERM_VERSION="5.3.0"
 ADDON_FIT_VERSION="0.11.0"
 ADDON_WEBLINKS_VERSION="0.12.0"
 
-if [ -f "${TERMINAL_DIR}/xterm.js" ] && [ "$(wc -c < "${TERMINAL_DIR}/xterm.js")" -gt 1000 ]; then
+if [ -f "${TERMINAL_DIR}/xterm.js" ] && [ "$(wc -c < "${TERMINAL_DIR}/xterm.js")" -gt 1000 ] \
+   && [ -f "${TERMINAL_DIR}/xterm.css" ] \
+   && [ -f "${TERMINAL_DIR}/addon-fit.js" ] \
+   && [ -f "${TERMINAL_DIR}/addon-web-links.js" ]; then
     echo "xterm.js already exists at ${TERMINAL_DIR}"
-    echo "Delete it first if you want to re-download: rm -f ${TERMINAL_DIR}/xterm.js ${TERMINAL_DIR}/xterm.css"
+    echo "Delete it first if you want to re-download: rm -f ${TERMINAL_DIR}/xterm.js ${TERMINAL_DIR}/xterm.css ${TERMINAL_DIR}/addon-*.js"
     exit 0
 fi
 
