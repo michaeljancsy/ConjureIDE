@@ -19,6 +19,7 @@
 ### UI & Editor
 - Investigate ACP (Audio Code Protocol) and more full-fledged IDE features for the editor
 - AI-powered autocomplete (context-aware LLM suggestions)
+- Investigate Python LSP (Pyright) for dynamic autocomplete of user-installed packages and arbitrary code
 - Claude Code terminal polish: auto-launch companion app, terminal reconnect UX, DAW testing
 - Audio visualization polish: persist spectrogram preferences in UserDefaults, add spectrogram to host app
 - Full-screen text editor mode
@@ -33,6 +34,7 @@
 
 ## Done
 
+- Comprehensive Monaco autocomplete for conjuredsp: Python/Rust dot-completions (Biquad, DelayLine, LFO, BiquadCoeffs::, Waveform::, ctx.), signature help on `(`, hover docs, function-level completions for DSP utils/param builders, latency!() macro, ParamSpec chain methods (2026-03-28)
 - Latency reporting for DAW compensation — scripts declare `LATENCY` (Python) or `latency!()` (Rust), AU reports via `AUAudioUnit.latency`, export pipeline includes in runtime-config.json, MCP tools report latency, Claude Code context guide documents the feature, lookahead limiter factory presets (Python + Rust) with parity tests (2026-03-27)
 - Export AUv3 Phase 5: integration tests (export → FFI kernel → process audio for both Rust and Python), post-export validation (WASM magic bytes, Python process fn, JSON config), param metadata round-trip tests, edge case tests, documentation (2026-03-27)
 - Claude Code terminal integration — MCP server in extension, companion app for PTY, xterm.js terminal UI, contentEditable keyboard input for ViewBridge (2026-03-27)

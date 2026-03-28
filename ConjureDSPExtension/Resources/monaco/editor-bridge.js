@@ -123,6 +123,209 @@ const bridge = {
             return s;
         }
 
+        // ── Shared documentation data ──────────────────────────────────
+        // Single source of truth for completions, signature help, and hover.
+
+        const biquadCoeffsStatics = [
+            { name: 'lowpass', sig: '(freq, q, sample_rate)', rustSig: '(freq: f64, q: f64, sample_rate: f64) -> BiquadCoeffs', doc: 'Low-pass filter. Passes frequencies below cutoff.', params: [{ label: 'freq', doc: 'Cutoff frequency in Hz' }, { label: 'q', doc: 'Q factor (0.707 = Butterworth)' }, { label: 'sample_rate', doc: 'Sample rate in Hz' }] },
+            { name: 'highpass', sig: '(freq, q, sample_rate)', rustSig: '(freq: f64, q: f64, sample_rate: f64) -> BiquadCoeffs', doc: 'High-pass filter. Passes frequencies above cutoff.', params: [{ label: 'freq', doc: 'Cutoff frequency in Hz' }, { label: 'q', doc: 'Q factor (0.707 = Butterworth)' }, { label: 'sample_rate', doc: 'Sample rate in Hz' }] },
+            { name: 'bandpass', sig: '(freq, q, sample_rate)', rustSig: '(freq: f64, q: f64, sample_rate: f64) -> BiquadCoeffs', doc: 'Band-pass filter. Passes a frequency band.', params: [{ label: 'freq', doc: 'Center frequency in Hz' }, { label: 'q', doc: 'Q factor (bandwidth)' }, { label: 'sample_rate', doc: 'Sample rate in Hz' }] },
+            { name: 'notch', sig: '(freq, q, sample_rate)', rustSig: '(freq: f64, q: f64, sample_rate: f64) -> BiquadCoeffs', doc: 'Notch (band-reject) filter.', params: [{ label: 'freq', doc: 'Center frequency in Hz' }, { label: 'q', doc: 'Q factor (notch width)' }, { label: 'sample_rate', doc: 'Sample rate in Hz' }] },
+            { name: 'peak', sig: '(freq, q, gain_db, sample_rate)', rustSig: '(freq: f64, q: f64, gain_db: f64, sample_rate: f64) -> BiquadCoeffs', doc: 'Peaking EQ. Boost or cut at center frequency.', params: [{ label: 'freq', doc: 'Center frequency in Hz' }, { label: 'q', doc: 'Q factor (bandwidth)' }, { label: 'gain_db', doc: 'Gain in dB (positive = boost, negative = cut)' }, { label: 'sample_rate', doc: 'Sample rate in Hz' }] },
+            { name: 'lowshelf', sig: '(freq, q, gain_db, sample_rate)', rustSig: '(freq: f64, q: f64, gain_db: f64, sample_rate: f64) -> BiquadCoeffs', doc: 'Low shelf. Boost or cut frequencies below cutoff.', params: [{ label: 'freq', doc: 'Shelf frequency in Hz' }, { label: 'q', doc: 'Q factor (shelf slope)' }, { label: 'gain_db', doc: 'Gain in dB' }, { label: 'sample_rate', doc: 'Sample rate in Hz' }] },
+            { name: 'highshelf', sig: '(freq, q, gain_db, sample_rate)', rustSig: '(freq: f64, q: f64, gain_db: f64, sample_rate: f64) -> BiquadCoeffs', doc: 'High shelf. Boost or cut frequencies above cutoff.', params: [{ label: 'freq', doc: 'Shelf frequency in Hz' }, { label: 'q', doc: 'Q factor (shelf slope)' }, { label: 'gain_db', doc: 'Gain in dB' }, { label: 'sample_rate', doc: 'Sample rate in Hz' }] },
+            { name: 'allpass', sig: '(freq, q, sample_rate)', rustSig: '(freq: f64, q: f64, sample_rate: f64) -> BiquadCoeffs', doc: 'All-pass filter. Shifts phase without changing amplitude.', params: [{ label: 'freq', doc: 'Frequency in Hz' }, { label: 'q', doc: 'Q factor' }, { label: 'sample_rate', doc: 'Sample rate in Hz' }] },
+        ];
+
+        const biquadMethods = [
+            { name: 'set_coeffs', sig: '(coeffs)', rustSig: '(&mut self, coeffs: BiquadCoeffs)', doc: 'Update filter coefficients without resetting state.', params: [{ label: 'coeffs', doc: 'BiquadCoeffs instance' }] },
+            { name: 'process_sample', sig: '(x)', rustSig: '(&mut self, x: f64) -> f64', doc: 'Process a single sample through the filter. Returns filtered output.', params: [{ label: 'x', doc: 'Input sample' }] },
+            { name: 'reset', sig: '()', rustSig: '(&mut self)', doc: 'Reset filter state to zero (clear internal memory).', params: [] },
+        ];
+
+        const delayLineMethods = [
+            { name: 'write', sig: '(sample)', rustSig: '(&mut self, sample: f32)', doc: 'Write a sample and advance the write head.', params: [{ label: 'sample', doc: 'Input sample value' }] },
+            { name: 'read', sig: '(delay_samples)', rustSig: '(&self, delay_samples: f64) -> f32', doc: 'Read with linear interpolation. delay_samples can be fractional.', params: [{ label: 'delay_samples', doc: 'Delay in samples (fractional OK)' }] },
+            { name: 'read_cubic', sig: '(delay_samples)', rustSig: '(&self, delay_samples: f64) -> f32', doc: 'Read with cubic (Hermite) interpolation. Better quality for pitch/modulation.', params: [{ label: 'delay_samples', doc: 'Delay in samples (fractional OK)' }] },
+            { name: 'tap', sig: '(delay_samples)', rustSig: '(&self, delay_samples: usize) -> f32', doc: 'Read at integer delay (no interpolation).', params: [{ label: 'delay_samples', doc: 'Delay in samples (integer)' }] },
+            { name: 'clear', sig: '()', rustSig: '(&mut self)', doc: 'Zero entire buffer and reset write position.', params: [] },
+        ];
+        const delayLineProperties = [
+            { name: 'max_samples', doc: 'Maximum delay length in samples (read-only property).' },
+        ];
+
+        const lfoMethods = [
+            { name: 'set_freq', sig: '(freq)', rustSig: '(&mut self, freq: f64)', doc: 'Update oscillation frequency in Hz.', params: [{ label: 'freq', doc: 'Frequency in Hz' }] },
+            { name: 'set_waveform', sig: '(waveform)', rustSig: '(&mut self, waveform: Waveform)', doc: 'Change waveform type. Python: "sine", "triangle", "saw", "square". Rust: Waveform::Sine etc.', params: [{ label: 'waveform', doc: 'Waveform name or variant' }] },
+            { name: 'tick', sig: '()', rustSig: '(&mut self) -> f64', doc: 'Advance by one sample. Returns value in [-1, 1].', params: [] },
+            { name: 'reset', sig: '()', rustSig: '(&mut self)', doc: 'Reset phase to zero.', params: [] },
+        ];
+        const lfoMethodsPython = [
+            ...lfoMethods,
+            { name: 'tick_n', sig: '(n)', rustSig: null, doc: 'Advance by n samples. Returns numpy float32 array. More efficient than tick() in a loop.', params: [{ label: 'n', doc: 'Number of samples to generate' }] },
+        ];
+        const lfoProperties = [
+            { name: 'value', doc: 'Current oscillator value (last tick result).' },
+        ];
+
+        const ctxMethods = [
+            { name: 'channels', sig: '() -> usize', doc: 'Get the number of audio channels.' },
+            { name: 'frames', sig: '() -> usize', doc: 'Get the number of frames in this render block.' },
+            { name: 'sample_rate', sig: '() -> f32', doc: 'Get the audio sample rate in Hz.' },
+            { name: 'input', sig: '(channel: usize, frame: usize) -> f32', doc: 'Read input sample at [channel, frame].', params: [{ label: 'channel', doc: 'Channel index' }, { label: 'frame', doc: 'Frame index' }] },
+            { name: 'set_output', sig: '(channel: usize, frame: usize, value: f32)', doc: 'Write output sample at [channel, frame].', params: [{ label: 'channel', doc: 'Channel index' }, { label: 'frame', doc: 'Frame index' }, { label: 'value', doc: 'Sample value' }] },
+            { name: 'param', sig: '(index: usize) -> f32', doc: 'Read parameter at index. Returns denormalized value if metadata exists.', params: [{ label: 'index', doc: 'Parameter index constant' }] },
+        ];
+
+        const waveformVariants = [
+            { name: 'Sine', doc: 'Sine wave oscillator.' },
+            { name: 'Triangle', doc: 'Triangle wave oscillator.' },
+            { name: 'Saw', doc: 'Sawtooth wave oscillator.' },
+            { name: 'Square', doc: 'Square wave oscillator.' },
+        ];
+
+        const dspFunctions = [
+            { name: 'db_to_gain', pySig: '(db)', rustSig: '(db: f64) -> f64', doc: 'Convert dB to linear gain. 0 dB = 1.0, -6 dB ≈ 0.5', insert: 'db_to_gain(${1:db})', params: [{ label: 'db', doc: 'Value in decibels' }] },
+            { name: 'gain_to_db', pySig: '(gain)', rustSig: '(gain: f64) -> f64', doc: 'Convert linear gain to dB. Clamps to avoid log(0).', insert: 'gain_to_db(${1:gain})', params: [{ label: 'gain', doc: 'Linear gain value' }] },
+            { name: 'ms_to_samples', pySig: '(ms, sample_rate)', rustSig: '(ms: f64, sample_rate: f64) -> usize', doc: 'Convert milliseconds to sample count (rounded).', insert: 'ms_to_samples(${1:ms}, ${2:sample_rate})', params: [{ label: 'ms', doc: 'Time in milliseconds' }, { label: 'sample_rate', doc: 'Sample rate in Hz' }] },
+            { name: 'samples_to_ms', pySig: '(samples, sample_rate)', rustSig: '(samples: usize, sample_rate: f64) -> f64', doc: 'Convert sample count to milliseconds.', insert: 'samples_to_ms(${1:samples}, ${2:sample_rate})', params: [{ label: 'samples', doc: 'Number of samples' }, { label: 'sample_rate', doc: 'Sample rate in Hz' }] },
+            { name: 'freq_to_period', pySig: '(freq, sample_rate)', rustSig: '(freq: f64, sample_rate: f64) -> f64', doc: 'Convert frequency (Hz) to period in samples.', insert: 'freq_to_period(${1:freq}, ${2:sample_rate})', params: [{ label: 'freq', doc: 'Frequency in Hz' }, { label: 'sample_rate', doc: 'Sample rate in Hz' }] },
+            { name: 'smooth_coeff', pySig: '(time_ms, sample_rate)', rustSig: '(time_ms: f64, sample_rate: f64) -> f64', doc: 'One-pole smoothing coefficient. Use: state = α*state + (1-α)*target', insert: 'smooth_coeff(${1:time_ms}, ${2:sample_rate})', params: [{ label: 'time_ms', doc: 'Smoothing time in ms' }, { label: 'sample_rate', doc: 'Sample rate in Hz' }] },
+            { name: 'soft_clip', pySig: '(x, drive=1.0)', rustSig: '(x: f64, drive: f64) -> f64', doc: 'Soft clipping via tanh saturation.', insert: 'soft_clip(${1:x}, ${2:1.0})', params: [{ label: 'x', doc: 'Input value' }, { label: 'drive', doc: 'Drive amount (default 1.0)' }] },
+            { name: 'lerp', pySig: '(a, b, t)', rustSig: '(a: f64, b: f64, t: f64) -> f64', doc: 'Linear interpolation. t=0 → a, t=1 → b.', insert: 'lerp(${1:a}, ${2:b}, ${3:t})', params: [{ label: 'a', doc: 'Start value' }, { label: 'b', doc: 'End value' }, { label: 't', doc: 'Interpolation factor (0–1)' }] },
+            { name: 'crossfade', pySig: '(dry, wet, mix, out, n)', rustSig: '(dry: f32, wet: f32, mix: f32) -> f32', doc: 'Linear crossfade. mix=0 → dry, mix=1 → wet.', insert: 'crossfade(${1:dry}, ${2:wet}, ${3:mix})', params: [{ label: 'dry', doc: 'Dry signal' }, { label: 'wet', doc: 'Wet signal' }, { label: 'mix', doc: 'Mix amount (0–1)' }] },
+            { name: 'equal_power_crossfade', pySig: '(dry, wet, mix, out, n)', rustSig: null, doc: 'Equal-power crossfade using sine/cosine curves. Preserves energy at 50% mix.', insert: 'equal_power_crossfade(${1:dry}, ${2:wet}, ${3:mix}, ${4:out}, ${5:n})', params: [{ label: 'dry', doc: 'Dry buffer' }, { label: 'wet', doc: 'Wet buffer' }, { label: 'mix', doc: 'Mix (0–1)' }, { label: 'out', doc: 'Output buffer' }, { label: 'n', doc: 'Frame count' }] },
+        ];
+
+        const paramBuilders = [
+            { name: 'freq', pySig: '(min=20.0, max=20000.0, default=1000.0)', rustSig: '() -> ParamSpec', doc: 'Frequency parameter (Hz, log curve). Customize with .min()/.max()/.default()', insert: 'freq()', params: [{ label: 'min', doc: 'Min frequency (default 20)' }, { label: 'max', doc: 'Max frequency (default 20000)' }, { label: 'default', doc: 'Default value (default 1000)' }] },
+            { name: 'db', pySig: '(min=-60.0, max=12.0, default=0.0)', rustSig: '() -> ParamSpec', doc: 'Decibel parameter (dB, linear curve).', insert: 'db()', params: [{ label: 'min', doc: 'Min dB (default -60)' }, { label: 'max', doc: 'Max dB (default 12)' }, { label: 'default', doc: 'Default value (default 0)' }] },
+            { name: 'time_ms', pySig: '(min=0.1, max=1000.0, default=100.0)', rustSig: '() -> ParamSpec', doc: 'Time parameter (ms, log curve).', insert: 'time_ms()', params: [{ label: 'min', doc: 'Min ms (default 0.1)' }, { label: 'max', doc: 'Max ms (default 1000)' }, { label: 'default', doc: 'Default value (default 100)' }] },
+            { name: 'pct', pySig: '(default=50.0)', rustSig: '() -> ParamSpec', doc: 'Percentage parameter (0–100%).', insert: 'pct()', params: [{ label: 'default', doc: 'Default value (default 50)' }] },
+            { name: 'mix', pySig: '(default=0.5)', rustSig: '() -> ParamSpec', doc: 'Wet/dry mix parameter (0.0–1.0).', insert: 'mix()', params: [{ label: 'default', doc: 'Default value (default 0.5)' }] },
+            { name: 'toggle', pySig: '(default=0.0)', rustSig: '() -> ParamSpec', doc: 'On/off toggle (renders as switch in UI).', insert: 'toggle()', params: [{ label: 'default', doc: 'Default value (default 0)' }] },
+            { name: 'choice', pySig: '(*labels, default=None)', rustSig: null, doc: 'Enum dropdown. Script receives selected index as float.', insert: 'choice(${1:"Low"}, ${2:"High"})', params: [{ label: '*labels', doc: 'Option strings' }, { label: 'default', doc: 'Default label (optional)' }] },
+            { name: 'ratio', pySig: '(min=1.0, max=20.0, default=4.0)', rustSig: '() -> ParamSpec', doc: 'Compression/expansion ratio (:1 unit).', insert: 'ratio()', params: [{ label: 'min', doc: 'Min ratio (default 1)' }, { label: 'max', doc: 'Max ratio (default 20)' }, { label: 'default', doc: 'Default value (default 4)' }] },
+            { name: 'param', pySig: '(min, max, *, unit="", default=None, curve="linear")', rustSig: '(min: f64, max: f64) -> ParamSpec', doc: 'Generic parameter with custom range.', insert: 'param(${1:min}, ${2:max})', params: [{ label: 'min', doc: 'Minimum value' }, { label: 'max', doc: 'Maximum value' }] },
+        ];
+
+        const paramSpecChainMethods = [
+            { name: 'min', sig: '(value)', doc: 'Set minimum value.', insert: 'min(${1:value})' },
+            { name: 'max', sig: '(value)', doc: 'Set maximum value.', insert: 'max(${1:value})' },
+            { name: 'default', sig: '(value)', doc: 'Set default value.', insert: 'default(${1:value})' },
+            { name: 'unit', sig: '(str)', doc: 'Set display unit (e.g., "Hz", "dB", "ms").', insert: 'unit("${1:Hz}")' },
+            { name: 'curve', sig: '(str)', doc: 'Set curve type: "linear" or "log".', insert: 'curve("${1:log}")' },
+        ];
+
+        // Build signature maps for signature help providers
+        const pySignatures = {};
+        const rustSignatures = {};
+
+        biquadCoeffsStatics.forEach(m => {
+            pySignatures['BiquadCoeffs.' + m.name] = { label: 'BiquadCoeffs.' + m.name + m.sig, doc: m.doc, params: m.params };
+            rustSignatures['BiquadCoeffs::' + m.name] = { label: 'BiquadCoeffs::' + m.name + m.rustSig, doc: m.doc, params: m.params };
+        });
+        biquadMethods.forEach(m => {
+            pySignatures[m.name] = { label: m.name + m.sig, doc: m.doc, params: m.params };
+            rustSignatures[m.name] = { label: m.name + m.rustSig, doc: m.doc, params: m.params };
+        });
+        delayLineMethods.forEach(m => {
+            pySignatures[m.name] = { label: m.name + m.sig, doc: m.doc, params: m.params };
+            rustSignatures[m.name] = { label: m.name + m.rustSig, doc: m.doc, params: m.params };
+        });
+        lfoMethodsPython.forEach(m => {
+            pySignatures[m.name] = { label: m.name + m.sig, doc: m.doc, params: m.params };
+        });
+        lfoMethods.forEach(m => {
+            rustSignatures[m.name] = { label: m.name + m.rustSig, doc: m.doc, params: m.params };
+        });
+        pySignatures['Biquad'] = { label: 'Biquad(coeffs=None)', doc: 'Create a biquad filter. Passthrough if no coeffs.', params: [{ label: 'coeffs', doc: 'BiquadCoeffs instance (optional)' }] };
+        pySignatures['DelayLine'] = { label: 'DelayLine(max_samples)', doc: 'Create a delay line with given maximum length.', params: [{ label: 'max_samples', doc: 'Maximum delay in samples' }] };
+        pySignatures['LFO'] = { label: 'LFO(sample_rate, freq=1.0, waveform="sine")', doc: 'Create a low-frequency oscillator.', params: [{ label: 'sample_rate', doc: 'Audio sample rate in Hz' }, { label: 'freq', doc: 'Frequency in Hz (default 1.0)' }, { label: 'waveform', doc: '"sine", "triangle", "saw", or "square"' }] };
+        rustSignatures['Biquad::new'] = { label: 'Biquad::new() -> Biquad', doc: 'Create a passthrough biquad filter.', params: [] };
+        rustSignatures['DelayLine::new'] = { label: 'DelayLine::<SIZE>::new() -> DelayLine', doc: 'Create a zeroed delay line.', params: [] };
+        rustSignatures['Lfo::new'] = { label: 'Lfo::new() -> Lfo', doc: 'Create LFO (1 Hz sine, 44100 Hz sample rate).', params: [] };
+        rustSignatures['Lfo::init'] = { label: 'Lfo::init(&mut self, sample_rate: f64, freq: f64)', doc: 'Initialize LFO with sample rate and frequency.', params: [{ label: 'sample_rate', doc: 'Sample rate in Hz' }, { label: 'freq', doc: 'Frequency in Hz' }] };
+        rustSignatures['init'] = rustSignatures['Lfo::init'];
+
+        dspFunctions.forEach(f => {
+            pySignatures[f.name] = { label: f.name + f.pySig, doc: f.doc, params: f.params };
+            if (f.rustSig) rustSignatures[f.name] = { label: f.name + f.rustSig, doc: f.doc, params: f.params };
+        });
+        paramBuilders.forEach(f => {
+            pySignatures[f.name] = { label: f.name + f.pySig, doc: f.doc, params: f.params };
+            if (f.rustSig) rustSignatures[f.name] = { label: f.name + f.rustSig, doc: f.doc, params: f.params };
+        });
+        ctxMethods.forEach(m => {
+            if (m.params) rustSignatures['ctx.' + m.name] = { label: 'ctx.' + m.name + m.sig, doc: m.doc, params: m.params };
+        });
+
+        // Build hover documentation maps
+        const pyHoverDocs = {};
+        const rustHoverDocs = {};
+
+        pyHoverDocs['Biquad'] = '```python\nclass Biquad(coeffs=None)\n```\nStateful biquad filter (direct form II transposed). One instance per channel.\n\nMethods: `set_coeffs(coeffs)`, `process_sample(x)`, `reset()`';
+        pyHoverDocs['BiquadCoeffs'] = '```python\nclass BiquadCoeffs\n```\nImmutable biquad coefficient container.\n\nStatic methods: `lowpass`, `highpass`, `bandpass`, `notch`, `peak`, `lowshelf`, `highshelf`, `allpass`';
+        pyHoverDocs['DelayLine'] = '```python\nclass DelayLine(max_samples)\n```\nPre-allocated circular buffer backed by numpy float32 array.\n\nMethods: `write(sample)`, `read(delay)`, `read_cubic(delay)`, `tap(delay)`, `clear()`\nProperty: `max_samples`';
+        pyHoverDocs['LFO'] = '```python\nclass LFO(sample_rate, freq=1.0, waveform="sine")\n```\nLow-frequency oscillator with sine/triangle/saw/square waveforms.\n\nMethods: `set_freq(freq)`, `set_waveform(wf)`, `tick()`, `tick_n(n)`, `reset()`\nProperty: `value`';
+
+        rustHoverDocs['Biquad'] = '```rust\nstruct Biquad\n```\nStateful biquad filter (direct form II transposed). `#[derive(Clone, Copy)]`\n\nMethods: `new()`, `set_coeffs(coeffs)`, `process_sample(x) -> f64`, `reset()`';
+        rustHoverDocs['BiquadCoeffs'] = '```rust\nstruct BiquadCoeffs\n```\nBiquad coefficient container. `#[derive(Clone, Copy)]`\n\nAssociated fns: `lowpass`, `highpass`, `bandpass`, `notch`, `peak`, `lowshelf`, `highshelf`, `allpass`';
+        rustHoverDocs['DelayLine'] = '```rust\nstruct DelayLine<const SIZE: usize>\n```\nCircular delay buffer. `#[derive(Clone, Copy)]`\n\nMethods: `new()`, `write(sample)`, `read(delay) -> f32`, `read_cubic(delay) -> f32`, `tap(n) -> f32`, `clear()`';
+        rustHoverDocs['Lfo'] = '```rust\nstruct Lfo\n```\nLow-frequency oscillator. `#[derive(Clone, Copy)]`\n\nMethods: `new()`, `init(sr, freq)`, `set_freq(f)`, `set_waveform(wf)`, `tick() -> f64`, `reset()`\nField: `value: f64`';
+        rustHoverDocs['Waveform'] = '```rust\nenum Waveform { Sine, Triangle, Saw, Square }\n```\nWaveform type for `Lfo::set_waveform()`.';
+        rustHoverDocs['Context'] = '```rust\nstruct Context\n```\nSafe wrapper for audio buffer access. Created by `ctx()` (from `setup!()`).\n\nMethods: `channels()`, `frames()`, `sample_rate()`, `input(ch, fr)`, `set_output(ch, fr, val)`, `param(idx)`';
+        rustHoverDocs['ParamSpec'] = '```rust\nstruct ParamSpec\n```\nParameter specification. Builder pattern with `.min()`, `.max()`, `.default()`, `.unit()`, `.curve()`.';
+
+        dspFunctions.forEach(f => {
+            pyHoverDocs[f.name] = '```python\n' + f.name + f.pySig + '\n```\n' + f.doc;
+            if (f.rustSig) rustHoverDocs[f.name] = '```rust\nfn ' + f.name + f.rustSig + '\n```\n' + f.doc;
+        });
+        paramBuilders.forEach(f => {
+            pyHoverDocs[f.name] = '```python\n' + f.name + f.pySig + '\n```\n' + f.doc;
+            if (f.rustSig) rustHoverDocs[f.name] = '```rust\nconst fn ' + f.name + f.rustSig + '\n```\n' + f.doc;
+        });
+
+        rustHoverDocs['setup'] = '```rust\nsetup!()\n```\nDeclares INPUT_BUF, OUTPUT_BUF, PARAMS_BUF, TRANSPORT_BUF, MAX_CH, MAX_FR, get_*_ptr() exports, and `ctx()` helper.';
+        rustHoverDocs['params'] = '```rust\nparams! { NAME = builder(), ... }\n```\nDeclares parameter index constants, METADATA JSON, and get_param_metadata_ptr/len exports.';
+        rustHoverDocs['latency'] = '```rust\nlatency!(samples)\n```\nDeclares algorithmic latency for DAW delay compensation. Generates `get_latency_samples()` export.';
+
+        // Helper: extract function name before cursor's opening paren
+        function extractFuncBeforeParen(lineText, col) {
+            let depth = 0;
+            let i = col - 2; // col is 1-based, lineText is 0-based
+            // Walk backwards to find the unmatched (
+            for (; i >= 0; i--) {
+                if (lineText[i] === ')') depth++;
+                else if (lineText[i] === '(') {
+                    if (depth === 0) break;
+                    depth--;
+                }
+            }
+            if (i < 0) return null;
+            // Extract the function/method name before the (
+            const before = lineText.substring(0, i).trimEnd();
+            const match = before.match(/([\w.:"]+)\s*$/);
+            return match ? match[1] : null;
+        }
+
+        // Helper: count commas at current nesting level
+        function countCommas(lineText, col) {
+            let depth = 0;
+            let commas = 0;
+            let i = col - 2;
+            for (; i >= 0; i--) {
+                if (lineText[i] === ')') depth++;
+                else if (lineText[i] === '(') {
+                    if (depth === 0) break;
+                    depth--;
+                } else if (lineText[i] === ',' && depth === 0) {
+                    commas++;
+                }
+            }
+            return commas;
+        }
+
         // ── Python: ConjureDSP DSP snippets ──────────────────────────
         monaco.languages.registerCompletionItemProvider('python', {
             provideCompletionItems(model, position) {
@@ -325,6 +528,36 @@ const bridge = {
                         'One-pole smoothing coefficient from cutoff frequency.\nUse as: y = coeff * y + (1 - coeff) * x',
                         true),
 
+                    // ── conjuredsp function completions ──
+                    ...dspFunctions.map(f =>
+                        sug(f.name, Kind.Function, f.insert, f.doc, true)),
+                    ...paramBuilders.map(f =>
+                        sug(f.name, Kind.Function, f.insert, f.doc, true)),
+
+                    // ── Constructor completions ──
+                    sug('Biquad', Kind.Function,
+                        'Biquad(${1:coeffs})',
+                        'Create a stateful biquad filter. Pass BiquadCoeffs or omit for passthrough.\nMethods: set_coeffs(), process_sample(), reset()',
+                        true),
+                    sug('DelayLine', Kind.Function,
+                        'DelayLine(${1:max_samples})',
+                        'Create a circular delay buffer.\nMethods: write(), read(), read_cubic(), tap(), clear()\nProperty: max_samples',
+                        true),
+                    sug('LFO', Kind.Function,
+                        'LFO(${1:sample_rate}, freq=${2:1.0}, waveform="${3:sine}")',
+                        'Create a low-frequency oscillator.\nWaveforms: "sine", "triangle", "saw", "square"\nMethods: set_freq(), set_waveform(), tick(), tick_n(), reset()\nProperty: value',
+                        true),
+
+                    // ── Stateless oscillator functions ──
+                    sug('sine', Kind.Function, 'sine(${1:phase})',
+                        'Sine wave from phase [0, 1). Returns [-1, 1].', true),
+                    sug('triangle', Kind.Function, 'triangle(${1:phase})',
+                        'Triangle wave from phase [0, 1). Returns [-1, 1].', true),
+                    sug('saw', Kind.Function, 'saw(${1:phase})',
+                        'Sawtooth wave from phase [0, 1). Returns [-1, 1].', true),
+                    sug('advance_phase', Kind.Function, 'advance_phase(${1:phase}, ${2:freq}, ${3:sample_rate})',
+                        'Advance phase by one sample with wrapping. Returns new phase.', true),
+
                 ].map(s => ({ ...s, range })) };
             },
         });
@@ -489,31 +722,43 @@ const bridge = {
 
                 // BiquadCoeffs. completions
                 if (textBefore.match(/\bBiquadCoeffs\.\w*$/)) {
+                    return { suggestions: biquadCoeffsStatics.map(m =>
+                        sug('BiquadCoeffs.' + m.name, Kind.Function,
+                            m.name + '(' + m.params.map((p, i) => '${' + (i+1) + ':' + p.label + '}').join(', ') + ')',
+                            m.doc, true)
+                    ).map(s => ({ ...s, range })) };
+                }
+
+                // Biquad. instance methods (must be after BiquadCoeffs check)
+                if (textBefore.match(/\bBiquad\.\w*$/) || textBefore.match(/(?:_filter|filter|filt|bq)\w*\.\w*$/)) {
+                    return { suggestions: biquadMethods.map(m =>
+                        sug(m.name, Kind.Method,
+                            m.name + '(' + m.params.map((p, i) => '${' + (i+1) + ':' + p.label + '}').join(', ') + ')',
+                            m.doc, true)
+                    ).map(s => ({ ...s, range })) };
+                }
+
+                // DelayLine. instance methods
+                if (textBefore.match(/(?:\bDelayLine|_delay|delay_line|delay|dl)\w*\.\w*$/)) {
                     return { suggestions: [
-                        sug('BiquadCoeffs.lowpass', Kind.Function,
-                            'lowpass(${1:freq}, ${2:q}, ${3:sample_rate})',
-                            'Low-pass biquad coefficients. Passes frequencies below cutoff.', true),
-                        sug('BiquadCoeffs.highpass', Kind.Function,
-                            'highpass(${1:freq}, ${2:q}, ${3:sample_rate})',
-                            'High-pass biquad coefficients. Passes frequencies above cutoff.', true),
-                        sug('BiquadCoeffs.bandpass', Kind.Function,
-                            'bandpass(${1:freq}, ${2:q}, ${3:sample_rate})',
-                            'Band-pass biquad coefficients.', true),
-                        sug('BiquadCoeffs.notch', Kind.Function,
-                            'notch(${1:freq}, ${2:q}, ${3:sample_rate})',
-                            'Notch (band-reject) biquad coefficients.', true),
-                        sug('BiquadCoeffs.peak', Kind.Function,
-                            'peak(${1:freq}, ${2:q}, ${3:gain_db}, ${4:sample_rate})',
-                            'Peaking EQ biquad coefficients. Boost or cut at center frequency.', true),
-                        sug('BiquadCoeffs.lowshelf', Kind.Function,
-                            'lowshelf(${1:freq}, ${2:q}, ${3:gain_db}, ${4:sample_rate})',
-                            'Low shelf biquad coefficients.', true),
-                        sug('BiquadCoeffs.highshelf', Kind.Function,
-                            'highshelf(${1:freq}, ${2:q}, ${3:gain_db}, ${4:sample_rate})',
-                            'High shelf biquad coefficients.', true),
-                        sug('BiquadCoeffs.allpass', Kind.Function,
-                            'allpass(${1:freq}, ${2:q}, ${3:sample_rate})',
-                            'All-pass biquad coefficients. Shifts phase without changing amplitude.', true),
+                        ...delayLineMethods.map(m =>
+                            sug(m.name, Kind.Method,
+                                m.name + '(' + m.params.map((p, i) => '${' + (i+1) + ':' + p.label + '}').join(', ') + ')',
+                                m.doc, true)),
+                        ...delayLineProperties.map(p =>
+                            sug(p.name, Kind.Property, p.name, p.doc, false)),
+                    ].map(s => ({ ...s, range })) };
+                }
+
+                // LFO. instance methods
+                if (textBefore.match(/(?:\bLFO|_lfo|lfo)\w*\.\w*$/)) {
+                    return { suggestions: [
+                        ...lfoMethodsPython.map(m =>
+                            sug(m.name, Kind.Method,
+                                m.name + '(' + m.params.map((p, i) => '${' + (i+1) + ':' + p.label + '}').join(', ') + ')',
+                                m.doc, true)),
+                        ...lfoProperties.map(p =>
+                            sug(p.name, Kind.Property, p.name, p.doc, false)),
                     ].map(s => ({ ...s, range })) };
                 }
 
@@ -920,7 +1165,235 @@ const bridge = {
                         'Soft clipping using hyperbolic tangent. Drive controls saturation amount.',
                         true),
 
+                    // ── Missing DSP function completions ──
+                    sug('samples_to_ms', Kind.Function,
+                        'samples_to_ms(${1:samples} as usize, ${2:sample_rate} as f64)',
+                        'Convert sample count to milliseconds.', true),
+                    sug('freq_to_period', Kind.Function,
+                        'freq_to_period(${1:freq} as f64, ${2:sample_rate} as f64)',
+                        'Convert frequency (Hz) to period in samples.', true),
+                    sug('lerp', Kind.Function,
+                        'lerp(${1:a}, ${2:b}, ${3:t})',
+                        'Linear interpolation. t=0 → a, t=1 → b.', true),
+
+                    // ── latency! macro ──
+                    sug('latency', Kind.Snippet,
+                        'latency!(${1:256});',
+                        'Declare algorithmic latency in samples for DAW delay compensation.\nGenerates get_latency_samples() WASM export.\nUse for lookahead, FFT windowing, oversampling. NOT for creative delays.',
+                        true),
+
+                    // ── Waveform enum ──
+                    sug('Waveform', Kind.Snippet,
+                        'Waveform::${1|Sine,Triangle,Saw,Square|}',
+                        'Waveform variant for Lfo::set_waveform().',
+                        true),
+
+                    // ── Stateless oscillator functions ──
+                    sug('sine', Kind.Function, 'sine(${1:phase})',
+                        'Sine wave from phase [0, 1). Returns [-1, 1].', true),
+                    sug('triangle', Kind.Function, 'triangle(${1:phase})',
+                        'Triangle wave from phase [0, 1). Returns [-1, 1].', true),
+                    sug('saw', Kind.Function, 'saw(${1:phase})',
+                        'Sawtooth wave from phase [0, 1). Returns [-1, 1].', true),
+                    sug('advance_phase', Kind.Function, 'advance_phase(${1:phase}, ${2:freq}, ${3:sample_rate})',
+                        'Advance phase by one sample with wrapping.', true),
+
                 ].map(s => ({ ...s, range })) };
+            },
+        });
+
+        // ── Rust: dot and :: completions ──────────────────────────────
+        monaco.languages.registerCompletionItemProvider('rust', {
+            triggerCharacters: ['.', ':'],
+            provideCompletionItems(model, position) {
+                const lineContent = model.getLineContent(position.lineNumber);
+                const textBefore = lineContent.substring(0, position.column - 1);
+
+                const word = model.getWordUntilPosition(position);
+                const range = {
+                    startLineNumber: position.lineNumber,
+                    endLineNumber: position.lineNumber,
+                    startColumn: word.startColumn,
+                    endColumn: word.endColumn,
+                };
+
+                // BiquadCoeffs:: associated functions
+                if (textBefore.match(/\bBiquadCoeffs::\w*$/)) {
+                    return { suggestions: biquadCoeffsStatics.map(m =>
+                        sug('BiquadCoeffs::' + m.name, Kind.Function,
+                            m.name + '(' + m.params.map((p, i) => '${' + (i+1) + ':' + p.label + '}').join(', ') + ')',
+                            m.doc, true)
+                    ).map(s => ({ ...s, range })) };
+                }
+
+                // Biquad:: associated functions
+                if (textBefore.match(/\bBiquad::\w*$/)) {
+                    return { suggestions: [
+                        sug('Biquad::new', Kind.Function, 'new()', 'Create a passthrough biquad filter.', true),
+                    ].map(s => ({ ...s, range })) };
+                }
+
+                // DelayLine:: associated functions
+                if (textBefore.match(/\bDelayLine::\w*$/)) {
+                    return { suggestions: [
+                        sug('DelayLine::new', Kind.Function, 'new()', 'Create a zeroed delay line.', true),
+                    ].map(s => ({ ...s, range })) };
+                }
+
+                // Lfo:: associated functions
+                if (textBefore.match(/\bLfo::\w*$/)) {
+                    return { suggestions: [
+                        sug('Lfo::new', Kind.Function, 'new()', 'Create LFO (1 Hz sine, 44100 Hz sample rate).', true),
+                    ].map(s => ({ ...s, range })) };
+                }
+
+                // Waveform:: enum variants
+                if (textBefore.match(/\bWaveform::\w*$/)) {
+                    return { suggestions: waveformVariants.map(v =>
+                        sug('Waveform::' + v.name, Kind.Enum, v.name, v.doc, false)
+                    ).map(s => ({ ...s, range })) };
+                }
+
+                // ctx. methods (Context)
+                if (textBefore.match(/\bctx\.\w*$/)) {
+                    return { suggestions: ctxMethods.map(m =>
+                        sug('ctx.' + m.name, Kind.Method,
+                            m.params ? m.name + '(' + m.params.map((p, i) => '${' + (i+1) + ':' + p.label + '}').join(', ') + ')' : m.name + '()',
+                            m.doc, true)
+                    ).map(s => ({ ...s, range })) };
+                }
+
+                // Biquad instance methods (filter., filt., bq., FILTER.)
+                if (textBefore.match(/(?:filter|filt|biquad|FILTER)\w*\.\w*$/) && !textBefore.match(/BiquadCoeffs/)) {
+                    return { suggestions: biquadMethods.map(m =>
+                        sug(m.name, Kind.Method,
+                            m.name + '(' + m.params.map((p, i) => '${' + (i+1) + ':' + p.label + '}').join(', ') + ')',
+                            m.doc, true)
+                    ).map(s => ({ ...s, range })) };
+                }
+
+                // DelayLine instance methods (delay., dl., DELAY.)
+                if (textBefore.match(/(?:delay|dl|DELAY)\w*\.\w*$/) && !textBefore.match(/DelayLine::/)) {
+                    return { suggestions: [
+                        ...delayLineMethods.map(m =>
+                            sug(m.name, Kind.Method,
+                                m.name + '(' + m.params.map((p, i) => '${' + (i+1) + ':' + p.label + '}').join(', ') + ')',
+                                m.doc, true)),
+                    ].map(s => ({ ...s, range })) };
+                }
+
+                // Lfo instance methods (lfo., LFO.)
+                if (textBefore.match(/(?:lfo|LFO)\w*\.\w*$/) && !textBefore.match(/Lfo::/)) {
+                    return { suggestions: [
+                        ...lfoMethods.map(m =>
+                            sug(m.name, Kind.Method,
+                                m.name + '(' + m.params.map((p, i) => '${' + (i+1) + ':' + p.label + '}').join(', ') + ')',
+                                m.doc, true)),
+                        ...lfoProperties.map(p =>
+                            sug(p.name, Kind.Property, p.name, p.doc, false)),
+                    ].map(s => ({ ...s, range })) };
+                }
+
+                // ParamSpec chain methods (after param builder calls like freq()., db()., param(0,1).)
+                if (textBefore.match(/\)\.\w*$/)) {
+                    return { suggestions: paramSpecChainMethods.map(m =>
+                        sug('.' + m.name, Kind.Method, m.insert, m.doc, true)
+                    ).map(s => ({ ...s, range })) };
+                }
+
+                return { suggestions: [] };
+            },
+        });
+
+        // ── Python: Signature help ──────────────────────────────────
+        monaco.languages.registerSignatureHelpProvider('python', {
+            signatureHelpTriggerCharacters: ['(', ','],
+            provideSignatureHelp(model, position) {
+                const lineContent = model.getLineContent(position.lineNumber);
+                const funcName = extractFuncBeforeParen(lineContent, position.column);
+                if (!funcName) return null;
+
+                // Try exact match, then last segment (for method calls like obj.method)
+                const sig = pySignatures[funcName] || pySignatures[funcName.split('.').pop()];
+                if (!sig) return null;
+
+                const activeParameter = countCommas(lineContent, position.column);
+                return {
+                    value: {
+                        signatures: [{
+                            label: sig.label,
+                            documentation: sig.doc,
+                            parameters: sig.params.map(p => ({
+                                label: p.label,
+                                documentation: p.doc,
+                            })),
+                        }],
+                        activeSignature: 0,
+                        activeParameter: Math.min(activeParameter, sig.params.length - 1),
+                    },
+                    dispose() {},
+                };
+            },
+        });
+
+        // ── Rust: Signature help ────────────────────────────────────
+        monaco.languages.registerSignatureHelpProvider('rust', {
+            signatureHelpTriggerCharacters: ['(', ','],
+            provideSignatureHelp(model, position) {
+                const lineContent = model.getLineContent(position.lineNumber);
+                const funcName = extractFuncBeforeParen(lineContent, position.column);
+                if (!funcName) return null;
+
+                // Try exact match, then normalize :: to . for lookup, then last segment
+                const sig = rustSignatures[funcName]
+                    || rustSignatures[funcName.replace(/::/g, '.')]
+                    || rustSignatures[funcName.split(/[.:]+/).pop()];
+                if (!sig) return null;
+
+                const activeParameter = countCommas(lineContent, position.column);
+                return {
+                    value: {
+                        signatures: [{
+                            label: sig.label,
+                            documentation: sig.doc,
+                            parameters: sig.params.map(p => ({
+                                label: p.label,
+                                documentation: p.doc,
+                            })),
+                        }],
+                        activeSignature: 0,
+                        activeParameter: Math.min(activeParameter, sig.params.length - 1),
+                    },
+                    dispose() {},
+                };
+            },
+        });
+
+        // ── Python: Hover provider ──────────────────────────────────
+        monaco.languages.registerHoverProvider('python', {
+            provideHover(model, position) {
+                const wordInfo = model.getWordAtPosition(position);
+                if (!wordInfo) return null;
+                const doc = pyHoverDocs[wordInfo.word];
+                if (!doc) return null;
+                return {
+                    range: new monaco.Range(position.lineNumber, wordInfo.startColumn, position.lineNumber, wordInfo.endColumn),
+                    contents: [{ value: doc }],
+                };
+            },
+        });
+
+        // ── Rust: Hover provider ────────────────────────────────────
+        monaco.languages.registerHoverProvider('rust', {
+            provideHover(model, position) {
+                const wordInfo = model.getWordAtPosition(position);
+                if (!wordInfo) return null;
+                const doc = rustHoverDocs[wordInfo.word];
+                if (!doc) return null;
+                return {
+                    range: new monaco.Range(position.lineNumber, wordInfo.startColumn, position.lineNumber, wordInfo.endColumn),
+                    contents: [{ value: doc }],
+                };
             },
         });
     },
