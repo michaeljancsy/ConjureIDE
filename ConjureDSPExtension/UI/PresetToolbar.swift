@@ -63,7 +63,7 @@ struct PresetToolbar: View {
     var onSave: () -> Void
     var onSaveAs: (String) -> Void
     var onDelete: () -> Void
-    var onRename: (String) -> Void
+    var onRename: (String) -> String?
     var onNew: (ScriptLanguage) -> Void
     var onExport: (String) -> Void
     var isExporting: Bool = false
@@ -73,6 +73,7 @@ struct PresetToolbar: View {
     @State private var showDeleteConfirm = false
     @State private var showingRename = false
     @State private var renameName = ""
+    @State private var renameError: String?
     @State private var showingSettings = false
     @State private var showingExport = false
     @State private var showingPresetBrowser = false
@@ -232,11 +233,19 @@ struct PresetToolbar: View {
                         name: $renameName,
                         currentName: presetManager.currentPreset?.name ?? "",
                         existingNames: Set(presetManager.presets.filter { !$0.isFactory }.map(\.name)),
+                        errorMessage: renameError,
                         onRename: { name in
-                            showingRename = false
-                            onRename(name)
+                            if let error = onRename(name) {
+                                renameError = error
+                            } else {
+                                renameError = nil
+                                showingRename = false
+                            }
                         },
-                        onCancel: { showingRename = false }
+                        onCancel: {
+                            renameError = nil
+                            showingRename = false
+                        }
                     )
                 }
 

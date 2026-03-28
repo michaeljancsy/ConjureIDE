@@ -5,6 +5,7 @@ struct RenamePopover: View {
     @Binding var name: String
     let currentName: String
     let existingNames: Set<String>
+    var errorMessage: String?
     let onRename: (String) -> Void
     let onCancel: () -> Void
 
@@ -35,6 +36,10 @@ struct RenamePopover: View {
 
             if nameConflict {
                 Text("A preset named \"\(trimmedName)\" already exists.")
+                    .font(.caption)
+                    .foregroundColor(.red)
+            } else if let errorMessage {
+                Text(errorMessage)
                     .font(.caption)
                     .foregroundColor(.red)
             }

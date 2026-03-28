@@ -344,10 +344,17 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             try? pm.deleteUserPreset(current)
         }
 
-        // Rename: rename current user/repo preset
-        let onRenamePreset: (String) -> Void = { [weak pm] newName in
-            guard let pm, let current = pm.currentPreset, !current.isFactory else { return }
-            try? pm.renamePreset(current, to: newName)
+        // Rename: rename current user/repo preset, returns error string on failure
+        let onRenamePreset: (String) -> String? = { [weak pm] newName in
+            guard let pm, let current = pm.currentPreset, !current.isFactory else {
+                return "No preset selected"
+            }
+            do {
+                try pm.renamePreset(current, to: newName)
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
         }
 
         // New: reset to default template for the selected language

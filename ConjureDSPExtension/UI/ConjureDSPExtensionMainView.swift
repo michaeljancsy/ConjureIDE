@@ -32,7 +32,7 @@ struct ConjureDSPExtensionMainView: View {
     var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
     var onSaveAsPreset: (String, String, ScriptLanguage) -> ScriptSaveResult
     var onDeletePreset: () -> Void
-    var onRenamePreset: (String) -> Void
+    var onRenamePreset: (String) -> String?
     var onNew: (ScriptLanguage) -> ScriptSaveResult
     var onExport: (String) async -> ExportResult
     var defaultBenchmark: (processTimeMs: Double, budgetMs: Double)?
@@ -134,7 +134,7 @@ struct ConjureDSPExtensionMainView: View {
                     onDeletePreset()
                 },
                 onRename: { name in
-                    onRenamePreset(name)
+                    return onRenamePreset(name)
                 },
                 onNew: { language in
                     selectedLanguage = language
