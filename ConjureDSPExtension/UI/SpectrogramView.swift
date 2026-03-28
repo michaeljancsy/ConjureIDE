@@ -278,8 +278,11 @@ final class SpectrogramBitmapBuffer {
         writeColumn = (col + 1) % width
     }
 
-    /// Create a CGImage from the persistent bitmap context.
-    /// The returned image shares the context's backing store (no pixel copy).
+    /// Create a CGImage snapshot from the persistent bitmap context.
+    /// Per Apple docs, CGContext.makeImage() returns an immutable image —
+    /// CG manages the copy internally. Thread safety is guaranteed because
+    /// both appendColumn() and Canvas rendering run on the main thread
+    /// (via CADisplayLink → onChange → Canvas), so they never overlap.
     func makeImage() -> CGImage? {
         context.makeImage()
     }
