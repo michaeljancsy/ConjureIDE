@@ -224,14 +224,17 @@ uint32_t dsp_kernel_read_input_ring(DSPKernelRef kernel, float *out, uint32_t ma
 uint32_t dsp_kernel_read_output_ring(DSPKernelRef kernel, float *out, uint32_t max_samples);
 
 /**
- * Verify a license serial key and set the kernel's licensed state.
- * Returns true if the license is valid.
+ * Verify a subscription token's signature and expiry, then set the kernel's
+ * subscription status and licensed flag.
+ *
+ * Returns a `SubscriptionStatus` value (0=Active, 1=GracePeriod, 2=Expired,
+ * 3=Cancelled, 4=NoSubscription).
  *
  * # Safety
  * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
- * - `serial` must be a valid null-terminated C string.
+ * - `token` must be a valid null-terminated C string.
  */
-bool dsp_kernel_verify_license(DSPKernelRef kernel, const char *serial);
+uint8_t dsp_kernel_verify_token(DSPKernelRef kernel, const char *token);
 
 /**
  * Check if the kernel has a valid license.
@@ -249,6 +252,36 @@ bool dsp_kernel_is_licensed(DSPKernelRef kernel);
  * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
  */
 double dsp_kernel_demo_seconds_remaining(DSPKernelRef kernel, double sample_rate);
+
+/**
+ * Set the subscription status directly (for restoring from cached token
+ * or when the Swift layer determines the status via server call).
+ *
+ * Status values: 0=Active, 1=GracePeriod, 2=Expired, 3=Cancelled, 4=NoSubscription
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+void dsp_kernel_set_subscription_status(DSPKernelRef kernel, uint8_t status);
+
+/**
+ * Get the current subscription status.
+ *
+ * Returns: 0=Active, 1=GracePeriod, 2=Expired, 3=Cancelled, 4=NoSubscription
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+uint8_t dsp_kernel_subscription_status(DSPKernelRef kernel);
+
+/**
+ * Get the grace period deadline as Unix seconds.
+ * Returns 0 if no token has been verified.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+int64_t dsp_kernel_grace_deadline_unix(DSPKernelRef kernel);
 
 /**
  * Set the licensed state directly (for restoring from persisted license).

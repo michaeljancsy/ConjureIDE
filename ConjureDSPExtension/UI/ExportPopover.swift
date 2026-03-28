@@ -37,7 +37,7 @@ struct ExportPopover: View {
             .font(.caption)
 
             if !isLicensed {
-                Text("License required to export presets.")
+                Text("Subscription required to export presets.")
                     .font(.caption)
                     .foregroundColor(.orange)
             }

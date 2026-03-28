@@ -287,29 +287,41 @@ pub unsafe extern "C" fn dsp_kernel_read_output_ring(
     (*kernel).read_output_ring(output) as u32
 }
 
-/// Verify a license serial key and set the kernel's licensed state.
-/// Returns true if the license is valid.
+/// Verify a subscription token's signature and expiry, then set the kernel's
+/// subscription status and licensed flag.
+///
+/// Returns a `SubscriptionStatus` value (0=Active, 1=GracePeriod, 2=Expired,
+/// 3=Cancelled, 4=NoSubscription).
 ///
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-/// - `serial` must be a valid null-terminated C string.
+/// - `token` must be a valid null-terminated C string.
 #[no_mangle]
-pub unsafe extern "C" fn dsp_kernel_verify_license(
+pub unsafe extern "C" fn dsp_kernel_verify_token(
     kernel: DSPKernelRef,
-    serial: *const c_char,
-) -> bool {
-    let serial_str = match CStr::from_ptr(serial).to_str() {
+    token: *const c_char,
+) -> u8 {
+    let token_str = match CStr::from_ptr(token).to_str() {
         Ok(s) => s,
-        Err(_) => return false,
+        Err(_) => return license::SubscriptionStatus::NoSubscription as u8,
     };
-    match crate::license::verify_license(serial_str) {
-        Ok(_payload) => {
-            (*kernel).set_licensed(true);
-            true
+    match license::verify_token(token_str) {
+        Ok(payload) => {
+            // Get current Unix time
+            let now_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let status = license::check_token_status(&payload, now_unix);
+            let deadline = license::grace_deadline_from_token(&payload);
+            (*kernel).set_subscription_status(status);
+            (*kernel).set_grace_deadline_unix(deadline);
+            status as u8
         }
         Err(e) => {
-            (*kernel).last_error = Some(format!("License verification failed: {}", e));
-            false
+            (*kernel).last_error = Some(format!("Token verification failed: {}", e));
+            (*kernel).set_subscription_status(license::SubscriptionStatus::NoSubscription);
+            license::SubscriptionStatus::NoSubscription as u8
         }
     }
 }
@@ -334,6 +346,40 @@ pub unsafe extern "C" fn dsp_kernel_demo_seconds_remaining(
     sample_rate: f64,
 ) -> f64 {
     (*kernel).demo_seconds_remaining(sample_rate)
+}
+
+/// Set the subscription status directly (for restoring from cached token
+/// or when the Swift layer determines the status via server call).
+///
+/// Status values: 0=Active, 1=GracePeriod, 2=Expired, 3=Cancelled, 4=NoSubscription
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_set_subscription_status(kernel: DSPKernelRef, status: u8) {
+    let s = license::SubscriptionStatus::from_u8(status);
+    (*kernel).set_subscription_status(s);
+}
+
+/// Get the current subscription status.
+///
+/// Returns: 0=Active, 1=GracePeriod, 2=Expired, 3=Cancelled, 4=NoSubscription
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_subscription_status(kernel: DSPKernelRef) -> u8 {
+    (*kernel).subscription_status() as u8
+}
+
+/// Get the grace period deadline as Unix seconds.
+/// Returns 0 if no token has been verified.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_grace_deadline_unix(kernel: DSPKernelRef) -> i64 {
+    (*kernel).grace_deadline_unix()
 }
 
 /// Set the licensed state directly (for restoring from persisted license).
@@ -835,17 +881,38 @@ mod tests {
     }
 
     #[test]
-    fn test_ffi_verify_license_invalid_serial() {
+    fn test_ffi_verify_token_invalid() {
         let kernel = dsp_kernel_create();
         unsafe {
-            let serial = std::ffi::CString::new("invalid.serial").unwrap();
-            let result = dsp_kernel_verify_license(kernel, serial.as_ptr());
-            assert!(!result);
+            let token = std::ffi::CString::new("invalid.token").unwrap();
+            let result = dsp_kernel_verify_token(kernel, token.as_ptr());
+            assert_eq!(result, license::SubscriptionStatus::NoSubscription as u8);
             assert!(!dsp_kernel_is_licensed(kernel));
 
             // Should have set an error message
             let err = dsp_kernel_last_error(kernel);
             assert!(!err.is_null());
+
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    #[test]
+    fn test_ffi_subscription_status() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            // Default is NoSubscription
+            assert_eq!(dsp_kernel_subscription_status(kernel), 4);
+
+            // Set to Active
+            dsp_kernel_set_subscription_status(kernel, 0);
+            assert_eq!(dsp_kernel_subscription_status(kernel), 0);
+            assert!(dsp_kernel_is_licensed(kernel));
+
+            // Set to Expired
+            dsp_kernel_set_subscription_status(kernel, 2);
+            assert_eq!(dsp_kernel_subscription_status(kernel), 2);
+            assert!(!dsp_kernel_is_licensed(kernel));
 
             dsp_kernel_destroy(kernel);
         }

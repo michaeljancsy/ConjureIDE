@@ -3,7 +3,8 @@ use crate::params::PARAM_COUNT;
 use crate::python_backend::PythonBackend;
 use crate::ring_buffer::AudioRingBuffer;
 use crate::wasm_backend::WasmBackend;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use crate::license::SubscriptionStatus;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 
 /// Demo limit in seconds. The actual sample count is computed from the host sample rate
@@ -89,6 +90,12 @@ pub struct DSPKernel {
     /// Real-time profiler: decaying peak duration in microseconds.
     /// Each callback: peak = max(current, peak * 1023/1024).
     pub(crate) profiler_peak_us: AtomicU32,
+    /// Current subscription status for UI reporting.
+    /// Main thread writes, UI thread reads — lock-free.
+    subscription_status: AtomicU8,
+    /// Unix timestamp when grace period ends (valid_until + 7 days).
+    /// Used by UI to show "X days remaining" warnings.
+    grace_deadline_unix: AtomicI64,
 }
 
 impl DSPKernel {
@@ -115,6 +122,8 @@ impl DSPKernel {
             profiler_current_us: AtomicU32::new(0),
             profiler_avg_us: AtomicU32::new(0),
             profiler_peak_us: AtomicU32::new(0),
+            subscription_status: AtomicU8::new(SubscriptionStatus::NoSubscription as u8),
+            grace_deadline_unix: AtomicI64::new(0),
         }
     }
 
@@ -343,6 +352,31 @@ impl DSPKernel {
     /// Reset the demo sample counter to zero, giving another 60 seconds of demo time.
     pub fn reset_demo(&self) {
         self.demo_samples_processed.store(0, Ordering::Relaxed);
+    }
+
+    /// Set the subscription status and update the licensed flag accordingly.
+    /// Active and GracePeriod grant licensed access; everything else → demo mode.
+    pub fn set_subscription_status(&self, status: SubscriptionStatus) {
+        self.subscription_status.store(status as u8, Ordering::Relaxed);
+        self.licensed.store(status.is_licensed(), Ordering::Relaxed);
+        if status.is_licensed() {
+            self.demo_samples_processed.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Read the current subscription status.
+    pub fn subscription_status(&self) -> SubscriptionStatus {
+        SubscriptionStatus::from_u8(self.subscription_status.load(Ordering::Relaxed))
+    }
+
+    /// Set the grace period deadline (Unix seconds) for UI display.
+    pub fn set_grace_deadline_unix(&self, deadline: i64) {
+        self.grace_deadline_unix.store(deadline, Ordering::Relaxed);
+    }
+
+    /// Read the grace period deadline (Unix seconds).
+    pub fn grace_deadline_unix(&self) -> i64 {
+        self.grace_deadline_unix.load(Ordering::Relaxed)
     }
 
     /// Mono-downmix multi-channel audio into the scratch buffer and write to ring buffer.

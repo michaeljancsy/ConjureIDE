@@ -25,7 +25,7 @@ struct ConjureDSPExtensionMainView: View {
     @ObservedObject var captureManager: AudioCaptureManager
     @ObservedObject var processProfiler: ProcessProfiler
     @ObservedObject var parameterState: ParameterState
-    @ObservedObject var licenseManager: LicenseManager
+    @ObservedObject var subscriptionManager: SubscriptionManager
     @ObservedObject var gitHubService: GitHubService
     var onRun: (String) async -> ScriptSaveResult
     var onSelectPreset: (Preset) async -> ScriptSaveResult
@@ -94,7 +94,7 @@ struct ConjureDSPExtensionMainView: View {
             // Preset toolbar
             PresetToolbar(
                 presetManager: presetManager,
-                licenseManager: licenseManager,
+                subscriptionManager: subscriptionManager,
                 gitHubService: gitHubService,
                 isCompiling: isCompiling,
                 hasUnrunChanges: scriptSource != lastRunSource,
@@ -289,7 +289,7 @@ struct ConjureDSPExtensionMainView: View {
             } // HStack
 
             // Demo expired overlay
-            if !licenseManager.isLicensed && licenseManager.demoSecondsRemaining <= 0 {
+            if !subscriptionManager.isLicensed && subscriptionManager.demoSecondsRemaining <= 0 {
                 Color.black.opacity(0.6)
                     .ignoresSafeArea()
 
@@ -308,7 +308,7 @@ struct ConjureDSPExtensionMainView: View {
 
                     VStack(spacing: 10) {
                         Button {
-                            licenseManager.restartDemo()
+                            subscriptionManager.restartDemo()
                         } label: {
                             Text("Restart Demo")
                                 .frame(minWidth: 160)
@@ -316,7 +316,7 @@ struct ConjureDSPExtensionMainView: View {
                         .controlSize(.large)
                         .accessibilityIdentifier("restartDemoButton")
 
-                        Link(destination: LicenseSettingsView.subscribeURL) {
+                        Link(destination: SubscriptionSettingsView.subscribeURL) {
                             Text("Subscribe")
                                 .frame(minWidth: 160)
                         }
