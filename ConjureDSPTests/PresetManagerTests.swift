@@ -399,7 +399,14 @@ struct PresetManagerTests {
     }
 
     @Test @MainActor func renameRepoPreset() throws {
-        let (manager, tempDir) = try Self.makeManager()
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PresetManagerTests_\(UUID().uuidString)", isDirectory: true)
+        let repoDir = tempDir.appendingPathComponent("RepoPresets", isDirectory: true)
+        let manager = PresetManager(
+            extensionBundle: try Self.extensionBundle,
+            userPresetsURL: tempDir,
+            repoPresetsURL: repoDir
+        )
         defer { Self.cleanup(tempDir) }
 
         let script = "# repo script\n"
