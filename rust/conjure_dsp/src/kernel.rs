@@ -759,15 +759,13 @@ impl DSPKernel {
                 }
                 if ok {
                     Self::safety_clamp(outputs, channel_count, frame_count);
-                    // Cast output pointers to const (used for capture and demo gating)
-                    let out_as_const: Vec<*const f32> = outputs.iter().map(|p| *p as *const f32).collect();
                     // Capture output audio for spectrogram (after processing)
                     if capturing {
-                        self.capture_to_ring(&out_as_const, channel_count, frame_count, &self.output_ring);
+                        self.capture_to_ring(Self::as_const_ptrs(outputs), channel_count, frame_count, &self.output_ring);
                     }
                     // Increment demo counter only if output is non-silent
                     if !self.licensed.load(Ordering::Relaxed)
-                        && Self::buffer_peak(&out_as_const, channel_count, frame_count)
+                        && Self::buffer_peak(Self::as_const_ptrs(outputs), channel_count, frame_count)
                             >= DEMO_SILENCE_THRESHOLD
                     {
                         self.demo_samples_processed
@@ -789,15 +787,12 @@ impl DSPKernel {
             self.capture_to_ring(inputs, channel_count, frame_count, &self.output_ring);
         }
         // Increment demo counter only if output is non-silent
-        if !self.licensed.load(Ordering::Relaxed) {
-            let out_as_const: Vec<*const f32> =
-                outputs.iter().map(|p| *p as *const f32).collect();
-            if Self::buffer_peak(&out_as_const, channel_count, frame_count)
+        if !self.licensed.load(Ordering::Relaxed)
+            && Self::buffer_peak(Self::as_const_ptrs(outputs), channel_count, frame_count)
                 >= DEMO_SILENCE_THRESHOLD
-            {
-                self.demo_samples_processed
-                    .fetch_add(frame_count as u64, Ordering::Relaxed);
-            }
+        {
+            self.demo_samples_processed
+                .fetch_add(frame_count as u64, Ordering::Relaxed);
         }
     }
 
@@ -829,6 +824,13 @@ impl DSPKernel {
             }
         }
         peak
+    }
+
+    /// Reinterpret a `&[*mut f32]` slice as `&[*const f32]` (same layout, no allocation).
+    #[inline]
+    fn as_const_ptrs(outputs: &[*mut f32]) -> &[*const f32] {
+        // SAFETY: *mut T and *const T have identical layout per Rust reference.
+        unsafe { std::slice::from_raw_parts(outputs.as_ptr() as *const *const f32, outputs.len()) }
     }
 
     /// Copy input to output unchanged.

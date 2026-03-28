@@ -556,16 +556,15 @@ impl Backend for WasmBackend {
 
         let mem_data = self.memory.data_mut(&mut self.store);
 
-        // Copy input audio into WASM linear memory
+        // Copy input audio into WASM linear memory (bulk memcpy — both ARM64 and WASM are little-endian)
         let input_byte_offset = self.input_offset as usize;
         for ch in 0..channel_count {
             let src = std::slice::from_raw_parts(inputs[ch], frame_count);
             let dst_offset = input_byte_offset + ch * frame_count * 4;
             let dst = &mut mem_data[dst_offset..dst_offset + frame_count * 4];
-            // Copy f32 samples as raw bytes
-            for (i, &sample) in src.iter().enumerate() {
-                dst[i * 4..(i + 1) * 4].copy_from_slice(&sample.to_le_bytes());
-            }
+            let src_bytes =
+                std::slice::from_raw_parts(src.as_ptr() as *const u8, frame_count * 4);
+            dst.copy_from_slice(src_bytes);
         }
 
         // Write params into WASM memory if the module exports get_params_ptr.
@@ -606,10 +605,11 @@ impl Backend for WasmBackend {
                     transport.time_sig_denominator as f32,
                     transport.sample_position as f32,
                 ];
-                for (i, &val) in vals.iter().enumerate() {
-                    let offset = transport_byte_offset + i * 4;
-                    mem_data[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
-                }
+                let src_bytes = std::slice::from_raw_parts(
+                    vals.as_ptr() as *const u8,
+                    6 * 4,
+                );
+                mem_data[transport_byte_offset..transport_end].copy_from_slice(src_bytes);
             }
         }
 
@@ -630,21 +630,16 @@ impl Backend for WasmBackend {
             return false;
         }
 
-        // Copy output audio from WASM linear memory
+        // Copy output audio from WASM linear memory (bulk memcpy — little-endian match)
         let mem_data = self.memory.data(&self.store);
         let output_byte_offset = self.output_offset as usize;
         for ch in 0..channel_count {
             let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
             let src_offset = output_byte_offset + ch * frame_count * 4;
             let src = &mem_data[src_offset..src_offset + frame_count * 4];
-            for i in 0..frame_count {
-                dst[i] = f32::from_le_bytes([
-                    src[i * 4],
-                    src[i * 4 + 1],
-                    src[i * 4 + 2],
-                    src[i * 4 + 3],
-                ]);
-            }
+            let dst_bytes =
+                std::slice::from_raw_parts_mut(dst.as_mut_ptr() as *mut u8, frame_count * 4);
+            dst_bytes.copy_from_slice(src);
         }
 
         true

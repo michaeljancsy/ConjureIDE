@@ -94,6 +94,10 @@ final class AudioCaptureManager: ObservableObject {
     private var inputAccumulator: [Float] = []
     private var outputAccumulator: [Float] = []
 
+    /// When false, skips computing normalized-difference columns (saves ~50μs/window).
+    /// Set by SpectrogramSidePanel based on whether that spectrogram mode is visible.
+    var isNormalizedDiffEnabled: Bool = true
+
     // FFT resources (vDSP)
     private var fftSetup: OpaquePointer?  // FFTSetup from vDSP_create_fftsetup
     private var windowBuffer: [Float] = []
@@ -102,6 +106,11 @@ final class AudioCaptureManager: ObservableObject {
     private var fftImagInput: [Float] = []
     private var fftRealOutput: [Float] = []
     private var fftImagOutput: [Float] = []
+
+    // Pre-allocated FFT working buffers (reused across computeFFT calls)
+    private var fftWindowed: [Float] = []
+    private var fftMagnitudes: [Float] = []
+    private var fftDBValues: [Float] = []
 
     // MARK: - Init
 
@@ -141,6 +150,11 @@ final class AudioCaptureManager: ObservableObject {
         fftImagInput = [Float](repeating: 0, count: n / 2)
         fftRealOutput = [Float](repeating: 0, count: n / 2)
         fftImagOutput = [Float](repeating: 0, count: n / 2)
+
+        // Pre-allocated computeFFT scratch buffers
+        fftWindowed = [Float](repeating: 0, count: n)
+        fftMagnitudes = [Float](repeating: 0, count: n / 2)
+        fftDBValues = [Float](repeating: 0, count: n / 2)
 
         // Reset accumulators
         inputAccumulator.removeAll(keepingCapacity: true)
@@ -261,7 +275,9 @@ final class AudioCaptureManager: ObservableObject {
                 }
 
                 pendingDifferenceColumns.append(computeDifference(input: lastInput, output: lastOutput))
-                pendingNormalizedDifferenceColumns.append(computeNormalizedDifference(inputDB: lastInput, outputDB: lastOutput))
+                if isNormalizedDiffEnabled {
+                    pendingNormalizedDifferenceColumns.append(computeNormalizedDifference(inputDB: lastInput, outputDB: lastOutput))
+                }
             }
 
             updateCounter &+= 1
@@ -276,12 +292,11 @@ final class AudioCaptureManager: ObservableObject {
         let n = fftSize
         let halfN = n / 2
 
-        // Apply Hann window
-        var windowed = [Float](repeating: 0, count: n)
-        vDSP_vmul(samples, 1, windowBuffer, 1, &windowed, 1, vDSP_Length(n))
+        // Apply Hann window (reuse pre-allocated buffer)
+        vDSP_vmul(samples, 1, windowBuffer, 1, &fftWindowed, 1, vDSP_Length(n))
 
         // Pack into split complex (even/odd interleave)
-        windowed.withUnsafeBufferPointer { buf in
+        fftWindowed.withUnsafeBufferPointer { buf in
             buf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfN) { complexPtr in
                 fftRealInput.withUnsafeMutableBufferPointer { realBuf in
                     fftImagInput.withUnsafeMutableBufferPointer { imagBuf in
@@ -292,41 +307,42 @@ final class AudioCaptureManager: ObservableObject {
             }
         }
 
-        // Forward FFT (in-place)
-        var magnitudes = [Float](repeating: 0, count: halfN)
+        // Forward FFT (in-place), reuse pre-allocated magnitude/dB buffers
         fftRealInput.withUnsafeMutableBufferPointer { realBuf in
             fftImagInput.withUnsafeMutableBufferPointer { imagBuf in
                 var split = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
                 vDSP_fft_zrip(fftSetup, &split, 1, fftLog2n, FFTDirection(FFT_FORWARD))
 
                 // Compute magnitude squared
-                vDSP_zvmags(&split, 1, &magnitudes, 1, vDSP_Length(halfN))
+                vDSP_zvmags(&split, 1, &fftMagnitudes, 1, vDSP_Length(halfN))
             }
         }
 
         // Scale: divide by N^2
         let nFloat = Float(n)
         var scale = 1.0 / (nFloat * nFloat)
-        vDSP_vsmul(magnitudes, 1, &scale, &magnitudes, 1, vDSP_Length(halfN))
+        vDSP_vsmul(fftMagnitudes, 1, &scale, &fftMagnitudes, 1, vDSP_Length(halfN))
 
         // Convert to dB: 10 * log10(magnitude)
         // Add small epsilon to avoid log(0)
         var epsilon: Float = 1e-20
-        vDSP_vsadd(magnitudes, 1, &epsilon, &magnitudes, 1, vDSP_Length(halfN))
+        vDSP_vsadd(fftMagnitudes, 1, &epsilon, &fftMagnitudes, 1, vDSP_Length(halfN))
 
-        var dbValues = [Float](repeating: 0, count: halfN)
         var count = Int32(halfN)
-        vvlog10f(&dbValues, magnitudes, &count)
+        vvlog10f(&fftDBValues, fftMagnitudes, &count)
 
         var ten: Float = 10.0
-        vDSP_vsmul(dbValues, 1, &ten, &dbValues, 1, vDSP_Length(halfN))
+        vDSP_vsmul(fftDBValues, 1, &ten, &fftDBValues, 1, vDSP_Length(halfN))
 
         // Clamp to floor
         var floor = Self.floorDB
         var ceiling: Float = 0.0
-        vDSP_vclip(dbValues, 1, &floor, &ceiling, &dbValues, 1, vDSP_Length(halfN))
+        vDSP_vclip(fftDBValues, 1, &floor, &ceiling, &fftDBValues, 1, vDSP_Length(halfN))
 
-        result = dbValues
+        // Copy into caller's buffer (avoids allocation since result is pre-sized by caller)
+        for i in 0..<halfN {
+            result[i] = fftDBValues[i]
+        }
     }
 
     // MARK: - Column Draining

@@ -95,6 +95,9 @@ struct SpectrogramSidePanel: View {
             }
         }
         .accessibilityIdentifier("spectrogramSidePanel")
+        .onChange(of: showNormalizedDiff) { _, newValue in
+            captureManager.isNormalizedDiffEnabled = newValue
+        }
     }
 
     @ViewBuilder
