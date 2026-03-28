@@ -50,7 +50,6 @@ private extension View {
 /// Toolbar for browsing, running, saving, and deleting presets.
 struct PresetToolbar: View {
     @ObservedObject var presetManager: PresetManager
-    @ObservedObject var aiService: AIService
     @ObservedObject var licenseManager: LicenseManager
     @ObservedObject var gitHubService: GitHubService
     var isCompiling: Bool = false
@@ -299,12 +298,12 @@ struct PresetToolbar: View {
                 }
             }
 
-            // Chat sidebar toggle
+            // Claude Code terminal toggle
             Button(action: { showChat.toggle() }) {
-                Image(systemName: showChat ? "bubble.left.fill" : "bubble.left")
+                Image(systemName: showChat ? "terminal.fill" : "terminal")
             }
             .buttonStyle(.borderless)
-            .toolbarTooltip(showChat ? "Hide AI chat" : "Show AI chat")
+            .toolbarTooltip(showChat ? "Hide Claude Code" : "Show Claude Code")
             .accessibilityIdentifier("chatToggleButton")
 
             // Spectrogram toggle
@@ -340,11 +339,6 @@ struct PresetToolbar: View {
             .popover(isPresented: $showingSettings) {
                 VStack(spacing: 0) {
                     LicenseSettingsView(licenseManager: licenseManager)
-                    Divider()
-                    AISettingsPopover(
-                        aiService: aiService,
-                        onDone: { showingSettings = false }
-                    )
                     Divider()
                     GitHubSettingsView(
                         gitHubService: gitHubService,

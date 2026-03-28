@@ -20,7 +20,7 @@ class AudioUnitHostModel {
     var viewModel = AudioUnitViewModel()
 
     var isPlaying: Bool { playEngine.isPlaying }
-    
+
     var audioUnitCrashed = false
 
     /// Audio Component Description

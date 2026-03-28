@@ -64,6 +64,8 @@ Note: `--test-threads=1` is required because Python tests share a single interpr
 
 ## Architecture
 
+**The host app is primarily a development convenience, and all essential functionality must live in the extension.** The plugin must work fully when hosted in any DAW — the host app provides no runtime services to the extension. Any feature that requires the host app to be running (e.g., a server, a process manager) will not work in production DAW contexts.
+
 - **Swift + SwiftUI** for all UI, host app logic, buffer management, and render block
 - **Rust** for the DSP kernel, with pluggable backends for Python and WASM processing
 - **Python** for user-editable DSP scripts, called each render callback with pre-allocated numpy arrays
