@@ -61,6 +61,14 @@ final class PTYManager {
             return
         }
 
+        // Clean up stale dispatch sources from a previous session (e.g. restarting
+        // from .exited state). The old readSource's cancel handler would otherwise
+        // close the new masterFD, corrupting the new session.
+        readSource?.cancel()
+        readSource = nil
+        waitSource?.cancel()
+        waitSource = nil
+
         // Write MCP config and context file BEFORE fork — Foundation APIs are not fork-safe
         if let port = mcpServerPort {
             writeMCPConfig(port: port)
