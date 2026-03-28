@@ -2,6 +2,10 @@ name = "conjuredsp-api"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
+routes = [
+  { pattern = "api.conjuredsp.com", custom_domain = true }
+]
+
 [vars]
 PADDLE_API_BASE = "https://api.paddle.com"
 
@@ -13,4 +17,4 @@ PADDLE_API_BASE = "https://api.paddle.com"
 [[d1_databases]]
 binding = "DB"
 database_name = "conjuredsp-db"
-database_id = ""  # Set after `wrangler d1 create conjuredsp-db`
+database_id = "2c4420f2-5b0c-4dc6-b22d-f9082019472c"
