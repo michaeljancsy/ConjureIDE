@@ -397,7 +397,7 @@ final class PTYManager {
                 outputs[ch][i] = inputs[ch][i]  # passthrough
     ```
 
-    ## Standard Library
+    ## Python Standard Library
 
     ```python
     from conjuredsp.dsp import db_to_gain, gain_to_db, smooth_coeff, soft_clip, crossfade, lerp, ms_to_samples
@@ -413,14 +413,53 @@ final class PTYManager {
     - `LFO(sample_rate, freq=1.0, waveform="sine")` — `.tick()` returns [-1,1], `.set_freq(hz)`, `.tick_n(n)` returns numpy array
     - `smooth_coeff(time_ms, sample_rate)` → alpha for one-pole smoothing: `state = alpha * state + (1-alpha) * target`
 
+    ## Rust DSP Scripts
+
+    Rust scripts are compiled to WASM (takes a few seconds). Use `conjuredsp` crate for the same DSP \
+    building blocks as Python.
+
+    ```rust
+    use conjuredsp::*;
+    setup!();
+
+    params! {
+        CUTOFF = freq(),
+        RESONANCE = param(0.0, 1.0).default(0.5),
+    }
+
+    #[no_mangle]
+    pub extern "C" fn process(
+        input: *const f32, output: *mut f32,
+        channels: i32, frame_count: i32, sample_rate: f32,
+    ) {
+        let ctx = ctx(input, output, channels, frame_count, sample_rate);
+        for c in 0..ctx.channels() {
+            for i in 0..ctx.frames() {
+                ctx.set_output(c, i, ctx.input(c, i));
+            }
+        }
+    }
+    ```
+
+    Rust key APIs (same primitives as Python):
+    - `ctx.input(ch, frame)`, `ctx.set_output(ch, frame, val)`, `ctx.param(INDEX)` — safe buffer access
+    - `DelayLine::<SIZE>::new()` — `.write(sample)`, `.read(delay)` (linear interp), `.read_cubic(delay)`
+    - `BiquadCoeffs::lowpass(freq, q, sr)` — also highpass, bandpass, peak, notch, lowshelf, highshelf, allpass
+    - `Biquad::new(coeffs)` — `.set_coeffs(coeffs)`, `.process(sample)` returns filtered sample
+    - `Lfo::new(sr, freq, Waveform::Sine)` — `.tick()` returns [-1,1]
+    - `db_to_gain`, `gain_to_db`, `smooth_coeff`, `soft_clip`, `lerp`, `crossfade`, `ms_to_samples`
+    - Persistent state: use `static mut` or `static` with interior mutability
+    - Param builders: `freq()`, `db()`, `time_ms()`, `mix()`, `pct()`, `toggle()`, `ratio()`, `param(min, max)` \
+    — all support `.min()`, `.max()`, `.default()`, `.unit()`, `.curve()` modifiers
+
     ## Conventions
 
-    - Persistent state: use module-level globals (e.g., `_filters = None`, initialized on first call)
-    - numpy is available; scipy is available for advanced DSP
     - No file I/O or network calls in process() — it runs on the real-time audio thread
     - Up to 16 parameters per script
     - Use `compile_and_run` to load scripts, `get_parameters` to check state, `toggle_bypass` for A/B comparison
-    - Rust scripts are also supported (compiled to WASM, takes a few seconds) but Python is preferred for iteration speed
+    - Python loads instantly; Rust compiles to WASM first (takes a few seconds)
+    - **Language selection**: Write in whatever language the user asks for. If the user doesn't specify, \
+    call `get_script` to check the currently loaded script and write in the same language.
     - IMPORTANT: The user may change scripts via the editor at any time. Never assume a previous script \
     is still loaded — always call `get_script` to check before deciding whether to modify or replace. \
     Do not rely on conversation memory for what script is currently active.
