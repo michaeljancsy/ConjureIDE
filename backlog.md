@@ -2,8 +2,6 @@
 
 ## In Progress
 
-- **GitHub preset integration**: Phases 1–4 complete plus ETag HTTP caching, automatic retry/backoff (exponential 1–32s with ±20% jitter, 7 attempts), and unit tests. Remaining: polish (Phase 5).
-
 ## To Do
 
 ### v1 Release
@@ -31,7 +29,7 @@
 
 ### Post-Launch
 - Python package management: Phase 2 (bundle uv + host-app install UI) and Phase 3 (per-preset requirements.txt). Design doc at `docs/python-package-management.md`.
-- GitHub integration Phase 5 polish (remaining UI/UX improvements)
+- GitHub preset integration Phase 5 polish (UI/UX improvements, Phases 1–4 complete)
 
 ### Other
 - AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration)
