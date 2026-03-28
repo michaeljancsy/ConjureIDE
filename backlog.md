@@ -11,6 +11,7 @@
 ### UI & Editor
 - Investigate ACP (Audio Code Protocol) and more full-fledged IDE features for the editor
 - AI-powered autocomplete (context-aware LLM suggestions)
+- Investigate Python LSP (Pyright) for dynamic autocomplete of user-installed packages and arbitrary code
 - Claude Code terminal polish: auto-launch companion app from AU, DAW testing
 - Audio visualization polish: persist spectrogram preferences in UserDefaults, add spectrogram to host app
 - Full-screen text editor mode
@@ -24,13 +25,13 @@
 
 ## Done
 
+- Comprehensive Monaco autocomplete for conjuredsp: Python/Rust dot-completions (Biquad, DelayLine, LFO, BiquadCoeffs::, Waveform::, ctx.), signature help on `(`, hover docs, function-level completions for DSP utils/param builders, latency!() macro, ParamSpec chain methods (2026-03-28)
 - In-app "Buy" link for unlicensed users — subscribe buttons in SubscriptionSettingsView and demo-expired overlay linking to conjuredsp.com/buy (2026-03-28)
 - Deploy Paddle subscription server — Cloudflare Worker at api.conjuredsp.com with activate/verify/webhook endpoints, D1 SQLite, Ed25519 token signing (2026-03-27)
 - Website licensing link — buy/account URLs in subscription UI (2026-03-28)
 - Process function profiler — ProcessProfiler.swift polling kernel FFI timing, status bar display of current/avg/peak ms and budget % (2026-03-28)
 - Memory leak detection — MemoryMonitor.swift with sliding-window monotonic growth detection, WASM memory tracking, ok/warning/critical states (2026-03-28)
 - Preset comparison tests — tolerances tightened to 1e-4, native Rust compilation via bundled rustc for wasm32-wasip1 (2026-03-28)
-
 - Latency reporting for DAW compensation — scripts declare `LATENCY` (Python) or `latency!()` (Rust), AU reports via `AUAudioUnit.latency`, export pipeline includes in runtime-config.json, MCP tools report latency, Claude Code context guide documents the feature, lookahead limiter factory presets (Python + Rust) with parity tests (2026-03-27)
 - Export AUv3 Phase 5: integration tests (export → FFI kernel → process audio for both Rust and Python), post-export validation (WASM magic bytes, Python process fn, JSON config), param metadata round-trip tests, edge case tests, documentation (2026-03-27)
 - Claude Code terminal integration — MCP server in extension, companion app for PTY, xterm.js terminal UI, contentEditable keyboard input for ViewBridge (2026-03-27)
