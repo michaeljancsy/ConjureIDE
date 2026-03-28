@@ -17,18 +17,17 @@ enum SpectrogramChannel {
 
 /// Renders a single scrolling waterfall spectrogram from FFT magnitude data.
 ///
-/// Maintains a pixel buffer that scrolls left each time new FFT data arrives.
-/// New frequency columns are drawn on the right edge.
+/// Maintains a circular pixel buffer backed by a persistent CGBitmapContext.
+/// New frequency columns are written at the cursor position, eliminating
+/// the O(width*height) shift-left that the previous implementation required.
 struct SpectrogramView: View {
     @ObservedObject var captureManager: AudioCaptureManager
     let channel: SpectrogramChannel
     var frequencyScale: FrequencyScale = .log
+    var isPaused: Bool = false
     var isDivergingMap: Bool { channel == .difference || channel == .normalizedDifference }
 
-    /// Number of time columns visible in the waterfall
-    private static let columnCount = 256
-
-    @State private var pixelBuffer: SpectrogramPixelBuffer?
+    @State private var bitmapBuffer: SpectrogramBitmapBuffer?
 
     var body: some View {
         GeometryReader { geometry in
@@ -36,23 +35,86 @@ struct SpectrogramView: View {
             let height = Int(geometry.size.height)
 
             Canvas { context, size in
-                guard let buffer = pixelBuffer, let image = buffer.makeImage() else { return }
-                context.draw(Image(image, scale: 1, label: Text("")), in: CGRect(origin: .zero, size: size))
+                guard let buffer = bitmapBuffer, let fullImage = buffer.makeImage() else { return }
+                let col = buffer.writeColumn
+
+                if col == 0 {
+                    // Buffer is in natural order — draw as single image
+                    context.draw(
+                        Image(fullImage, scale: 1, label: Text("")),
+                        in: CGRect(origin: .zero, size: size)
+                    )
+                } else {
+                    let bufW = buffer.width
+                    let bufH = buffer.height
+                    let leftColumnsCount = bufW - col  // older data: [col ..< bufW]
+                    let rightColumnsCount = col         // newer data: [0 ..< col]
+
+                    // Scale factors from pixel coords to view coords
+                    let scaleX = size.width / CGFloat(bufW)
+                    let scaleY = size.height / CGFloat(bufH)
+
+                    // Left portion (older data) — from pixel column `col` to end
+                    if leftColumnsCount > 0,
+                       let leftCrop = fullImage.cropping(to: CGRect(
+                           x: col, y: 0, width: leftColumnsCount, height: bufH
+                       )) {
+                        context.draw(
+                            Image(leftCrop, scale: 1, label: Text("")),
+                            in: CGRect(
+                                x: 0,
+                                y: 0,
+                                width: CGFloat(leftColumnsCount) * scaleX,
+                                height: size.height
+                            )
+                        )
+                    }
+
+                    // Right portion (newer data) — from pixel column 0 to `col`
+                    if rightColumnsCount > 0,
+                       let rightCrop = fullImage.cropping(to: CGRect(
+                           x: 0, y: 0, width: rightColumnsCount, height: bufH
+                       )) {
+                        context.draw(
+                            Image(rightCrop, scale: 1, label: Text("")),
+                            in: CGRect(
+                                x: CGFloat(leftColumnsCount) * scaleX,
+                                y: 0,
+                                width: CGFloat(rightColumnsCount) * scaleX,
+                                height: size.height
+                            )
+                        )
+                    }
+                }
             }
             .onChange(of: captureManager.updateCounter) { _, _ in
-                ensureBuffer(width: width, height: height)
-                drainPendingColumns(height: height)
+                // Always drain to prevent unbounded accumulation,
+                // but only append to the bitmap when not paused.
+                if isPaused {
+                    _ = captureManager.drainColumns(for: channel)
+                } else {
+                    ensureBuffer(width: width, height: height)
+                    drainPendingColumns(height: height)
+                }
+            }
+            .onChange(of: isPaused) { _, newValue in
+                if !newValue {
+                    // Clear the buffer on unpause so the spectrogram starts fresh
+                    if width > 0 && height > 0 {
+                        bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height)
+                    }
+                }
             }
             .onChange(of: geometry.size) { _, newSize in
                 let w = Int(newSize.width)
                 let h = Int(newSize.height)
                 if w > 0 && h > 0 {
-                    pixelBuffer = SpectrogramPixelBuffer(width: w, height: h)
+                    bitmapBuffer = SpectrogramBitmapBuffer(width: w, height: h)
                 }
             }
             .onAppear {
                 if width > 0 && height > 0 {
-                    pixelBuffer = SpectrogramPixelBuffer(width: width, height: height)
+                    bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height)
                 }
             }
         }
@@ -81,17 +143,17 @@ struct SpectrogramView: View {
     }
 
     private func ensureBuffer(width: Int, height: Int) {
-        if pixelBuffer == nil && width > 0 && height > 0 {
-            pixelBuffer = SpectrogramPixelBuffer(width: width, height: height)
+        if bitmapBuffer == nil && width > 0 && height > 0 {
+            bitmapBuffer = SpectrogramBitmapBuffer(width: width, height: height)
         }
     }
 
     private func appendColumn(magnitudes: [Float], height: Int) {
-        guard var buffer = pixelBuffer else { return }
+        guard let buffer = bitmapBuffer else { return }
         let binCount = magnitudes.count
         guard binCount > 0 && height > 0 else { return }
 
-        // Build a column of pixels (bottom to top)
+        // Build a column of pixels (bottom to top: index 0 = lowest frequency)
         var column = [SIMD4<UInt8>](repeating: .zero, count: height)
 
         for y in 0..<height {
@@ -113,8 +175,7 @@ struct SpectrogramView: View {
             }
         }
 
-        buffer.shiftLeftAndAppend(column: column)
-        pixelBuffer = buffer
+        buffer.appendColumn(column)
     }
 
     /// Map a display position (0...1, bottom to top) back to an FFT bin index.
@@ -144,68 +205,85 @@ struct SpectrogramView: View {
     }
 }
 
-// MARK: - Pixel Buffer
+// MARK: - Bitmap Buffer
 
-/// A bitmap buffer for waterfall spectrogram rendering.
-/// Stores RGBA pixel data and supports efficient left-shift + append operations.
-struct SpectrogramPixelBuffer {
+/// A persistent CGBitmapContext-backed circular buffer for waterfall spectrogram rendering.
+///
+/// Instead of shifting all pixels left on each new column (O(width*height)),
+/// maintains a write cursor that advances circularly. New columns overwrite
+/// at the cursor position. The Canvas renders two cropped halves to present
+/// the circular buffer in the correct visual order.
+final class SpectrogramBitmapBuffer {
     let width: Int
     let height: Int
-    /// Row-major pixel data: pixels[y * width + x] where y=0 is bottom.
-    var pixels: [SIMD4<UInt8>]
+    /// Next column index to write. After writing, this advances by 1 (wrapping).
+    /// The visual order is: columns [writeColumn ..< width] (older), then [0 ..< writeColumn] (newer).
+    private(set) var writeColumn: Int = 0
 
-    init(width: Int, height: Int) {
+    private let context: CGContext
+    private let baseAddress: UnsafeMutablePointer<UInt8>
+    private let bytesPerRow: Int
+
+    init?(width: Int, height: Int) {
+        guard width > 0 && height > 0 else { return nil }
         self.width = width
         self.height = height
-        self.pixels = [SIMD4<UInt8>](repeating: SIMD4(0, 0, 0, 255), count: width * height)
-    }
-
-    /// Shift all columns left by 1 pixel, then write `column` at the right edge.
-    /// `column` has `height` entries where index 0 = bottom.
-    mutating func shiftLeftAndAppend(column: [SIMD4<UInt8>]) {
-        guard column.count == height else { return }
-
-        // Shift each row left by 1
-        for y in 0..<height {
-            let rowStart = y * width
-            // memmove within the row
-            for x in 0..<(width - 1) {
-                pixels[rowStart + x] = pixels[rowStart + x + 1]
-            }
-            // Write new column on the right edge
-            pixels[rowStart + width - 1] = column[y]
-        }
-    }
-
-    /// Create a CGImage from the pixel buffer.
-    func makeImage() -> CGImage? {
-        // Flip vertically: pixel buffer has y=0 at bottom, CGImage has y=0 at top
-        var flipped = [UInt8](repeating: 0, count: width * height * 4)
-        for y in 0..<height {
-            let srcRow = y
-            let dstRow = height - 1 - y
-            for x in 0..<width {
-                let srcIdx = srcRow * width + x
-                let dstIdx = (dstRow * width + x) * 4
-                let pixel = pixels[srcIdx]
-                flipped[dstIdx] = pixel.x     // R
-                flipped[dstIdx + 1] = pixel.y // G
-                flipped[dstIdx + 2] = pixel.z // B
-                flipped[dstIdx + 3] = pixel.w // A
-            }
-        }
 
         let colorSpace = CGColorSpaceCreateDeviceRGB()
-        guard let context = CGContext(
-            data: &flipped,
+        // Let CGContext allocate optimally aligned memory (data: nil, bytesPerRow: 0)
+        guard let ctx = CGContext(
+            data: nil,
             width: width,
             height: height,
             bitsPerComponent: 8,
-            bytesPerRow: width * 4,
+            bytesPerRow: 0,
             space: colorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
 
-        return context.makeImage()
+        guard let data = ctx.data else { return nil }
+
+        self.context = ctx
+        self.bytesPerRow = ctx.bytesPerRow
+        self.baseAddress = data.assumingMemoryBound(to: UInt8.self)
+
+        // Fill with opaque black
+        let totalBytes = bytesPerRow * height
+        for i in stride(from: 0, to: totalBytes, by: 4) {
+            baseAddress[i] = 0       // R
+            baseAddress[i + 1] = 0   // G
+            baseAddress[i + 2] = 0   // B
+            baseAddress[i + 3] = 255 // A
+        }
+    }
+
+    /// Write a column of pixels at the current cursor position and advance.
+    /// `column` has `height` entries where index 0 = bottom (lowest frequency).
+    /// The bitmap stores y=0 at top (CGImage orientation), so we flip during write.
+    func appendColumn(_ column: [SIMD4<UInt8>]) {
+        guard column.count == height else { return }
+
+        let col = writeColumn
+        for y in 0..<height {
+            // column[y] is bottom-to-top; bitmap row 0 is top
+            let row = height - 1 - y
+            let offset = row * bytesPerRow + col * 4
+            let pixel = column[y]
+            baseAddress[offset] = pixel.x       // R
+            baseAddress[offset + 1] = pixel.y   // G
+            baseAddress[offset + 2] = pixel.z   // B
+            baseAddress[offset + 3] = pixel.w   // A
+        }
+
+        writeColumn = (col + 1) % width
+    }
+
+    /// Create a CGImage snapshot from the persistent bitmap context.
+    /// Per Apple docs, CGContext.makeImage() returns an immutable image —
+    /// CG manages the copy internally. Thread safety is guaranteed because
+    /// both appendColumn() and Canvas rendering run on the main thread
+    /// (via CADisplayLink → onChange → Canvas), so they never overlap.
+    func makeImage() -> CGImage? {
+        context.makeImage()
     }
 }
