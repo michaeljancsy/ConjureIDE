@@ -480,13 +480,6 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             onDeletePreset: onDeletePreset,
             onNew: onNew,
             onExport: onExport,
-            currentSize: { [weak self] in
-                self?.view.frame.size ?? CGSize(width: 960, height: 800)
-            },
-            onResize: { [weak self] newSize in
-                guard let self else { return }
-                self.preferredContentSize = newSize
-            },
             defaultBenchmark: initialBenchmark
         )
         let hv = SafeHostingView(rootView: content)
