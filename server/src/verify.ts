@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import { signToken, createTokenPayload, parseTokenPayload } from "./token";
+import { signToken, createTokenPayload, verifyToken } from "./token";
 
 /**
  * POST /verify
@@ -25,12 +25,12 @@ export async function handleVerify(
   }
 
   try {
-    // Parse the token to extract subscription ID (no signature verification needed server-side)
-    const payload = parseTokenPayload(body.token);
+    // Verify the token signature and extract payload
+    const payload = await verifyToken(body.token, env);
     if (!payload || !payload.sub) {
       return Response.json(
-        { error: "Invalid token format" },
-        { status: 400 }
+        { error: "Invalid or tampered token" },
+        { status: 401 }
       );
     }
 

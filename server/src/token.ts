@@ -52,7 +52,6 @@ export function createTokenPayload(
 
 /**
  * Parse a token to extract the payload (without verification).
- * Used by the /verify endpoint to find the subscription ID.
  */
 export function parseTokenPayload(token: string): TokenPayload | null {
   const parts = token.split(".");
@@ -60,6 +59,33 @@ export function parseTokenPayload(token: string): TokenPayload | null {
 
   try {
     const payloadBytes = base64ToBytes(parts[0]);
+    const payloadJson = new TextDecoder().decode(payloadBytes);
+    return JSON.parse(payloadJson) as TokenPayload;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verify a token's Ed25519 signature and return the payload if valid.
+ * Derives the public key from the server's private key.
+ */
+export async function verifyToken(
+  token: string,
+  env: Env
+): Promise<TokenPayload | null> {
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+
+  try {
+    const payloadBytes = base64ToBytes(parts[0]);
+    const signatureBytes = base64ToBytes(parts[1]);
+    const privateKeyBytes = base64ToBytes(env.ED25519_PRIVATE_KEY);
+    const publicKey = await ed.getPublicKeyAsync(privateKeyBytes);
+
+    const valid = await ed.verifyAsync(signatureBytes, payloadBytes, publicKey);
+    if (!valid) return null;
+
     const payloadJson = new TextDecoder().decode(payloadBytes);
     return JSON.parse(payloadJson) as TokenPayload;
   } catch {

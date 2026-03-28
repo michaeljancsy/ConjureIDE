@@ -57,6 +57,8 @@ export async function handleActivate(
       `INSERT INTO subscriptions (id, email, paddle_customer_id, status, current_period_end, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
        ON CONFLICT(id) DO UPDATE SET
+         email = excluded.email,
+         paddle_customer_id = excluded.paddle_customer_id,
          status = excluded.status,
          current_period_end = excluded.current_period_end,
          updated_at = datetime('now')`
