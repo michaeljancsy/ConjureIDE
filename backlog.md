@@ -6,20 +6,12 @@
 
 ### v1 Release
 - Run `scripts/release.sh` end-to-end, store notarization creds in Keychain, verify DMG on clean machine. Full plan at `docs/distribution-plan.md`.
-- Deploy Paddle subscription server (Cloudflare Worker, Ed25519 keypair, Paddle webhooks)
 - Landing page (static site with Buy + Download)
-- In-app "Buy" link for unlicensed users
-
-
-### DSP & Audio
-- Process function profiler: real-time stats on `process()` duration (median, peak, % budget). Two `mach_absolute_time()` calls around `dsp_kernel_process` (~50 ns overhead), atomics to main thread. No locks or allocations on audio thread.
-- Memory leak detection: periodic resident memory sampling via `task_info` from main thread. Flag monotonic growth as likely script leak. Zero audio-thread overhead.
-- Preset comparison tests: tighten tolerance (investigate native Rust compilation instead of WASM to eliminate libm differences)
 
 ### UI & Editor
 - Investigate ACP (Audio Code Protocol) and more full-fledged IDE features for the editor
 - AI-powered autocomplete (context-aware LLM suggestions)
-- Claude Code terminal polish: auto-launch companion app, terminal reconnect UX, DAW testing
+- Claude Code terminal polish: auto-launch companion app from AU, DAW testing
 - Audio visualization polish: persist spectrogram preferences in UserDefaults, add spectrogram to host app
 - Full-screen text editor mode
 - Make scrolling smoother
@@ -29,9 +21,15 @@
 
 ### Other
 - AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration)
-- Add link to website for licensing
 
 ## Done
+
+- In-app "Buy" link for unlicensed users — subscribe buttons in SubscriptionSettingsView and demo-expired overlay linking to conjuredsp.com/buy (2026-03-28)
+- Deploy Paddle subscription server — Cloudflare Worker at api.conjuredsp.com with activate/verify/webhook endpoints, D1 SQLite, Ed25519 token signing (2026-03-27)
+- Website licensing link — buy/account URLs in subscription UI (2026-03-28)
+- Process function profiler — ProcessProfiler.swift polling kernel FFI timing, status bar display of current/avg/peak ms and budget % (2026-03-28)
+- Memory leak detection — MemoryMonitor.swift with sliding-window monotonic growth detection, WASM memory tracking, ok/warning/critical states (2026-03-28)
+- Preset comparison tests — tolerances tightened to 1e-4, native Rust compilation via bundled rustc for wasm32-wasip1 (2026-03-28)
 
 - Latency reporting for DAW compensation — scripts declare `LATENCY` (Python) or `latency!()` (Rust), AU reports via `AUAudioUnit.latency`, export pipeline includes in runtime-config.json, MCP tools report latency, Claude Code context guide documents the feature, lookahead limiter factory presets (Python + Rust) with parity tests (2026-03-27)
 - Export AUv3 Phase 5: integration tests (export → FFI kernel → process audio for both Rust and Python), post-export validation (WASM magic bytes, Python process fn, JSON config), param metadata round-trip tests, edge case tests, documentation (2026-03-27)
