@@ -338,6 +338,49 @@ const bridge = {
                 };
                 const lineContent = model.getLineContent(position.lineNumber);
                 const isImportLine = /^\s*(from|import)\s/.test(lineContent);
+
+                // On import lines, only show import completions with full-line replacement
+                if (isImportLine) {
+                    const lineRange = {
+                        startLineNumber: position.lineNumber,
+                        endLineNumber: position.lineNumber,
+                        startColumn: 1,
+                        endColumn: lineContent.length + 1,
+                    };
+                    return { suggestions: [
+                        sug('import numpy as np', Kind.Module,
+                            'import numpy as np',
+                            'Import numpy (pre-installed in ConjureDSP runtime)', false),
+                        sug('import math', Kind.Module,
+                            'import math',
+                            'Import Python math module', false),
+                        sug('from scipy import signal', Kind.Module,
+                            'from scipy import signal',
+                            'Import scipy.signal for DSP filters (pre-installed in ConjureDSP runtime)', false),
+                        sug('from scipy.fft import rfft, irfft, rfftfreq', Kind.Module,
+                            'from scipy.fft import rfft, irfft, rfftfreq',
+                            'Import scipy FFT functions', false),
+                        sug('from conjuredsp import ...', Kind.Module,
+                            'from conjuredsp import ${1|freq,db,time_ms,mix,pct,param,toggle,ratio|}',
+                            'Import conjuredsp parameter helpers (pre-installed in ConjureDSP runtime)', true),
+                        sug('from conjuredsp import freq, db, time_ms, mix, pct, param', Kind.Module,
+                            'from conjuredsp import freq, db, time_ms, mix, pct, param',
+                            'Import all parameter shorthand builders from conjuredsp', false),
+                        sug('from conjuredsp.dsp import db_to_gain, gain_to_db, ms_to_samples, smooth_coeff', Kind.Module,
+                            'from conjuredsp.dsp import db_to_gain, gain_to_db, ms_to_samples, smooth_coeff',
+                            'Import DSP utility functions', false),
+                        sug('from conjuredsp.buffers import DelayLine', Kind.Module,
+                            'from conjuredsp.buffers import DelayLine',
+                            'Import DelayLine — pre-allocated circular buffer for delay effects', false),
+                        sug('from conjuredsp.filters import Biquad, BiquadCoeffs', Kind.Module,
+                            'from conjuredsp.filters import Biquad, BiquadCoeffs',
+                            'Import biquad filter — coefficient calculation + stateful filtering', false),
+                        sug('from conjuredsp.osc import LFO', Kind.Module,
+                            'from conjuredsp.osc import LFO',
+                            'Import LFO — low-frequency oscillator with sine/triangle/saw/square waveforms', false),
+                    ].map(s => ({ ...s, range: lineRange })) };
+                }
+
                 return { suggestions: [
                     // ── ConjureDSP API ──
                     sug('process', Kind.Function,
@@ -372,48 +415,6 @@ const bridge = {
                         '  default: initial value\n' +
                         '  curve: "log" for frequency/time params, omit for linear',
                         true),
-
-                    // ── Imports ──
-                    sug('import numpy', Kind.Module,
-                        'import numpy as np',
-                        'Import numpy (pre-installed in ConjureDSP runtime)', false),
-
-                    sug('import math', Kind.Module,
-                        'import math',
-                        'Import Python math module', false),
-
-                    sug('from scipy import signal', Kind.Module,
-                        'from scipy import signal',
-                        'Import scipy.signal for DSP filters (pre-installed in ConjureDSP runtime)', false),
-
-                    sug('from scipy.fft import rfft', Kind.Module,
-                        'from scipy.fft import rfft, irfft, rfftfreq',
-                        'Import scipy FFT functions', false),
-
-                    // ── conjuredsp imports ──
-                    sug('from conjuredsp import', Kind.Module,
-                        'from conjuredsp import ${1|freq,db,time_ms,mix,pct,param,toggle,ratio|}',
-                        'Import conjuredsp parameter helpers (pre-installed in ConjureDSP runtime)', true),
-
-                    sug('from conjuredsp import params', Kind.Module,
-                        'from conjuredsp import freq, db, time_ms, mix, pct, param',
-                        'Import all parameter shorthand builders from conjuredsp', false),
-
-                    sug('from conjuredsp.dsp import', Kind.Module,
-                        'from conjuredsp.dsp import db_to_gain, gain_to_db, ms_to_samples, smooth_coeff',
-                        'Import DSP utility functions', false),
-
-                    sug('from conjuredsp.buffers import DelayLine', Kind.Module,
-                        'from conjuredsp.buffers import DelayLine',
-                        'Import DelayLine — pre-allocated circular buffer for delay effects', false),
-
-                    sug('from conjuredsp.filters import', Kind.Module,
-                        'from conjuredsp.filters import Biquad, BiquadCoeffs',
-                        'Import biquad filter — coefficient calculation + stateful filtering', false),
-
-                    sug('from conjuredsp.osc import LFO', Kind.Module,
-                        'from conjuredsp.osc import LFO',
-                        'Import LFO — low-frequency oscillator with sine/triangle/saw/square waveforms', false),
 
                     // ── Persistent state pattern ──
                     sug('global state', Kind.Snippet,
@@ -530,37 +531,35 @@ const bridge = {
                         'One-pole smoothing coefficient from cutoff frequency.\nUse as: y = coeff * y + (1 - coeff) * x',
                         true),
 
-                    // ── conjuredsp function completions (suppressed on import lines) ──
-                    ...(isImportLine ? [] : [
-                        ...dspFunctions.map(f =>
-                            sug(f.name, Kind.Function, f.insert, f.doc, true)),
-                        ...paramBuilders.map(f =>
-                            sug(f.name, Kind.Function, f.insert, f.doc, true)),
+                    // ── conjuredsp function completions ──
+                    ...dspFunctions.map(f =>
+                        sug(f.name, Kind.Function, f.insert, f.doc, true)),
+                    ...paramBuilders.map(f =>
+                        sug(f.name, Kind.Function, f.insert, f.doc, true)),
 
-                        // ── Constructor completions ──
-                        sug('Biquad', Kind.Function,
-                            'Biquad(${1:coeffs})',
-                            'Create a stateful biquad filter. Pass BiquadCoeffs or omit for passthrough.\nMethods: set_coeffs(), process_sample(), reset()',
-                            true),
-                        sug('DelayLine', Kind.Function,
-                            'DelayLine(${1:max_samples})',
-                            'Create a circular delay buffer.\nMethods: write(), read(), read_cubic(), tap(), clear()\nProperty: max_samples',
-                            true),
-                        sug('LFO', Kind.Function,
-                            'LFO(${1:sample_rate}, freq=${2:1.0}, waveform="${3:sine}")',
-                            'Create a low-frequency oscillator.\nWaveforms: "sine", "triangle", "saw", "square"\nMethods: set_freq(), set_waveform(), tick(), tick_n(), reset()\nProperty: value',
-                            true),
+                    // ── Constructor completions ──
+                    sug('Biquad', Kind.Function,
+                        'Biquad(${1:coeffs})',
+                        'Create a stateful biquad filter. Pass BiquadCoeffs or omit for passthrough.\nMethods: set_coeffs(), process_sample(), reset()',
+                        true),
+                    sug('DelayLine', Kind.Function,
+                        'DelayLine(${1:max_samples})',
+                        'Create a circular delay buffer.\nMethods: write(), read(), read_cubic(), tap(), clear()\nProperty: max_samples',
+                        true),
+                    sug('LFO', Kind.Function,
+                        'LFO(${1:sample_rate}, freq=${2:1.0}, waveform="${3:sine}")',
+                        'Create a low-frequency oscillator.\nWaveforms: "sine", "triangle", "saw", "square"\nMethods: set_freq(), set_waveform(), tick(), tick_n(), reset()\nProperty: value',
+                        true),
 
-                        // ── Stateless oscillator functions ──
-                        sug('sine', Kind.Function, 'sine(${1:phase})',
-                            'Sine wave from phase [0, 1). Returns [-1, 1].', true),
-                        sug('triangle', Kind.Function, 'triangle(${1:phase})',
-                            'Triangle wave from phase [0, 1). Returns [-1, 1].', true),
-                        sug('saw', Kind.Function, 'saw(${1:phase})',
-                            'Sawtooth wave from phase [0, 1). Returns [-1, 1].', true),
-                        sug('advance_phase', Kind.Function, 'advance_phase(${1:phase}, ${2:freq}, ${3:sample_rate})',
-                            'Advance phase by one sample with wrapping. Returns new phase.', true),
-                    ]),
+                    // ── Stateless oscillator functions ──
+                    sug('sine', Kind.Function, 'sine(${1:phase})',
+                        'Sine wave from phase [0, 1). Returns [-1, 1].', true),
+                    sug('triangle', Kind.Function, 'triangle(${1:phase})',
+                        'Triangle wave from phase [0, 1). Returns [-1, 1].', true),
+                    sug('saw', Kind.Function, 'saw(${1:phase})',
+                        'Sawtooth wave from phase [0, 1). Returns [-1, 1].', true),
+                    sug('advance_phase', Kind.Function, 'advance_phase(${1:phase}, ${2:freq}, ${3:sample_rate})',
+                        'Advance phase by one sample with wrapping. Returns new phase.', true),
 
                 ].map(s => ({ ...s, range })) };
             },
