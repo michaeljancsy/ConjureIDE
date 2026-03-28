@@ -280,11 +280,14 @@ final class MCPServer {
     // MARK: - MCP Method Handlers
 
     private func handleInitialize(request: MCPProtocol.JSONRPCRequest, on connection: NWConnection) {
+        let instructions = toolProvider?.mcpStateSummary?()
+
         let result = MCPProtocol.InitializeResult(
             capabilities: MCPProtocol.ServerCapabilities(
                 tools: MCPProtocol.ToolsCapability(listChanged: false)
             ),
-            serverInfo: MCPProtocol.ServerInfo(name: "conjuredsp", version: "1.0.0")
+            serverInfo: MCPProtocol.ServerInfo(name: "conjuredsp", version: "1.0.0"),
+            instructions: instructions
         )
 
         if let encoded = try? JSONEncoder().encode(result) {

@@ -44,6 +44,7 @@ enum MCPProtocol {
         let protocolVersion: String = "2024-11-05"
         let capabilities: ServerCapabilities
         let serverInfo: ServerInfo
+        let instructions: String?
     }
 
     struct ServerCapabilities: Encodable {

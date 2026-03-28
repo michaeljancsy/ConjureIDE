@@ -10,7 +10,7 @@ import Foundation
 import Network
 import os.log
 
-private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "WebSocketServer")
+private let wsLog = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "WebSocketServer")
 
 /// WebSocket server for relaying terminal I/O between a pty and remote xterm.js clients.
 final class WebSocketServer {
@@ -57,7 +57,7 @@ final class WebSocketServer {
 
             listener.start(queue: .main)
         } catch {
-            log.error("Failed to create WebSocket listener: \(error.localizedDescription, privacy: .public)")
+            wsLog.error("Failed to create WebSocket listener: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -80,7 +80,7 @@ final class WebSocketServer {
         for (id, client) in clients {
             client.send(content: data, contentContext: context, completion: .contentProcessed { [weak self] error in
                 if let error {
-                    log.debug("Failed to send to client: \(error.localizedDescription, privacy: .public)")
+                    wsLog.debug("Failed to send to client: \(error.localizedDescription, privacy: .public)")
                     DispatchQueue.main.async {
                         self?.removeClient(id)
                     }
@@ -98,7 +98,7 @@ final class WebSocketServer {
         for (id, client) in clients {
             client.send(content: data, contentContext: context, completion: .contentProcessed { [weak self] error in
                 if let error {
-                    log.debug("Failed to send text to client: \(error.localizedDescription, privacy: .public)")
+                    wsLog.debug("Failed to send text to client: \(error.localizedDescription, privacy: .public)")
                     DispatchQueue.main.async {
                         self?.removeClient(id)
                     }
@@ -116,10 +116,10 @@ final class WebSocketServer {
         case .ready:
             if let listenerPort = listener?.port?.rawValue {
                 self.port = listenerPort
-                log.info("WebSocket server listening on port \(listenerPort)")
+                wsLog.info("WebSocket server listening on port \(listenerPort)")
             }
         case .failed(let error):
-            log.error("WebSocket listener failed: \(error.localizedDescription, privacy: .public)")
+            wsLog.error("WebSocket listener failed: \(error.localizedDescription, privacy: .public)")
         default:
             break
         }
@@ -128,7 +128,7 @@ final class WebSocketServer {
     private func handleNewConnection(_ connection: NWConnection) {
         let id = ObjectIdentifier(connection)
         clients[id] = connection
-        log.info("WebSocket client connected (total: \(self.clients.count))")
+        wsLog.info("WebSocket client connected (total: \(self.clients.count))")
         onClientCountChange?(clients.count)
 
         connection.stateUpdateHandler = { [weak self] state in
@@ -149,7 +149,7 @@ final class WebSocketServer {
     private func removeClient(_ id: ObjectIdentifier) {
         if let client = clients.removeValue(forKey: id) {
             client.cancel()
-            log.info("WebSocket client disconnected (total: \(self.clients.count))")
+            wsLog.info("WebSocket client disconnected (total: \(self.clients.count))")
             onClientCountChange?(clients.count)
         }
     }
@@ -180,7 +180,7 @@ final class WebSocketServer {
             }
 
             if let error {
-                log.debug("WebSocket receive error: \(error.localizedDescription, privacy: .public)")
+                wsLog.debug("WebSocket receive error: \(error.localizedDescription, privacy: .public)")
                 DispatchQueue.main.async {
                     self.removeClient(id)
                 }

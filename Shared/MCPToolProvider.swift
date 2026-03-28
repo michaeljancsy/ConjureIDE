@@ -29,4 +29,9 @@ import Foundation
 
     /// Save the current script as a user preset. Returns result JSON.
     @objc optional func mcpSavePreset(_ name: String) -> String
+
+    /// Return a short summary of the current AU state for MCP initialize instructions.
+    /// Called synchronously during MCP handshake. Returns a human-readable string like:
+    /// "Audio: 48000 Hz, 2ch. Script: \"Warm Comp\" (Python). Params: Cutoff=1000 Hz, Mix=0.5."
+    @objc optional func mcpStateSummary() -> String
 }

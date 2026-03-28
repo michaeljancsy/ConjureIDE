@@ -7,6 +7,7 @@
 //
 
 import AVFoundation
+import Combine
 import ObjectiveC
 import os.log
 
@@ -32,6 +33,10 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         case "compile_and_run":
             Task { @MainActor in
                 let result = await self.mcpCompileAndRun(input: input)
+                // Notify Monaco editor of the new script source
+                if !result.1, let source = input["source"] as? String {
+                    self.scriptSourceDidChange.send(ScriptSourceChange(source: source))
+                }
                 completion(result.0, result.1)
             }
         case "get_script":
@@ -201,6 +206,55 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     private func mcpToggleBypass() -> (String, Bool) {
         shouldBypassEffect.toggle()
         return (jsonStr(["bypassed": shouldBypassEffect]), false)
+    }
+
+    // MARK: - State Summary
+
+    /// Synchronous summary of current AU state for MCP initialize instructions.
+    @objc func mcpStateSummary() -> String {
+        var parts: [String] = []
+
+        // Audio state
+        let sr = outputBusses[0].format.sampleRate
+        let ch = Int(outputBusses[0].format.channelCount)
+        let bypass = shouldBypassEffect ? ", bypassed" : ""
+        parts.append("Audio: \(Int(sr)) Hz, \(ch)ch\(bypass).")
+
+        // Script info
+        if let source = scriptSource {
+            let lang = currentScriptLanguage.rawValue
+            // Try to extract a meaningful identifier (first non-import, non-comment line)
+            let lines = source.components(separatedBy: .newlines)
+            let hasParams = lines.contains { $0.trimmingCharacters(in: .whitespaces).hasPrefix("PARAMS") }
+            parts.append("Script loaded (\(lang)\(hasParams ? ", has PARAMS" : "")).")
+        } else {
+            parts.append("No script loaded.")
+        }
+
+        // Active parameters
+        let metadata = currentParamMetadata
+        var paramDescs: [String] = []
+        for i in 0..<Self.paramCount {
+            if let param = parameterTree?.parameter(withAddress: AUParameterAddress(i)),
+               param.displayName != "Parameter \(i + 1)" {
+                let unit = (metadata != nil && i < metadata!.count) ? metadata![i].unit : ""
+                let unitStr = unit.isEmpty ? "" : " \(unit)"
+                paramDescs.append("\(param.displayName)=\(formatValue(param.value))\(unitStr)")
+            }
+        }
+        if !paramDescs.isEmpty {
+            parts.append("Params: \(paramDescs.joined(separator: ", ")).")
+        }
+
+        return parts.joined(separator: " ")
+    }
+
+    /// Format a parameter value concisely (no trailing zeros).
+    private func formatValue(_ value: Float) -> String {
+        if value == Float(Int(value)) {
+            return "\(Int(value))"
+        }
+        return String(format: "%.1f", value)
     }
 
     // MARK: - Helpers

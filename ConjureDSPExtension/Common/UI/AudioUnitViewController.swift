@@ -45,12 +45,20 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var parameterState: ParameterState?
     private var licenseManager: LicenseManager?
     private var gitHubService: GitHubService?
+    private var terminalServer: TerminalServer?
     private var paramNamesCancellable: AnyCancellable?
     private var paramMetadataCancellable: AnyCancellable?
 
 	deinit {
         log.info("deinit called")
 	}
+
+    public override func viewWillDisappear() {
+        super.viewWillDisappear()
+        terminalServer?.stop()
+        terminalServer = nil
+        log.info("AU view disappearing — terminal server stopped")
+    }
 
     /// Provide a fresh NSView container each time the system creates this VC.
     /// This forces the ViewBridge to work with a new view hierarchy, working
@@ -460,6 +468,15 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             hv.bottomAnchor.constraint(equalTo: self.view.bottomAnchor)
         ])
         hostingView = hv
+
+        // Start terminal/MCP infrastructure — direct access to the real AU, no proxy
+        if terminalServer == nil {
+            let ts = TerminalServer()
+            ts.mcpServer.toolProvider = au  // Set before start so first connection sees it
+            ts.start()
+            terminalServer = ts
+            log.info("Terminal server started with direct AU access")
+        }
 
         log.info("configureSwiftUIView done")
     }

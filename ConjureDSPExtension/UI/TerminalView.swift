@@ -121,7 +121,7 @@ struct TerminalView: NSViewRepresentable {
         }
 
         private func showFallbackMessage() {
-            let msg = "\\r\\n  \\x1b[33mClaude Code terminal requires the ConjureDSP host app.\\x1b[0m\\r\\n  \\x1b[90mOpen ConjureDSP.app to enable the AI terminal.\\x1b[0m\\r\\n"
+            let msg = "\\r\\n  \\x1b[33mTerminal server not ready.\\x1b[0m\\r\\n  \\x1b[90mTry reopening the plugin window.\\x1b[0m\\r\\n"
             webView?.evaluateJavaScript("terminalBridge.write('\(msg)')") { _, _ in }
         }
 
