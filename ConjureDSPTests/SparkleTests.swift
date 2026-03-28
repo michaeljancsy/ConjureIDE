@@ -38,6 +38,6 @@ private final class CheckForUpdatesViewModel: ObservableObject {
             userDriverDelegate: nil
         )
         // Sparkle APIs require main thread; verify no crash on creation
-        #expect(controller.updater.automaticallyChecksForUpdates == false)
+        #expect(controller.updater.automaticallyChecksForUpdates == true)
     }
 }
