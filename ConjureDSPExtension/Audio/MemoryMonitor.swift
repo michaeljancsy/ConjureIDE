@@ -109,7 +109,7 @@ final class MemoryMonitor: ObservableObject {
         wasmMemoryMB = Double(wasmBytes) / 1_048_576.0
 
         // Detect baseline change (new script loaded) → reset analysis
-        if baselineBytes != lastBaseline && lastBaseline != 0 {
+        if baselineBytes != lastBaseline && baselineBytes != 0 {
             samples.removeAll()
             growthRateMBPerMin = 0
             leakStatus = .ok
