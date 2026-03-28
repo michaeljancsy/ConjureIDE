@@ -63,6 +63,7 @@ struct PresetToolbar: View {
     var onSave: () -> Void
     var onSaveAs: (String) -> Void
     var onDelete: () -> Void
+    var onRename: (String) -> Void
     var onNew: (ScriptLanguage) -> Void
     var onExport: (String) -> Void
     var isExporting: Bool = false
@@ -70,6 +71,8 @@ struct PresetToolbar: View {
     @Binding var showingSaveAs: Bool
     @Binding var saveAsName: String
     @State private var showDeleteConfirm = false
+    @State private var showingRename = false
+    @State private var renameName = ""
     @State private var showingSettings = false
     @State private var showingExport = false
     @State private var showingPresetBrowser = false
@@ -213,8 +216,30 @@ struct PresetToolbar: View {
                 .padding()
             }
 
-            // Delete (user presets only)
+            // Delete and Rename (user/repo presets only)
             if currentIsMutable {
+                Button(action: {
+                    renameName = presetManager.currentPreset?.name ?? ""
+                    showingRename = true
+                }) {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.borderless)
+                .toolbarTooltip("Rename preset")
+                .accessibilityIdentifier("renamePresetButton")
+                .popover(isPresented: $showingRename) {
+                    RenamePopover(
+                        name: $renameName,
+                        currentName: presetManager.currentPreset?.name ?? "",
+                        existingNames: Set(presetManager.presets.filter { !$0.isFactory }.map(\.name)),
+                        onRename: { name in
+                            showingRename = false
+                            onRename(name)
+                        },
+                        onCancel: { showingRename = false }
+                    )
+                }
+
                 Button(action: { showDeleteConfirm = true }) {
                     Image(systemName: "trash")
                 }

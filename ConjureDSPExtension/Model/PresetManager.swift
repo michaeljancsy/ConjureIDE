@@ -24,6 +24,9 @@ class PresetManager: ObservableObject {
     /// Called after a repo preset is deleted. GitHubService hooks into this to trigger background delete.
     var onRepoPresetDeleted: ((String, ScriptLanguage) -> Void)?
 
+    /// Called after a repo preset is renamed. Parameters: (oldName, newName, source, language).
+    var onRepoPresetRenamed: ((String, String, String, ScriptLanguage) -> Void)?
+
     private let extensionBundle: Bundle
     let userPresetsURL: URL
     let repoPresetsURL: URL
@@ -234,6 +237,69 @@ class PresetManager: ObservableObject {
         try deletePreset(preset)
     }
 
+    // MARK: - Rename
+
+    /// Rename a user or repo preset. Factory presets cannot be renamed.
+    /// Returns the renamed preset with updated identity.
+    @discardableResult
+    func renamePreset(_ preset: Preset, to newName: String) throws -> Preset {
+        guard !preset.isFactory else {
+            throw PresetManagerError.renameFailed
+        }
+
+        let sanitized = sanitizeFilename(newName)
+        guard !sanitized.isEmpty else {
+            throw PresetManagerError.invalidName
+        }
+
+        // No-op if name is unchanged
+        guard sanitized != preset.name else { return preset }
+
+        // Check for conflicts with existing non-factory presets
+        if presets.contains(where: { !$0.isFactory && $0.name == sanitized }) {
+            throw PresetManagerError.nameConflict
+        }
+
+        let oldURL: URL
+        let prefix: String
+        switch preset.source {
+        case .factory:
+            throw PresetManagerError.renameFailed
+        case .user(let url):
+            oldURL = url
+            prefix = "user"
+        case .repo(let url):
+            oldURL = url
+            prefix = "repo"
+        }
+
+        let ext = preset.fileExtension
+        let newURL = oldURL.deletingLastPathComponent().appendingPathComponent("\(sanitized).\(ext)")
+        try fileManager.moveItem(at: oldURL, to: newURL)
+        log.info("Renamed preset: \(preset.name, privacy: .public) → \(sanitized, privacy: .public)")
+
+        // For repo presets, trigger background rename on GitHub
+        if case .repo = preset.source {
+            if let source = try? String(contentsOf: newURL, encoding: .utf8) {
+                onRepoPresetRenamed?(preset.name, sanitized, source, preset.language)
+            }
+        }
+
+        refreshPresets()
+
+        let newID = "\(prefix):\(sanitized).\(ext)"
+        guard let renamedPreset = presets.first(where: { $0.id == newID }) else {
+            throw PresetManagerError.renameFailed
+        }
+
+        // Update current preset reference if it was the renamed one
+        if currentPreset?.id == preset.id {
+            currentPreset = renamedPreset
+        }
+
+        return renamedPreset
+    }
+
     // MARK: - Migration
 
     /// Move a user preset to the repo cache. Returns the new repo Preset.
@@ -288,11 +354,15 @@ class PresetManager: ObservableObject {
 enum PresetManagerError: LocalizedError {
     case invalidName
     case saveFailed
+    case renameFailed
+    case nameConflict
 
     var errorDescription: String? {
         switch self {
         case .invalidName: return "Preset name is invalid"
         case .saveFailed: return "Failed to save preset"
+        case .renameFailed: return "Failed to rename preset"
+        case .nameConflict: return "A preset with that name already exists"
         }
     }
 }

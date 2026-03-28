@@ -376,4 +376,135 @@ struct PresetManagerTests {
         #expect(manager.presets.contains(where: { $0.id == factory.id }),
                "Factory preset should not be deleted")
     }
+
+    // MARK: - Rename
+
+    @Test @MainActor func renameUserPreset() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
+        try manager.saveUserPreset(name: "Alpha", source: script)
+
+        let renamed = try manager.renamePreset(
+            manager.presets.first(where: { $0.name == "Alpha" && !$0.isFactory })!,
+            to: "Beta"
+        )
+
+        #expect(renamed.name == "Beta")
+        #expect(renamed.id == "user:Beta.py")
+        #expect(!manager.presets.contains(where: { $0.name == "Alpha" && !$0.isFactory }))
+        #expect(manager.presets.contains(where: { $0.name == "Beta" && !$0.isFactory }))
+        #expect(manager.loadSource(for: renamed) == script)
+    }
+
+    @Test @MainActor func renameRepoPreset() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let script = "# repo script\n"
+        try manager.saveRepoPreset(name: "RepoAlpha", source: script)
+
+        var callbackArgs: (oldName: String, newName: String, source: String, language: ScriptLanguage)?
+        manager.onRepoPresetRenamed = { oldName, newName, source, language in
+            callbackArgs = (oldName, newName, source, language)
+        }
+
+        let preset = manager.presets.first(where: { $0.name == "RepoAlpha" && $0.isRepo })!
+        let renamed = try manager.renamePreset(preset, to: "RepoBeta")
+
+        #expect(renamed.name == "RepoBeta")
+        #expect(renamed.id == "repo:RepoBeta.py")
+        #expect(callbackArgs?.oldName == "RepoAlpha")
+        #expect(callbackArgs?.newName == "RepoBeta")
+        #expect(callbackArgs?.source == script)
+        #expect(callbackArgs?.language == .python)
+    }
+
+    @Test @MainActor func renameCurrentPresetUpdatesCurrent() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let script = "# active preset\n"
+        let preset = try manager.saveUserPreset(name: "Current", source: script)
+        manager.setCurrentPreset(preset, source: script)
+        manager.scriptDidChange(to: "# edited\n")
+        #expect(manager.isModified == true)
+
+        let renamed = try manager.renamePreset(preset, to: "Renamed")
+
+        #expect(manager.currentPreset?.id == renamed.id)
+        #expect(manager.currentPreset?.name == "Renamed")
+        #expect(manager.loadedSource == script)
+        #expect(manager.isModified == true)
+    }
+
+    @Test @MainActor func renameSameNameIsNoOp() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.saveUserPreset(name: "Same", source: "pass\n")
+        let result = try manager.renamePreset(preset, to: "Same")
+
+        #expect(result.id == preset.id)
+        #expect(result.name == "Same")
+    }
+
+    @Test @MainActor func renameFactoryPresetThrows() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let factory = manager.presets.first(where: \.isFactory)!
+        #expect(throws: PresetManagerError.self) {
+            try manager.renamePreset(factory, to: "New Name")
+        }
+    }
+
+    @Test @MainActor func renameToEmptyNameThrows() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.saveUserPreset(name: "Valid", source: "pass\n")
+        #expect(throws: PresetManagerError.self) {
+            try manager.renamePreset(preset, to: "   ")
+        }
+    }
+
+    @Test @MainActor func renameToConflictingNameThrows() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        try manager.saveUserPreset(name: "Existing", source: "pass\n")
+        let preset = try manager.saveUserPreset(name: "ToRename", source: "pass\n")
+
+        #expect(throws: PresetManagerError.self) {
+            try manager.renamePreset(preset, to: "Existing")
+        }
+    }
+
+    @Test @MainActor func renamePreservesLanguage() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.saveUserPreset(name: "RustEffect", source: "fn process() {}\n", language: .rust)
+        let renamed = try manager.renamePreset(preset, to: "RenamedRust")
+
+        #expect(renamed.language == .rust)
+        #expect(renamed.id == "user:RenamedRust.rs")
+        #expect(manager.loadSource(for: renamed) == "fn process() {}\n")
+    }
+
+    @Test @MainActor func renameNonCurrentDoesNotAffectCurrent() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let presetA = try manager.saveUserPreset(name: "A", source: "# a\n")
+        let presetB = try manager.saveUserPreset(name: "B", source: "# b\n")
+        manager.setCurrentPreset(presetA, source: "# a\n")
+
+        try manager.renamePreset(presetB, to: "C")
+
+        #expect(manager.currentPreset?.id == presetA.id)
+        #expect(manager.currentPreset?.name == "A")
+    }
 }

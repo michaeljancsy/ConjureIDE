@@ -344,6 +344,12 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             try? pm.deleteUserPreset(current)
         }
 
+        // Rename: rename current user/repo preset
+        let onRenamePreset: (String) -> Void = { [weak pm] newName in
+            guard let pm, let current = pm.currentPreset, !current.isFactory else { return }
+            try? pm.renamePreset(current, to: newName)
+        }
+
         // New: reset to default template for the selected language
         let extensionBundle = Bundle(for: type(of: self))
         log.info("Extension bundle path: \(extensionBundle.bundlePath, privacy: .public)")
@@ -467,6 +473,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             onSavePreset: onSavePreset,
             onSaveAsPreset: onSaveAsPreset,
             onDeletePreset: onDeletePreset,
+            onRenamePreset: onRenamePreset,
             onNew: onNew,
             onExport: onExport,
             defaultBenchmark: initialBenchmark

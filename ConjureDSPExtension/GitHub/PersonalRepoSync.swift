@@ -316,6 +316,97 @@ class PersonalRepoSync: ObservableObject {
         }
     }
 
+    // MARK: - Background Rename (fire-and-forget after rename)
+
+    /// Rename a preset on the repo: push new file, then delete old file.
+    /// Order ensures data safety — if push fails, old file remains.
+    func backgroundRename(
+        oldFilename: String,
+        newFilename: String,
+        source: String,
+        metadata: PresetMetadata?,
+        owner: String,
+        repo: String,
+        token: String
+    ) {
+        Task.detached { [client, log] in
+            do {
+                // 1. Push new file (no SHA needed — new path)
+                let response = try await client.putFile(
+                    owner: owner, repo: repo, path: newFilename,
+                    content: source, message: "Rename \((oldFilename as NSString).lastPathComponent) → \((newFilename as NSString).lastPathComponent)",
+                    sha: nil, token: token
+                )
+                await MainActor.run {
+                    self.remoteSHAs[newFilename] = response.content.sha
+                }
+                log.info("Background rename push: \(newFilename, privacy: .public)")
+
+                // Push new sidecar metadata
+                if let metadata {
+                    let newScriptName = (newFilename as NSString).lastPathComponent
+                    let newMetadataName = PresetMetadata.metadataFilename(forScript: newScriptName)
+                    let dir = (newFilename as NSString).deletingLastPathComponent
+                    let newMetadataPath = dir.isEmpty ? newMetadataName : "\(dir)/\(newMetadataName)"
+                    if let jsonData = try? metadata.jsonData(),
+                       let jsonString = String(data: jsonData, encoding: .utf8) {
+                        let metaResponse = try await client.putFile(
+                            owner: owner, repo: repo, path: newMetadataPath,
+                            content: jsonString, message: "Add metadata for \(newScriptName)",
+                            sha: nil, token: token
+                        )
+                        await MainActor.run {
+                            self.remoteSHAs[newMetadataPath] = metaResponse.content.sha
+                        }
+                    }
+                }
+
+                // 2. Delete old file
+                let oldSHA: String
+                if let cached = await MainActor.run(body: { self.remoteSHAs[oldFilename] }) {
+                    oldSHA = cached
+                } else {
+                    log.warning("No SHA for \(oldFilename, privacy: .public), fetching...")
+                    let file = try await client.getFile(owner: owner, repo: repo, path: oldFilename, token: token)
+                    oldSHA = file.sha
+                }
+                try await client.deleteFile(
+                    owner: owner, repo: repo, path: oldFilename,
+                    sha: oldSHA, message: "Delete renamed \((oldFilename as NSString).lastPathComponent)", token: token
+                )
+                await MainActor.run { self.remoteSHAs.removeValue(forKey: oldFilename) }
+                log.info("Background rename delete: \(oldFilename, privacy: .public)")
+
+                // Delete old sidecar metadata
+                let oldScriptName = (oldFilename as NSString).lastPathComponent
+                let oldMetadataName = PresetMetadata.metadataFilename(forScript: oldScriptName)
+                let oldDir = (oldFilename as NSString).deletingLastPathComponent
+                let oldMetadataPath = oldDir.isEmpty ? oldMetadataName : "\(oldDir)/\(oldMetadataName)"
+                do {
+                    let metaSHA: String
+                    if let cached = await MainActor.run(body: { self.remoteSHAs[oldMetadataPath] }) {
+                        metaSHA = cached
+                    } else {
+                        let file = try await client.getFile(owner: owner, repo: repo, path: oldMetadataPath, token: token)
+                        metaSHA = file.sha
+                    }
+                    try await client.deleteFile(
+                        owner: owner, repo: repo, path: oldMetadataPath,
+                        sha: metaSHA, message: "Delete metadata for \(oldScriptName)", token: token
+                    )
+                    await MainActor.run { self.remoteSHAs.removeValue(forKey: oldMetadataPath) }
+                } catch {
+                    // Old metadata file may not exist — that's fine
+                }
+
+                await MainActor.run { self.hasPendingChanges = false }
+            } catch {
+                log.error("Background rename failed (\(oldFilename, privacy: .public) → \(newFilename, privacy: .public)): \(error.localizedDescription, privacy: .public)")
+                await MainActor.run { self.hasPendingChanges = true }
+            }
+        }
+    }
+
     /// Clear all cached sync state (called on disconnect).
     func reset() {
         remoteSHAs = [:]
