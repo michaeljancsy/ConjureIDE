@@ -30,6 +30,9 @@ const bridge = {
                 cursorBlinking: 'smooth',
                 cursorSmoothCaretAnimation: 'on',
                 padding: { top: 8 },
+                quickSuggestions: { other: 'on', comments: 'off', strings: 'off' },
+                quickSuggestionsDelay: 5,
+                suggestOnTriggerCharacters: true,
             });
 
             this._changeListener = this.editor.onDidChangeModelContent(() => {
