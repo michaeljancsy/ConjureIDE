@@ -8,15 +8,6 @@
 - Run `scripts/release.sh` end-to-end, store notarization creds in Keychain, verify DMG on clean machine. Full plan at `docs/distribution-plan.md`.
 - Landing page (static site with Buy + Download)
 
-### UI & Editor
-- Investigate ACP (Audio Code Protocol) and more full-fledged IDE features for the editor
-- AI-powered autocomplete (context-aware LLM suggestions)
-- Investigate Python LSP (Pyright) for dynamic autocomplete of user-installed packages and arbitrary code
-- Claude Code terminal polish: auto-launch companion app from AU, DAW testing
-- Audio visualization polish: persist spectrogram preferences in UserDefaults, add spectrogram to host app
-- Full-screen text editor mode
-- Make scrolling smoother
-
 ### Post-Launch
 - Python package management: in-script `REQUIREMENTS` metadata, per-preset isolated environments, companion app as installer, vendored exports, configurable Python path for exported AUs. Revised design at `docs/per-preset-package-requirements.md`, supersedes Phase 2B/3 of `docs/python-package-management.md`. Phase 2A infrastructure (sys.path wiring, Rust FFI) still needed as foundation.
 
@@ -24,6 +15,10 @@
 - AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration)
 
 ## Done
+
+- Smoother scrolling in editor (2026-03-28)
+- Full-screen text editor mode (2026-03-28)
+- Audio visualization polish: persist spectrogram preferences, host app spectrogram (2026-03-28)
 
 - Comprehensive Monaco autocomplete for conjuredsp: Python/Rust dot-completions (Biquad, DelayLine, LFO, BiquadCoeffs::, Waveform::, ctx.), signature help on `(`, hover docs, function-level completions for DSP utils/param builders, latency!() macro, ParamSpec chain methods (2026-03-28)
 - In-app "Buy" link for unlicensed users — subscribe buttons in SubscriptionSettingsView and demo-expired overlay linking to conjuredsp.com/buy (2026-03-28)
