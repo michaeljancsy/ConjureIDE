@@ -41,6 +41,9 @@ class TerminalAppServer {
     private var wsServer: WebSocketServer?
     private var pty: PTYManager?
     private var watchTask: Task<Void, Never>?
+    private var currentMCPPort: UInt16 = 0
+    private var healthCheckFailCount = 0
+    private let healthCheckThreshold = 3  // consecutive failures before reset
 
     private let appGroupID = "group.com.MichaelJancsy.ConjureDSP"
 
@@ -52,30 +55,74 @@ class TerminalAppServer {
 
     // MARK: - App Group file watching
 
-    /// Continuously watch for MCP port file (plugin started) and shutdown signal (plugin stopped).
+    /// Continuously watch for lifecycle changes via three mechanisms:
+    /// 1. Shutdown signal — clean AU teardown (deinit wrote the file)
+    /// 2. Port change — AU restarted, new MCP server on a different port
+    /// 3. Health check — MCP server stopped responding (AU crashed or closed without signal)
     private func startWatching() {
         watchTask?.cancel()
         watchTask = Task { @MainActor [weak self] in
+            var tickCount = 0
             while !Task.isCancelled {
                 guard let self else { return }
 
-                // Check for shutdown signal first
+                // 1. Shutdown signal (fastest detection — file written by AU deinit)
                 if self.isRunning, self.shutdownSignalExists() {
                     log.info("Shutdown signal detected — resetting")
                     self.resetSession()
                     self.deleteAppGroupFile("terminal-shutdown")
                     self.status = "Waiting for ConjureDSP plugin..."
-                    // Continue watching for next MCP port
                 }
 
-                // Check for MCP port (plugin started or restarted)
-                if !self.isRunning, let port = self.readMCPPort() {
-                    log.info("MCP port detected: \(port) — starting session")
-                    self.startSession(mcpPort: port)
+                // 2. Port change or new port
+                if let port = self.readMCPPort() {
+                    if !self.isRunning {
+                        log.info("MCP port detected: \(port) — starting session")
+                        self.startSession(mcpPort: port)
+                    } else if port != self.currentMCPPort {
+                        log.info("MCP port changed \(self.currentMCPPort) → \(port) — restarting session")
+                        self.resetSession()
+                        self.startSession(mcpPort: port)
+                    }
                 }
 
+                // 3. Health check (every ~3 seconds when running)
+                if self.isRunning, tickCount % 6 == 0 {
+                    let healthy = await self.checkMCPHealth()
+                    if healthy {
+                        self.healthCheckFailCount = 0
+                    } else {
+                        self.healthCheckFailCount += 1
+                        if self.healthCheckFailCount >= self.healthCheckThreshold {
+                            log.info("MCP server unreachable after \(self.healthCheckFailCount) checks — resetting")
+                            self.resetSession()
+                            self.deleteAppGroupFile("mcp-server-port")
+                            self.status = "Waiting for ConjureDSP plugin..."
+                        }
+                    }
+                }
+
+                tickCount += 1
                 try? await Task.sleep(for: .milliseconds(500))
             }
+        }
+    }
+
+    /// Ping the MCP server's health endpoint.
+    private func checkMCPHealth() async -> Bool {
+        guard currentMCPPort > 0,
+              let url = URL(string: "http://localhost:\(currentMCPPort)/health") else { return false }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return false }
+            // Verify it's actually our server
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let status = json["status"] as? String, status == "ok" {
+                return true
+            }
+            return false
+        } catch {
+            return false
         }
     }
 
@@ -129,11 +176,19 @@ class TerminalAppServer {
         }
 
         ws.onClientCountChange = { [weak p] count in
-            if count > 0, let p, case .idle = p.state {
-                p.start()
+            guard let p else { return }
+            if count > 0 {
+                if case .idle = p.state {
+                    p.start()
+                } else if case .running = p.state {
+                    // New client connected to an already-running PTY — send SIGWINCH
+                    // to make Claude Code redraw its screen for the fresh xterm.js
+                    p.sendSIGWINCH()
+                }
             }
         }
 
+        currentMCPPort = mcpPort
         isRunning = true
         status = "Ready (MCP: \(mcpPort), WS: \(wsPort))"
         log.info("Session started — MCP: \(mcpPort), WS: \(wsPort)")
@@ -148,6 +203,8 @@ class TerminalAppServer {
         wsServer?.stop()
         wsServer = nil
 
+        currentMCPPort = 0
+        healthCheckFailCount = 0
         isRunning = false
         claudeState = "Idle"
         log.info("Session reset")

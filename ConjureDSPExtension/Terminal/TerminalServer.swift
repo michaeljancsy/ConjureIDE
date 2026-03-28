@@ -42,21 +42,23 @@ final class TerminalServer {
     }
 
     /// Stop the MCP server, clean up port file, and signal the companion app to reset.
-    func stop() {
-        mcpServer.stop()
-
-        // Delete the MCP port file so the companion app knows the server is gone
+    /// Nonisolated so it can be called from deinit.
+    nonisolated func stop() {
+        // File operations are safe from any thread
         deleteAppGroupFile("mcp-server-port")
-
-        // Write a shutdown signal — the companion app watches for this
         writeAppGroupFile("terminal-shutdown", content: "\(ProcessInfo.processInfo.processIdentifier)")
+
+        // MCP server stop must happen on main actor
+        Task { @MainActor [mcpServer] in
+            mcpServer.stop()
+        }
 
         log.info("Terminal server stopped — shutdown signal written")
     }
 
     // MARK: - App Group helpers
 
-    private func appGroupURL() -> URL? {
+    nonisolated private func appGroupURL() -> URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
     }
 
@@ -65,7 +67,7 @@ final class TerminalServer {
         writeAppGroupFile("mcp-server-port", content: "\(port)")
     }
 
-    private func writeAppGroupFile(_ name: String, content: String) {
+    nonisolated private func writeAppGroupFile(_ name: String, content: String) {
         guard let url = appGroupURL() else {
             log.warning("Failed to get App Group container URL")
             return
@@ -78,7 +80,7 @@ final class TerminalServer {
         }
     }
 
-    private func deleteAppGroupFile(_ name: String) {
+    nonisolated private func deleteAppGroupFile(_ name: String) {
         guard let url = appGroupURL() else { return }
         let file = url.appendingPathComponent(name)
         try? FileManager.default.removeItem(at: file)

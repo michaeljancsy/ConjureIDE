@@ -206,6 +206,13 @@ final class PTYManager {
         ioctl(masterFD, TIOCSWINSZ, &winSize)
     }
 
+    /// Send SIGWINCH to the child process to force a screen redraw.
+    /// Used when a new xterm.js client connects to an already-running PTY.
+    func sendSIGWINCH() {
+        guard childPID > 0 else { return }
+        kill(childPID, SIGWINCH)
+    }
+
     // MARK: - Private
 
     private func readFromPTY() {
@@ -399,6 +406,9 @@ final class PTYManager {
     - Up to 16 parameters per script
     - Use `compile_and_run` to load scripts, `get_parameters` to check state, `toggle_bypass` for A/B comparison
     - Rust scripts are also supported (compiled to WASM, takes a few seconds) but Python is preferred for iteration speed
+    - IMPORTANT: The user may change scripts via the editor at any time. Never assume a previous script \
+    is still loaded — always call `get_script` to check before deciding whether to modify or replace. \
+    Do not rely on conversation memory for what script is currently active.
     """
 
     /// Write a temporary MCP config file for Claude Code to discover the local MCP server.

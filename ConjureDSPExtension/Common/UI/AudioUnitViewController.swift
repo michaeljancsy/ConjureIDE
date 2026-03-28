@@ -50,15 +50,10 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var paramMetadataCancellable: AnyCancellable?
 
 	deinit {
-        log.info("deinit called")
-	}
-
-    public override func viewWillDisappear() {
-        super.viewWillDisappear()
         terminalServer?.stop()
         terminalServer = nil
-        log.info("AU view disappearing — terminal server stopped")
-    }
+        log.info("deinit — terminal server stopped")
+	}
 
     /// Provide a fresh NSView container each time the system creates this VC.
     /// This forces the ViewBridge to work with a new view hierarchy, working
