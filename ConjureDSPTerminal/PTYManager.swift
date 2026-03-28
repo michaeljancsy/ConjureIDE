@@ -42,6 +42,7 @@ final class PTYManager {
 
     private var masterFD: Int32 = -1
     private var childPID: pid_t = 0
+    private var sessionGeneration: UInt64 = 0  // distinguishes fd reuse across sessions
     private var readSource: DispatchSourceRead?
     private var waitSource: DispatchSourceProcess?
 
@@ -72,6 +73,7 @@ final class PTYManager {
         readSource = nil
         waitSource?.cancel()
         waitSource = nil
+        sessionGeneration &+= 1
 
         // Write MCP config and context file BEFORE fork — Foundation APIs are not fork-safe
         if let port = mcpServerPort {
@@ -133,19 +135,21 @@ final class PTYManager {
         let flags = fcntl(masterFD, F_GETFL)
         fcntl(masterFD, F_SETFL, flags | O_NONBLOCK)
 
-        // Read output from pty
+        // Read output from pty — capture generation to detect fd reuse across sessions
         let fd = masterFD
+        let gen = sessionGeneration
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global(qos: .userInteractive))
         source.setEventHandler { [weak self] in
             self?.readFromPTY()
         }
         source.setCancelHandler { [weak self] in
-            // Close if self is deallocated (deinit path) or fd hasn't been replaced
+            // Close if self is deallocated (deinit path) or this is still the active session.
+            // Using generation counter instead of fd comparison to handle fd number reuse.
             guard let self else {
                 close(fd)
                 return
             }
-            if self.masterFD == fd {
+            if self.sessionGeneration == gen {
                 close(fd)
                 self.masterFD = -1
             }
