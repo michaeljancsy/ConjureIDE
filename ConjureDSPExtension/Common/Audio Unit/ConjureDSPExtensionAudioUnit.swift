@@ -7,6 +7,7 @@
 
 import AVFoundation
 import Combine
+import CoreAudioKit
 import os.log
 
 private let pluginLog = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "DSP")
@@ -681,6 +682,12 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	public override var channelCapabilities: [NSNumber] {
 		return [NSNumber(value: 1), NSNumber(value: 1),
 				NSNumber(value: 2), NSNumber(value: 2)]
+	}
+
+	public override func supportedViewConfigurations(
+		_ availableViewConfigurations: [AUAudioUnitViewConfiguration]
+	) -> IndexSet {
+		IndexSet(integersIn: 0..<availableViewConfigurations.count)
 	}
 
 	public override var maximumFramesToRender: AUAudioFrameCount {

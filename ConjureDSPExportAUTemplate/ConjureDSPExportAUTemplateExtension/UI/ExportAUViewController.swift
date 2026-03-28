@@ -68,6 +68,7 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
             pythonRuntimeMissing: au.pythonRuntimeMissing
         )
         let hv = NSHostingView(rootView: content)
+        hv.sizingOptions = []
         hv.translatesAutoresizingMaskIntoConstraints = false
         self.view.addSubview(hv)
         NSLayoutConstraint.activate([
