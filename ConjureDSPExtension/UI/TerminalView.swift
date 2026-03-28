@@ -32,9 +32,10 @@ struct TerminalView: NSViewRepresentable {
         let bundle = Bundle(for: Coordinator.self)
         if let terminalDir = bundle.url(forResource: "terminal", withExtension: nil),
            let terminalURL = bundle.url(forResource: "index", withExtension: "html", subdirectory: "terminal") {
+            log.info("Loading terminal from \(terminalURL.path, privacy: .public)")
             webView.loadFileURL(terminalURL, allowingReadAccessTo: terminalDir)
         } else {
-            log.error("Terminal resources not found in bundle")
+            log.error("Terminal resources not found in bundle: \(bundle.bundlePath, privacy: .public)")
         }
 
         return webView
@@ -81,6 +82,7 @@ struct TerminalView: NSViewRepresentable {
             switch event {
             case "terminalReady":
                 isTerminalReady = true
+                log.info("Terminal JS ready")
 
                 if let theme = pendingTheme {
                     let name = theme == .dark ? "dark" : "light"
@@ -96,6 +98,10 @@ struct TerminalView: NSViewRepresentable {
             case "connected":
                 webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
 
+            case "error":
+                let message = data["message"] as? String ?? "unknown"
+                log.error("Terminal JS error: \(message, privacy: .public)")
+
             case "disconnected":
                 let code = data["code"] as? Int ?? 0
                 log.info("Terminal disconnected (code: \(code))")
@@ -110,13 +116,16 @@ struct TerminalView: NSViewRepresentable {
 
         private func connectToWebSocket() {
             guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP") else {
+                log.error("App Group container not available")
                 showFallbackMessage(); return
             }
             let portFile = url.appendingPathComponent("terminal-server-port")
             guard let s = try? String(contentsOf: portFile, encoding: .utf8),
                   let port = UInt16(s.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                log.warning("WebSocket port file not found or unreadable at \(portFile.path, privacy: .public)")
                 showFallbackMessage(); return
             }
+            log.info("Connecting to WebSocket on port \(port)")
             webView?.evaluateJavaScript("terminalBridge.connect(\(port))") { _, _ in }
         }
 
