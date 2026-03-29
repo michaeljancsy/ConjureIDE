@@ -22,6 +22,7 @@ final class PackageInstaller {
     // MARK: - Request/Result models (must match PackageInstallManager in the extension)
 
     struct InstallRequest: Codable {
+        let requestId: String
         let packages: [String]
         let targetPath: String
         let pythonHomePath: String
@@ -29,12 +30,14 @@ final class PackageInstaller {
     }
 
     struct UninstallRequest: Codable {
+        let requestId: String
         let packages: [String]
         let targetPath: String
         let timestamp: Double
     }
 
     struct InstallResult: Codable {
+        let requestId: String
         let success: Bool
         let packages: [String]
         let error: String?
@@ -90,6 +93,7 @@ final class PackageInstaller {
         do {
             try await installPackages(request)
             writeResult(InstallResult(
+                requestId: request.requestId,
                 success: true,
                 packages: request.packages,
                 error: nil,
@@ -98,6 +102,7 @@ final class PackageInstaller {
             log.info("Install succeeded for: \(request.packages.joined(separator: ", "), privacy: .public)")
         } catch {
             writeResult(InstallResult(
+                requestId: request.requestId,
                 success: false,
                 packages: request.packages,
                 error: error.localizedDescription,
@@ -121,6 +126,7 @@ final class PackageInstaller {
         do {
             try uninstallPackages(request)
             writeResult(InstallResult(
+                requestId: request.requestId,
                 success: true,
                 packages: request.packages,
                 error: nil,
@@ -129,6 +135,7 @@ final class PackageInstaller {
             log.info("Uninstall succeeded for: \(request.packages.joined(separator: ", "), privacy: .public)")
         } catch {
             writeResult(InstallResult(
+                requestId: request.requestId,
                 success: false,
                 packages: request.packages,
                 error: error.localizedDescription,
@@ -170,22 +177,53 @@ final class PackageInstaller {
         let fm = FileManager.default
         let targetURL = URL(fileURLWithPath: request.targetPath)
 
+        guard let contents = try? fm.contentsOfDirectory(at: targetURL, includingPropertiesForKeys: nil) else {
+            return
+        }
+
         for packageName in request.packages {
-            // Remove package directory
             let normalizedName = packageName.lowercased().replacingOccurrences(of: "-", with: "_")
-            let pkgDir = targetURL.appendingPathComponent(normalizedName)
-            if fm.fileExists(atPath: pkgDir.path) {
-                try fm.removeItem(at: pkgDir)
+
+            // Find and remove .dist-info directory, reading top_level.txt first
+            // to discover the actual import directory names (e.g. Pillow -> PIL)
+            var topLevelNames: [String] = []
+            for item in contents {
+                let name = item.lastPathComponent
+                if name.hasSuffix(".dist-info"),
+                   name.lowercased().hasPrefix(normalizedName + "-") {
+                    // Read top_level.txt to find actual import directories
+                    let topLevelFile = item.appendingPathComponent("top_level.txt")
+                    if let text = try? String(contentsOf: topLevelFile, encoding: .utf8) {
+                        topLevelNames = text.split(separator: "\n")
+                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                            .filter { !$0.isEmpty }
+                    }
+                    try fm.removeItem(at: item)
+                }
             }
 
-            // Remove .dist-info directory
-            if let contents = try? fm.contentsOfDirectory(at: targetURL, includingPropertiesForKeys: nil) {
-                for item in contents {
-                    let name = item.lastPathComponent
-                    if name.hasSuffix(".dist-info"),
-                       name.lowercased().hasPrefix(normalizedName + "-") {
-                        try fm.removeItem(at: item)
+            // Remove import directories listed in top_level.txt
+            if !topLevelNames.isEmpty {
+                for importName in topLevelNames {
+                    let importDir = targetURL.appendingPathComponent(importName)
+                    if fm.fileExists(atPath: importDir.path) {
+                        try fm.removeItem(at: importDir)
                     }
+                }
+            } else {
+                // Fallback: use normalized distribution name (works for most packages)
+                let pkgDir = targetURL.appendingPathComponent(normalizedName)
+                if fm.fileExists(atPath: pkgDir.path) {
+                    try fm.removeItem(at: pkgDir)
+                }
+            }
+
+            // Also remove any .data directories (e.g. package_name-1.0.0.data)
+            for item in contents {
+                let name = item.lastPathComponent
+                if name.hasSuffix(".data"),
+                   name.lowercased().hasPrefix(normalizedName + "-") {
+                    try fm.removeItem(at: item)
                 }
             }
         }

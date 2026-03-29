@@ -36,6 +36,7 @@ final class PackageInstallManager {
     }
 
     struct InstallRequest: Codable {
+        let requestId: String
         let packages: [String]
         let targetPath: String
         let pythonHomePath: String
@@ -43,12 +44,14 @@ final class PackageInstallManager {
     }
 
     struct UninstallRequest: Codable {
+        let requestId: String
         let packages: [String]
         let targetPath: String
         let timestamp: Double
     }
 
     struct InstallResult: Codable {
+        let requestId: String
         let success: Bool
         let packages: [String]
         let error: String?
@@ -58,6 +61,7 @@ final class PackageInstallManager {
     // MARK: - State
 
     private var resultPollTimer: Timer?
+    private var pendingRequestId: String?
     private let pythonHomePath: String?
 
     /// Callback fired when packages change (install/uninstall). Use to trigger script reload.
@@ -84,7 +88,9 @@ final class PackageInstallManager {
         }
 
         let targetPath = ConjureDSPExtensionAudioUnit.userPackagesURL.path
+        let requestId = UUID().uuidString
         let request = InstallRequest(
+            requestId: requestId,
             packages: packages,
             targetPath: targetPath,
             pythonHomePath: pythonHome,
@@ -92,9 +98,14 @@ final class PackageInstallManager {
         )
 
         let requestURL = containerURL.appendingPathComponent(Self.installRequestFile)
+        // Remove any stale result file before writing new request
+        let resultURL = containerURL.appendingPathComponent(Self.installResultFile)
+        try? FileManager.default.removeItem(at: resultURL)
+
         do {
             let data = try JSONEncoder().encode(request)
             try data.write(to: requestURL, options: .atomic)
+            pendingRequestId = requestId
             isInstalling = true
             installStatusMessage = "Installing \(packages.joined(separator: ", "))..."
             lastError = nil
@@ -116,16 +127,23 @@ final class PackageInstallManager {
         }
 
         let targetPath = ConjureDSPExtensionAudioUnit.userPackagesURL.path
+        let requestId = UUID().uuidString
         let request = UninstallRequest(
+            requestId: requestId,
             packages: [packageName],
             targetPath: targetPath,
             timestamp: Date().timeIntervalSince1970
         )
 
         let requestURL = containerURL.appendingPathComponent(Self.uninstallRequestFile)
+        // Remove any stale result file before writing new request
+        let resultURL = containerURL.appendingPathComponent(Self.installResultFile)
+        try? FileManager.default.removeItem(at: resultURL)
+
         do {
             let data = try JSONEncoder().encode(request)
             try data.write(to: requestURL, options: .atomic)
+            pendingRequestId = requestId
             isInstalling = true
             installStatusMessage = "Removing \(packageName)..."
             lastError = nil
@@ -156,10 +174,18 @@ final class PackageInstallManager {
               let result = try? JSONDecoder().decode(InstallResult.self, from: data)
         else { return }
 
+        // Ignore results that don't match the pending request
+        guard result.requestId == pendingRequestId else {
+            // Stale result file — clean it up and keep polling
+            try? FileManager.default.removeItem(at: resultURL)
+            return
+        }
+
         // Clean up result file
         try? FileManager.default.removeItem(at: resultURL)
 
         // Update state
+        pendingRequestId = nil
         isInstalling = false
         installStatusMessage = nil
         resultPollTimer?.invalidate()

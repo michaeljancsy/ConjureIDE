@@ -247,7 +247,7 @@ struct PackageManagerView: View {
         }
 
         isSearching = true
-        Task {
+        Task { @MainActor in
             defer { isSearching = false }
 
             // Use PyPI JSON API to look up a specific package
@@ -256,7 +256,7 @@ struct PackageManagerView: View {
             do {
                 let (data, response) = try await URLSession.shared.data(from: url)
                 guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                    await MainActor.run { searchResults = [] }
+                    searchResults = []
                     return
                 }
                 if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -264,13 +264,11 @@ struct PackageManagerView: View {
                    let name = info["name"] as? String,
                    let version = info["version"] as? String {
                     let summary = (info["summary"] as? String) ?? ""
-                    await MainActor.run {
-                        searchResults = [PyPIPackageInfo(name: name, version: version, summary: summary)]
-                    }
+                    searchResults = [PyPIPackageInfo(name: name, version: version, summary: summary)]
                 }
             } catch {
                 log.warning("PyPI search failed: \(error.localizedDescription, privacy: .public)")
-                await MainActor.run { searchResults = [] }
+                searchResults = []
             }
         }
     }
