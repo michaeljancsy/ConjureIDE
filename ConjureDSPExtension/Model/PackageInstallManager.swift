@@ -147,6 +147,10 @@ final class PackageInstallManager {
 
     /// Request package removal via the companion app.
     func requestUninstall(packageName: String) {
+        guard !isInstalling else {
+            lastError = "Please wait for the current operation to finish"
+            return
+        }
         let normalized = packageName.lowercased().replacingOccurrences(of: "-", with: "_")
         guard !Self.bundledPackagePrefixes.contains(normalized) else {
             lastError = "\(packageName) is a built-in package and cannot be removed"
