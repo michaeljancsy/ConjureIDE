@@ -330,13 +330,13 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 
 		pluginLog.info("Loading Python script. pythonHome=\(pythonHome, privacy: .public) scriptPath=\(scriptPath, privacy: .public)")
-
-		// Point sys.path at the global user-packages directory so user-installed
-		// Python packages are importable by any preset.
-		dsp_kernel_set_extra_site_packages(kernel, Self.userPackagesURL.path)
-
 		let success = dsp_kernel_load_script(kernel, pythonHome, scriptPath)
 		if success {
+			// Point sys.path at the global user-packages directory so user-installed
+			// Python packages are importable by any preset.
+			// Must be called AFTER load_script, which sets PYTHONHOME and initializes
+			// the interpreter — inject_site_packages uses Python::with_gil.
+			dsp_kernel_set_extra_site_packages(kernel, Self.userPackagesURL.path)
 			pluginLog.info("Python DSP script loaded successfully")
 
 			// Read source so the UI can display it
