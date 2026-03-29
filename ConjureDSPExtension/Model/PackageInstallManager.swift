@@ -58,21 +58,35 @@ final class PackageInstallManager {
         let timestamp: Double
     }
 
+    /// Packages bundled with the Python runtime that should not appear in the user-installed list.
+    private static let bundledPackagePrefixes: Set<String> = [
+        "numpy", "scipy", "conjuredsp", "pip", "setuptools", "wheel",
+        "_distutils_hack", "distutils",
+    ]
+
     // MARK: - State
 
     private var resultPollTimer: Timer?
     private var pendingRequestId: String?
     private var pollStartTime: Date?
     private static let pollTimeoutSeconds: TimeInterval = 30
-    private let pythonHomePath: String?
 
     /// Callback fired when packages change (install/uninstall). Use to trigger script reload.
     var onPackagesChanged: (() -> Void)?
 
+    /// Python runtime URL in the App Group container (provisioned by ConjureDSPTerminal).
+    private var pythonRuntimeURL: URL? {
+        ConjureDSPExtensionAudioUnit.pythonRuntimeURL
+    }
+
+    /// Site-packages directory inside the shared Python runtime.
+    private var sitePackagesURL: URL? {
+        pythonRuntimeURL?.appendingPathComponent("lib/python3.14t/site-packages")
+    }
+
     // MARK: - Init
 
-    init(pythonHomePath: String?) {
-        self.pythonHomePath = pythonHomePath
+    init() {
         refreshInstalledPackages()
     }
 
@@ -80,27 +94,31 @@ final class PackageInstallManager {
 
     /// Request package installation via the companion app.
     func requestInstall(packages: [String]) {
-        guard let pythonHome = pythonHomePath else {
+        guard let runtimeURL = pythonRuntimeURL else {
             lastError = "Python runtime not available"
             return
         }
-        let pythonBin = URL(fileURLWithPath: pythonHome).appendingPathComponent("bin/python3").path
+        let pythonBin = runtimeURL.appendingPathComponent("bin/python3").path
         guard FileManager.default.fileExists(atPath: pythonBin) else {
-            lastError = "Python runtime not installed. Open the ConjureDSP app at least once to set it up."
+            lastError = "Python runtime not installed. Launch ConjureDSP Terminal to set it up."
             return
         }
         guard let containerURL = appGroupContainerURL() else {
             lastError = "App Group container not available"
             return
         }
+        guard let sitePackages = sitePackagesURL else {
+            lastError = "Site-packages path not available"
+            return
+        }
 
-        let targetPath = ConjureDSPExtensionAudioUnit.userPackagesURL.path
+        let targetPath = sitePackages.path
         let requestId = UUID().uuidString
         let request = InstallRequest(
             requestId: requestId,
             packages: packages,
             targetPath: targetPath,
-            pythonHomePath: pythonHome,
+            pythonHomePath: runtimeURL.path,
             timestamp: Date().timeIntervalSince1970
         )
 
@@ -132,8 +150,12 @@ final class PackageInstallManager {
             lastError = "App Group container not available"
             return
         }
+        guard let sitePackages = sitePackagesURL else {
+            lastError = "Site-packages path not available"
+            return
+        }
 
-        let targetPath = ConjureDSPExtensionAudioUnit.userPackagesURL.path
+        let targetPath = sitePackages.path
         let requestId = UUID().uuidString
         let request = UninstallRequest(
             requestId: requestId,
@@ -230,19 +252,23 @@ final class PackageInstallManager {
 
     // MARK: - Installed Packages
 
-    /// Scan user-packages directory to discover installed packages.
+    /// Scan site-packages directory to discover user-installed packages.
+    /// Filters out packages bundled with the Python runtime (numpy, scipy, etc.).
     func refreshInstalledPackages() {
-        let userPkgsURL = ConjureDSPExtensionAudioUnit.userPackagesURL
+        guard let sitePackages = sitePackagesURL else {
+            installedPackages = []
+            return
+        }
         let fm = FileManager.default
 
-        guard fm.fileExists(atPath: userPkgsURL.path) else {
+        guard fm.fileExists(atPath: sitePackages.path) else {
             installedPackages = []
             return
         }
 
         // Look for *.dist-info directories (standard pip/uv metadata)
         guard let contents = try? fm.contentsOfDirectory(
-            at: userPkgsURL,
+            at: sitePackages,
             includingPropertiesForKeys: [.isDirectoryKey]
         ) else {
             installedPackages = []
@@ -258,6 +284,11 @@ final class PackageInstallManager {
                 if let dashRange = stem.range(of: "-", options: .backwards) {
                     let pkgName = String(stem[..<dashRange.lowerBound])
                         .replacingOccurrences(of: "_", with: "-")
+                    // Skip packages bundled with the runtime
+                    let normalized = pkgName.lowercased().replacingOccurrences(of: "-", with: "_")
+                    if Self.bundledPackagePrefixes.contains(normalized) {
+                        continue
+                    }
                     let version = String(stem[dashRange.upperBound...])
                     packages.append(InstalledPackage(name: pkgName, version: version))
                 }

@@ -21,15 +21,16 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Only used by AudioCaptureManager on the UI thread.
 	var kernelReference: DSPKernelRef? { kernel }
 
-	// MARK: - User-Installed Packages
+	// MARK: - Shared Python Runtime
 
-	/// Global directory for user-installed Python packages.
-	/// Shared by all presets; prepended to sys.path on every script load.
-	static let userPackagesURL: URL = {
-		let appSupport = FileManager.default
-			.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-		return appSupport.appendingPathComponent("ConjureDSP/user-packages", isDirectory: true)
-	}()
+	/// App Group container URL for cross-app data sharing.
+	private static let appGroupContainerURL: URL? = FileManager.default.containerURL(
+		forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
+	)
+
+	/// Shared Python runtime provisioned by ConjureDSPTerminal into the App Group container.
+	/// Used as PYTHONHOME — contains stdlib, numpy, scipy, and user-installed packages.
+	static let pythonRuntimeURL: URL? = appGroupContainerURL?.appendingPathComponent("PythonRuntime")
 
 	// MARK: - Parameter Tree (up to 16 parameters, with optional rich metadata)
 
@@ -316,10 +317,22 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	private func loadPythonScript() {
 		let bundle = Bundle(for: type(of: self))
 
-		// Python home: the bundled Python standard library root
-		// The bundle copies python-dist contents into Resources/python-dist/
-		guard let pythonHome = bundle.path(forResource: "python-dist", ofType: nil) else {
-			pluginLog.error("Bundled Python distribution not found in bundle, using Rust fallback DSP")
+		// Python home: shared runtime in App Group container (provisioned by ConjureDSPTerminal),
+		// with fallback to bundled python-dist for backward compatibility.
+		let pythonHome: String? = {
+			if let runtimeURL = Self.pythonRuntimeURL {
+				let stdlibPath = runtimeURL.appendingPathComponent("lib/python3.14t").path
+				if FileManager.default.fileExists(atPath: stdlibPath) {
+					return runtimeURL.path
+				}
+				pluginLog.warning("Shared Python runtime not found at \(runtimeURL.path, privacy: .public)")
+			}
+			// Fallback: bundled python-dist (transitional)
+			return bundle.path(forResource: "python-dist", ofType: nil)
+		}()
+
+		guard let pythonHome else {
+			pluginLog.error("Python runtime not available — launch ConjureDSP Terminal to install it")
 			return
 		}
 		self.pythonHome = pythonHome
@@ -332,11 +345,6 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		pluginLog.info("Loading Python script. pythonHome=\(pythonHome, privacy: .public) scriptPath=\(scriptPath, privacy: .public)")
 		let success = dsp_kernel_load_script(kernel, pythonHome, scriptPath)
 		if success {
-			// Point sys.path at the global user-packages directory so user-installed
-			// Python packages are importable by any preset.
-			// Must be called AFTER load_script, which sets PYTHONHOME and initializes
-			// the interpreter — inject_site_packages uses Python::with_gil.
-			dsp_kernel_set_extra_site_packages(kernel, Self.userPackagesURL.path)
 			pluginLog.info("Python DSP script loaded successfully")
 
 			// Read source so the UI can display it

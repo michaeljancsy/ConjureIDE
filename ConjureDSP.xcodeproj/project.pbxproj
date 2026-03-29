@@ -388,7 +388,7 @@
 				2579117A2F5013850036AAB6 /* Sources */,
 				2579117B2F5013850036AAB6 /* Frameworks */,
 				2579117C2F5013850036AAB6 /* Resources */,
-				AABB00032F5013850036AAB6 /* Copy Python Runtime */,
+				AABB00032F5013850036AAB6 /* Copy Python Dylib */,
 				AABB00092F5013850036AAB6 /* Copy Rust Compiler */,
 				AABB0010000000MONACO0001 /* Copy Monaco Editor */,
 				AABB0020000000XTERM0001 /* Copy Terminal (xterm.js) */,
@@ -443,6 +443,7 @@
 				25E930F82F773DC200D36258 /* Frameworks */,
 				25E930F92F773DC200D36258 /* Resources */,
 				AABB00202F5013850036AAB6 /* Copy uv Binary */,
+				AABB00302F5013850036AAB6 /* Copy Python Runtime */,
 			);
 			buildRules = (
 			);
@@ -659,7 +660,7 @@
 			shellPath = /bin/bash;
 			shellScript = "\"${SRCROOT}/rust/build-rust.sh\"\n";
 		};
-		AABB00032F5013850036AAB6 /* Copy Python Runtime */ = {
+		AABB00032F5013850036AAB6 /* Copy Python Dylib */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -669,7 +670,7 @@
 			inputPaths = (
 				"$(SRCROOT)/rust/python-dist/lib/libpython3.14t.dylib",
 			);
-			name = "Copy Python Runtime";
+			name = "Copy Python Dylib";
 			outputFileListPaths = (
 			);
 			outputPaths = (
@@ -677,7 +678,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "# Skip if Python runtime hasn't changed since last copy\nPYDST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/python-dist\"\nSTAMP=\"${PYDST}/.copy-stamp\"\nSRC_DYLIB=\"${SRCROOT}/rust/python-dist/lib/libpython3.14t.dylib\"\nDST_DYLIB=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libpython3.14t.dylib\"\n\nif [ -f \"$STAMP\" ] && [ -f \"$DST_DYLIB\" ] && [ \"$SRC_DYLIB\" -ot \"$STAMP\" ]; then\n    echo \"note: Python runtime unchanged, skipping copy\" >&2\n    exit 0\nfi\n\n# Copy Python dylib into Frameworks\nmkdir -p \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\ncp \"${SRC_DYLIB}\" \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/\"\n\n# Code-sign the dylib with the same identity as the build\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${DST_DYLIB}\"\n\n# Copy Python stdlib + site-packages into Resources/python-dist\nmkdir -p \"${PYDST}/lib\"\ncp -R \"${SRCROOT}/rust/python-dist/lib/python3.14t\" \"${PYDST}/lib/\"\n\n# Code-sign all .so files (numpy, stdlib extensions) for hardened runtime\nfind \"${PYDST}\" -name '*.so' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp {} \\;\n\ntouch \"$STAMP\"\n";
+			shellScript = "# Copy libpython3.14t.dylib into Frameworks (required for pyo3 @rpath loading).\n# The Python stdlib is no longer bundled here — it lives in the App Group container,\n# provisioned by ConjureDSPTerminal.\nSRC_DYLIB=\"${SRCROOT}/rust/python-dist/lib/libpython3.14t.dylib\"\nDST_DYLIB=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libpython3.14t.dylib\"\n\nif [ -f \"$DST_DYLIB\" ] && [ \"$SRC_DYLIB\" -ot \"$DST_DYLIB\" ]; then\n    echo \"note: Python dylib unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\ncp \"${SRC_DYLIB}\" \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${DST_DYLIB}\"\n";
 		};
 		AABB00092F5013850036AAB6 /* Copy Rust Compiler */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -876,6 +877,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "UV_SRC=\"${SRCROOT}/uv-dist/uv\"\nUV_DST=\"${SCRIPT_OUTPUT_FILE_0}\"\nif [ -f \"$UV_SRC\" ]; then\n    mkdir -p \"$(dirname \"$UV_DST\")\"\n    cp \"$UV_SRC\" \"$UV_DST\"\nfi\n";
+		};
+		AABB00302F5013850036AAB6 /* Copy Python Runtime */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/rust/python-dist/lib/libpython3.14t.dylib",
+			);
+			name = "Copy Python Runtime";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(PRODUCT_NAME).app/Contents/Resources/python-dist/.copy-stamp",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# Copy full Python distribution into ConjureDSPTerminal.app/Contents/Resources/python-dist/\nPYSRC=\"${SRCROOT}/rust/python-dist\"\nPYDST=\"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/python-dist\"\nSTAMP=\"${PYDST}/.copy-stamp\"\n\nif [ ! -d \"$PYSRC\" ]; then\n    echo \"warning: python-dist not found at $PYSRC, skipping\" >&2\n    exit 0\nfi\n\nif [ -f \"$STAMP\" ] && [ \"$PYSRC/lib/libpython3.14t.dylib\" -ot \"$STAMP\" ]; then\n    echo \"note: Python runtime unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${PYDST}/bin\"\nmkdir -p \"${PYDST}/lib\"\n\n# Copy Python binary\ncp \"${PYSRC}/bin/python3\" \"${PYDST}/bin/python3\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${PYDST}/bin/python3\"\n\n# Copy libpython dylib\ncp \"${PYSRC}/lib/libpython3.14t.dylib\" \"${PYDST}/lib/\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${PYDST}/lib/libpython3.14t.dylib\"\n\n# Copy stdlib + numpy + scipy\ncp -R \"${PYSRC}/lib/python3.14t\" \"${PYDST}/lib/\"\n\n# Code-sign all .so files\nfind \"${PYDST}\" -name '*.so' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp {} \\;\n\ntouch \"$STAMP\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
