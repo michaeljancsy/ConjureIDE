@@ -866,17 +866,15 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"$(SRCROOT)/uv-dist/uv",
 			);
 			name = "Copy uv Binary";
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(BUILT_PRODUCTS_DIR)/$(PRODUCT_NAME).app/Contents/Resources/uv",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "UV_SRC=\"${SRCROOT}/uv-dist/uv\"\nUV_DST=\"${SCRIPT_OUTPUT_FILE_0}\"\nif [ -f \"$UV_SRC\" ]; then\n    mkdir -p \"$(dirname \"$UV_DST\")\"\n    cp \"$UV_SRC\" \"$UV_DST\"\nfi\n";
+			shellScript = "UV_SRC=\"${SRCROOT}/uv-dist/uv\"\nUV_DST=\"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/uv\"\nif [ -f \"$UV_SRC\" ]; then\n    mkdir -p \"$(dirname \"$UV_DST\")\"\n    cp \"$UV_SRC\" \"$UV_DST\"\nfi\n";
 		};
 		AABB00302F5013850036AAB6 /* Copy Python Runtime */ = {
 			isa = PBXShellScriptBuildPhase;
