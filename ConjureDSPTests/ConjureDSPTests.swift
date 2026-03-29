@@ -62,11 +62,23 @@ struct ConjureDSPTests {
 
     private static func instantiateAU() async throws -> (AVAudioUnit, AUAudioUnit) {
         let desc = try componentDescription
-        let avAudioUnit = try await AVAudioUnit.instantiate(
-            with: desc,
-            options: .loadInProcess
-        )
-        return (avAudioUnit, avAudioUnit.auAudioUnit)
+        let maxAttempts = 3
+        for attempt in 1...maxAttempts {
+            do {
+                let avAudioUnit = try await AVAudioUnit.instantiate(
+                    with: desc,
+                    options: .loadInProcess
+                )
+                return (avAudioUnit, avAudioUnit.auAudioUnit)
+            } catch {
+                if attempt < maxAttempts {
+                    try await Task.sleep(for: .milliseconds(500 * attempt))
+                    continue
+                }
+                throw error
+            }
+        }
+        fatalError("unreachable")
     }
 
     // MARK: - Component Discovery
