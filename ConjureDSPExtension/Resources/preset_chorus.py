@@ -1,11 +1,11 @@
 import numpy as np
 import math
-from conjuredsp.params import param, mix as mix_param
+from conjuredsp.params import param, mix as mix_param, time_ms
 
 PARAMS = {
     "rate":  param(0.1, 2, unit="Hz", default=0.5),
-    "depth": param(0.5, 15, unit="ms", default=5),
-    "delay": param(2, 30, unit="ms", default=10),
+    "depth": time_ms(min=0.5, max=15, default=5),
+    "delay": time_ms(min=2, max=30, default=10),
     "mix":   mix_param(default=0.5),
 }
 

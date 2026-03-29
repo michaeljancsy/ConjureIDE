@@ -45,7 +45,7 @@ pub use osc::{advance_phase, saw, sine, triangle, Lfo, Waveform};
 pub use params::{param, ParamSpec};
 
 // Re-export param builders (these are functions, not macros)
-pub use params::{db, freq, mix, pct, ratio, time_ms, toggle};
+pub use params::{choice, db, freq, mix, pct, ratio, time_ms, toggle};
 
 // Re-export JSON builder for macro use
 pub use json::{write_param_json, JsonBuf};

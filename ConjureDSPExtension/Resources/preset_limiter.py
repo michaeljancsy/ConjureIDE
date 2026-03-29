@@ -1,11 +1,11 @@
 import numpy as np
-from conjuredsp.params import db, param
+from conjuredsp.params import db, time_ms
 from conjuredsp.dsp import db_to_gain, smooth_coeff
 
 PARAMS = {
     "threshold": db(-20, 0, default=-6),
-    "attack":    param(0.01, 1, unit="ms", default=0.1),
-    "release":   param(10, 500, unit="ms", default=100),
+    "attack":    time_ms(min=0.01, max=1, default=0.1),
+    "release":   time_ms(min=10, max=500, default=100),
 }
 
 # Persistent envelope follower state

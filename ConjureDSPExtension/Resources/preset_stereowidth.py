@@ -1,7 +1,8 @@
 import numpy as np
+from conjuredsp.params import param
 
 PARAMS = {
-    "width": {"min": 0.0, "max": 2.0, "unit": "x", "default": 1.0},
+    "width": param(0, 2, unit="x", default=1),
 }
 
 

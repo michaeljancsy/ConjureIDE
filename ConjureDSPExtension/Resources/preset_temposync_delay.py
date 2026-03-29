@@ -1,9 +1,10 @@
 import numpy as np
+from conjuredsp.params import param, mix, choice
 
 PARAMS = {
-    "division":  {"min": 0.0, "max": 6.0, "unit": "", "default": 2.0},
-    "feedback":  {"min": 0.0, "max": 0.95, "unit": "", "default": 0.4},
-    "mix":       {"min": 0.0, "max": 1.0,  "unit": "", "default": 0.5},
+    "division":  choice("1/1", "1/2", "1/4", "1/8", "1/16", "1/4T", "1/8T", default="1/4"),
+    "feedback":  param(0, 0.95, default=0.4),
+    "mix":       mix(default=0.5),
 }
 
 # Division mapping: 0=1/1, 1=1/2, 2=1/4, 3=1/8, 4=1/16, 5=1/4T, 6=1/8T

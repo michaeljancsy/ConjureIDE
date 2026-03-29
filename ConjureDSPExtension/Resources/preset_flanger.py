@@ -1,11 +1,11 @@
 import math
-from conjuredsp.params import param, mix as mix_param
+from conjuredsp.params import param, mix as mix_param, time_ms
 from conjuredsp.buffers import DelayLine
 
 PARAMS = {
     "rate":     param(0.1, 5, unit="Hz", default=0.5),
-    "depth":    param(0.5, 5, unit="ms", default=2),
-    "delay":    param(1, 5, unit="ms", default=2),
+    "depth":    time_ms(min=0.5, max=5, default=2),
+    "delay":    time_ms(min=1, max=5, default=2),
     "feedback": param(0, 1, default=0.5),
     "mix":      mix_param(default=0.5),
 }

@@ -10,7 +10,7 @@ use conjuredsp::*;
 setup!();
 
 params! {
-    GAIN = param(-24.0, 12.0).unit("dB").default(0.0),
+    GAIN = db().min(-24.0).max(12.0),
     PAN = param(0.0, 1.0).default(0.5),
 }
 
