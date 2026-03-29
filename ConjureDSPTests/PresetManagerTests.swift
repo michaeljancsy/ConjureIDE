@@ -79,12 +79,14 @@ struct PresetManagerTests {
 
         let factory = manager.presets.filter(\.isFactory)
         for preset in factory {
-            let source = manager.loadSource(for: preset)
-            #expect(source != nil, "Should load source for factory preset \(preset.name)")
+            guard let source = manager.loadSource(for: preset) else {
+                Issue.record("Should load source for factory preset \(preset.name)")
+                continue
+            }
             if preset.language == .rust {
-                #expect(source!.contains("fn process"), "Rust factory preset \(preset.name) should contain fn process")
+                #expect(source.contains("fn process"), "Rust factory preset \(preset.name) should contain fn process")
             } else {
-                #expect(source!.contains("def process"), "Python factory preset \(preset.name) should contain def process")
+                #expect(source.contains("def process"), "Python factory preset \(preset.name) should contain def process")
             }
         }
     }

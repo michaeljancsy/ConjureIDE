@@ -19,6 +19,13 @@ enum SharedPythonRuntimeInstaller {
         return appSupport.appendingPathComponent("ConjureDSP/PythonRuntime-\(runtimeVersion)")
     }
 
+    /// Global directory for user-installed Python packages.
+    /// Shared by all presets; prepended to sys.path on every script load.
+    static var userPackagesURL: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("ConjureDSP/user-packages", isDirectory: true)
+    }
+
     /// True if the shared Python runtime (stdlib + numpy) is already installed.
     static var isInstalled: Bool {
         let stdlibPath = sharedRuntimeURL.appendingPathComponent("lib/python3.14t").path

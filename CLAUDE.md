@@ -39,6 +39,7 @@ UI test classes and what they cover:
 - Bundled Rust compiler (one-time setup): `./scripts/setup-rustc.sh`
 - Monaco Editor (one-time setup): `./scripts/setup-monaco.sh`
 - xterm.js terminal (one-time setup): `./scripts/setup-xterm.sh`
+- Bundled uv package manager (one-time setup): `./scripts/setup-uv.sh`
 
 Deployment targets: macOS 26.2+.
 

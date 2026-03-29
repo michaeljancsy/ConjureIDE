@@ -198,6 +198,12 @@ impl DSPKernel {
         }
     }
 
+    /// Prepend a directory to Python's sys.path so user-installed packages are importable.
+    /// Idempotent — safe to call multiple times. Takes effect immediately.
+    pub fn set_extra_site_packages(&mut self, path: &str) -> Result<(), String> {
+        PythonBackend::inject_site_packages(path)
+    }
+
     pub fn initialize(&mut self, input_channels: i32, _output_channels: i32, sample_rate: f64) {
         self.sample_rate = sample_rate;
         self.channel_count = input_channels as usize;
