@@ -84,6 +84,11 @@ final class PackageInstallManager {
             lastError = "Python runtime not available"
             return
         }
+        let pythonBin = URL(fileURLWithPath: pythonHome).appendingPathComponent("bin/python3").path
+        guard FileManager.default.fileExists(atPath: pythonBin) else {
+            lastError = "Python runtime not installed. Open the ConjureDSP app at least once to set it up."
+            return
+        }
         guard let containerURL = appGroupContainerURL() else {
             lastError = "App Group container not available"
             return
