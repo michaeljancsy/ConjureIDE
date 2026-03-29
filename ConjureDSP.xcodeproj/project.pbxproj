@@ -442,6 +442,7 @@
 				25E930F72F773DC200D36258 /* Sources */,
 				25E930F82F773DC200D36258 /* Frameworks */,
 				25E930F92F773DC200D36258 /* Resources */,
+				AABB00202F5013850036AAB6 /* Copy uv Binary */,
 			);
 			buildRules = (
 			);
@@ -855,6 +856,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "# Copy terminal resources into the extension bundle, auto-downloading xterm.js if needed\nTERM_SRC=\"${SRCROOT}/ConjureDSPExtension/Resources/terminal\"\nTERM_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/terminal\"\n\n# Auto-download xterm.js if missing\nif [ ! -f \"${TERM_SRC}/xterm.js\" ]; then\n    echo \"note: xterm.js not found, downloading...\" >&2\n    \"${SRCROOT}/scripts/setup-xterm.sh\" || {\n        echo \"warning: Failed to download xterm.js. Terminal will not work.\" >&2\n        # Still copy checked-in files so build doesn't fail\n        mkdir -p \"${TERM_DST}\"\n        cp -f \"${TERM_SRC}/index.html\" \"${TERM_DST}/\" 2>/dev/null || true\n        cp -f \"${TERM_SRC}/terminal-bridge.js\" \"${TERM_DST}/\" 2>/dev/null || true\n        exit 0\n    }\nfi\n\n# Skip if no source file is newer than the last copy\nSTAMP=\"${TERM_DST}/.copy-stamp\"\nif [ -f \"$STAMP\" ] && [ -z \"$(find -L \"${TERM_SRC}\" -type f -newer \"$STAMP\" -print -quit 2>/dev/null)\" ]; then\n    echo \"note: Terminal resources unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${TERM_DST}\"\nrsync -aL --delete \"${TERM_SRC}/\" \"${TERM_DST}/\"\n\ntouch \"$STAMP\"\n";
+		};
+		AABB00202F5013850036AAB6 /* Copy uv Binary */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/uv-dist/uv",
+			);
+			name = "Copy uv Binary";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(PRODUCT_NAME).app/Contents/Resources/uv",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "UV_SRC=\"${SRCROOT}/uv-dist/uv\"\nUV_DST=\"${SCRIPT_OUTPUT_FILE_0}\"\nif [ -f \"$UV_SRC\" ]; then\n    mkdir -p \"$(dirname \"$UV_DST\")\"\n    cp \"$UV_SRC\" \"$UV_DST\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
