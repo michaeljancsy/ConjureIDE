@@ -12,12 +12,12 @@ import os.log
 private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.Terminal", category: "PackageInstaller")
 
 final class PackageInstaller {
-    private let appGroupURL: URL
-    private let uvPath: String
+    let appGroupURL: URL
+    let uvPath: String
 
-    private static let installRequestFile = "package-install-request.json"
-    private static let uninstallRequestFile = "package-uninstall-request.json"
-    private static let installResultFile = "package-install-result.json"
+    static let installRequestFile = "package-install-request.json"
+    static let uninstallRequestFile = "package-uninstall-request.json"
+    static let installResultFile = "package-install-result.json"
 
     // MARK: - Request/Result models (must match PackageInstallManager in the extension)
 
@@ -46,27 +46,45 @@ final class PackageInstaller {
 
     // MARK: - Init
 
+    /// Testing initializer with explicit uv path.
+    init(appGroupURL: URL, uvPath: String) {
+        self.appGroupURL = appGroupURL
+        self.uvPath = uvPath
+    }
+
+    /// Production initializer — resolves uv from bundle, App Group, or PATH.
     init?(appGroupURL: URL) {
         self.appGroupURL = appGroupURL
 
-        // Find bundled uv binary
+        // 1. Check bundled uv binary (inside the app's Resources/)
         if let resourceURL = Bundle.main.resourceURL {
             let bundledUV = resourceURL.appendingPathComponent("uv").path
             if FileManager.default.fileExists(atPath: bundledUV) {
+                log.info("Using bundled uv: \(bundledUV, privacy: .public)")
                 self.uvPath = bundledUV
                 return
             }
         }
 
-        // Fallback: check if uv is on PATH
+        // 2. Check App Group container (provisioned by provisionUVIfNeeded())
+        let appGroupUV = appGroupURL.appendingPathComponent("uv").path
+        if FileManager.default.fileExists(atPath: appGroupUV) {
+            log.info("Using App Group uv: \(appGroupUV, privacy: .public)")
+            self.uvPath = appGroupUV
+            return
+        }
+
+        // 3. Fallback: check if uv is on PATH
         let whichResult = Self.runProcessSync("/usr/bin/which", arguments: ["uv"])
         if let path = whichResult.output?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !path.isEmpty {
+           !path.isEmpty,
+           FileManager.default.fileExists(atPath: path) {
+            log.info("Using PATH uv: \(path, privacy: .public)")
             self.uvPath = path
             return
         }
 
-        log.error("uv binary not found — package installation unavailable")
+        log.error("uv binary not found — checked bundle, App Group (\(appGroupUV, privacy: .public)), and PATH")
         return nil
     }
 
@@ -153,6 +171,10 @@ final class PackageInstaller {
         // Ensure target directory exists
         try fm.createDirectory(atPath: request.targetPath, withIntermediateDirectories: true)
 
+        // Verify uv binary still exists
+        let uvExists = fm.fileExists(atPath: uvPath)
+        log.info("Running uv at: \(self.uvPath, privacy: .public) (exists=\(uvExists))")
+
         // Build uv command
         let pythonBin = request.pythonHomePath + "/bin/python3"
         var args = ["pip", "install",
@@ -160,10 +182,13 @@ final class PackageInstaller {
                     "--python", pythonBin]
         args.append(contentsOf: request.packages)
 
+        log.info("uv command: \(self.uvPath, privacy: .public) \(args.joined(separator: " "), privacy: .public)")
+
         let result = await Self.runProcess(uvPath, arguments: args)
 
         if result.exitCode != 0 {
             let errMsg = result.output ?? "uv exited with code \(result.exitCode)"
+            log.error("uv failed (exit=\(result.exitCode)): \(errMsg, privacy: .public)")
             throw PackageInstallerError.installFailed(errMsg)
         }
 
@@ -297,6 +322,7 @@ final class PackageInstaller {
             do {
                 try process.run()
             } catch {
+                log.error("Process.run() failed for \(path, privacy: .public): \(error, privacy: .public)")
                 continuation.resume(returning: (-1, error.localizedDescription))
             }
         }

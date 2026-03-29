@@ -61,19 +61,24 @@ class TerminalAppServer {
         log.info("ConjureDSP Terminal starting")
         status = "Waiting for ConjureDSP plugin..."
 
-        // Initialize package installer if App Group is available
-        if let containerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: appGroupID
-        ) {
-            packageInstaller = PackageInstaller(appGroupURL: containerURL)
-            if packageInstaller != nil {
-                log.info("Package installer ready")
-            }
-        }
-
-        // Provision the shared Python runtime to the App Group container
-        DispatchQueue.global(qos: .utility).async {
+        // Provision shared runtimes to the App Group container, then init package installer.
+        // uv must be provisioned before PackageInstaller.init so it can find the binary.
+        DispatchQueue.global(qos: .utility).async { [self] in
             Self.installPythonRuntimeIfNeeded()
+            Self.provisionUVIfNeeded()
+
+            Task { @MainActor in
+                if let containerURL = FileManager.default.containerURL(
+                    forSecurityApplicationGroupIdentifier: self.appGroupID
+                ) {
+                    self.packageInstaller = PackageInstaller(appGroupURL: containerURL)
+                    if self.packageInstaller != nil {
+                        log.info("Package installer ready")
+                    } else {
+                        log.error("Package installer failed to initialize — uv not available")
+                    }
+                }
+            }
         }
 
         startWatching()
@@ -157,6 +162,36 @@ class TerminalAppServer {
             }
         }
         log.info("Migration complete — old user-packages preserved at \(oldUserPackages.path, privacy: .public)")
+    }
+
+    /// Copies the bundled `uv` binary to the App Group container so PackageInstaller
+    /// can find it reliably regardless of PATH or Bundle.main state. No-op if already present.
+    nonisolated static func provisionUVIfNeeded() {
+        guard let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
+        ) else {
+            log.error("App Group container not available — cannot provision uv")
+            return
+        }
+
+        let dstUV = containerURL.appendingPathComponent("uv")
+        if FileManager.default.fileExists(atPath: dstUV.path) {
+            log.info("uv already provisioned in App Group at \(dstUV.path, privacy: .public)")
+            return
+        }
+
+        guard let bundledUV = Bundle.main.resourceURL?.appendingPathComponent("uv"),
+              FileManager.default.fileExists(atPath: bundledUV.path) else {
+            log.warning("Bundled uv not found in Terminal app bundle — package management requires rebuild")
+            return
+        }
+
+        do {
+            try FileManager.default.copyItem(at: bundledUV, to: dstUV)
+            log.info("uv provisioned to App Group at \(dstUV.path, privacy: .public)")
+        } catch {
+            log.error("Failed to provision uv to App Group: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     // MARK: - App Group file watching
