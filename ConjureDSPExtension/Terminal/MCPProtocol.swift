@@ -167,6 +167,17 @@ enum MCPProtocol {
             description: "Toggle bypass mode. When bypassed, audio passes through unprocessed (useful for A/B comparison).",
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
+        ToolDefinition(
+            name: "get_docs",
+            description: "Get detailed API reference for the conjuredsp library. Use this when you need exact method signatures, parameter types, default values, or usage details beyond what's in your system prompt.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "topic": PropertySchema(type: "string", description: "Documentation topic: \"params\", \"filters\", \"delays\", \"oscillators\", \"utilities\", or \"all\".")
+                ],
+                required: ["topic"]
+            )
+        ),
     ]
 }
 
