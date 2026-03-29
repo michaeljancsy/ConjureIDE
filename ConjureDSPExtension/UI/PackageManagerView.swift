@@ -94,17 +94,21 @@ struct PackageManagerView: View {
                         Divider().padding(.vertical, 4)
                     }
 
-                    // Installed packages
-                    sectionHeader("Installed")
+                    // Built-in packages
+                    let bundled = installManager.installedPackages.filter(\.isBundled)
+                    let userInstalled = installManager.installedPackages.filter { !$0.isBundled }
 
-                    if installManager.installedPackages.isEmpty {
-                        Text("No user-installed packages")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                    } else {
-                        ForEach(installManager.installedPackages) { pkg in
+                    if !bundled.isEmpty {
+                        sectionHeader("Built-in")
+                        ForEach(bundled) { pkg in
+                            installedPackageRow(pkg)
+                        }
+                    }
+
+                    // User-installed packages
+                    if !userInstalled.isEmpty {
+                        sectionHeader("User-installed")
+                        ForEach(userInstalled) { pkg in
                             installedPackageRow(pkg)
                         }
                     }
@@ -192,11 +196,13 @@ struct PackageManagerView: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            Button(action: { confirmUninstall = pkg.name }) {
-                Image(systemName: "trash")
-                    .foregroundColor(.secondary)
+            if !pkg.isBundled {
+                Button(action: { confirmUninstall = pkg.name }) {
+                    Image(systemName: "trash")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.borderless)
             }
-            .buttonStyle(.borderless)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)

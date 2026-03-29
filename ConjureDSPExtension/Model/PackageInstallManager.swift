@@ -33,6 +33,7 @@ final class PackageInstallManager {
         var id: String { name }
         let name: String
         let version: String
+        let isBundled: Bool
     }
 
     struct InstallRequest: Codable {
@@ -58,8 +59,8 @@ final class PackageInstallManager {
         let timestamp: Double
     }
 
-    /// Packages bundled with the Python runtime that should not appear in the user-installed list.
-    private static let bundledPackagePrefixes: Set<String> = [
+    /// Packages bundled with the Python runtime (shown as "Built-in", not uninstallable).
+    static let bundledPackagePrefixes: Set<String> = [
         "numpy", "scipy", "conjuredsp", "pip", "setuptools", "wheel",
         "_distutils_hack", "distutils",
     ]
@@ -146,6 +147,11 @@ final class PackageInstallManager {
 
     /// Request package removal via the companion app.
     func requestUninstall(packageName: String) {
+        let normalized = packageName.lowercased().replacingOccurrences(of: "-", with: "_")
+        guard !Self.bundledPackagePrefixes.contains(normalized) else {
+            lastError = "\(packageName) is a built-in package and cannot be removed"
+            return
+        }
         guard let containerURL = appGroupContainerURL() else {
             lastError = "App Group container not available"
             return
@@ -252,8 +258,8 @@ final class PackageInstallManager {
 
     // MARK: - Installed Packages
 
-    /// Scan site-packages directory to discover user-installed packages.
-    /// Filters out packages bundled with the Python runtime (numpy, scipy, etc.).
+    /// Scan site-packages directory to discover all installed packages.
+    /// Bundled packages (numpy, scipy, etc.) are included but marked as `isBundled`.
     func refreshInstalledPackages() {
         guard let sitePackages = sitePackagesURL else {
             installedPackages = []
@@ -284,18 +290,19 @@ final class PackageInstallManager {
                 if let dashRange = stem.range(of: "-", options: .backwards) {
                     let pkgName = String(stem[..<dashRange.lowerBound])
                         .replacingOccurrences(of: "_", with: "-")
-                    // Skip packages bundled with the runtime
                     let normalized = pkgName.lowercased().replacingOccurrences(of: "-", with: "_")
-                    if Self.bundledPackagePrefixes.contains(normalized) {
-                        continue
-                    }
+                    let isBundled = Self.bundledPackagePrefixes.contains(normalized)
                     let version = String(stem[dashRange.upperBound...])
-                    packages.append(InstalledPackage(name: pkgName, version: version))
+                    packages.append(InstalledPackage(name: pkgName, version: version, isBundled: isBundled))
                 }
             }
         }
 
-        installedPackages = packages.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        // Bundled first (alphabetical), then user-installed (alphabetical)
+        installedPackages = packages.sorted {
+            if $0.isBundled != $1.isBundled { return $0.isBundled }
+            return $0.name.lowercased() < $1.name.lowercased()
+        }
     }
 
     // MARK: - Helpers
