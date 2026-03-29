@@ -12,11 +12,11 @@
 - Python package management: in-script `REQUIREMENTS` metadata, per-preset isolated environments, companion app as installer, vendored exports, configurable Python path for exported AUs. Revised design at `docs/per-preset-package-requirements.md`, supersedes Phase 2B/3 of `docs/python-package-management.md`. Phase 2A infrastructure (sys.path wiring, Rust FFI) still needed as foundation.
 
 ### Other
-- Terminal app needs an app icon
 - AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration)
 
 ## Done
 
+- Terminal app icon from daemon-icon.png (2026-03-28)
 - Smoother scrolling in editor (2026-03-28)
 - Full-screen text editor mode (2026-03-28)
 - Audio visualization polish: persist spectrogram preferences, host app spectrogram (2026-03-28)
