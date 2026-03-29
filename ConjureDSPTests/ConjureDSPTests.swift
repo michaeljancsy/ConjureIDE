@@ -10,6 +10,7 @@ import AVFoundation
 import AudioToolbox
 import CoreAudioKit
 
+@Suite(.serialized)
 struct ConjureDSPTests {
 
     // MARK: - Helpers
