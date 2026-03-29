@@ -444,6 +444,9 @@ struct PresetToolbar: View {
                 onCancel: { showingImportURL = false }
             )
         }
+        .onAppear {
+            packageInstallManager.onPackagesChanged = { onRun() }
+        }
     }
 
 }
