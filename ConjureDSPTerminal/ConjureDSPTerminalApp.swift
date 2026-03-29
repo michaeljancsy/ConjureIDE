@@ -81,7 +81,7 @@ class TerminalAppServer {
 
     /// Copies the bundled Python distribution to the App Group container so the AU
     /// extension and package manager can use it. No-op if already installed.
-    static func installPythonRuntimeIfNeeded() {
+    nonisolated static func installPythonRuntimeIfNeeded() {
         guard let runtimeURL = pythonRuntimeURL else {
             log.error("App Group container not available — cannot install Python runtime")
             return
@@ -140,7 +140,7 @@ class TerminalAppServer {
     }
 
     /// One-time migration: move packages from the old user-packages directory into site-packages.
-    private static func migrateUserPackages(to sitePackages: URL) {
+    nonisolated private static func migrateUserPackages(to sitePackages: URL) {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let oldUserPackages = appSupport.appendingPathComponent("ConjureDSP/user-packages")
         let fm = FileManager.default
