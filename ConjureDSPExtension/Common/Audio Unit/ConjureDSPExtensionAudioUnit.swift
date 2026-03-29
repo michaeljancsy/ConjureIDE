@@ -21,6 +21,17 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Only used by AudioCaptureManager on the UI thread.
 	var kernelReference: DSPKernelRef? { kernel }
 
+	// MARK: - Shared Python Runtime
+
+	/// App Group container URL for cross-app data sharing.
+	private static let appGroupContainerURL: URL? = FileManager.default.containerURL(
+		forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
+	)
+
+	/// Shared Python runtime provisioned by ConjureDSPTerminal into the App Group container.
+	/// Used as PYTHONHOME — contains stdlib, numpy, scipy, and user-installed packages.
+	static let pythonRuntimeURL: URL? = appGroupContainerURL?.appendingPathComponent("PythonRuntime")
+
 	// MARK: - Parameter Tree (up to 16 parameters, with optional rich metadata)
 
 	static let paramCount = 16
@@ -306,10 +317,22 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	private func loadPythonScript() {
 		let bundle = Bundle(for: type(of: self))
 
-		// Python home: the bundled Python standard library root
-		// The bundle copies python-dist contents into Resources/python-dist/
-		guard let pythonHome = bundle.path(forResource: "python-dist", ofType: nil) else {
-			pluginLog.error("Bundled Python distribution not found in bundle, using Rust fallback DSP")
+		// Python home: shared runtime in App Group container (provisioned by ConjureDSPTerminal),
+		// with fallback to bundled python-dist for backward compatibility.
+		let pythonHome: String? = {
+			if let runtimeURL = Self.pythonRuntimeURL {
+				let stdlibPath = runtimeURL.appendingPathComponent("lib/python3.14t").path
+				if FileManager.default.fileExists(atPath: stdlibPath) {
+					return runtimeURL.path
+				}
+				pluginLog.warning("Shared Python runtime not found at \(runtimeURL.path, privacy: .public)")
+			}
+			// Fallback: bundled python-dist (transitional)
+			return bundle.path(forResource: "python-dist", ofType: nil)
+		}()
+
+		guard let pythonHome else {
+			pluginLog.error("Python runtime not available — launch ConjureDSP Terminal to install it")
 			return
 		}
 		self.pythonHome = pythonHome

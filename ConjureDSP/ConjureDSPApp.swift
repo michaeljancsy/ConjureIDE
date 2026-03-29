@@ -28,9 +28,6 @@ struct ConjureDSPApp: App {
                     Analytics.track(.appOpen)
                     Analytics.flush()
                     exportHandler.checkForPendingExports()
-                    DispatchQueue.global(qos: .utility).async {
-                        SharedPythonRuntimeInstaller.installIfNeeded()
-                    }
                 }
                 .onOpenURL { url in
                     handleURL(url)

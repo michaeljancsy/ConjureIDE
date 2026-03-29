@@ -1300,16 +1300,3 @@ struct ExportEdgeCaseTests {
     }
 }
 
-// MARK: - SharedPythonRuntimeInstaller Tests
-
-@Suite struct SharedPythonRuntimeInstallerTests {
-    @Test func isInstalledReturnsFalseForNonexistentPath() {
-        // The shared runtime URL is derived from Application Support.
-        // Unless the installer has run previously, the stdlib dir shouldn't exist
-        // at a randomly-named test path. We test the static check here.
-        let testPath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ConjureDSPTest-\(UUID().uuidString)")
-            .appendingPathComponent("lib/python3.14t")
-        #expect(!FileManager.default.fileExists(atPath: testPath.path))
-    }
-}

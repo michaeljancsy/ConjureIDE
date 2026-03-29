@@ -39,6 +39,7 @@ UI test classes and what they cover:
 - Bundled Rust compiler (one-time setup): `./scripts/setup-rustc.sh`
 - Monaco Editor (one-time setup): `./scripts/setup-monaco.sh`
 - xterm.js terminal (one-time setup): `./scripts/setup-xterm.sh`
+- Bundled uv package manager (one-time setup): `./scripts/setup-uv.sh`
 
 Deployment targets: macOS 26.2+.
 
@@ -57,7 +58,7 @@ Note: `--test-threads=1` is required because Python tests share a single interpr
 
 ### Xcode build phases (ConjureDSPExtension target)
 1. **Run Script — Build Rust**: calls `rust/build-rust.sh`
-2. **Run Script — Copy Python Runtime**: copies `libpython3.14t.dylib` into Frameworks, copies `python3.14t/` stdlib+numpy into Resources/python-dist, and code-signs the dylib and all `.so` files with `EXPANDED_CODE_SIGN_IDENTITY`
+2. **Run Script — Copy Python Dylib**: copies `libpython3.14t.dylib` into Frameworks and code-signs it. The Python stdlib is not bundled in the extension — it lives in the App Group container, provisioned by ConjureDSPTerminal.
 3. **Run Script — Copy Rust Compiler**: copies bundled `rustc`, `librustc_driver`, `rust-lld`, and wasm32-wasip1 sysroot into Resources/rustc-dist/, code-signs all executables and dylibs
 
 ### Xcode build phases (ConjureDSP host app target)
@@ -77,7 +78,7 @@ Note: `--test-threads=1` is required because Python tests share a single interpr
 Scripts can be written in Python (instant load) or Rust (compiled to WASM). `ScriptLanguage` auto-detects the language via heuristics (e.g., `fn process()` → Rust). `WasmCache` stores compiled WASM binaries by SHA256 hash to avoid redundant compilation. Both backends implement a common `Backend` trait with `initialize()`, `process()`, and metadata extraction.
 
 ### Python DSP pipeline
-1. On AU init, Swift calls `dsp_kernel_load_script()` with the bundled `process.py` path and Python home
+1. On AU init, Swift calls `dsp_kernel_load_script()` with the default preset path and Python home (resolved from the App Group container, provisioned by ConjureDSPTerminal)
 2. Rust sets `PYTHONHOME`, initializes the free-threaded Python 3.14 interpreter via pyo3, and caches the script's `process()` function
 3. On `allocateRenderResources()`, Rust pre-allocates numpy float32 arrays (one per channel, sized to `maximumFramesToRender`)
 4. Each render callback: Rust copies input audio into numpy arrays, calls `process(inputs, outputs, frame_count, sample_rate, params)`, copies output back. If PARAMS metadata exists, params is a dict of denormalized values; otherwise a list of 0–1 floats.
@@ -127,7 +128,7 @@ Paddle Billing subscription model with a Cloudflare Workers backend (`server/`).
 
 ```
 ConjureDSP/                  Host app — loads and tests the AU extension
-  Model/                     AudioUnitHostModel, AudioUnitViewModel, PendingExportHandler, SharedPythonRuntimeInstaller
+  Model/                     AudioUnitHostModel, AudioUnitViewModel, PendingExportHandler
   Common/Audio/              SimplePlayEngine (AVAudioEngine wrapper)
   Common/MIDI/               MIDIManager
   SentrySetup.swift          Sentry crash reporting initialization
@@ -384,7 +385,7 @@ This resets ALL LaunchServices registrations system-wide. Apps will re-register 
 ## Code Signing
 
 Bundled runtimes require proper code signing for the hardened runtime:
-- **Python**: `libpython3.14t.dylib` and all `.so` files (numpy, stdlib extensions) — handled by "Copy Python Runtime" build phase
+- **Python**: `libpython3.14t.dylib` in the AU extension (handled by "Copy Python Dylib" build phase), full Python distribution in ConjureDSPTerminal (handled by "Copy Python Runtime" build phase)
 - **Rust compiler**: `rustc`, `librustc_driver-*.dylib`, `rust-lld`, `gcc-ld/wasm-ld` — handled by "Copy Rust Compiler" build phase
 
 ## Release Pipeline

@@ -78,6 +78,9 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         case "get_docs":
             let result = mcpGetDocs(input: input)
             completion(result.0, result.1)
+        case "list_packages":
+            let result = mcpListPackages()
+            completion(result.0, result.1)
         default:
             completion(jsonStr(["error": "Unknown tool: \(name)"]), true)
         }
@@ -255,6 +258,47 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         if topic == "utilities" || topic == "all" { sections.append(Self.docsUtilities) }
 
         return (jsonStr(["topic": topic, "docs": sections.joined(separator: "\n\n")]), false)
+    }
+
+    // MARK: - Package listing
+
+    private func mcpListPackages() -> (String, Bool) {
+        guard let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
+        ) else {
+            return (jsonStr(["error": "App Group container not available"]), true)
+        }
+
+        let sitePackages = containerURL
+            .appendingPathComponent("PythonRuntime/lib/python3.14t/site-packages")
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: sitePackages, includingPropertiesForKeys: [.isDirectoryKey]
+        ) else {
+            return (jsonStr(["packages": [] as [Any], "note": "No site-packages directory found"]), false)
+        }
+
+        var packages: [[String: Any]] = []
+        for item in contents {
+            let name = item.lastPathComponent
+            if name.hasSuffix(".dist-info") {
+                let stem = String(name.dropLast(".dist-info".count))
+                if let dashRange = stem.range(of: "-", options: .backwards) {
+                    let pkgName = String(stem[..<dashRange.lowerBound])
+                        .replacingOccurrences(of: "_", with: "-")
+                    let normalized = pkgName.lowercased().replacingOccurrences(of: "-", with: "_")
+                    let version = String(stem[dashRange.upperBound...])
+                    let isBundled = PackageInstallManager.bundledPackagePrefixes.contains(normalized)
+                    packages.append([
+                        "name": pkgName,
+                        "version": version,
+                        "built_in": isBundled,
+                    ])
+                }
+            }
+        }
+
+        packages.sort { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
+        return (jsonStr(["packages": packages]), false)
     }
 
     // Static documentation strings — comprehensive API reference derived from actual source.

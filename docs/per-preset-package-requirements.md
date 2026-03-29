@@ -1,252 +1,106 @@
-# Per-Preset Package Requirements
+# Python Package Management
+
+> **Note:** This document supersedes the earlier per-preset isolated environments design. The approach was simplified to a global shared package directory after recognizing that per-preset isolation added complexity without proportional benefit for the typical DSP use case.
 
 ## Context
 
-Python DSP scripts can currently only use numpy, scipy, and the stdlib. The existing `docs/python-package-management.md` plans user-installable packages (Phases 2–3) with sidecar `-requirements.txt` files and a host-app-only install flow. This design replaces that approach with:
+Python DSP scripts can currently only use numpy, scipy, and the stdlib. This feature adds:
 
-1. **In-script `REQUIREMENTS`** metadata (like PARAMS/LATENCY) — self-contained, no sidecar files
-2. **Companion app as package installer** — installs from within DAW, no context switch to host app
-3. **Per-preset isolated environments** — each preset gets its own package directory, eliminating version conflicts
-4. **Exact version pinning** — reproducible builds, no "works on my machine"
-5. **Vendored exports** — optional at export time, makes exports portable to machines without ConjureDSP
-6. **Configurable Python path** — exported AUs have a settings field pointing to the Python environment, overridable by power users or non-ConjureDSP users
+1. **Global `user-packages/` directory** -- one shared package directory for all presets at `~/Library/Application Support/ConjureDSP/user-packages/`
+2. **Package manager UI** in the AU extension -- search PyPI, install/uninstall packages, view installed packages
+3. **Companion app as installer** -- installs from within DAW via App Group file signaling, no context switch
+4. **Vendored exports** (future) -- optional at export time, auto-detected via static import analysis + user selection
 
----
-
-## Declaration
-
-Scripts declare dependencies as a Python list with exact version pins:
-
-```python
-REQUIREMENTS = ["pedalboard==0.9.16", "resampy==0.4.3"]
-
-PARAMS = {
-    "threshold": db(min=-40, max=0, default=-20),
-}
-
-def process(inputs, outputs, frame_count, sample_rate, params):
-    import pedalboard
-    ...
-```
-
-- **Exact versions only** (`==`). ConjureDSP enforces this at install time — if the user writes `>=`, the install resolves and pins to the exact version installed.
-- Follows the established in-script metadata pattern (PARAMS, LATENCY, PARAM_NAMES).
-- Extracted by Rust at script load time, same as PARAMS in `python_backend.rs`.
-- Rust/WASM presets don't need this — they compile to self-contained WASM.
-- Factory presets must NOT declare external requirements (must work out of the box everywhere).
-
----
-
-## Per-Preset Isolated Environments
-
-Each preset with REQUIREMENTS gets its own package directory. All environments share the underlying Python 3.14t interpreter + stdlib + numpy/scipy.
+## Architecture
 
 ```
+AU Extension (sandboxed in DAWs)           Companion App (unsandboxed)
++----------------------------------+       +-----------------------------+
+| PackageInstallManager            |       | PackageInstaller            |
+|   writes install-request.json ---------->|   reads request             |
+|   polls for result.json     <------------|   runs bundled `uv`         |
+|                                  |       |   code-signs .so files      |
+| Rust kernel: sys.path injection  |       |   writes result.json        |
+|   dsp_kernel_set_extra_site_pkgs |       +-----------------------------+
+|                                  |
+| PackageManagerView (toolbar)     |
+|   search PyPI, install, uninstall|
++----------------------------------+
+          |
+          v
 ~/Library/Application Support/ConjureDSP/
-  PythonRuntime-3.14/                    # shared: interpreter, stdlib, numpy, scipy, conjuredsp
-  Environments/
-    <preset-id>/                         # one directory per preset
-      resampy/
-      soundfile/
-    <another-preset-id>/
-      pedalboard/
+  PythonRuntime-3.14/          <- bundled: interpreter, stdlib, numpy, scipy
+  user-packages/               <- user-installed packages (shared by all presets)
 ```
 
-**Why per-preset isolation:**
-- Eliminates version conflicts entirely — two presets can pin different versions of the same package
-- Storage cost is negligible (most DSP packages are <500KB; even with duplication, total is small relative to the ~530MB app)
-- Simple mental model — each preset is fully self-contained
+## How It Works
 
-**One environment per preset.** No sharing between presets, even if their REQUIREMENTS are identical. This keeps cleanup trivial: when a preset is deleted, its environment directory is deleted too. No reference counting needed.
+### sys.path Injection (Rust)
 
-**Environment identity:** Keyed by the preset's existing ID (e.g., `user:My Filter.py`, sanitized to a filesystem-safe name).
+Before the initial Python script load, the AU calls `dsp_kernel_set_extra_site_packages(kernel, path)` to prepend the `user-packages/` directory to `sys.path`. This is idempotent and takes effect immediately via `PythonBackend::inject_site_packages()`, so user-installed packages are importable by any preset.
 
-**REQUIREMENTS normalization:** Rust sorts the extracted REQUIREMENTS list after extracting it from the Python module (before computing anything from it). The user's script stays as-written; normalization happens at the extraction layer.
+### Package Installation Flow
 
-**Transitive dependencies:** `uv` resolves the full dependency tree. REQUIREMENTS only lists direct dependencies; `uv pip install --target` installs transitive deps automatically into the environment directory.
+1. User opens Packages panel in AU toolbar (shippingbox icon)
+2. Searches PyPI or types a package spec (e.g. `pedalboard==0.9.16`)
+3. Clicks Install -> AU writes `package-install-request.json` to App Group container
+4. Companion app detects request in its 500ms polling loop
+5. Companion app runs: `uv pip install --target <user-packages> --python <shared-runtime-python-bin> <packages>`
+6. Companion app code-signs any `.so`/`.dylib` files
+7. Companion app writes `package-install-result.json` to App Group
+8. AU detects result, refreshes installed packages list
 
-**On script load**, Rust receives the environment path and inserts it into `sys.path` before executing the script:
-```rust
-// sys.path = [preset_env_path, shared_runtime_site_packages, stdlib, ...]
-sys.path.insert(0, preset_env_path);
-```
+### Uninstall
+
+Same flow but with `package-uninstall-request.json`. Companion app reads `top_level.txt` from `.dist-info` to discover actual import directory names (handles cases like Pillow->PIL, beautifulsoup4->bs4), then removes package directory, `.dist-info`, and `.data` dirs.
+
+### Vendored Exports (Future)
+
+At export time:
+1. Static analysis scans the script for `import X` / `from X import Y` statements
+2. Filters against stdlib + numpy + scipy to identify third-party imports
+3. Pre-selects matching packages from `user-packages/`
+4. User can adjust the selection (add/remove from checklist)
+5. Selected packages copied into `Resources/vendor-packages/` in the export bundle
+6. Export template checks for `vendor-packages/` at load time (highest priority in fallback chain)
 
 ---
 
-## Package Installation — Companion App
+## Implementation Details
 
-The ConjureDSPTerminal companion app handles installation. It already runs outside the sandbox and communicates with the AU via App Group file signaling.
+### Files Changed
 
-**Flow:**
-```
-User loads preset with REQUIREMENTS in DAW
-  ↓
-AU extracts REQUIREMENTS, checks if environment exists with all pinned packages
-  ↓
-Missing packages → AU shows prompt: "This preset needs pedalboard==0.9.16. [Install]"
-  ↓
-User clicks Install
-  ↓
-AU writes request to App Group: package-install-request.json
-  {"requirements": ["pedalboard==0.9.16"], "environmentId": "<hash>"}
-  ↓
-Companion app detects request (existing 500ms file-watch loop)
-  ↓
-Companion app runs: uv pip install --target <env-path> --python <bundled> pedalboard==0.9.16
-  ↓
-Companion app code-signs any .so files in the environment
-  ↓
-Companion app writes: package-install-result.json
-  {"success": true, "environmentId": "<hash>", "installed": ["pedalboard==0.9.16"]}
-  ↓
-AU detects result, reloads script — works now
-```
+| File | Purpose |
+|------|---------|
+| `rust/conjure_dsp/src/python_backend.rs` | `inject_site_packages()` static method, inject into sys.path |
+| `rust/conjure_dsp/src/kernel.rs` | `set_extra_site_packages()` delegates to PythonBackend |
+| `rust/conjure_dsp/src/lib.rs` | New FFI: `dsp_kernel_set_extra_site_packages()` |
+| `rust/include/conjure_dsp.h` | Auto-generated C header with new FFI |
+| `ConjureDSPExtension/Common/Audio Unit/ConjureDSPExtensionAudioUnit.swift` | Call `set_extra_site_packages` before initial script load |
+| `ConjureDSPExtension/Model/PackageInstallManager.swift` | App Group signaling for install/uninstall |
+| `ConjureDSPExtension/UI/PackageManagerView.swift` | Package manager UI panel |
+| `ConjureDSPExtension/UI/PresetToolbar.swift` | Packages button in toolbar |
+| `ConjureDSPTerminal/PackageInstaller.swift` | uv-based package installer service |
+| `ConjureDSPTerminal/ConjureDSPTerminalApp.swift` | Integrate PackageInstaller into file-watch loop |
+| `ConjureDSP/Model/SharedPythonRuntimeInstaller.swift` | `userPackagesURL` property |
+| `scripts/setup-uv.sh` | Download uv binary |
+| `.gitignore` | Add `uv-dist/` |
 
-**Companion app not running?** AU detects this via absence of port file / failed health check. First attempt: auto-launch via custom URL scheme (`conjuredsp-terminal://install`). AU extensions may be able to open URL schemes even from sandbox — needs testing. Fallback if blocked: show message "Start ConjureDSP Terminal to install packages."
+### Prerequisites
 
-**Host app** remains a secondary interface — useful for browsing installed environments, cleaning up unused ones, manual package management. But the companion app is the primary install path.
+- Run `scripts/setup-uv.sh` once to download the `uv` binary (~31MB)
+- Companion app must be running for package installs to work
 
----
+### Key Design Decisions
 
-## Exported AUs
+- **Global over per-preset**: One `user-packages/` directory shared by all presets. Simpler than per-preset isolation; version conflicts are unlikely for DSP packages and this matches standard Python workflows.
+- **No in-script REQUIREMENTS**: Users manage packages through the UI panel, not metadata in scripts. The AU helps identify what to vendor at export time via static import analysis.
+- **Companion app as installer**: AU extension is sandboxed in DAWs and cannot run subprocesses. The companion app runs outside the sandbox and uses App Group file signaling (same pattern as the Claude Code terminal).
+- **uv over pip**: 10-100x faster installs, single static binary, first-class free-threaded Python 3.14t support.
+- **Shared runtime for --python**: Install requests use the shared runtime path at `~/Library/Application Support/ConjureDSP/PythonRuntime-3.14/` (not the bundled python-dist resource) so uv has access to a real Python binary for wheel compatibility checks.
 
-### Vendor choice at export time
+### What's Not Yet Implemented
 
-The exporter chooses whether to vendor packages into the export bundle:
-
-```
-┌──────────────────────────────────────────┐
-│ Export "Warm Tape Saturator"             │
-│                                          │
-│ ☑ Include packages          +2.1 MB     │
-│   • resampy==0.4.3           (210 KB)   │
-│   • soundfile==0.12.1        (1.9 MB)   │
-│                                          │
-│ Estimated export size:       17.1 MB     │
-│                                          │
-│ [Export]                                 │
-└──────────────────────────────────────────┘
-```
-
-- **Vendored** (checkbox on): packages copied into `Resources/vendor-packages/`, code-signed. Export is portable — works on any machine with a Python 3.14t runtime. Good for sharing.
-- **Not vendored** (checkbox off): lightweight export, behaves identically to a regular ConjureDSP preset. Relies on the managed environment on the recipient's machine. Good for personal use on the same machine.
-
-### Package resolution at load time (exported AU)
-
-Fallback chain:
-1. **Vendored packages** — `vendor-packages/` inside the export bundle (if present, always wins)
-2. **ConjureDSP managed environment** — per-preset environment at `~/Library/Application Support/ConjureDSP/Environments/<hash>/`
-3. **User-configured Python path** — settings string in the exported AU's UI
-
-### Settings string (Python environment path)
-
-Exported AUs include a text field in their UI where the user can override the Python environment path. Stored in `runtime-config.json`.
-
-- **Default:** Points to ConjureDSP's managed runtime (`~/Library/Application Support/ConjureDSP/PythonRuntime-3.14/`)
-- **Override use cases:**
-  - Recipient doesn't have ConjureDSP → points to their own Python 3.14t install
-  - Power user with a custom environment
-  - Non-vendored export on a different machine
-
-### Error messages
-
-Errors must be descriptive and help less-Python-savvy users. Examples:
-
-**No Python runtime found (no ConjureDSP, no override):**
-```
-Python 3.14 runtime not found.
-
-Install ConjureDSP (free) to set up the runtime automatically,
-or set a custom Python path in this plugin's settings.
-
-Settings → Python Environment Path → /path/to/python3.14t
-```
-
-**Python found but missing packages (non-vendored, no managed environment):**
-```
-Missing packages: resampy==0.4.3, soundfile==0.12.1
-
-If you have ConjureDSP installed, load this preset there to
-install packages automatically.
-
-Or install manually:
-  pip install resampy==0.4.3 soundfile==0.12.1
-
-Or set a Python environment path that has these packages:
-  Settings → Python Environment Path
-```
-
-**Vendored export, Python found:** Just works, no errors.
-
----
-
-## What Changes From the Existing Plan
-
-| `docs/python-package-management.md` (current) | Revised |
-|---|---|
-| Sidecar `-requirements.txt` files (Phase 3) | In-script `REQUIREMENTS = [...]` |
-| Global `user-packages/` directory | Per-preset isolated environments at `Environments/<hash>/` |
-| Version ranges allowed | Exact version pins enforced (`==`) |
-| Host app only for package install (Phase 2B) | Companion app as primary installer via App Group signaling |
-| Exports can't use extra packages | Exports optionally vendor packages; settings string for Python path |
-| No conflict handling | No conflicts possible (per-preset isolation) |
-
-Phase 2A infrastructure (sys.path wiring, Rust `extra_site_packages` FFI) remains relevant and is reused.
-
----
-
-## Implementation Sketch
-
-### Rust (`python_backend.rs`, `kernel.rs`, `lib.rs`)
-- Extract `REQUIREMENTS` list from Python module (same pattern as PARAMS)
-- Cache as JSON string in kernel
-- New FFI: `dsp_kernel_requirements_json()` — returns JSON array or null
-- Existing Phase 2A FFI `dsp_kernel_set_extra_site_packages()` used to set per-preset environment path
-
-### Swift AU Extension (`ConjureDSPExtensionAudioUnit.swift`)
-- After loading script, read requirements JSON via FFI
-- Compute environment hash from sorted pinned requirements
-- Check if `Environments/<hash>/` exists and is populated
-- If missing: show install prompt in UI
-- On install click: write `package-install-request.json` to App Group
-- Watch for `package-install-result.json`, reload script on success
-
-### Companion App (`ConjureDSPTerminal/`)
-- New `PackageInstaller` service alongside PTYManager, WebSocketServer
-- Bundles `uv` binary (downloaded via `scripts/setup-uv.sh`, copied into companion app Resources)
-- Watches App Group for `package-install-request.json`
-- Runs `uv pip install --target <Environments/preset-id/> --python <bundled> <packages>`
-- Code-signs `.so`/`.dylib` files post-install
-- Writes `package-install-result.json`
-- Register custom URL scheme `conjuredsp-terminal://` for auto-launch attempts from AU extension
-
-### Export (`ExportManager.swift`)
-- Read REQUIREMENTS from loaded script metadata
-- If "include packages" checked: copy environment directory into `Resources/vendor-packages/`, code-sign `.so` files
-- Write `requirements` and `vendorPackagesPath` into `runtime-config.json`
-- If requirements aren't installed locally, block export: "Install packages first"
-
-### Export Template (`ExportAUAudioUnit.swift`)
-- Load time: check for `vendor-packages/` in bundle (priority 1), then managed environment (priority 2), then user-configured path (priority 3)
-- Settings UI: text field for Python environment path override, stored in UserDefaults or runtime-config.json
-- Descriptive errors with actionable guidance for each failure mode
-
-### Community Browser (`CommunityPresetStore.swift`)
-- Regex-extract REQUIREMENTS from script source for display
-- Show "Requires: X, Y" badge on presets with dependencies
-- On install: prompt to install packages alongside the preset
-
-### Cleanup (`PresetManager.swift`)
-- On preset delete: also delete `Environments/<preset-id>/` directory
-- On preset rename: rename the environment directory to match the new preset ID
-
-### No changes needed to:
-- `PersonalRepoSync.swift` (requirements travel inside the script)
-- Preset file format (still bare `.py` files)
-- `PresetMetadata` / `GitHubModels.swift` (display metadata unchanged)
-
----
-
-## Open Questions
-
-1. **Auto-launch from sandbox** — Can the AU extension open a custom URL scheme (`conjuredsp-terminal://`) from within a DAW's sandbox? Needs testing in Logic/Ableton. If not, fallback is a manual-launch prompt.
+- Vendored exports (import analysis + export UI + export template changes)
+- Community browser badges for presets with third-party dependencies
+- Auto-launch companion app from sandbox via custom URL scheme

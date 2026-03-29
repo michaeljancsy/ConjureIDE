@@ -2,6 +2,8 @@
 
 ## In Progress
 
+- Python package management: global `user-packages/` directory, package manager UI in AU extension, companion app installer via `uv`. Design at `docs/per-preset-package-requirements.md`. Remaining: vendored exports, community browser badges, companion app auto-launch.
+
 ## To Do
 
 ### v1 Release
@@ -9,7 +11,7 @@
 - Landing page (static site with Buy + Download)
 
 ### Post-Launch
-- Python package management: in-script `REQUIREMENTS` metadata, per-preset isolated environments, companion app as installer, vendored exports, configurable Python path for exported AUs. Revised design at `docs/per-preset-package-requirements.md`, supersedes Phase 2B/3 of `docs/python-package-management.md`. Phase 2A infrastructure (sys.path wiring, Rust FFI) still needed as foundation.
+- Python package management follow-up: vendored exports (import analysis + export UI), community browser dependency badges, auto-launch companion app from sandbox
 
 ### Other
 - AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration)

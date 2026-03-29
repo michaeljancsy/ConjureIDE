@@ -517,6 +517,8 @@ final class PTYManager {
     - No file I/O or network calls in process() — runs on the real-time audio thread
     - Up to 16 parameters per script
     - Use `compile_and_run` to load scripts, `get_parameters` to check state, `toggle_bypass` for A/B
+    - Call `list_packages` to see what Python packages are available for import (built-in and user-installed). \
+    Do not assume a package is unavailable — always check first.
     - Before writing a script, call `get_docs` for the language-specific API reference. Topics: \
     params, filters, delays, oscillators, utilities. Python and Rust have different syntax for \
     the same concepts — always check.

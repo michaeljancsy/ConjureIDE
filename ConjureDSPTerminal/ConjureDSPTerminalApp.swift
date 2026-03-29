@@ -44,13 +44,154 @@ class TerminalAppServer {
     private var currentMCPPort: UInt16 = 0
     private var healthCheckFailCount = 0
     private let healthCheckThreshold = 3  // consecutive failures before reset
+    private var packageInstaller: PackageInstaller?
 
     private let appGroupID = "group.com.MichaelJancsy.ConjureDSP"
+
+    /// URL of the shared Python runtime in the App Group container.
+    /// This is the single authoritative Python installation used by the AU extension,
+    /// package manager, and exported AUs.
+    static let pythonRuntimeURL: URL? = {
+        FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
+        )?.appendingPathComponent("PythonRuntime")
+    }()
 
     func start() {
         log.info("ConjureDSP Terminal starting")
         status = "Waiting for ConjureDSP plugin..."
+
+        // Provision shared runtimes to the App Group container, then init package installer.
+        // uv must be provisioned before PackageInstaller.init so it can find the binary.
+        DispatchQueue.global(qos: .utility).async { [self] in
+            Self.installPythonRuntimeIfNeeded()
+            Self.provisionUVIfNeeded()
+
+            Task { @MainActor in
+                if let containerURL = FileManager.default.containerURL(
+                    forSecurityApplicationGroupIdentifier: self.appGroupID
+                ) {
+                    self.packageInstaller = PackageInstaller(appGroupURL: containerURL)
+                    if self.packageInstaller != nil {
+                        log.info("Package installer ready")
+                    } else {
+                        log.error("Package installer failed to initialize — uv not available")
+                    }
+                }
+            }
+        }
+
         startWatching()
+    }
+
+    /// Copies the bundled Python distribution to the App Group container so the AU
+    /// extension and package manager can use it. No-op if already installed.
+    nonisolated static func installPythonRuntimeIfNeeded() {
+        guard let runtimeURL = pythonRuntimeURL else {
+            log.error("App Group container not available — cannot install Python runtime")
+            return
+        }
+
+        let stdlibPath = runtimeURL.appendingPathComponent("lib/python3.14t").path
+        if FileManager.default.fileExists(atPath: stdlibPath) {
+            log.info("Shared Python runtime already installed at \(runtimeURL.path, privacy: .public)")
+            return
+        }
+
+        guard let bundledPythonDist = Bundle.main.resourceURL?.appendingPathComponent("python-dist"),
+              FileManager.default.fileExists(atPath: bundledPythonDist.path) else {
+            log.error("Bundled python-dist not found in Terminal app bundle")
+            return
+        }
+
+        do {
+            let fm = FileManager.default
+
+            // Copy bin/python3
+            let srcBin = bundledPythonDist.appendingPathComponent("bin/python3")
+            let dstBin = runtimeURL.appendingPathComponent("bin")
+            try fm.createDirectory(at: dstBin, withIntermediateDirectories: true)
+            let dstPython = dstBin.appendingPathComponent("python3")
+            if fm.fileExists(atPath: dstPython.path) {
+                try fm.removeItem(at: dstPython)
+            }
+            try fm.copyItem(at: srcBin, to: dstPython)
+
+            // Copy lib/libpython3.14t.dylib
+            let srcDylib = bundledPythonDist.appendingPathComponent("lib/libpython3.14t.dylib")
+            let dstLib = runtimeURL.appendingPathComponent("lib")
+            try fm.createDirectory(at: dstLib, withIntermediateDirectories: true)
+            let dstDylib = dstLib.appendingPathComponent("libpython3.14t.dylib")
+            if fm.fileExists(atPath: dstDylib.path) {
+                try fm.removeItem(at: dstDylib)
+            }
+            try fm.copyItem(at: srcDylib, to: dstDylib)
+
+            // Copy lib/python3.14t/ (stdlib + numpy + scipy)
+            let srcStdlib = bundledPythonDist.appendingPathComponent("lib/python3.14t")
+            let dstStdlib = dstLib.appendingPathComponent("python3.14t")
+            if fm.fileExists(atPath: dstStdlib.path) {
+                try fm.removeItem(at: dstStdlib)
+            }
+            try fm.copyItem(at: srcStdlib, to: dstStdlib)
+
+            log.info("Shared Python runtime installed at \(runtimeURL.path, privacy: .public)")
+
+            // Migrate existing user-packages if present
+            migrateUserPackages(to: dstStdlib.appendingPathComponent("site-packages"))
+        } catch {
+            log.error("Failed to install shared Python runtime: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// One-time migration: move packages from the old user-packages directory into site-packages.
+    nonisolated private static func migrateUserPackages(to sitePackages: URL) {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let oldUserPackages = appSupport.appendingPathComponent("ConjureDSP/user-packages")
+        let fm = FileManager.default
+
+        guard fm.fileExists(atPath: oldUserPackages.path),
+              let contents = try? fm.contentsOfDirectory(at: oldUserPackages, includingPropertiesForKeys: nil),
+              !contents.isEmpty else { return }
+
+        log.info("Migrating user-packages to shared runtime site-packages")
+        for item in contents {
+            let dest = sitePackages.appendingPathComponent(item.lastPathComponent)
+            if !fm.fileExists(atPath: dest.path) {
+                try? fm.copyItem(at: item, to: dest)
+            }
+        }
+        log.info("Migration complete — old user-packages preserved at \(oldUserPackages.path, privacy: .public)")
+    }
+
+    /// Copies the bundled `uv` binary to the App Group container so PackageInstaller
+    /// can find it reliably regardless of PATH or Bundle.main state. No-op if already present.
+    nonisolated static func provisionUVIfNeeded() {
+        guard let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
+        ) else {
+            log.error("App Group container not available — cannot provision uv")
+            return
+        }
+
+        let dstUV = containerURL.appendingPathComponent("uv")
+        if FileManager.default.fileExists(atPath: dstUV.path) {
+            log.info("uv already provisioned in App Group at \(dstUV.path, privacy: .public)")
+            return
+        }
+
+        guard let bundledUV = Bundle.main.resourceURL?.appendingPathComponent("uv"),
+              FileManager.default.fileExists(atPath: bundledUV.path) else {
+            log.warning("Bundled uv not found in Terminal app bundle — package management requires rebuild")
+            return
+        }
+
+        do {
+            try FileManager.default.copyItem(at: bundledUV, to: dstUV)
+            log.info("uv provisioned to App Group at \(dstUV.path, privacy: .public)")
+        } catch {
+            log.error("Failed to provision uv to App Group: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     // MARK: - App Group file watching
@@ -86,7 +227,12 @@ class TerminalAppServer {
                     }
                 }
 
-                // 3. Health check (every ~3 seconds when running)
+                // 3. Check for package install/uninstall requests
+                if let installer = self.packageInstaller {
+                    await installer.checkForRequests()
+                }
+
+                // 4. Health check (every ~3 seconds when running)
                 if self.isRunning, tickCount % 6 == 0 {
                     let healthy = await self.checkMCPHealth()
                     if healthy {

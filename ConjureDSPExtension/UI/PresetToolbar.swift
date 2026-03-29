@@ -75,6 +75,8 @@ struct PresetToolbar: View {
     @State private var renameName = ""
     @State private var renameError: String?
     @State private var showingSettings = false
+    @State private var showingPackages = false
+    @State private var packageInstallManager = PackageInstallManager()
     @State private var showingExport = false
     @State private var showingPresetBrowser = false
     @State private var showingCommunityBrowser = false
@@ -369,6 +371,20 @@ struct PresetToolbar: View {
                 .accessibilityIdentifier("demoIndicator")
             }
 
+            // Python packages
+            Button(action: { showingPackages = true }) {
+                Image(systemName: "shippingbox")
+            }
+            .buttonStyle(.borderless)
+            .toolbarTooltip("Packages")
+            .accessibilityIdentifier("packagesButton")
+            .popover(isPresented: $showingPackages) {
+                PackageManagerView(
+                    installManager: packageInstallManager,
+                    onDone: { showingPackages = false }
+                )
+            }
+
             // Settings (License + AI)
             Button(action: { showingSettings = true }) {
                 Image(systemName: "gearshape")
@@ -421,6 +437,9 @@ struct PresetToolbar: View {
                 },
                 onCancel: { showingImportURL = false }
             )
+        }
+        .onAppear {
+            packageInstallManager.onPackagesChanged = { onRun() }
         }
     }
 

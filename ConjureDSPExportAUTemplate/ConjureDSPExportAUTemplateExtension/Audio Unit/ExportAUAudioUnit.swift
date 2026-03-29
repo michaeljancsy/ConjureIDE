@@ -293,7 +293,8 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
     // MARK: - Python Runtime Resolution
 
-    /// Searches for a Python runtime in order: own bundle, shared location, environment variable.
+    /// Searches for a Python runtime in order: own bundle, App Group container,
+    /// legacy shared location, environment variable.
     private func findPythonHome(bundle: Bundle) -> String? {
         // 1. Own bundle (standalone/full export)
         pluginLog.info("findPythonHome: checking bundle at \(bundle.bundlePath, privacy: .public)")
@@ -303,23 +304,30 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         }
         pluginLog.info("findPythonHome: no bundled python-dist found")
 
-        // 2. Shared location — use real home directory, not sandbox container
-        // In a sandboxed AU extension, FileManager.urls(for: .applicationSupportDirectory)
-        // returns the sandbox container path, but the temp-exception entitlement grants
-        // read access to the real ~/Library/Application Support/ path.
+        // 2. App Group container (provisioned by ConjureDSPTerminal)
+        // Exported AUs don't have the App Group entitlement, so use the raw filesystem path.
         if let realHome = Self.realHomeDirectory() {
-            let shared = realHome + "/Library/Application Support/ConjureDSP/PythonRuntime-3.14"
-            pluginLog.info("findPythonHome: checking shared location at \(shared, privacy: .public)")
-            if FileManager.default.fileExists(atPath: shared + "/lib/python3.14t") {
-                pluginLog.info("findPythonHome: found Python runtime at shared location")
-                return shared
+            let appGroup = realHome + "/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/PythonRuntime"
+            pluginLog.info("findPythonHome: checking App Group container at \(appGroup, privacy: .public)")
+            if FileManager.default.fileExists(atPath: appGroup + "/lib/python3.14t") {
+                pluginLog.info("findPythonHome: found Python runtime in App Group container")
+                return appGroup
             }
-            pluginLog.info("findPythonHome: shared location missing or no lib/python3.14t")
+            pluginLog.info("findPythonHome: App Group container missing or no lib/python3.14t")
+
+            // 3. Legacy shared location (backward compatibility)
+            let legacy = realHome + "/Library/Application Support/ConjureDSP/PythonRuntime-3.14"
+            pluginLog.info("findPythonHome: checking legacy location at \(legacy, privacy: .public)")
+            if FileManager.default.fileExists(atPath: legacy + "/lib/python3.14t") {
+                pluginLog.info("findPythonHome: found Python runtime at legacy location")
+                return legacy
+            }
+            pluginLog.info("findPythonHome: legacy location missing or no lib/python3.14t")
         } else {
             pluginLog.warning("findPythonHome: could not resolve real home directory")
         }
 
-        // 3. Environment variable override (power users)
+        // 4. Environment variable override (power users)
         if let envPath = ProcessInfo.processInfo.environment["CONJUREDSP_PYTHON_HOME"],
            FileManager.default.fileExists(atPath: envPath) {
             pluginLog.info("findPythonHome: found Python runtime via CONJUREDSP_PYTHON_HOME")
