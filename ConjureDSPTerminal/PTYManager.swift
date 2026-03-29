@@ -168,7 +168,7 @@ final class PTYManager {
         // Auto-launch Claude Code after shell initializes.
         // Define a shell alias so re-typing `claude` after exit reconnects to MCP.
         if let claudePath {
-            var fullCmd = "\(shellQuote(claudePath)) --dangerously-skip-permissions"
+            var fullCmd = "\(shellQuote(claudePath)) --allowedTools 'mcp__conjuredsp__*'"
             if let contextPath = contextFilePath {
                 fullCmd += " --append-system-prompt-file \(shellQuote(contextPath))"
             }
@@ -473,31 +473,29 @@ final class PTYManager {
     `ctx` provides: `.input(ch, frame)`, `.set_output(ch, frame, val)`, `.param(INDEX)`, \
     `.channels()`, `.frames()`, `.sample_rate()`. All `static mut` access requires `unsafe {}`.
 
-    ## Standard Library (both languages)
+    ## Standard Library
 
-    **Parameter builders** — `freq()`, `db()`, `time_ms()`, `mix()`, `pct()`, `toggle()`, \
-    `ratio()`, `param(min, max)`. All support `.min()`, `.max()`, `.default()`, `.unit()`, \
-    `.curve("log")` chaining. Python also has `choice("A", "B", ...)` for dropdown menus.
+    Both languages have a `conjuredsp` library with equivalent DSP building blocks. \
+    The APIs differ in syntax between Python and Rust — once you know which language \
+    you're writing, call `get_docs` with the relevant topic to get exact signatures and usage.
 
-    **DelayLine** — circular buffer. Python: `DelayLine(max_samples)`. Rust: `DelayLine::<SIZE>::new()`. \
-    Methods: `.write(sample)`, `.read(delay)` (linear interp), `.read_cubic(delay)`.
+    **Parameter builders** — `freq`, `db`, `time_ms`, `mix`, `pct`, `toggle`, `ratio`, `param`. \
+    Python also has `choice` for dropdown menus. Customization syntax differs between languages — \
+    call `get_docs` with topic "params" for details.
 
-    **BiquadCoeffs + Biquad** — `BiquadCoeffs.lowpass(freq, q, sr)` (also `.highpass`, `.bandpass`, \
-    `.peak(freq, q, gain_db, sr)`, `.notch`, `.lowshelf`, `.highshelf`, `.allpass`). \
-    `Biquad` wraps coeffs: `.set_coeffs(c)`, `.process_sample(x)` returns filtered sample.
+    **DelayLine** — circular buffer with linear and cubic interpolation.
 
-    **LFO** — Python: `LFO(sr, freq, waveform="sine")`. Rust: `Lfo::new(sr, freq, Waveform::Sine)`. \
-    `.tick()` returns [-1,1], `.set_freq(hz)`. Waveforms: sine, triangle, saw, square.
+    **BiquadCoeffs + Biquad** — 8 filter types (lowpass, highpass, bandpass, notch, peak, \
+    lowshelf, highshelf, allpass). Stateful per-channel filtering.
 
-    **Utilities** — `db_to_gain`, `gain_to_db`, `smooth_coeff`, `ms_to_samples`, `soft_clip`, \
-    `lerp`, `crossfade`. `smooth_coeff(time_ms, sr)` returns alpha for: \
-    `state = alpha * state + (1-alpha) * target`.
+    **LFO** — low-frequency oscillator. Waveforms: sine, triangle, saw, square.
 
-    **Internal precision** — All conjuredsp library types (`Biquad`, `BiquadCoeffs`, `DelayLine`, \
-    `Lfo`, and utility functions) use `f64` internally for precision, even though WASM I/O buffers \
-    are `f32`. Cast to/from `f64` when interfacing with library types (e.g. \
-    `biquad.process_sample(sample as f64) as f32`). In Python, this is handled automatically since \
-    Python floats are 64-bit.
+    **Utilities** — `db_to_gain`, `gain_to_db`, `smooth_coeff`, `ms_to_samples`, \
+    `soft_clip`, `lerp`, `crossfade`, and more.
+
+    **Internal precision** — All conjuredsp library types use f64 internally for precision, \
+    even though WASM I/O buffers are f32. In Rust, cast to/from f64 when interfacing with \
+    library types. In Python, this is handled automatically.
 
     ## Latency Reporting
 
@@ -519,6 +517,9 @@ final class PTYManager {
     - No file I/O or network calls in process() — runs on the real-time audio thread
     - Up to 16 parameters per script
     - Use `compile_and_run` to load scripts, `get_parameters` to check state, `toggle_bypass` for A/B
+    - Before writing a script, call `get_docs` for the language-specific API reference. Topics: \
+    params, filters, delays, oscillators, utilities. Python and Rust have different syntax for \
+    the same concepts — always check.
     - Python loads instantly; Rust compiles to WASM (a few seconds) but runs much faster
     - **Language selection**: Write in whatever language the user asks for. If the user doesn't specify, \
     call `get_script` to check the currently loaded script and write in the same language.

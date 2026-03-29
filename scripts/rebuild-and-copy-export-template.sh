@@ -5,19 +5,21 @@ set -euo pipefail
 # Must be zipped (not a raw .app) to prevent PluginKit from discovering
 # the template's embedded .appex and registering it as an AU.
 #
-# In a git worktree, auto-symlinks the template build dir from the main worktree.
+# In a git worktree, ensures a real build directory exists (replaces any symlink).
 
 SRCROOT="${SRCROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 TEMPLATE_BUILD="${SRCROOT}/ConjureDSPExportAUTemplate/build"
 TEMPLATE_PROJECT="${SRCROOT}/ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplate.xcodeproj"
 
-# Auto-symlink template build dir from main worktree if missing
-if [ ! -d "${TEMPLATE_BUILD}" ] && [ ! -L "${TEMPLATE_BUILD}" ]; then
-    MAIN_WORKTREE=$(git -C "${SRCROOT}" worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //')
-    if [ -n "${MAIN_WORKTREE}" ] && [ -d "${MAIN_WORKTREE}/ConjureDSPExportAUTemplate/build" ]; then
-        echo "note: Symlinking export template build from main worktree" >&2
-        ln -s "${MAIN_WORKTREE}/ConjureDSPExportAUTemplate/build" "${TEMPLATE_BUILD}"
-    fi
+# In a worktree, the build dir may be a symlink to the main worktree.
+# xcodebuild can't use -derivedDataPath through a symlink (fails to create
+# the workspace arena), so replace it with a real directory.
+if [ -L "${TEMPLATE_BUILD}" ]; then
+    echo "note: Replacing export template build symlink with local directory" >&2
+    rm "${TEMPLATE_BUILD}"
+    mkdir -p "${TEMPLATE_BUILD}"
+elif [ ! -d "${TEMPLATE_BUILD}" ]; then
+    mkdir -p "${TEMPLATE_BUILD}"
 fi
 
 TEMPLATE_CONFIG="${CONFIGURATION:-Release}"
