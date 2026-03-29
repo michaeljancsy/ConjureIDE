@@ -168,7 +168,7 @@ final class PTYManager {
         // Auto-launch Claude Code after shell initializes.
         // Define a shell alias so re-typing `claude` after exit reconnects to MCP.
         if let claudePath {
-            var fullCmd = "\(shellQuote(claudePath)) --dangerously-skip-permissions"
+            var fullCmd = "\(shellQuote(claudePath)) --allowedTools 'mcp__conjuredsp__*'"
             if let contextPath = contextFilePath {
                 fullCmd += " --append-system-prompt-file \(shellQuote(contextPath))"
             }
