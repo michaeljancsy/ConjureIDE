@@ -519,9 +519,6 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			try? FileManager.default.removeItem(at: tempFile)
 		}
 
-		// Ensure user-packages directory is in sys.path for hot-reload too
-		dsp_kernel_set_extra_site_packages(kernel, Self.userPackagesURL.path)
-
 		let success = dsp_kernel_load_script(kernel, pythonHome, tempFile.path)
 
 		if success {

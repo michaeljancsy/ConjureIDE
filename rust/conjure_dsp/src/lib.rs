@@ -162,9 +162,9 @@ pub unsafe extern "C" fn dsp_kernel_load_script(
     (*kernel).load_script(python_home, script_path)
 }
 
-/// Set the user-packages directory for Python sys.path injection.
-/// Call before `dsp_kernel_load_script()`. The path is prepended to `sys.path`
-/// so user-installed packages are importable. Pass null to clear.
+/// Prepend a directory to Python's sys.path so user-installed packages are importable.
+/// Idempotent — safe to call multiple times. Takes effect immediately.
+/// Pass null to no-op.
 ///
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
@@ -174,10 +174,10 @@ pub unsafe extern "C" fn dsp_kernel_set_extra_site_packages(
     kernel: DSPKernelRef,
     path: *const c_char,
 ) {
-    if path.is_null() {
-        (*kernel).clear_extra_site_packages();
-    } else if let Ok(s) = CStr::from_ptr(path).to_str() {
-        (*kernel).set_extra_site_packages(s);
+    if !path.is_null() {
+        if let Ok(s) = CStr::from_ptr(path).to_str() {
+            let _ = (*kernel).set_extra_site_packages(s);
+        }
     }
 }
 

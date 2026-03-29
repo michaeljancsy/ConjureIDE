@@ -138,9 +138,9 @@ void dsp_kernel_set_transport(DSPKernelRef kernel,
 bool dsp_kernel_load_script(DSPKernelRef kernel, const char *python_home, const char *script_path);
 
 /**
- * Set the user-packages directory for Python sys.path injection.
- * Call before `dsp_kernel_load_script()`. The path is prepended to `sys.path`
- * so user-installed packages are importable. Pass null to clear.
+ * Prepend a directory to Python's sys.path so user-installed packages are importable.
+ * Idempotent — safe to call multiple times. Takes effect immediately.
+ * Pass null to no-op.
  *
  * # Safety
  * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.

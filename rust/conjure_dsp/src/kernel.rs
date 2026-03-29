@@ -105,9 +105,6 @@ pub struct DSPKernel {
     /// Current WASM linear memory size in bytes (0 if Python backend).
     /// Updated after each process() call on the audio thread.
     wasm_memory_bytes: AtomicU64,
-    /// Optional path to user-installed packages directory.
-    /// Prepended to Python's sys.path on each script load so user packages are importable.
-    extra_site_packages: Option<String>,
 }
 
 /// Get the current process resident memory in bytes via mach task_info.
@@ -198,19 +195,13 @@ impl DSPKernel {
             grace_deadline_unix: AtomicI64::new(0),
             memory_baseline_bytes: AtomicU64::new(0),
             wasm_memory_bytes: AtomicU64::new(0),
-            extra_site_packages: None,
         }
     }
 
-    /// Set the extra site-packages directory for user-installed Python packages.
-    /// This path is prepended to sys.path on the next script load.
-    pub fn set_extra_site_packages(&mut self, path: &str) {
-        self.extra_site_packages = Some(path.to_string());
-    }
-
-    /// Clear the extra site-packages directory.
-    pub fn clear_extra_site_packages(&mut self) {
-        self.extra_site_packages = None;
+    /// Prepend a directory to Python's sys.path so user-installed packages are importable.
+    /// Idempotent — safe to call multiple times. Takes effect immediately.
+    pub fn set_extra_site_packages(&mut self, path: &str) -> Result<(), String> {
+        PythonBackend::inject_site_packages(path)
     }
 
     pub fn initialize(&mut self, input_channels: i32, _output_channels: i32, sample_rate: f64) {
@@ -237,7 +228,7 @@ impl DSPKernel {
     /// `python_home` sets PYTHONHOME before interpreter init.
     /// Returns true on success.
     pub fn load_script(&mut self, python_home: &str, script_path: &str) -> bool {
-        match PythonBackend::load(python_home, script_path, self.extra_site_packages.as_deref()) {
+        match PythonBackend::load(python_home, script_path) {
             Ok(mut pb) => {
                 // If already initialized with channels, allocate arrays now
                 if self.channel_count > 0 {

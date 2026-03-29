@@ -37,11 +37,26 @@ pub struct PythonBackend {
 }
 
 impl PythonBackend {
+    /// Prepend a directory to Python's `sys.path` so packages in it are importable.
+    /// Idempotent — skips if the path is already present.
+    pub fn inject_site_packages(path: &str) -> Result<(), String> {
+        Python::with_gil(|py| -> Result<(), PyErr> {
+            let sys = py.import("sys")?;
+            let path_list = sys.getattr("path")?;
+            let contains: bool = path_list
+                .call_method1("__contains__", (path,))?
+                .extract()?;
+            if !contains {
+                path_list.call_method1("insert", (0i32, path))?;
+            }
+            Ok(())
+        })
+        .map_err(|e| e.to_string())
+    }
+
     /// Load a Python script containing a `process()` function.
     /// `python_home` sets PYTHONHOME before interpreter init.
-    /// `extra_site_packages` is an optional path to a directory of additional packages
-    /// (e.g. user-installed packages) to prepend to `sys.path`.
-    pub fn load(python_home: &str, script_path: &str, extra_site_packages: Option<&str>) -> Result<Self, String> {
+    pub fn load(python_home: &str, script_path: &str) -> Result<Self, String> {
         eprintln!(
             "ConjureDSP-Rust: PythonBackend::load called, python_home={}, script_path={}",
             python_home, script_path
@@ -72,16 +87,6 @@ impl PythonBackend {
                 let sys = py.import("sys")?;
                 let sys_modules = sys.getattr("modules")?;
                 let _ = sys_modules.call_method1("pop", ("dsp_script", py.None()));
-
-                // Inject extra site-packages directory (user-installed packages) into sys.path.
-                // Inserted at position 0 so user packages can shadow bundled ones.
-                if let Some(extra_path) = extra_site_packages {
-                    let path_list = sys.getattr("path")?;
-                    let contains: bool = path_list.call_method1("__contains__", (extra_path,))?.extract()?;
-                    if !contains {
-                        path_list.call_method1("insert", (0i32, extra_path))?;
-                    }
-                }
 
                 let module = PyModule::from_code(py, &code_c, &path_c, &module_name)?;
                 let process_fn = module.getattr("process")?;
