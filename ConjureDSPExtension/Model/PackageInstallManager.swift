@@ -62,6 +62,8 @@ final class PackageInstallManager {
 
     private var resultPollTimer: Timer?
     private var pendingRequestId: String?
+    private var pollStartTime: Date?
+    private static let pollTimeoutSeconds: TimeInterval = 30
     private let pythonHomePath: String?
 
     /// Callback fired when packages change (install/uninstall). Use to trigger script reload.
@@ -158,6 +160,7 @@ final class PackageInstallManager {
 
     private func startPollingForResult() {
         resultPollTimer?.invalidate()
+        pollStartTime = Date()
         resultPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.checkForResult()
@@ -165,7 +168,24 @@ final class PackageInstallManager {
         }
     }
 
+    private func timeoutPolling() {
+        resultPollTimer?.invalidate()
+        resultPollTimer = nil
+        pendingRequestId = nil
+        pollStartTime = nil
+        isInstalling = false
+        installStatusMessage = nil
+        lastError = "Operation timed out. Is ConjureDSP app running?"
+        log.error("Package install/uninstall timed out after \(Self.pollTimeoutSeconds)s — companion app not responding")
+    }
+
     func checkForResult() {
+        // Time out if companion app hasn't responded within the timeout window
+        if let start = pollStartTime, Date().timeIntervalSince(start) > Self.pollTimeoutSeconds {
+            timeoutPolling()
+            return
+        }
+
         guard let containerURL = appGroupContainerURL() else { return }
         let resultURL = containerURL.appendingPathComponent(Self.installResultFile)
 
