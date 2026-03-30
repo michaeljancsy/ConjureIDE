@@ -102,6 +102,10 @@ final class CrateInstallManager {
     // MARK: - Install
 
     func requestInstall(crates: [CrateSpec]) {
+        guard !isInstalling else {
+            lastError = "Please wait for the current operation to finish"
+            return
+        }
         guard let containerURL = appGroupContainerURL() else {
             lastError = "App Group container not available"
             return

@@ -176,10 +176,13 @@ final class CrateInstaller {
             }
         }
 
-        // Merge new crates with existing user-requested crates
+        // Merge new crates with existing user-requested crates.
+        // Normalize names: Cargo treats hyphens and underscores as equivalent,
+        // but we use underscores consistently (matching rlib filenames).
         var allCrates = readExistingUserCrates()
         for crate in newCrates {
-            allCrates[crate.name] = crate.version
+            let normalized = crate.name.replacingOccurrences(of: "-", with: "_")
+            allCrates[normalized] = crate.version
         }
 
         try await rebuildAllCrates(allCrates)
@@ -190,7 +193,9 @@ final class CrateInstaller {
     private func uninstallCrates(_ crateNames: [String]) async throws {
         var allCrates = readExistingUserCrates()
         for name in crateNames {
-            allCrates.removeValue(forKey: name)
+            // Normalize to underscores to match manifest keys
+            let normalized = name.replacingOccurrences(of: "-", with: "_")
+            allCrates.removeValue(forKey: normalized)
         }
 
         if allCrates.isEmpty {
