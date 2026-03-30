@@ -58,6 +58,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var spectrogramFrequencyScale: FrequencyScale = .log
     @State private var spectrogramFFTSizeIndex: Int = 2 // default: 2048
     @State private var spectrogramShowNoteNames: Bool = false
+    @StateObject private var daemonChecker = DaemonStatusChecker()
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("editorTheme") private var selectedTheme: String = "auto"
 
@@ -191,8 +192,13 @@ struct ConjureDSPExtensionMainView: View {
             // MonacoEditorView's pattern (bare WKWebView, simple frame).
             // WKWebView is recreated on toggle; WebSocket reconnects automatically.
             if showChat {
-                TerminalView(colorScheme: colorScheme)
-                    .frame(width: chatWidth)
+                if daemonChecker.isDaemonAvailable {
+                    TerminalView(colorScheme: colorScheme)
+                        .frame(width: chatWidth)
+                } else {
+                    DaemonLaunchPromptView(colorScheme: colorScheme)
+                        .frame(width: chatWidth)
+                }
 
                 // Resizable divider
                 Rectangle()
@@ -375,6 +381,13 @@ struct ConjureDSPExtensionMainView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(exportAlertMessage ?? "")
+        }
+        .onChange(of: showChat) { _, newValue in
+            if newValue {
+                daemonChecker.startChecking()
+            } else {
+                daemonChecker.stopChecking()
+            }
         }
         .onChange(of: showSpectrogram) { _, newValue in
             captureManager.isActive = newValue
