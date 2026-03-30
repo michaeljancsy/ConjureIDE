@@ -74,7 +74,7 @@ final class RustCompiler: ScriptCompiler {
             if let libDir = CrateInstallManager.cratesLibURL()?.path {
                 args = ["-L", "dependency=\(libDir)"] + args
             }
-            for (name, path) in userExterns {
+            for (name, path) in userExterns where name != "conjuredsp" {
                 args = ["--extern", "\(name)=\(path)"] + args
             }
             log.info("Linking \(userExterns.count) user-installed crate(s)")

@@ -168,6 +168,13 @@ final class CrateInstaller {
     // MARK: - Install
 
     private func installCrates(_ newCrates: [CrateSpec]) async throws {
+        // Reject built-in crate names to avoid conflicts with the bundled rlib
+        for crate in newCrates {
+            if crate.name.lowercased().replacingOccurrences(of: "-", with: "_") == "conjuredsp" {
+                throw CrateInstallerError.buildFailed("conjuredsp is a built-in crate and cannot be installed as a dependency")
+            }
+        }
+
         // Merge new crates with existing user-requested crates
         var allCrates = readExistingUserCrates()
         for crate in newCrates {
