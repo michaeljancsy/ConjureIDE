@@ -106,6 +106,13 @@ final class CrateInstallManager {
             return
         }
 
+        // Check if the Rust toolchain is provisioned (cargo must exist)
+        let cargoPath = containerURL.appendingPathComponent("rustc-dist/bin/cargo").path
+        if !FileManager.default.fileExists(atPath: cargoPath) {
+            lastError = "Rust toolchain not available. Restart ConjureDSP Terminal (re-run scripts/setup-rustc.sh if cargo is missing)."
+            return
+        }
+
         let requestId = UUID().uuidString
         let request = InstallRequest(
             requestId: requestId,
@@ -147,6 +154,12 @@ final class CrateInstallManager {
         }
         guard let containerURL = appGroupContainerURL() else {
             lastError = "App Group container not available"
+            return
+        }
+
+        let cargoPath = containerURL.appendingPathComponent("rustc-dist/bin/cargo").path
+        if !FileManager.default.fileExists(atPath: cargoPath) {
+            lastError = "Rust toolchain not available. Restart ConjureDSP Terminal (re-run scripts/setup-rustc.sh if cargo is missing)."
             return
         }
 
