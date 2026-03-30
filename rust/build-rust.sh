@@ -12,12 +12,8 @@ fi
 # Use the bundled Python distribution for pyo3
 PYTHON_DIST="${RUST_DIR}/python-dist"
 if [ ! -d "${PYTHON_DIST}" ]; then
-    # In a git worktree, symlink python-dist from the main worktree
-    MAIN_WORKTREE=$(git -C "${RUST_DIR}" worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //')
-    if [ -n "${MAIN_WORKTREE}" ] && [ "${RUST_DIR}" != "${MAIN_WORKTREE}/rust" ] && [ -d "${MAIN_WORKTREE}/rust/python-dist" ]; then
-        echo "note: Symlinking python-dist from main worktree" >&2
-        ln -s "${MAIN_WORKTREE}/rust/python-dist" "${PYTHON_DIST}"
-    fi
+    # In a git worktree, run the worktree setup script to create symlinks
+    "${RUST_DIR}/../scripts/setup-worktree.sh" >&2 || true
 fi
 if [ -d "${PYTHON_DIST}" ]; then
     export PYO3_PYTHON="${PYTHON_DIST}/bin/python3"
