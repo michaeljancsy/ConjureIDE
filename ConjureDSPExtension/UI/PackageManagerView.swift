@@ -302,8 +302,17 @@ struct PackageManagerView: View {
         .padding(.vertical, 4)
     }
 
+    private var installedNames: Set<String> {
+        if activeLanguage == .python {
+            return Set(installManager.installedPackages.map { $0.name.lowercased() })
+        } else {
+            return Set(crateInstallManager.installedCrates.map { $0.name.lowercased() })
+        }
+    }
+
     private func searchResultRow(_ pkg: SearchResult) -> some View {
-        HStack {
+        let alreadyInstalled = installedNames.contains(pkg.name.lowercased())
+        return HStack {
             VStack(alignment: .leading, spacing: 1) {
                 Text(pkg.name)
                     .font(.system(.body, design: .monospaced))
@@ -318,17 +327,23 @@ struct PackageManagerView: View {
             Text(pkg.version)
                 .font(.caption)
                 .foregroundColor(.secondary)
-            Button("Install") {
-                if activeLanguage == .python {
-                    packageSpec = "\(pkg.name)==\(pkg.version)"
-                } else {
-                    packageSpec = "\(pkg.name) = \"\(pkg.version)\""
+            if alreadyInstalled {
+                Text("Installed")
+                    .font(.caption)
+                    .foregroundColor(.green)
+            } else {
+                Button("Install") {
+                    if activeLanguage == .python {
+                        packageSpec = "\(pkg.name)==\(pkg.version)"
+                    } else {
+                        packageSpec = "\(pkg.name) = \"\(pkg.version)\""
+                    }
+                    installPackage()
                 }
-                installPackage()
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isInstalling)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(isInstalling)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
