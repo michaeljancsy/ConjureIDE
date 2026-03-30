@@ -295,8 +295,7 @@ final class CrateInstallManager {
         ]
 
         for (name, entry) in manifest.crates where entry.userRequested {
-            let displayName = name.replacingOccurrences(of: "_", with: "-")
-            crates.append(InstalledCrate(name: displayName, version: entry.version, isBundled: false))
+            crates.append(InstalledCrate(name: name, version: entry.version, isBundled: false))
         }
 
         installedCrates = crates.sorted {
