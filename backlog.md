@@ -3,6 +3,7 @@
 ## In Progress
 
 - Python package management: global `user-packages/` directory, package manager UI in AU extension, companion app installer via `uv`. Design at `docs/per-preset-package-requirements.md`. Remaining: vendored exports, community browser badges, companion app auto-launch.
+- Rust crate package management: crates.io search + install UI, companion app compiles crates to wasm32-wasip1 rlibs via bundled cargo, RustCompiler links user crates via `--extern` flags, WasmCache invalidates on dependency changes. Remaining: manual testing end-to-end with real crates.
 
 ## To Do
 

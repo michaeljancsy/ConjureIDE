@@ -298,7 +298,23 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         }
 
         packages.sort { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
-        return (jsonStr(["packages": packages]), false)
+
+        // Rust crates
+        var crates: [[String: Any]] = [
+            ["name": "conjuredsp", "version": "built-in", "built_in": true],
+        ]
+        if let manifest = CrateInstallManager.readManifest() {
+            for (name, entry) in manifest.crates where entry.userRequested {
+                crates.append([
+                    "name": name,
+                    "version": entry.version,
+                    "built_in": false,
+                ])
+            }
+        }
+        crates.sort { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
+
+        return (jsonStr(["python_packages": packages, "rust_crates": crates]), false)
     }
 
     // Static documentation strings — comprehensive API reference derived from actual source.
