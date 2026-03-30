@@ -186,7 +186,7 @@ struct PackageManagerView: View {
                 }
 
                 if activeLanguage == .rust {
-                    Text("Crates are compiled from source for WebAssembly. First install may take 1–2 minutes.")
+                    Text("Crates are compiled from source for WebAssembly. First install may take a few minutes.")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
