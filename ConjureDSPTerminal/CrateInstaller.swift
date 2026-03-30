@@ -262,11 +262,7 @@ final class CrateInstaller {
         // macOS SIP strips DYLD_* env vars from child processes of signed binaries,
         // so cargo's spawned rustc won't inherit our DYLD_LIBRARY_PATH directly.
         let rustcWrapper = tempDir.appendingPathComponent("rustc-wrapper.sh")
-        let wrapperScript = """
-        #!/bin/bash
-        export DYLD_LIBRARY_PATH="\(sysrootPath)/lib"
-        exec "\(rustcPath)" "$@"
-        """
+        let wrapperScript = "#!/bin/bash\nexport DYLD_LIBRARY_PATH=\"\(sysrootPath)/lib\"\nexec \"\(rustcPath)\" \"$@\"\n"
         try wrapperScript.write(to: rustcWrapper, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rustcWrapper.path)
 
