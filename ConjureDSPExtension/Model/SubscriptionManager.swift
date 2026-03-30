@@ -46,7 +46,7 @@ class SubscriptionManager: ObservableObject {
     var isLicensed: Bool { status.isLicensed }
 
     /// App Group container identifier shared between host app and AU extension.
-    static let appGroupIdentifier = "group.com.MichaelJancsy.ConjureDSP"
+    static let appGroupIdentifier = AppGroupContainer.id
 
     /// Token filename within the App Group container.
     private static let tokenFilename = "subscription_token"
@@ -210,16 +210,13 @@ class SubscriptionManager: ObservableObject {
     // MARK: - Token Persistence (App Group)
 
     private func loadToken() -> String? {
-        let fm = FileManager.default
-        guard let containerURL = fm.containerURL(
-            forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier
-        ) else {
+        guard let containerURL = AppGroupContainer.url else {
             log.warning("App Group container not available")
             return nil
         }
 
         let tokenURL = containerURL.appendingPathComponent(Self.tokenFilename)
-        guard let data = fm.contents(atPath: tokenURL.path),
+        guard let data = FileManager.default.contents(atPath: tokenURL.path),
               let token = String(data: data, encoding: .utf8) else {
             return nil
         }
@@ -227,10 +224,7 @@ class SubscriptionManager: ObservableObject {
     }
 
     private func saveToken(_ token: String) throws {
-        let fm = FileManager.default
-        guard let containerURL = fm.containerURL(
-            forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier
-        ) else {
+        guard let containerURL = AppGroupContainer.url else {
             throw NSError(domain: "SubscriptionManager", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "App Group container not available"])
         }

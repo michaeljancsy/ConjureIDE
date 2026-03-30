@@ -305,7 +305,7 @@ final class PTYManager {
             diag += "  \(path): exists=\(exists), executable=\(executable)\n"
         }
         // Write diagnostics to App Group container (readable from both processes)
-        if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP") {
+        if let url = AppGroupContainer.url {
             try? diag.write(to: url.appendingPathComponent("pty-diag.txt"), atomically: true, encoding: .utf8)
         }
 

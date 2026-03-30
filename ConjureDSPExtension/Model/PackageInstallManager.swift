@@ -15,7 +15,6 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "P
 @Observable
 @MainActor
 final class PackageInstallManager {
-    private static let appGroupID = "group.com.MichaelJancsy.ConjureDSP"
     private static let installRequestFile = "package-install-request.json"
     private static let installResultFile = "package-install-result.json"
     private static let uninstallRequestFile = "package-uninstall-request.json"
@@ -327,8 +326,6 @@ final class PackageInstallManager {
     // MARK: - Helpers
 
     private func appGroupContainerURL() -> URL? {
-        FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: Self.appGroupID
-        )
+        AppGroupContainer.url
     }
 }

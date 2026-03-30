@@ -115,7 +115,7 @@ struct TerminalView: NSViewRepresentable {
         }
 
         private func connectToWebSocket() {
-            guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP") else {
+            guard let url = AppGroupContainer.url else {
                 log.error("App Group container not available")
                 showFallbackMessage(); return
             }

@@ -24,9 +24,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	// MARK: - Shared Python Runtime
 
 	/// App Group container URL for cross-app data sharing.
-	private static let appGroupContainerURL: URL? = FileManager.default.containerURL(
-		forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
-	)
+	private static let appGroupContainerURL: URL? = AppGroupContainer.url
 
 	/// Shared Python runtime provisioned by ConjureDSPTerminal into the App Group container.
 	/// Used as PYTHONHOME — contains stdlib, numpy, scipy, and user-installed packages.
