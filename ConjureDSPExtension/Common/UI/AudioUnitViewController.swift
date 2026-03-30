@@ -55,10 +55,11 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var paramNamesCancellable: AnyCancellable?
     private var paramMetadataCancellable: AnyCancellable?
 
-    /// Pre-resolved App Group container URL, resolved once to avoid multiple TCC prompts on macOS 26.
-    private lazy var appGroupContainerURL: URL? = {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP")
-    }()
+    /// App Group container URL — uses the cached resolution from AppGroupContainer
+    /// to avoid extra TCC prompts on macOS 26 Tahoe.
+    private var appGroupContainerURL: URL? {
+        AppGroupContainer.url
+    }
 
 	deinit {
         terminalServer?.stop()

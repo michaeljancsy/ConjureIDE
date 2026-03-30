@@ -93,7 +93,7 @@ class SubscriptionManager: ObservableObject {
     // MARK: - Init
 
     init(appGroupContainerURL: URL? = nil) {
-        self.appGroupContainerURL = appGroupContainerURL ?? FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier)
+        self.appGroupContainerURL = appGroupContainerURL ?? AppGroupContainer.url
     }
 
     /// Load cached token from App Group and verify with kernel.
