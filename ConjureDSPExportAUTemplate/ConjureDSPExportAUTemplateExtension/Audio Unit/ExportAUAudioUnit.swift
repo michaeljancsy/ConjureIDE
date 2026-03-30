@@ -21,6 +21,9 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     // True when a Python preset can't find its runtime (stdlib+numpy)
     private(set) var pythonRuntimeMissing = false
 
+    // Non-nil when the preset failed to load; audio passes through unchanged
+    private(set) var loadError: String?
+
     // Audio busses
     private var _inputBus: AUAudioUnitBus!
     private var _outputBus: AUAudioUnitBus!
@@ -63,15 +66,6 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
         // Exported AUs run freely — no demo timer
         dsp_kernel_set_licensed(kernel, true)
-
-        // Log shared Python runtime filesystem state (for debugging)
-        // Use real home directory (not sandbox container) via getpwuid
-        if let realHome = Self.realHomeDirectory() {
-            let sharedPath = realHome + "/Library/Application Support/ConjureDSP/PythonRuntime-3.14"
-            let libExists = FileManager.default.fileExists(atPath: sharedPath + "/lib/python3.14t")
-            let dylibExists = FileManager.default.fileExists(atPath: sharedPath + "/lib/libpython3.14t.dylib")
-            pluginLog.info("Shared runtime check: path=\(sharedPath, privacy: .public) lib=\(libExists, privacy: .public) dylib=\(dylibExists, privacy: .public)")
-        }
 
         // Load preset from bundle (language determined by runtime-config.json)
         loadPresetFromBundle()
@@ -265,6 +259,7 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
             warmStart()
         } else {
             logKernelError("Failed to load WASM preset")
+            loadError = kernelErrorString() ?? "Failed to load preset"
         }
     }
 
@@ -288,13 +283,14 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
             warmStart()
         } else {
             logKernelError("Failed to load Python preset")
+            loadError = kernelErrorString() ?? "Failed to load preset"
         }
     }
 
     // MARK: - Python Runtime Resolution
 
     /// Searches for a Python runtime in order: own bundle, App Group container,
-    /// legacy shared location, environment variable.
+    /// environment variable.
     private func findPythonHome(bundle: Bundle) -> String? {
         // 1. Own bundle (standalone/full export)
         pluginLog.info("findPythonHome: checking bundle at \(bundle.bundlePath, privacy: .public)")
@@ -305,29 +301,24 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         pluginLog.info("findPythonHome: no bundled python-dist found")
 
         // 2. App Group container (provisioned by ConjureDSPTerminal)
-        // Exported AUs don't have the App Group entitlement, so use the raw filesystem path.
+        // Use the raw filesystem path — the sandbox exception in the entitlements grants
+        // read access to ~/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/PythonRuntime/.
+        // Use isReadableFile (not fileExists) — fileExists uses stat() which may succeed even
+        // when the sandbox blocks actual reads, causing Python's Py_Initialize() to call
+        // Py_FatalError() and abort the process when it can't open its stdlib.
         if let realHome = Self.realHomeDirectory() {
             let appGroup = realHome + "/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/PythonRuntime"
             pluginLog.info("findPythonHome: checking App Group container at \(appGroup, privacy: .public)")
-            if FileManager.default.fileExists(atPath: appGroup + "/lib/python3.14t") {
+            if FileManager.default.isReadableFile(atPath: appGroup + "/lib/python3.14t/os.py") {
                 pluginLog.info("findPythonHome: found Python runtime in App Group container")
                 return appGroup
             }
-            pluginLog.info("findPythonHome: App Group container missing or no lib/python3.14t")
-
-            // 3. Legacy shared location (backward compatibility)
-            let legacy = realHome + "/Library/Application Support/ConjureDSP/PythonRuntime-3.14"
-            pluginLog.info("findPythonHome: checking legacy location at \(legacy, privacy: .public)")
-            if FileManager.default.fileExists(atPath: legacy + "/lib/python3.14t") {
-                pluginLog.info("findPythonHome: found Python runtime at legacy location")
-                return legacy
-            }
-            pluginLog.info("findPythonHome: legacy location missing or no lib/python3.14t")
+            pluginLog.info("findPythonHome: App Group container missing or not readable")
         } else {
             pluginLog.warning("findPythonHome: could not resolve real home directory")
         }
 
-        // 4. Environment variable override (power users)
+        // 3. Environment variable override (power users)
         if let envPath = ProcessInfo.processInfo.environment["CONJUREDSP_PYTHON_HOME"],
            FileManager.default.fileExists(atPath: envPath) {
             pluginLog.info("findPythonHome: found Python runtime via CONJUREDSP_PYTHON_HOME")
@@ -357,9 +348,18 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         }
     }
 
+    /// Returns the current kernel error, if any. Safe to call from any thread.
+    func currentKernelError() -> String? {
+        kernelErrorString()
+    }
+
+    private func kernelErrorString() -> String? {
+        guard let errPtr = dsp_kernel_last_error(kernel) else { return nil }
+        return String(cString: errPtr)
+    }
+
     private func logKernelError(_ prefix: String) {
-        if let errPtr = dsp_kernel_last_error(kernel) {
-            let errMsg = String(cString: errPtr)
+        if let errMsg = kernelErrorString() {
             pluginLog.error("\(prefix, privacy: .public): \(errMsg, privacy: .public)")
         } else {
             pluginLog.error("\(prefix, privacy: .public)")

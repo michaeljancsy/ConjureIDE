@@ -11,6 +11,7 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
     var audioUnit: AUAudioUnit?
     private var hostingView: NSHostingView<ExportAUMainView>?
     private var parameterState: ExportParameterState?
+    private var errorPollTimer: Timer?
 
     public override var preferredMinimumSize: NSSize {
         NSSize(width: 300, height: 200)
@@ -65,7 +66,8 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
         let content = ExportAUMainView(
             parameterState: ps,
             config: config,
-            pythonRuntimeMissing: au.pythonRuntimeMissing
+            pythonRuntimeMissing: au.pythonRuntimeMissing,
+            loadError: au.loadError
         )
         let hv = NSHostingView(rootView: content)
         hv.sizingOptions = []
@@ -78,5 +80,25 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
             hv.bottomAnchor.constraint(equalTo: self.view.bottomAnchor)
         ])
         hostingView = hv
+
+        // Only poll for runtime errors if the preset loaded successfully.
+        // If load failed, loadError is already shown and the preset never runs.
+        if au.loadError == nil && !au.pythonRuntimeMissing {
+            startErrorPolling(au: au, parameterState: ps)
+        }
+    }
+
+    private func startErrorPolling(au: ExportAUAudioUnit, parameterState: ExportParameterState) {
+        errorPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak parameterState, weak au] _ in
+            guard let ps = parameterState, let au = au else { return }
+            let error = au.currentKernelError()
+            DispatchQueue.main.async {
+                ps.runtimeError = error
+            }
+        }
+    }
+
+    deinit {
+        errorPollTimer?.invalidate()
     }
 }

@@ -133,11 +133,15 @@ impl PythonBackend {
                 })
             }
             Err(e) => {
+                let py_err_msg = Python::with_gil(|py| {
+                    let msg = e.value(py).to_string();
+                    e.print(py);
+                    msg
+                });
                 let err_msg = format!(
-                    "python_home: {}\nscript_path: {}\nerror: {:?}",
-                    python_home, script_path, e
+                    "{}\n\npython_home: {}\nscript_path: {}",
+                    py_err_msg, python_home, script_path
                 );
-                Python::with_gil(|py| e.print(py));
                 Err(err_msg)
             }
         }

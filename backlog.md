@@ -14,6 +14,7 @@
 - Python package management follow-up: vendored exports (import analysis + export UI), community browser dependency badges, auto-launch companion app from sandbox
 
 ### Other
+- Export AU instantiation tests: add integration tests that instantiate exported AUs via `AVAudioUnitComponentManager` (the full DAW loading path) rather than just testing the Rust FFI directly. Would catch issues like Debug template stubs, `findPythonHome` sandbox failures, PluginKit registration, and parameter tree setup — bugs that the current `ExportDSPIntegrationTests` miss because they bypass the Swift AU class.
 - AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration)
 
 ## Done
