@@ -69,6 +69,7 @@ final class PackageInstallManager {
 
     private var resultPollTimer: Timer?
     private var pendingRequestId: String?
+    private var pendingIsUninstall = false
     private var pollStartTime: Date?
     private static let pollTimeoutSeconds: TimeInterval = 30
 
@@ -132,6 +133,7 @@ final class PackageInstallManager {
             let data = try JSONEncoder().encode(request)
             try data.write(to: requestURL, options: .atomic)
             pendingRequestId = requestId
+            pendingIsUninstall = false
             isInstalling = true
             installStatusMessage = "Installing \(packages.joined(separator: ", "))..."
             lastError = nil
@@ -183,6 +185,7 @@ final class PackageInstallManager {
             let data = try JSONEncoder().encode(request)
             try data.write(to: requestURL, options: .atomic)
             pendingRequestId = requestId
+            pendingIsUninstall = true
             isInstalling = true
             installStatusMessage = "Removing \(packageName)..."
             lastError = nil
@@ -243,6 +246,8 @@ final class PackageInstallManager {
 
         // Update state
         pendingRequestId = nil
+        let wasUninstall = pendingIsUninstall
+        pendingIsUninstall = false
         isInstalling = false
         installStatusMessage = nil
         resultPollTimer?.invalidate()
@@ -252,7 +257,8 @@ final class PackageInstallManager {
             log.info("Package operation succeeded: \(result.packages.joined(separator: ", "), privacy: .public)")
             lastError = nil
             let names = result.packages.joined(separator: ", ")
-            installStatusMessage = "Installed \(names) ✓"
+            let verb = wasUninstall ? "Removed" : "Installed"
+            installStatusMessage = "\(verb) \(names) ✓"
             refreshInstalledPackages()
             onPackagesChanged?()
             // Auto-clear success message after 3 seconds

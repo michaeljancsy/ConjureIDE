@@ -86,6 +86,7 @@ final class CrateInstallManager {
     private var resultPollTimer: Timer?
     private var pendingRequestId: String?
     private var pendingCrateNames: String?
+    private var pendingIsUninstall = false
     private var pollStartTime: Date?
     private static let pollTimeoutSeconds: TimeInterval = 300  // cargo compiles from source; first build downloads + compiles all deps
 
@@ -131,6 +132,7 @@ final class CrateInstallManager {
             isInstalling = true
             let names = crates.map(\.name).joined(separator: ", ")
             pendingCrateNames = names
+            pendingIsUninstall = false
             installStatusMessage = "Building \(names)..."
             lastError = nil
             log.info("Wrote crate install request for \(names, privacy: .public)")
@@ -180,6 +182,7 @@ final class CrateInstallManager {
             pendingRequestId = requestId
             isInstalling = true
             pendingCrateNames = crateName
+            pendingIsUninstall = true
             installStatusMessage = "Removing \(crateName)..."
             lastError = nil
             log.info("Wrote crate uninstall request for \(crateName, privacy: .public)")
@@ -249,7 +252,9 @@ final class CrateInstallManager {
         try? FileManager.default.removeItem(at: resultURL)
 
         pendingRequestId = nil
+        let wasUninstall = pendingIsUninstall
         pendingCrateNames = nil
+        pendingIsUninstall = false
         isInstalling = false
         installStatusMessage = nil
         resultPollTimer?.invalidate()
@@ -259,7 +264,8 @@ final class CrateInstallManager {
             log.info("Crate operation succeeded: \(result.crates.joined(separator: ", "), privacy: .public)")
             lastError = nil
             let names = result.crates.joined(separator: ", ")
-            installStatusMessage = "Installed \(names) ✓"
+            let verb = wasUninstall ? "Removed" : "Installed"
+            installStatusMessage = "\(verb) \(names) ✓"
             refreshInstalledCrates()
             onCratesChanged?()
             // Auto-clear success message after 3 seconds
