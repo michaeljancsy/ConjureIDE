@@ -15,8 +15,7 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "T
 /// Abstracts NSWorkspace for testability.
 protocol TerminalLaunchable: Sendable {
     @MainActor func isAppRunning(bundleID: String) -> Bool
-    @MainActor func urlForApp(bundleID: String) -> URL?
-    @MainActor func openApp(at url: URL, activates: Bool) async throws
+    @MainActor func openURL(_ url: URL) -> Bool
 }
 
 /// Default implementation using NSWorkspace.
@@ -26,22 +25,19 @@ struct WorkspaceTerminalLauncher: TerminalLaunchable {
         NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == bundleID }
     }
 
-    @MainActor func urlForApp(bundleID: String) -> URL? {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-    }
-
-    @MainActor func openApp(at url: URL, activates: Bool) async throws {
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = activates
-        try await NSWorkspace.shared.openApplication(at: url, configuration: config)
+    @MainActor func openURL(_ url: URL) -> Bool {
+        NSWorkspace.shared.open(url)
     }
 }
 
 /// Launches ConjureDSPTerminal in the background if it isn't already running.
+/// Uses a custom URL scheme (`conjuredsp-terminal://launch`) because
+/// `NSWorkspace.openApplication` doesn't work from the AUv3 ViewBridge XPC process.
 @MainActor
 final class TerminalLauncher {
 
     static let terminalBundleID = "com.MichaelJancsy.ConjureDSPTerminal"
+    static let launchURL = URL(string: "conjuredsp-terminal://launch")!
 
     private let workspace: any TerminalLaunchable
 
@@ -50,22 +46,16 @@ final class TerminalLauncher {
     }
 
     /// Launch the companion app if needed. Safe to call multiple times.
-    func launchIfNeeded() async {
+    func launchIfNeeded() {
         if workspace.isAppRunning(bundleID: Self.terminalBundleID) {
             log.debug("ConjureDSPTerminal already running — skipping launch")
             return
         }
 
-        guard let appURL = workspace.urlForApp(bundleID: Self.terminalBundleID) else {
-            log.warning("ConjureDSPTerminal not found — companion app is not installed")
-            return
-        }
-
-        do {
-            try await workspace.openApp(at: appURL, activates: false)
-            log.info("Launched ConjureDSPTerminal in background")
-        } catch {
-            log.warning("Failed to launch ConjureDSPTerminal: \(error.localizedDescription, privacy: .public)")
+        if workspace.openURL(Self.launchURL) {
+            log.info("Launched ConjureDSPTerminal via URL scheme")
+        } else {
+            log.warning("Failed to launch ConjureDSPTerminal — companion app may not be installed")
         }
     }
 }

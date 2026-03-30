@@ -11,28 +11,21 @@ import AppKit
 @MainActor
 final class MockTerminalLaunchable: TerminalLaunchable, @unchecked Sendable {
     var isRunning = false
-    var appURL: URL? = URL(fileURLWithPath: "/Applications/ConjureDSPTerminal.app")
+    var openURLResult = true
     var openCalled = false
-    var openActivatesValue: Bool?
-    var openError: Error?
+    var openedURL: URL?
 
     private(set) var isAppRunningBundleIDs: [String] = []
-    private(set) var urlForAppBundleIDs: [String] = []
 
     func isAppRunning(bundleID: String) -> Bool {
         isAppRunningBundleIDs.append(bundleID)
         return isRunning
     }
 
-    func urlForApp(bundleID: String) -> URL? {
-        urlForAppBundleIDs.append(bundleID)
-        return appURL
-    }
-
-    func openApp(at url: URL, activates: Bool) async throws {
-        if let error = openError { throw error }
+    func openURL(_ url: URL) -> Bool {
         openCalled = true
-        openActivatesValue = activates
+        openedURL = url
+        return openURLResult
     }
 }
 
@@ -41,66 +34,62 @@ final class MockTerminalLaunchable: TerminalLaunchable, @unchecked Sendable {
 @Suite(.serialized)
 struct TerminalLauncherTests {
 
-    @Test @MainActor func launchesWhenNotRunning() async {
+    @Test @MainActor func launchesWhenNotRunning() {
         let mock = MockTerminalLaunchable()
         mock.isRunning = false
         let launcher = TerminalLauncher(workspace: mock)
 
-        await launcher.launchIfNeeded()
+        launcher.launchIfNeeded()
 
         #expect(mock.openCalled)
-        #expect(mock.openActivatesValue == false)
+        #expect(mock.openedURL == TerminalLauncher.launchURL)
     }
 
-    @Test @MainActor func skipsWhenAlreadyRunning() async {
+    @Test @MainActor func skipsWhenAlreadyRunning() {
         let mock = MockTerminalLaunchable()
         mock.isRunning = true
         let launcher = TerminalLauncher(workspace: mock)
 
-        await launcher.launchIfNeeded()
+        launcher.launchIfNeeded()
 
         #expect(!mock.openCalled)
     }
 
-    @Test @MainActor func handlesAppNotInstalled() async {
+    @Test @MainActor func handlesOpenURLFailure() {
         let mock = MockTerminalLaunchable()
         mock.isRunning = false
-        mock.appURL = nil
+        mock.openURLResult = false
         let launcher = TerminalLauncher(workspace: mock)
 
-        await launcher.launchIfNeeded()
+        // Should not crash — failure is logged
+        launcher.launchIfNeeded()
 
-        #expect(!mock.openCalled)
+        #expect(mock.openCalled)
     }
 
-    @Test @MainActor func passesCorrectBundleID() async {
+    @Test @MainActor func passesCorrectBundleID() {
         let mock = MockTerminalLaunchable()
         mock.isRunning = false
         let launcher = TerminalLauncher(workspace: mock)
 
-        await launcher.launchIfNeeded()
+        launcher.launchIfNeeded()
 
         #expect(mock.isAppRunningBundleIDs == [TerminalLauncher.terminalBundleID])
-        #expect(mock.urlForAppBundleIDs == [TerminalLauncher.terminalBundleID])
     }
 
-    @Test @MainActor func handlesLaunchError() async {
-        let mock = MockTerminalLaunchable()
-        mock.isRunning = false
-        mock.openError = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "sandbox blocked"])
-        let launcher = TerminalLauncher(workspace: mock)
-
-        // Should not throw — errors are logged, not propagated
-        await launcher.launchIfNeeded()
+    @Test @MainActor func usesCorrectURLScheme() {
+        #expect(TerminalLauncher.launchURL.scheme == "conjuredsp-terminal")
     }
 
     // MARK: - Integration test (real NSWorkspace)
 
-    @Test @MainActor func realWorkspaceHandlesNotInstalled() async {
-        // In the test environment, ConjureDSPTerminal won't be found.
-        // This exercises the "not found" path with the real implementation.
-        let launcher = TerminalLauncher(workspace: WorkspaceTerminalLauncher())
-        await launcher.launchIfNeeded()
-        // No crash = success for this path
+    @Test @MainActor func realWorkspaceReportsTerminalNotRunning() {
+        // Exercises the real NSWorkspace wrapper — isAppRunning should return false
+        // in the test environment since ConjureDSPTerminal isn't running.
+        // NOTE: We don't call launchIfNeeded() here because NSWorkspace.open(url)
+        // with an unregistered URL scheme shows a system dialog, blocking the test runner.
+        let workspace = WorkspaceTerminalLauncher()
+        let running = workspace.isAppRunning(bundleID: TerminalLauncher.terminalBundleID)
+        #expect(!running)
     }
 }

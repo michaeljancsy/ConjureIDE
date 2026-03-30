@@ -681,24 +681,6 @@
 			shellPath = /bin/bash;
 			shellScript = "# Copy libpython3.14t.dylib into Frameworks (required for pyo3 @rpath loading).\n# The Python stdlib is no longer bundled here — it lives in the App Group container,\n# provisioned by ConjureDSPTerminal.\nSRC_DYLIB=\"${SRCROOT}/rust/python-dist/lib/libpython3.14t.dylib\"\nDST_DYLIB=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libpython3.14t.dylib\"\n\nif [ -f \"$DST_DYLIB\" ] && [ \"$SRC_DYLIB\" -ot \"$DST_DYLIB\" ]; then\n    echo \"note: Python dylib unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\ncp \"${SRC_DYLIB}\" \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${DST_DYLIB}\"\n";
 		};
-		AABB0040000000PYSTDLIB1 /* Copy Python Stdlib for Tests */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Copy Python Stdlib for Tests";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "# Copy Python stdlib into extension Resources so unit tests can use the FFI.\n# At runtime the stdlib comes from the App Group container, but tests don't have\n# that — they look for python-dist in the extension bundle's Resources.\nPYSRC=\"${SRCROOT}/rust/python-dist\"\nPYDST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/python-dist\"\nSTAMP=\"${PYDST}/.copy-stamp\"\n\nif [ ! -d \"$PYSRC\" ]; then\n    echo \"warning: python-dist not found at $PYSRC, skipping\" >&2\n    exit 0\nfi\n\nif [ -f \"$STAMP\" ] && [ \"$PYSRC/lib/libpython3.14t.dylib\" -ot \"$STAMP\" ]; then\n    echo \"note: Python stdlib unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${PYDST}/lib\"\n\n# Copy stdlib + site-packages (numpy, scipy, conjuredsp)\nrsync -a --delete \"${PYSRC}/lib/python3.14t\" \"${PYDST}/lib/\"\n\ntouch \"$STAMP\"\n";
-		};
 		AABB00092F5013850036AAB6 /* Copy Rust Compiler */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -912,6 +894,24 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "# Copy full Python distribution into ConjureDSPTerminal.app/Contents/Resources/python-dist/\nPYSRC=\"${SRCROOT}/rust/python-dist\"\nPYDST=\"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/python-dist\"\nSTAMP=\"${PYDST}/.copy-stamp\"\n\nif [ ! -d \"$PYSRC\" ]; then\n    echo \"warning: python-dist not found at $PYSRC, skipping\" >&2\n    exit 0\nfi\n\nif [ -f \"$STAMP\" ] && [ \"$PYSRC/lib/libpython3.14t.dylib\" -ot \"$STAMP\" ]; then\n    echo \"note: Python runtime unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${PYDST}/bin\"\nmkdir -p \"${PYDST}/lib\"\n\n# Copy Python binary\ncp \"${PYSRC}/bin/python3\" \"${PYDST}/bin/python3\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${PYDST}/bin/python3\"\n\n# Copy libpython dylib\ncp \"${PYSRC}/lib/libpython3.14t.dylib\" \"${PYDST}/lib/\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${PYDST}/lib/libpython3.14t.dylib\"\n\n# Copy stdlib + numpy + scipy\ncp -R \"${PYSRC}/lib/python3.14t\" \"${PYDST}/lib/\"\n\n# Code-sign all .so files\nfind \"${PYDST}\" -name '*.so' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp {} \\;\n\ntouch \"$STAMP\"\n";
+		};
+		AABB0040000000PYSTDLIB1 /* Copy Python Stdlib for Tests */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Python Stdlib for Tests";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# Copy Python stdlib into extension Resources so unit tests can use the FFI.\n# At runtime the stdlib comes from the App Group container, but tests don't have\n# that — they look for python-dist in the extension bundle's Resources.\nPYSRC=\"${SRCROOT}/rust/python-dist\"\nPYDST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/python-dist\"\nSTAMP=\"${PYDST}/.copy-stamp\"\n\nif [ ! -d \"$PYSRC\" ]; then\n    echo \"warning: python-dist not found at $PYSRC, skipping\" >&2\n    exit 0\nfi\n\nif [ -f \"$STAMP\" ] && [ \"$PYSRC/lib/libpython3.14t.dylib\" -ot \"$STAMP\" ]; then\n    echo \"note: Python stdlib unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${PYDST}/lib\"\n\n# Copy stdlib + site-packages (numpy, scipy, conjuredsp)\nrsync -a --delete \"${PYSRC}/lib/python3.14t\" \"${PYDST}/lib/\"\n\ntouch \"$STAMP\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1532,9 +1532,10 @@
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ConjureDSPTerminal/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1567,9 +1568,10 @@
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ConjureDSPTerminal/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
