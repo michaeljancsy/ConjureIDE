@@ -15,6 +15,7 @@ import SwiftUI
 @MainActor
 final class ExportParameterState: ObservableObject {
     @Published var values: [Float]
+    @Published var runtimeError: String?
     let paramCount: Int
     /// Rich parameter metadata for slider ranges and value formatting.
     let paramMetadata: [ExportParamMetadata]?

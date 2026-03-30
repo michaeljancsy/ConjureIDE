@@ -47,7 +47,10 @@ pub struct DSPKernel {
     max_frames_to_render: u32,
     channel_count: usize,
     backend: Mutex<Option<Box<dyn Backend>>>,
-    pub(crate) last_error: Option<String>,
+    /// Last error from script load or runtime processing.
+    /// Written on both the main thread (load failures) and render thread (runtime errors),
+    /// so it must be mutex-protected to avoid a data race.
+    last_error: Mutex<Option<String>>,
     /// 16 generic parameters (0.0–1.0), stored as AtomicU32 via f32::to_bits/from_bits.
     /// Main thread writes (DAW automation), audio thread reads — lock-free via Relaxed ordering.
     params: [AtomicU32; PARAM_COUNT],
@@ -175,7 +178,7 @@ impl DSPKernel {
             max_frames_to_render: 1024,
             channel_count: 0,
             backend: Mutex::new(None),
-            last_error: None,
+            last_error: Mutex::new(None),
             params: [ZERO; PARAM_COUNT],
             input_ring: AudioRingBuffer::new(AudioRingBuffer::DEFAULT_CAPACITY),
             output_ring: AudioRingBuffer::new(AudioRingBuffer::DEFAULT_CAPACITY),
@@ -247,11 +250,11 @@ impl DSPKernel {
                 self.reset_profiler();
                 self.memory_baseline_bytes.store(process_resident_bytes(), Ordering::Relaxed);
                 self.wasm_memory_bytes.store(0, Ordering::Relaxed);
-                self.last_error = None;
+                if let Ok(mut guard) = self.last_error.lock() { *guard = None; }
                 true
             }
             Err(err_msg) => {
-                self.last_error = Some(err_msg);
+                if let Ok(mut guard) = self.last_error.lock() { *guard = Some(err_msg); }
                 false
             }
         }
@@ -284,11 +287,11 @@ impl DSPKernel {
                         self.wasm_memory_bytes.store(b.memory_bytes(), Ordering::Relaxed);
                     }
                 }
-                self.last_error = None;
+                if let Ok(mut guard) = self.last_error.lock() { *guard = None; }
                 true
             }
             Err(err_msg) => {
-                self.last_error = Some(err_msg);
+                if let Ok(mut guard) = self.last_error.lock() { *guard = Some(err_msg); }
                 false
             }
         }
@@ -511,9 +514,16 @@ impl DSPKernel {
         ring.write(mono_slice);
     }
 
-    /// Returns the last error message, if any.
-    pub fn last_error(&self) -> Option<&str> {
-        self.last_error.as_deref()
+    /// Returns the last error message, if any. Safe to call from any thread.
+    pub fn last_error(&self) -> Option<String> {
+        self.last_error.lock().ok()?.clone()
+    }
+
+    /// Sets the last error message. Safe to call from any thread.
+    pub(crate) fn set_last_error(&self, err: Option<String>) {
+        if let Ok(mut guard) = self.last_error.lock() {
+            *guard = err;
+        }
     }
 
     /// Update the cached JSON representation of parameter names.
@@ -578,11 +588,13 @@ impl DSPKernel {
     }
 
     /// Capture any backend error into `last_error` so it outlives the mutex guard.
-    fn capture_backend_error(&mut self) {
-        if let Ok(guard) = self.backend.lock() {
-            if let Some(ref backend) = *guard {
+    fn capture_backend_error(&self) {
+        if let Ok(backend_guard) = self.backend.lock() {
+            if let Some(ref backend) = *backend_guard {
                 if let Some(err) = backend.last_error() {
-                    self.last_error = Some(err.to_string());
+                    if let Ok(mut last) = self.last_error.lock() {
+                        *last = Some(err.to_string());
+                    }
                 }
             }
         }
@@ -781,7 +793,9 @@ impl DSPKernel {
                 }
                 // Backend failed — capture error before dropping guard
                 if let Some(err) = backend.last_error() {
-                    self.last_error = Some(err.to_string());
+                    if let Ok(mut last) = self.last_error.lock() {
+                        *last = Some(err.to_string());
+                    }
                 }
             }
         }

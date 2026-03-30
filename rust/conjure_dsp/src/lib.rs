@@ -349,7 +349,7 @@ pub unsafe extern "C" fn dsp_kernel_verify_token(
             status as u8
         }
         Err(e) => {
-            (*kernel).last_error = Some(format!("Token verification failed: {}", e));
+            (*kernel).set_last_error(Some(format!("Token verification failed: {}", e)));
             (*kernel).set_subscription_status(license::SubscriptionStatus::NoSubscription);
             license::SubscriptionStatus::NoSubscription as u8
         }

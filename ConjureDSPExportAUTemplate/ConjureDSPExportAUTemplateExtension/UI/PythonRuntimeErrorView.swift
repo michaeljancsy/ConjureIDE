@@ -26,10 +26,13 @@ struct PythonRuntimeErrorView: View {
                     .multilineTextAlignment(.center)
             }
 
-            Text("Launch ConjureDSP once to install the runtime, then reopen your DAW project.")
+            Text("Install ConjureDSP and launch it once to set up the runtime, then reopen your DAW project.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+
+            Link("Download ConjureDSP", destination: URL(string: "https://conjuredsp.com")!)
+                .font(.caption)
 
             Spacer()
 

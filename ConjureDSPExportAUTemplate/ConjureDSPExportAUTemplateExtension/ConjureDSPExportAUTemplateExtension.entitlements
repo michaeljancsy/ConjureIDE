@@ -8,7 +8,7 @@
 	<true/>
 	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
 	<array>
-		<string>/Library/Application Support/ConjureDSP/PythonRuntime-3.14/</string>
+		<string>/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/PythonRuntime/</string>
 	</array>
 </dict>
 </plist>

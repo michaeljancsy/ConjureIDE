@@ -9,6 +9,8 @@ struct ExportAUMainView: View {
     @ObservedObject var parameterState: ExportParameterState
     let config: RuntimeConfig?
     let pythonRuntimeMissing: Bool
+    var loadError: String? = nil
+    @State private var errorCopied = false
 
     var body: some View {
         if pythonRuntimeMissing {
@@ -18,6 +20,40 @@ struct ExportAUMainView: View {
                 Text(config?.presetName ?? "ConjureDSP Export")
                     .font(.headline)
                     .padding(.top, 12)
+
+                if let error = loadError ?? parameterState.runtimeError {
+                    let isLoadError = loadError != nil
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.yellow)
+                            Text(isLoadError ? "Audio bypassed — preset failed to load" : "Audio bypassed — runtime error")
+                                .font(.caption).bold()
+                            Spacer()
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(error, forType: .string)
+                                errorCopied = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                    errorCopied = false
+                                }
+                            } label: {
+                                Label(errorCopied ? "Copied" : "Copy", systemImage: errorCopied ? "checkmark" : "doc.on.doc")
+                                    .font(.caption2)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                        }
+                        Text(error)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    .padding(8)
+                    .background(.yellow.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .padding(.horizontal)
+                }
 
                 Divider()
 

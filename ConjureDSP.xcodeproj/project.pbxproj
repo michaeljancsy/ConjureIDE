@@ -389,6 +389,7 @@
 				2579117B2F5013850036AAB6 /* Frameworks */,
 				2579117C2F5013850036AAB6 /* Resources */,
 				AABB00032F5013850036AAB6 /* Copy Python Dylib */,
+				AABB0040000000PYSTDLIB1 /* Copy Python Stdlib for Tests */,
 				AABB00092F5013850036AAB6 /* Copy Rust Compiler */,
 				AABB0010000000MONACO0001 /* Copy Monaco Editor */,
 				AABB0020000000XTERM0001 /* Copy Terminal (xterm.js) */,
@@ -679,6 +680,24 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "# Copy libpython3.14t.dylib into Frameworks (required for pyo3 @rpath loading).\n# The Python stdlib is no longer bundled here — it lives in the App Group container,\n# provisioned by ConjureDSPTerminal.\nSRC_DYLIB=\"${SRCROOT}/rust/python-dist/lib/libpython3.14t.dylib\"\nDST_DYLIB=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/libpython3.14t.dylib\"\n\nif [ -f \"$DST_DYLIB\" ] && [ \"$SRC_DYLIB\" -ot \"$DST_DYLIB\" ]; then\n    echo \"note: Python dylib unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\ncp \"${SRC_DYLIB}\" \"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${DST_DYLIB}\"\n";
+		};
+		AABB0040000000PYSTDLIB1 /* Copy Python Stdlib for Tests */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Python Stdlib for Tests";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# Copy Python stdlib into extension Resources so unit tests can use the FFI.\n# At runtime the stdlib comes from the App Group container, but tests don't have\n# that — they look for python-dist in the extension bundle's Resources.\nPYSRC=\"${SRCROOT}/rust/python-dist\"\nPYDST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/python-dist\"\nSTAMP=\"${PYDST}/.copy-stamp\"\n\nif [ ! -d \"$PYSRC\" ]; then\n    echo \"warning: python-dist not found at $PYSRC, skipping\" >&2\n    exit 0\nfi\n\nif [ -f \"$STAMP\" ] && [ \"$PYSRC/lib/libpython3.14t.dylib\" -ot \"$STAMP\" ]; then\n    echo \"note: Python stdlib unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${PYDST}/lib\"\n\n# Copy stdlib + site-packages (numpy, scipy, conjuredsp)\nrsync -a --delete \"${PYSRC}/lib/python3.14t\" \"${PYDST}/lib/\"\n\ntouch \"$STAMP\"\n";
 		};
 		AABB00092F5013850036AAB6 /* Copy Rust Compiler */ = {
 			isa = PBXShellScriptBuildPhase;

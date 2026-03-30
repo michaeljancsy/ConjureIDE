@@ -22,7 +22,10 @@ elif [ ! -d "${TEMPLATE_BUILD}" ]; then
     mkdir -p "${TEMPLATE_BUILD}"
 fi
 
-TEMPLATE_CONFIG="${CONFIGURATION:-Release}"
+# Always build the export template in Release — Debug builds link against
+# Xcode-internal dylibs (__preview.dylib, *.debug.dylib) that don't exist
+# outside Xcode, causing the exported AU to crash on load in DAWs.
+TEMPLATE_CONFIG="Release"
 
 # Build the export template (incremental — fast no-op if nothing changed).
 # Use env -i to prevent the parent build's environment (extension build settings)
@@ -50,6 +53,8 @@ if [ -d "$TEMPLATE_SRC" ]; then
         echo "note: Export template zip is up to date" >&2
     else
         echo "Zipping export template from $TEMPLATE_SRC"
+        # Remove old zip first to avoid stale files from a previous build config
+        rm -f "$TEMPLATE_DST"
         cd "$(dirname "$TEMPLATE_SRC")"
         zip -qry "$TEMPLATE_DST" "$(basename "$TEMPLATE_SRC")"
     fi
