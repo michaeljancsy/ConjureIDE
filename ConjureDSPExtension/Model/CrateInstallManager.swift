@@ -20,6 +20,7 @@ final class CrateInstallManager {
     private static let installRequestFile = "crate-install-request.json"
     private static let installResultFile = "crate-install-result.json"
     private static let uninstallRequestFile = "crate-uninstall-request.json"
+    private static let buildProgressFile = "crate-build-progress.txt"
     private static let manifestFile = "RustCrates/manifest.json"
     private static let rlibDir = "RustCrates/lib"
 
@@ -85,7 +86,7 @@ final class CrateInstallManager {
     private var resultPollTimer: Timer?
     private var pendingRequestId: String?
     private var pollStartTime: Date?
-    private static let pollTimeoutSeconds: TimeInterval = 120  // cargo is slower than pip
+    private static let pollTimeoutSeconds: TimeInterval = 300  // cargo compiles from source; first build downloads + compiles all deps
 
     /// Callback fired when crates change (install/uninstall). Use to trigger script reload.
     var onCratesChanged: (() -> Void)?
@@ -199,6 +200,18 @@ final class CrateInstallManager {
         if let start = pollStartTime, Date().timeIntervalSince(start) > Self.pollTimeoutSeconds {
             timeoutPolling()
             return
+        }
+
+        // Update status with cargo progress and elapsed time
+        if let start = pollStartTime, let containerURL = appGroupContainerURL() {
+            let elapsed = Int(Date().timeIntervalSince(start))
+            let progressURL = containerURL.appendingPathComponent(Self.buildProgressFile)
+            let progress = (try? String(contentsOf: progressURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let progress, !progress.isEmpty {
+                installStatusMessage = "\(progress) (\(elapsed)s)"
+            } else if let base = installStatusMessage, !base.contains("(") {
+                installStatusMessage = "\(base) (\(elapsed)s)"
+            }
         }
 
         guard let containerURL = appGroupContainerURL() else { return }

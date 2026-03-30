@@ -22,6 +22,7 @@ final class CrateInstaller {
     static let installRequestFile = "crate-install-request.json"
     static let uninstallRequestFile = "crate-uninstall-request.json"
     static let installResultFile = "crate-install-result.json"
+    static let buildProgressFile = "crate-build-progress.txt"
     static let manifestFile = "RustCrates/manifest.json"
     static let rlibDir = "RustCrates/lib"
 
@@ -276,7 +277,17 @@ final class CrateInstaller {
         ]
 
         log.info("Running cargo build with \(userCrates.count) crate(s)")
-        let result = await Self.runProcess(cargoPath, arguments: args, environment: env)
+
+        // Clear progress file before starting
+        let progressURL = appGroupURL.appendingPathComponent(Self.buildProgressFile)
+        try? "Downloading crates...".write(to: progressURL, atomically: true, encoding: .utf8)
+
+        let result = await Self.runCargoWithProgress(
+            cargoPath, arguments: args, environment: env, progressURL: progressURL
+        )
+
+        // Clean up progress file
+        try? FileManager.default.removeItem(at: progressURL)
 
         if result.exitCode != 0 {
             let errMsg = result.output ?? "cargo exited with code \(result.exitCode)"
@@ -437,29 +448,74 @@ final class CrateInstaller {
 
     // MARK: - Process execution
 
-    private static func runProcess(_ path: String, arguments: [String], environment: [String: String]? = nil) async -> (exitCode: Int32, output: String?) {
+    /// Runs cargo and streams stderr "Compiling ..." lines to a progress file
+    /// so the AU extension can show real-time build status.
+    private static func runCargoWithProgress(
+        _ path: String,
+        arguments: [String],
+        environment: [String: String],
+        progressURL: URL
+    ) async -> (exitCode: Int32, output: String?) {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: path)
             process.arguments = arguments
-            if let env = environment {
-                process.environment = env
+            process.environment = environment
+
+            let stderrPipe = Pipe()
+            let stdoutPipe = Pipe()
+            process.standardError = stderrPipe
+            process.standardOutput = stdoutPipe
+
+            // Accumulate all output for error reporting
+            let outputLock = NSLock()
+            var allOutput = ""
+
+            // Read stderr incrementally to extract "Compiling ..." lines
+            stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+
+                outputLock.lock()
+                allOutput += text
+                outputLock.unlock()
+
+                // Extract the last meaningful status line (Compiling, Downloading, Building, etc.)
+                let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+                for line in lines.reversed() {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if trimmed.hasPrefix("Compiling ") || trimmed.hasPrefix("Downloading ") ||
+                       trimmed.hasPrefix("Building ") || trimmed.hasPrefix("Updating ") {
+                        try? trimmed.write(to: progressURL, atomically: true, encoding: .utf8)
+                        break
+                    }
+                }
             }
 
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
-
             process.terminationHandler = { _ in
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8)
-                continuation.resume(returning: (process.terminationStatus, output))
+                // Stop reading handler
+                stderrPipe.fileHandleForReading.readabilityHandler = nil
+
+                // Read any remaining stdout
+                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                if let text = String(data: stdoutData, encoding: .utf8), !text.isEmpty {
+                    outputLock.lock()
+                    allOutput += text
+                    outputLock.unlock()
+                }
+
+                outputLock.lock()
+                let finalOutput = allOutput
+                outputLock.unlock()
+
+                continuation.resume(returning: (process.terminationStatus, finalOutput))
             }
 
             do {
                 try process.run()
             } catch {
                 log.error("Process.run() failed for \(path, privacy: .public): \(error, privacy: .public)")
+                stderrPipe.fileHandleForReading.readabilityHandler = nil
                 continuation.resume(returning: (-1, error.localizedDescription))
             }
         }

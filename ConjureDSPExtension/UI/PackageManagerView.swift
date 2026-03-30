@@ -186,7 +186,7 @@ struct PackageManagerView: View {
                 }
 
                 if activeLanguage == .rust {
-                    Text("Only crates supporting wasm32-wasip1 can be installed.")
+                    Text("Crates are compiled from source for WebAssembly. First install may take 1–2 minutes.")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
