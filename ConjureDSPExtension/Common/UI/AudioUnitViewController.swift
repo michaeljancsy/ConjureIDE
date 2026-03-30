@@ -66,7 +66,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     /// around the NSViewServiceMarshal bug in macOS 14+ where a second VC
     /// in the same extension process fails to render.
     public override var preferredMinimumSize: NSSize {
-        NSSize(width: 400, height: 300)
+        NSSize(width: 600, height: 300)
     }
 
     public override var preferredMaximumSize: NSSize {

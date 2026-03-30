@@ -45,10 +45,10 @@ struct ContentView: View {
 
                 if let viewController = hostModel.viewModel.viewController {
                     AUViewControllerUI(viewController: viewController)
-                        .frame(minWidth: 400, maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
+                        .frame(minWidth: 600, maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
                 } else {
                     Text(hostModel.viewModel.message)
-                        .frame(minWidth: 400, minHeight: 200)
+                        .frame(minWidth: 600, minHeight: 200)
                 }
             }
 

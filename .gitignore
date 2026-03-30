@@ -2,12 +2,15 @@
 rust/target/
 
 # Bundled Python distribution (created by rust/setup-python.sh)
+rust/python-dist
 rust/python-dist/
 
 # Bundled Rust compiler distribution (created by scripts/setup-rustc.sh)
+rustc-dist
 rustc-dist/
 
 # Bundled uv package manager (created by scripts/setup-uv.sh)
+uv-dist
 uv-dist/
 
 # License key generation tool build artifacts and private key
@@ -18,6 +21,7 @@ tools/generate-license/keypair.bin
 .test-serial
 
 # Bundled Monaco Editor (created by scripts/setup-monaco.sh)
+ConjureDSPExtension/Resources/monaco/vs
 ConjureDSPExtension/Resources/monaco/vs/
 ConjureDSPExtension/Resources/monaco/LICENSE
 
@@ -43,3 +47,4 @@ rust/conjuredsp/__pycache__/
 
 # Claude Code worktrees
 .claude/worktrees/
+DAW Projects/
