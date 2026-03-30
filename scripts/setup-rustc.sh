@@ -14,6 +14,7 @@ HOST_TARGET="aarch64-apple-darwin"
 RUSTC_URL="https://static.rust-lang.org/dist/rustc-${RUST_VERSION}-${HOST_TARGET}.tar.xz"
 CARGO_URL="https://static.rust-lang.org/dist/cargo-${RUST_VERSION}-${HOST_TARGET}.tar.xz"
 STD_URL="https://static.rust-lang.org/dist/rust-std-${RUST_VERSION}-wasm32-wasip1.tar.xz"
+HOST_STD_URL="https://static.rust-lang.org/dist/rust-std-${RUST_VERSION}-${HOST_TARGET}.tar.xz"
 
 if [ -d "${RUSTC_DIR}" ]; then
     echo "Rust compiler already exists at ${RUSTC_DIR}"
@@ -33,6 +34,9 @@ curl -L --progress-bar -o "${TMPDIR}/cargo.tar.xz" "${CARGO_URL}"
 echo "Downloading wasm32-wasip1 standard library..."
 curl -L --progress-bar -o "${TMPDIR}/rust-std-wasm.tar.xz" "${STD_URL}"
 
+echo "Downloading ${HOST_TARGET} standard library (for build scripts)..."
+curl -L --progress-bar -o "${TMPDIR}/rust-std-host.tar.xz" "${HOST_STD_URL}"
+
 echo "Extracting rustc..."
 tar xf "${TMPDIR}/rustc.tar.xz" -C "${TMPDIR}"
 
@@ -41,6 +45,9 @@ tar xf "${TMPDIR}/cargo.tar.xz" -C "${TMPDIR}"
 
 echo "Extracting wasm32-wasip1 std..."
 tar xf "${TMPDIR}/rust-std-wasm.tar.xz" -C "${TMPDIR}"
+
+echo "Extracting ${HOST_TARGET} std..."
+tar xf "${TMPDIR}/rust-std-host.tar.xz" -C "${TMPDIR}"
 
 # Assemble minimal sysroot — only what's needed for:
 #   rustc --target wasm32-wasip1 --crate-type cdylib
@@ -51,6 +58,7 @@ mkdir -p "${RUSTC_DIR}/lib/rustlib/wasm32-wasip1"
 RUSTC_EXTRACT="${TMPDIR}/rustc-${RUST_VERSION}-${HOST_TARGET}/rustc"
 CARGO_EXTRACT="${TMPDIR}/cargo-${RUST_VERSION}-${HOST_TARGET}/cargo"
 STD_EXTRACT="${TMPDIR}/rust-std-${RUST_VERSION}-wasm32-wasip1/rust-std-wasm32-wasip1"
+HOST_STD_EXTRACT="${TMPDIR}/rust-std-${RUST_VERSION}-${HOST_TARGET}/rust-std-${HOST_TARGET}"
 
 # rustc binary
 cp "${RUSTC_EXTRACT}/bin/rustc" "${RUSTC_DIR}/bin/"
@@ -77,6 +85,15 @@ cp "${RUSTC_EXTRACT}/lib/rustlib/${HOST_TARGET}/bin/gcc-ld/wasm-ld" \
 # wasm32-wasip1 standard library (rlibs + libc.a)
 cp -R "${STD_EXTRACT}/lib/rustlib/wasm32-wasip1/lib" \
    "${RUSTC_DIR}/lib/rustlib/wasm32-wasip1/"
+
+# Host standard library (needed by cargo for compiling build scripts and proc macros)
+cp -R "${HOST_STD_EXTRACT}/lib/rustlib/${HOST_TARGET}/lib" \
+   "${RUSTC_DIR}/lib/rustlib/${HOST_TARGET}/"
+
+# No-op rust-objcopy stub (rustc invokes this for split-debuginfo on macOS host builds;
+# we don't need debug symbols for build scripts, so a no-op is fine)
+printf '#!/bin/bash\nexit 0\n' > "${RUSTC_DIR}/lib/rustlib/${HOST_TARGET}/bin/rust-objcopy"
+chmod +x "${RUSTC_DIR}/lib/rustlib/${HOST_TARGET}/bin/rust-objcopy"
 
 # Compile conjuredsp library as rlib for wasm32-wasip1
 CONJUREDSP_SRC="${REPO_ROOT}/rust/conjuredsp-rs/src/lib.rs"
