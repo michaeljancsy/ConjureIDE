@@ -251,8 +251,17 @@ final class PackageInstallManager {
         if result.success {
             log.info("Package operation succeeded: \(result.packages.joined(separator: ", "), privacy: .public)")
             lastError = nil
+            let names = result.packages.joined(separator: ", ")
+            installStatusMessage = "Installed \(names) ✓"
             refreshInstalledPackages()
             onPackagesChanged?()
+            // Auto-clear success message after 3 seconds
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                if self.installStatusMessage?.hasSuffix("✓") == true {
+                    self.installStatusMessage = nil
+                }
+            }
         } else {
             let errorMsg = result.error ?? "Unknown error"
             log.error("Package operation failed: \(errorMsg, privacy: .public)")

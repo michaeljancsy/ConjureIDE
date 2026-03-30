@@ -173,6 +173,10 @@ struct PackageManagerView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
+                } else if let msg = statusMessage, msg.hasSuffix("✓") {
+                    Text(msg)
+                        .font(.caption)
+                        .foregroundColor(.green)
                 }
 
                 if let error = lastError {

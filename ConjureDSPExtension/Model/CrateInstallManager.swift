@@ -258,8 +258,17 @@ final class CrateInstallManager {
         if result.success {
             log.info("Crate operation succeeded: \(result.crates.joined(separator: ", "), privacy: .public)")
             lastError = nil
+            let names = result.crates.joined(separator: ", ")
+            installStatusMessage = "Installed \(names) ✓"
             refreshInstalledCrates()
             onCratesChanged?()
+            // Auto-clear success message after 3 seconds
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                if self.installStatusMessage?.hasSuffix("✓") == true {
+                    self.installStatusMessage = nil
+                }
+            }
         } else {
             let errorMsg = result.error ?? "Unknown error"
             log.error("Crate operation failed: \(errorMsg, privacy: .public)")
