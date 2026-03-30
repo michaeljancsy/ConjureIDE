@@ -99,6 +99,43 @@ final class ConjureDSPUITests: XCTestCase {
     // ViewBridge (NSViewServiceMarshal) in XCUITest — same limitation as the segmented
     // picker. These tests should be restored if Menu interaction becomes reliable.
 
+    // MARK: - Toolbar Labels
+
+    @MainActor
+    func testToolbarButtonsHaveTextLabels() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        // Wait for toolbar to load
+        let runButton = app.buttons["runButton"]
+        guard runButton.waitForExistence(timeout: 10) else {
+            XCTFail("Run button not found — toolbar did not load")
+            return
+        }
+
+        // Through the AU ViewBridge, VStack text inside a Button shows up
+        // in the button's accessibility label (not as separate staticTexts).
+        // Verify each toolbar button has the expected text label.
+        let expectedButtons: [(id: String, label: String)] = [
+            ("runButton", "Run"),
+            ("saveAsButton", "Save As"),
+            ("newScriptButton", "New"),
+            ("exportButton", "Export"),
+            ("chatToggleButton", "Terminal"),
+            ("spectrogramToggleButton", "Spectrogram"),
+            ("packagesButton", "Packages"),
+            ("settingsButton", "Settings"),
+        ]
+
+        for (id, expectedLabel) in expectedButtons {
+            let button = app.buttons[id]
+            XCTAssertTrue(button.waitForExistence(timeout: 5),
+                          "Button '\(id)' should exist")
+            XCTAssertEqual(button.label, expectedLabel,
+                           "Button '\(id)' should have label '\(expectedLabel)', got '\(button.label)'")
+        }
+    }
+
     // MARK: - Parameter Sliders
 
     @MainActor

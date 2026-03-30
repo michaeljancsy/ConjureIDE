@@ -144,6 +144,7 @@ struct PresetToolbar: View {
             Button(action: { onRun() }) {
                 VStack(alignment: .center, spacing: 1) {
                     Image(systemName: "play.fill")
+                        .frame(height: 16)
                         .overlay(alignment: .topTrailing) {
                             if hasUnrunChanges {
                                 Circle()
@@ -168,6 +169,7 @@ struct PresetToolbar: View {
                 Button(action: { onSave() }) {
                     VStack(alignment: .center, spacing: 1) {
                         Image(systemName: "square.and.arrow.down")
+                            .frame(height: 16)
                         Text("Save")
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
@@ -187,6 +189,7 @@ struct PresetToolbar: View {
             }) {
                 VStack(alignment: .center, spacing: 1) {
                     Image(systemName: "square.and.arrow.down.on.square")
+                        .frame(height: 16)
                     Text("Save As")
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
@@ -212,6 +215,7 @@ struct PresetToolbar: View {
             Button(action: { showNewScriptDialog = true }) {
                 VStack(alignment: .center, spacing: 1) {
                     Image(systemName: "doc.badge.plus")
+                        .frame(height: 16)
                     Text("New")
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
@@ -253,6 +257,7 @@ struct PresetToolbar: View {
                 }) {
                     VStack(alignment: .center, spacing: 1) {
                         Image(systemName: "pencil")
+                            .frame(height: 16)
                         Text("Rename")
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
@@ -289,6 +294,7 @@ struct PresetToolbar: View {
                 Button(action: { showDeleteConfirm = true }) {
                     VStack(alignment: .center, spacing: 1) {
                         Image(systemName: "trash")
+                            .frame(height: 16)
                         Text("Delete")
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
@@ -321,12 +327,15 @@ struct PresetToolbar: View {
                 showingExport = true
             }) {
                 VStack(alignment: .center, spacing: 1) {
-                    if isExporting {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.up.doc")
+                    Group {
+                        if isExporting {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.up.doc")
+                        }
                     }
+                    .frame(height: 16)
                     Text("Export")
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
@@ -354,20 +363,23 @@ struct PresetToolbar: View {
             if gitHubService.hasPersonalRepo && gitHubService.hasToken {
                 Button(action: { showingSync = true }) {
                     VStack(alignment: .center, spacing: 1) {
-                        if gitHubService.personalSync.isSyncing {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .overlay(alignment: .topTrailing) {
-                                    if gitHubService.personalSync.hasPendingChanges
-                                        || !gitHubService.personalSync.pendingConflicts.isEmpty {
-                                        Circle()
-                                            .fill(.orange)
-                                            .frame(width: 6, height: 6)
-                                            .offset(x: 3, y: -3)
+                        Group {
+                            if gitHubService.personalSync.isSyncing {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .overlay(alignment: .topTrailing) {
+                                        if gitHubService.personalSync.hasPendingChanges
+                                            || !gitHubService.personalSync.pendingConflicts.isEmpty {
+                                            Circle()
+                                                .fill(.orange)
+                                                .frame(width: 6, height: 6)
+                                                .offset(x: 3, y: -3)
+                                        }
                                     }
-                                }
+                            }
                         }
+                        .frame(height: 16)
                         Text("Sync")
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
@@ -391,6 +403,7 @@ struct PresetToolbar: View {
             Button(action: { showChat.toggle() }) {
                 VStack(alignment: .center, spacing: 1) {
                     Image(systemName: showChat ? "terminal.fill" : "terminal")
+                        .frame(height: 16)
                     Text("Terminal")
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
@@ -405,6 +418,7 @@ struct PresetToolbar: View {
             Button(action: { showSpectrogram.toggle() }) {
                 VStack(alignment: .center, spacing: 1) {
                     Image(systemName: showSpectrogram ? "waveform.path.ecg.rectangle" : "waveform.path.ecg")
+                        .frame(height: 16)
                     Text("Spectrogram")
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
@@ -436,6 +450,7 @@ struct PresetToolbar: View {
             Button(action: { showingPackages = true }) {
                 VStack(alignment: .center, spacing: 1) {
                     Image(systemName: "shippingbox")
+                        .frame(height: 16)
                     Text("Packages")
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
@@ -459,6 +474,7 @@ struct PresetToolbar: View {
             Button(action: { showingSettings = true }) {
                 VStack(alignment: .center, spacing: 1) {
                     Image(systemName: "gearshape")
+                        .frame(height: 16)
                     Text("Settings")
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
