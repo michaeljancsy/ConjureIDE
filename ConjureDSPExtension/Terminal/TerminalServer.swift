@@ -17,6 +17,7 @@ final class TerminalServer {
 
     let mcpServer = MCPServer()
     private let appGroupID = "group.com.MichaelJancsy.ConjureDSP"
+    private let terminalLauncher = TerminalLauncher()
 
     // MARK: - Lifecycle
 
@@ -32,6 +33,7 @@ final class TerminalServer {
             for _ in 0..<40 {
                 if let port = mcpServer.port, port > 0 {
                     writeMCPPortToAppGroup()
+                    await terminalLauncher.launchIfNeeded()
                     log.info("MCP server ready on port \(port)")
                     return
                 }
