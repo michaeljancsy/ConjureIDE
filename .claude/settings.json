@@ -31,6 +31,12 @@
             "command": "if [ ! -f \"ConjureDSPExtension/Resources/terminal/xterm.js\" ]; then MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ -n \"$MAIN_WT\" ] && [ -f \"$MAIN_WT/ConjureDSPExtension/Resources/terminal/xterm.js\" ]; then for f in xterm.js xterm.css addon-fit.js addon-web-links.js; do [ -f \"$MAIN_WT/ConjureDSPExtension/Resources/terminal/$f\" ] && ln -sf \"$MAIN_WT/ConjureDSPExtension/Resources/terminal/$f\" \"ConjureDSPExtension/Resources/terminal/$f\"; done && echo \"Symlinked xterm.js from main worktree\"; else ./scripts/setup-xterm.sh; fi; fi",
             "timeout": 60,
             "statusMessage": "Setting up xterm.js..."
+          },
+          {
+            "type": "command",
+            "command": "if [ ! -d \"uv-dist\" ]; then MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ -n \"$MAIN_WT\" ] && [ -d \"$MAIN_WT/uv-dist\" ]; then ln -s \"$MAIN_WT/uv-dist\" uv-dist && echo \"Symlinked uv-dist from main worktree\"; else ./scripts/setup-uv.sh; fi; fi",
+            "timeout": 60,
+            "statusMessage": "Setting up uv package manager..."
           }
         ]
       }
@@ -50,6 +56,12 @@
             "command": "WORKTREE_DIR=$(python3 -c 'import sys,json;print(json.load(sys.stdin)[\"cwd\"])') && cd \"$WORKTREE_DIR\" && if [ ! -f \"ConjureDSPExtension/Resources/terminal/xterm.js\" ]; then MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ -n \"$MAIN_WT\" ] && [ -f \"$MAIN_WT/ConjureDSPExtension/Resources/terminal/xterm.js\" ]; then for f in xterm.js xterm.css addon-fit.js addon-web-links.js; do [ -f \"$MAIN_WT/ConjureDSPExtension/Resources/terminal/$f\" ] && ln -sf \"$MAIN_WT/ConjureDSPExtension/Resources/terminal/$f\" \"ConjureDSPExtension/Resources/terminal/$f\"; done && echo \"Symlinked xterm.js from main worktree\"; else ./scripts/setup-xterm.sh; fi; fi",
             "timeout": 60,
             "statusMessage": "Setting up xterm.js..."
+          },
+          {
+            "type": "command",
+            "command": "WORKTREE_DIR=$(python3 -c 'import sys,json;print(json.load(sys.stdin)[\"cwd\"])') && cd \"$WORKTREE_DIR\" && if [ ! -d \"uv-dist\" ]; then MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ -n \"$MAIN_WT\" ] && [ -d \"$MAIN_WT/uv-dist\" ]; then ln -s \"$MAIN_WT/uv-dist\" uv-dist && echo \"Symlinked uv-dist from main worktree\"; else ./scripts/setup-uv.sh; fi; fi",
+            "timeout": 60,
+            "statusMessage": "Setting up uv package manager..."
           }
         ]
       }
