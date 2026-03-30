@@ -33,7 +33,7 @@ private struct ToolbarTooltip: ViewModifier {
                         .cornerRadius(4)
                         .shadow(radius: 2)
                         .fixedSize()
-                        .offset(y: 22)
+                        .offset(y: 30)
                         .zIndex(100)
                         .allowsHitTesting(false)
                 }
@@ -138,21 +138,27 @@ struct PresetToolbar: View {
             Spacer()
 
             // — Script actions zone —
-            Divider().frame(height: 20)
+            Divider().frame(height: 28)
 
             // Run
             Button(action: { onRun() }) {
-                Image(systemName: "play.fill")
-                    .overlay(alignment: .topTrailing) {
-                        if hasUnrunChanges {
-                            Circle()
-                                .fill(.orange)
-                                .frame(width: 6, height: 6)
-                                .offset(x: 3, y: -3)
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: "play.fill")
+                        .overlay(alignment: .topTrailing) {
+                            if hasUnrunChanges {
+                                Circle()
+                                    .fill(.orange)
+                                    .frame(width: 6, height: 6)
+                                    .offset(x: 3, y: -3)
+                            }
                         }
-                    }
+                    Text("Run")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
             }
             .buttonStyle(.borderless)
+            .fixedSize()
             .disabled(isCompiling)
             .toolbarTooltip("Run (\u{2318}R)")
             .accessibilityIdentifier("runButton")
@@ -160,9 +166,15 @@ struct PresetToolbar: View {
             // Save (overwrite current user preset)
             if currentIsMutable {
                 Button(action: { onSave() }) {
-                    Image(systemName: "square.and.arrow.down")
+                    VStack(alignment: .center, spacing: 1) {
+                        Image(systemName: "square.and.arrow.down")
+                        Text("Save")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .buttonStyle(.borderless)
+                .fixedSize()
                 .disabled(!presetManager.isModified)
                 .toolbarTooltip("Save (\u{2318}S)")
                 .accessibilityIdentifier("savePresetButton")
@@ -173,9 +185,15 @@ struct PresetToolbar: View {
                 saveAsName = presetManager.currentPreset?.name ?? ""
                 showingSaveAs = true
             }) {
-                Image(systemName: "square.and.arrow.down.on.square")
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: "square.and.arrow.down.on.square")
+                    Text("Save As")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
             }
             .buttonStyle(.borderless)
+            .fixedSize()
             .toolbarTooltip("Save As\u{2026}")
             .accessibilityIdentifier("saveAsButton")
             .popover(isPresented: $showingSaveAs) {
@@ -192,9 +210,15 @@ struct PresetToolbar: View {
 
             // New script
             Button(action: { showNewScriptDialog = true }) {
-                Image(systemName: "doc.badge.plus")
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: "doc.badge.plus")
+                    Text("New")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
             }
             .buttonStyle(.borderless)
+            .fixedSize()
             .toolbarTooltip("New (\u{2318}N)")
             .accessibilityIdentifier("newScriptButton")
             .popover(isPresented: $showNewScriptDialog) {
@@ -227,9 +251,15 @@ struct PresetToolbar: View {
                     renameError = nil
                     showingRename = true
                 }) {
-                    Image(systemName: "pencil")
+                    VStack(alignment: .center, spacing: 1) {
+                        Image(systemName: "pencil")
+                        Text("Rename")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .buttonStyle(.borderless)
+                .fixedSize()
                 .toolbarTooltip("Rename preset")
                 .accessibilityIdentifier("renamePresetButton")
                 .popover(isPresented: $showingRename) {
@@ -257,9 +287,15 @@ struct PresetToolbar: View {
                 }
 
                 Button(action: { showDeleteConfirm = true }) {
-                    Image(systemName: "trash")
+                    VStack(alignment: .center, spacing: 1) {
+                        Image(systemName: "trash")
+                        Text("Delete")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .buttonStyle(.borderless)
+                .fixedSize()
                 .toolbarTooltip("Delete preset")
                 .accessibilityIdentifier("deletePresetButton")
                 .alert("Delete Preset", isPresented: $showDeleteConfirm) {
@@ -277,21 +313,27 @@ struct PresetToolbar: View {
             }
 
             // — Panel toggles zone —
-            Divider().frame(height: 20)
+            Divider().frame(height: 28)
 
             // Export as standalone AU
             Button(action: {
                 exportName = presetManager.currentPreset?.name ?? "My Effect"
                 showingExport = true
             }) {
-                if isExporting {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: "arrow.up.doc")
+                VStack(alignment: .center, spacing: 1) {
+                    if isExporting {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.up.doc")
+                    }
+                    Text("Export")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
                 }
             }
             .buttonStyle(.borderless)
+            .fixedSize()
             .disabled(!subscriptionManager.isLicensed || isExporting || isCompiling)
             .toolbarTooltip(subscriptionManager.isLicensed ? "Export as standalone AU" : "License required to export")
             .accessibilityIdentifier("exportButton")
@@ -311,22 +353,28 @@ struct PresetToolbar: View {
             // Sync presets with personal repo
             if gitHubService.hasPersonalRepo && gitHubService.hasToken {
                 Button(action: { showingSync = true }) {
-                    if gitHubService.personalSync.isSyncing {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .overlay(alignment: .topTrailing) {
-                                if gitHubService.personalSync.hasPendingChanges
-                                    || !gitHubService.personalSync.pendingConflicts.isEmpty {
-                                    Circle()
-                                        .fill(.orange)
-                                        .frame(width: 6, height: 6)
-                                        .offset(x: 3, y: -3)
+                    VStack(alignment: .center, spacing: 1) {
+                        if gitHubService.personalSync.isSyncing {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .overlay(alignment: .topTrailing) {
+                                    if gitHubService.personalSync.hasPendingChanges
+                                        || !gitHubService.personalSync.pendingConflicts.isEmpty {
+                                        Circle()
+                                            .fill(.orange)
+                                            .frame(width: 6, height: 6)
+                                            .offset(x: 3, y: -3)
+                                    }
                                 }
-                            }
+                        }
+                        Text("Sync")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
                     }
                 }
                 .buttonStyle(.borderless)
+                .fixedSize()
                 .disabled(gitHubService.personalSync.isSyncing)
                 .toolbarTooltip("Sync with GitHub")
                 .accessibilityIdentifier("syncButton")
@@ -341,22 +389,34 @@ struct PresetToolbar: View {
 
             // Claude Code terminal toggle
             Button(action: { showChat.toggle() }) {
-                Image(systemName: showChat ? "terminal.fill" : "terminal")
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: showChat ? "terminal.fill" : "terminal")
+                    Text("Terminal")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
             }
             .buttonStyle(.borderless)
+            .fixedSize()
             .toolbarTooltip(showChat ? "Hide Claude Code" : "Show Claude Code")
             .accessibilityIdentifier("chatToggleButton")
 
             // Spectrogram toggle
             Button(action: { showSpectrogram.toggle() }) {
-                Image(systemName: showSpectrogram ? "waveform.path.ecg.rectangle" : "waveform.path.ecg")
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: showSpectrogram ? "waveform.path.ecg.rectangle" : "waveform.path.ecg")
+                    Text("Spectrogram")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
             }
             .buttonStyle(.borderless)
+            .fixedSize()
             .toolbarTooltip(showSpectrogram ? "Hide spectrogram" : "Show spectrogram")
             .accessibilityIdentifier("spectrogramToggleButton")
 
             // — Status/settings zone —
-            Divider().frame(height: 20)
+            Divider().frame(height: 28)
 
             // Demo mode indicator — links to subscribe page
             if !subscriptionManager.isLicensed {
@@ -374,9 +434,15 @@ struct PresetToolbar: View {
 
             // Packages / Crates
             Button(action: { showingPackages = true }) {
-                Image(systemName: "shippingbox")
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: "shippingbox")
+                    Text("Packages")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
             }
             .buttonStyle(.borderless)
+            .fixedSize()
             .toolbarTooltip("Packages")
             .accessibilityIdentifier("packagesButton")
             .popover(isPresented: $showingPackages) {
@@ -391,9 +457,15 @@ struct PresetToolbar: View {
 
             // Settings (License + AI)
             Button(action: { showingSettings = true }) {
-                Image(systemName: "gearshape")
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: "gearshape")
+                    Text("Settings")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
             }
             .buttonStyle(.borderless)
+            .fixedSize()
             .toolbarTooltip("Settings")
             .accessibilityIdentifier("settingsButton")
             .popover(isPresented: $showingSettings) {
