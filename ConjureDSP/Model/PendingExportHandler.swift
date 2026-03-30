@@ -11,7 +11,7 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "P
 /// For each: moves to `~/Library/Application Support/ConjureDSP/Exports/`, code signs,
 /// launches (to register AU with macOS), reveals in Finder, and cleans up.
 final class PendingExportHandler: ObservableObject {
-    static let appGroupIdentifier = "group.com.MichaelJancsy.ConjureDSP"
+    static let appGroupIdentifier = AppGroupContainer.id
 
     @Published var installedExportName: String?
     @Published var installError: String?
@@ -21,18 +21,12 @@ final class PendingExportHandler: ObservableObject {
         return appSupport.appendingPathComponent("ConjureDSP/Exports")
     }
 
-    private var pendingExportsDirectory: URL? {
-        guard let groupContainer = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier
-        ) else { return nil }
-        return groupContainer.appendingPathComponent("PendingExports")
+    private var pendingExportsDirectory: URL {
+        AppGroupContainer.url.appendingPathComponent("PendingExports")
     }
 
     func checkForPendingExports() {
-        guard let pendingDir = pendingExportsDirectory else {
-            log.info("No App Group container available")
-            return
-        }
+        let pendingDir = pendingExportsDirectory
 
         let fm = FileManager.default
         guard fm.fileExists(atPath: pendingDir.path) else {

@@ -411,7 +411,7 @@ final class MCPServer {
 
     private func writePortToAppGroup() {
         guard let port else { return }
-        guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP") else {
+        guard let containerURL = AppGroupContainer.url else {
             log.warning("Failed to get App Group container URL")
             return
         }
