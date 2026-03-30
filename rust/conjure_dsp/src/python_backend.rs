@@ -6,6 +6,12 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 use std::ffi::CString;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Global counter for generating unique Python module names per backend instance.
+/// Each PythonBackend gets its own module in sys.modules, preventing collisions
+/// when multiple AU instances load different scripts in the same DAW process.
+static INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Python DSP backend using pyo3 and numpy.
 ///
@@ -78,15 +84,20 @@ impl PythonBackend {
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
                 let path_c = CString::new(script_path)
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-                let module_name = CString::new("dsp_script")
+
+                // Each backend instance gets a unique module name so multiple AU
+                // instances in the same DAW process don't collide in sys.modules.
+                let instance_id = INSTANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+                let mod_name_str = format!("dsp_script_{}", instance_id);
+                let module_name = CString::new(mod_name_str.as_str())
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
                 // Remove any cached module so from_code creates a fresh one.
-                // Without this, attributes from a previous script (like PARAM_NAMES or PARAMS)
-                // persist in the module's __dict__ even if the new script doesn't define them.
+                // This handles the reload case where the same instance ID slot
+                // is reused (e.g., hot-reload within a single AU instance).
                 let sys = py.import("sys")?;
                 let sys_modules = sys.getattr("modules")?;
-                let _ = sys_modules.call_method1("pop", ("dsp_script", py.None()));
+                let _ = sys_modules.call_method1("pop", (mod_name_str.as_str(), py.None()));
 
                 let module = PyModule::from_code(py, &code_c, &path_c, &module_name)?;
                 let process_fn = module.getattr("process")?;
