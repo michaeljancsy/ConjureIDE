@@ -421,9 +421,7 @@ final class CrateInstaller {
         guard let manifest = readManifest() else { return [:] }
         var result: [String: String] = [:]
         for (name, entry) in manifest.crates where entry.userRequested {
-            // Use hyphenated name for Cargo.toml compatibility
-            let cargoName = name.replacingOccurrences(of: "_", with: "-")
-            result[cargoName] = entry.version
+            result[name] = entry.version
         }
         return result
     }
