@@ -180,7 +180,7 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "list_packages",
-            description: "List all Python packages available for import in DSP scripts. Returns built-in packages (numpy, scipy, conjuredsp) and any user-installed packages. Call this to check what's available before writing a script that uses third-party packages.",
+            description: "List all packages available for import in DSP scripts. Returns Python packages (numpy, scipy, conjuredsp, plus user-installed) and Rust crates (conjuredsp built-in, plus user-installed via crate package manager). Call this to check what's available before writing a script.",
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
     ]
