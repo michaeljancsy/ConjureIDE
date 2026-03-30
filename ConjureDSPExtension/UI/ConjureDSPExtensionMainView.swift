@@ -410,7 +410,7 @@ struct ConjureDSPExtensionMainView: View {
                 Button(action: handleCmdN) { EmptyView() }
                     .keyboardShortcut("n", modifiers: .command)
                 Button(action: handleSaveAs) { EmptyView() }
-                    .keyboardShortcut("a", modifiers: [.command, .shift])
+                    .keyboardShortcut("A", modifiers: .command)
             }
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
