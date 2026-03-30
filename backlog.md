@@ -9,6 +9,7 @@
 ### v1 Release
 - Run `scripts/release.sh` end-to-end, store notarization creds in Keychain, verify DMG on clean machine. Full plan at `docs/distribution-plan.md`.
 - Landing page (static site with Buy + Download)
+- Single-source download URL config: one config file in the repo defining the canonical download link, referenced everywhere (landing page, in-app links, etc.) so it only needs updating in one place
 
 ### Post-Launch
 - Python package management follow-up: vendored exports (import analysis + export UI), community browser dependency badges, auto-launch companion app from sandbox
