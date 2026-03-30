@@ -2,6 +2,29 @@
 
 Incomplete test items from open PRs. Check off as you verify each item.
 
+## PR #126 — [Fix exported Python AUs failing to load in DAWs](https://github.com/michaeljancsy/conjuredsp-application/pull/126)
+
+- [ ] Export a Python preset that uses `from conjuredsp import ...` — verify it loads and processes audio in Ableton
+- [ ] Export a Python preset with a deliberate error — verify the error banner appears with full message and copy button works
+- [ ] Export a Rust/WASM preset — verify it still loads correctly
+- [ ] Run unit tests: `xcodebuild test -only-testing:ConjureDSPTests`
+
+## PR #125 — [Use unique Python module names per AU instance](https://github.com/michaeljancsy/conjuredsp-application/pull/125)
+
+- [ ] Standalone multi-instance isolation tests in `rust/multi_instance_test/` verify: independent output, module-level state isolation, concurrent thread safety, reload isolation, and module name collision fix
+- [ ] Load ConjureDSP on two tracks in a DAW with different presets, verify both produce correct independent output
+
+## PR #115 — [Add Python package management](https://github.com/michaeljancsy/conjuredsp-application/pull/115)
+
+- [ ] Run `scripts/setup-uv.sh` and verify `uv-dist/uv` exists
+- [ ] `cargo test -- --test-threads=1` — all 233 Rust tests pass
+- [ ] `xcodebuild -scheme ConjureDSPTerminal build` succeeds with uv in app bundle
+- [ ] Xcode build compiles all Swift targets (ConjureDSP, ConjureDSPExtension, ConjureDSPTerminal)
+- [ ] Packages button (shippingbox icon) appears in AU toolbar
+- [ ] Clicking opens popover with PyPI search, installed list, install input
+- [ ] End-to-end: install a pure-Python package, write a script importing it, verify it works
+- [ ] Uninstall removes the package and its dist-info directory
+
 ## PR #90 — [Add ETag caching, retry/backoff, and tests to GitHub integration](https://github.com/michaeljancsy/conjuredsp-application/pull/90)
 
 - [ ] Open community browser, verify presets load; reload and check console for ETag cache hits
@@ -29,9 +52,9 @@ Incomplete test items from open PRs. Check off as you verify each item.
 
 ## PR #81 — [Add Sparkle auto-update framework](https://github.com/michaeljancsy/conjuredsp-application/pull/81)
 
-- [ ] Launch app and verify "Check for Updates…" appears in the app menu
+- [ ] Launch app and verify "Check for Updates..." appears in the app menu
 - [ ] After configuring feed URL + EdDSA key, test full update flow per the integration plan
 
 ## PR #78 — [Replace license keys with Paddle Billing subscriptions](https://github.com/michaeljancsy/conjuredsp-application/pull/78)
 
-- [ ] Manual: deploy server to Cloudflare staging, test Paddle sandbox checkout → activation → token refresh → grace period → demo fallback
+- [ ] Manual: deploy server to Cloudflare staging, test Paddle sandbox checkout -> activation -> token refresh -> grace period -> demo fallback
