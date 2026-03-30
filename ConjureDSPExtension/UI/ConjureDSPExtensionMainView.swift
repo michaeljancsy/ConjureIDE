@@ -195,6 +195,7 @@ struct ConjureDSPExtensionMainView: View {
                 if daemonChecker.isDaemonAvailable {
                     TerminalView(colorScheme: colorScheme)
                         .frame(width: chatWidth)
+                        .accessibilityIdentifier("terminalPanel")
                 } else {
                     DaemonLaunchPromptView(colorScheme: colorScheme)
                         .frame(width: chatWidth)
