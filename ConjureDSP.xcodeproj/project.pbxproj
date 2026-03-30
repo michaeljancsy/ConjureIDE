@@ -22,6 +22,7 @@
 		AA11000600000001MIXPANEL /* Analytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000700000001MIXPANEL /* Analytics.swift */; };
 		AA22000200000001SHARED /* MCPToolProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22000100000001SHARED /* MCPToolProvider.swift */; };
 		AA22000300000001SHARED /* MCPToolProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22000100000001SHARED /* MCPToolProvider.swift */; };
+		AA33000200000001DAEMON /* DaemonStatusChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA33000100000001DAEMON /* DaemonStatusChecker.swift */; };
 		AA5E00012F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00022F5013850036AAB6 /* Sentry */; };
 		AA5E00032F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00042F5013850036AAB6 /* Sentry */; };
 /* End PBXBuildFile section */
@@ -119,6 +120,7 @@
 		25E931132F773DC300D36258 /* ConjureDSPTerminalUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPTerminalUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA11000700000001MIXPANEL /* Analytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Analytics.swift; path = ConjureDSPExtension/Analytics.swift; sourceTree = "<group>"; };
 		AA22000100000001SHARED /* MCPToolProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPToolProvider.swift; sourceTree = "<group>"; };
+		AA33000100000001DAEMON /* DaemonStatusChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DaemonStatusChecker.swift; path = ConjureDSPExtension/Terminal/DaemonStatusChecker.swift; sourceTree = "<group>"; };
 		AABB00022F5013850036AAB6 /* rust */ = {isa = PBXFileReference; lastKnownFileType = folder; path = rust; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -288,6 +290,7 @@
 			isa = PBXGroup;
 			children = (
 				AA11000700000001MIXPANEL /* Analytics.swift */,
+				AA33000100000001DAEMON /* DaemonStatusChecker.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -948,6 +951,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA33000200000001DAEMON /* DaemonStatusChecker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

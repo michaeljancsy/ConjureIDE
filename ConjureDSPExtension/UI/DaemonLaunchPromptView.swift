@@ -32,6 +32,7 @@ struct DaemonLaunchPromptView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(colorScheme == .dark ? Color(white: 0.12) : Color(nsColor: .controlBackgroundColor))
+        .accessibilityIdentifier("daemonLaunchPrompt")
     }
 
     private var daemonIcon: Image {
