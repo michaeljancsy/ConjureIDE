@@ -14,6 +14,7 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExte
 
 struct TerminalView: NSViewRepresentable {
     var colorScheme: ColorScheme
+    var appGroupContainerURL: URL?
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -60,7 +61,7 @@ struct TerminalView: NSViewRepresentable {
         }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(appGroupContainerURL: appGroupContainerURL) }
 
     // MARK: - Coordinator
 
@@ -69,6 +70,11 @@ struct TerminalView: NSViewRepresentable {
         var isTerminalReady = false
         var lastTheme: String?
         var pendingTheme: ColorScheme?
+        let appGroupContainerURL: URL?
+
+        init(appGroupContainerURL: URL?) {
+            self.appGroupContainerURL = appGroupContainerURL
+        }
 
         func disconnect() {
             webView?.evaluateJavaScript("terminalBridge.disconnect()") { _, _ in }
@@ -115,7 +121,7 @@ struct TerminalView: NSViewRepresentable {
         }
 
         private func connectToWebSocket() {
-            guard let url = AppGroupContainer.url else {
+            guard let url = appGroupContainerURL else {
                 log.error("App Group container not available")
                 showFallbackMessage(); return
             }

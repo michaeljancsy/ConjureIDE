@@ -26,6 +26,7 @@ final class MCPServer {
     /// The port the server is listening on (nil if not started).
     private(set) var port: UInt16?
 
+    private let appGroupContainerURL: URL?
     private var listener: NWListener?
     private var connections: [NWConnection] = []
 
@@ -34,6 +35,10 @@ final class MCPServer {
 
     /// Buffered data per connection for handling fragmented TCP packets.
     private var connectionBuffers: [ObjectIdentifier: Data] = [:]
+
+    init(appGroupContainerURL: URL?) {
+        self.appGroupContainerURL = appGroupContainerURL
+    }
 
     // MARK: - Lifecycle
 
@@ -411,7 +416,7 @@ final class MCPServer {
 
     private func writePortToAppGroup() {
         guard let port else { return }
-        guard let containerURL = AppGroupContainer.url else {
+        guard let containerURL = appGroupContainerURL else {
             log.warning("Failed to get App Group container URL")
             return
         }

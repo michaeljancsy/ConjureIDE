@@ -48,6 +48,9 @@ class SubscriptionManager: ObservableObject {
     /// App Group container identifier shared between host app and AU extension.
     static let appGroupIdentifier = "group.com.MichaelJancsy.ConjureDSP"
 
+    /// Pre-resolved App Group container URL (resolved once at startup).
+    private let appGroupContainerURL: URL?
+
     /// Token filename within the App Group container.
     private static let tokenFilename = "subscription_token"
 
@@ -89,7 +92,9 @@ class SubscriptionManager: ObservableObject {
 
     // MARK: - Init
 
-    init() {}
+    init(appGroupContainerURL: URL? = nil) {
+        self.appGroupContainerURL = appGroupContainerURL ?? FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier)
+    }
 
     /// Load cached token from App Group and verify with kernel.
     func loadAndVerify() {
@@ -209,16 +214,13 @@ class SubscriptionManager: ObservableObject {
     // MARK: - Token Persistence (App Group)
 
     private func loadToken() -> String? {
-        let fm = FileManager.default
-        guard let containerURL = fm.containerURL(
-            forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier
-        ) else {
+        guard let containerURL = appGroupContainerURL else {
             log.warning("App Group container not available")
             return nil
         }
 
         let tokenURL = containerURL.appendingPathComponent(Self.tokenFilename)
-        guard let data = fm.contents(atPath: tokenURL.path),
+        guard let data = FileManager.default.contents(atPath: tokenURL.path),
               let token = String(data: data, encoding: .utf8) else {
             return nil
         }
@@ -226,10 +228,7 @@ class SubscriptionManager: ObservableObject {
     }
 
     private func saveToken(_ token: String) throws {
-        let fm = FileManager.default
-        guard let containerURL = fm.containerURL(
-            forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier
-        ) else {
+        guard let containerURL = appGroupContainerURL else {
             throw NSError(domain: "SubscriptionManager", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "App Group container not available"])
         }
