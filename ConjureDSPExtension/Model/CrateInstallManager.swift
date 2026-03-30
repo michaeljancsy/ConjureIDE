@@ -222,15 +222,15 @@ final class CrateInstallManager {
             return
         }
 
-        // Update status with cargo progress and elapsed time
-        if let start = pollStartTime, let containerURL = appGroupContainerURL() {
+        // Update status with cargo progress and elapsed time (installs only —
+        // uninstalls show "Removing <name>..." without cargo noise)
+        if let start = pollStartTime, !pendingIsUninstall, let containerURL = appGroupContainerURL() {
             let elapsed = Int(Date().timeIntervalSince(start))
             let progressURL = containerURL.appendingPathComponent(Self.buildProgressFile)
             let progress = (try? String(contentsOf: progressURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let progress, !progress.isEmpty {
                 installStatusMessage = "\(progress) (\(elapsed)s)"
             } else {
-                // No progress file yet — show generic message with elapsed time
                 let baseName = pendingCrateNames ?? "crates"
                 installStatusMessage = "Building \(baseName)... (\(elapsed)s)"
             }
