@@ -40,6 +40,22 @@ pub struct PythonBackend {
     py_transport_dict: Option<Py<PyAny>>,
     /// Cached PyDict for params when using rich metadata (created once, values updated in-place).
     py_params_dict: Option<Py<PyAny>>,
+    /// Unique module name in sys.modules for this instance (e.g., "dsp_script_0").
+    /// Stored so Drop can remove it from sys.modules to prevent memory leaks.
+    module_name: String,
+}
+
+impl Drop for PythonBackend {
+    fn drop(&mut self) {
+        // Remove our module from sys.modules so Python can GC it.
+        Python::with_gil(|py| {
+            if let Ok(sys) = py.import("sys") {
+                if let Ok(modules) = sys.getattr("modules") {
+                    let _ = modules.call_method1("pop", (self.module_name.as_str(), py.None()));
+                }
+            }
+        });
+    }
 }
 
 impl PythonBackend {
@@ -75,7 +91,7 @@ impl PythonBackend {
         // AU bundle's Resources/python-dist/, which corrupts the code signature.
         std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
 
-        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, usize, u32), PyErr> =
+        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, usize, u32, String), PyErr> =
             Python::with_gil(|py| {
                 let code = std::fs::read_to_string(script_path)
                     .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
@@ -121,11 +137,11 @@ impl PythonBackend {
                     .and_then(|v| v.extract::<u32>().ok())
                     .unwrap_or(0);
 
-                Ok((process_fn.unbind(), param_names, param_metadata, arity, latency))
+                Ok((process_fn.unbind(), param_names, param_metadata, arity, latency, mod_name_str))
             });
 
         match result {
-            Ok((process_fn, param_names, param_metadata, arity, latency)) => {
+            Ok((process_fn, param_names, param_metadata, arity, latency, module_name)) => {
                 eprintln!("ConjureDSP-Rust: Python script loaded successfully (arity={}, latency={})", arity, latency);
                 Ok(Self {
                     py_process_fn: process_fn,
@@ -141,6 +157,7 @@ impl PythonBackend {
                     py_output_list: None,
                     py_transport_dict: None,
                     py_params_dict: None,
+                    module_name,
                 })
             }
             Err(e) => {
