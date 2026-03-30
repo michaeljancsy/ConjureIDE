@@ -12,6 +12,7 @@ RUST_VERSION="1.93.1"
 HOST_TARGET="aarch64-apple-darwin"
 
 RUSTC_URL="https://static.rust-lang.org/dist/rustc-${RUST_VERSION}-${HOST_TARGET}.tar.xz"
+CARGO_URL="https://static.rust-lang.org/dist/cargo-${RUST_VERSION}-${HOST_TARGET}.tar.xz"
 STD_URL="https://static.rust-lang.org/dist/rust-std-${RUST_VERSION}-wasm32-wasip1.tar.xz"
 
 if [ -d "${RUSTC_DIR}" ]; then
@@ -26,11 +27,17 @@ trap "rm -rf ${TMPDIR}" EXIT
 echo "Downloading rustc ${RUST_VERSION} for ${HOST_TARGET}..."
 curl -L --progress-bar -o "${TMPDIR}/rustc.tar.xz" "${RUSTC_URL}"
 
+echo "Downloading cargo ${RUST_VERSION} for ${HOST_TARGET}..."
+curl -L --progress-bar -o "${TMPDIR}/cargo.tar.xz" "${CARGO_URL}"
+
 echo "Downloading wasm32-wasip1 standard library..."
 curl -L --progress-bar -o "${TMPDIR}/rust-std-wasm.tar.xz" "${STD_URL}"
 
 echo "Extracting rustc..."
 tar xf "${TMPDIR}/rustc.tar.xz" -C "${TMPDIR}"
+
+echo "Extracting cargo..."
+tar xf "${TMPDIR}/cargo.tar.xz" -C "${TMPDIR}"
 
 echo "Extracting wasm32-wasip1 std..."
 tar xf "${TMPDIR}/rust-std-wasm.tar.xz" -C "${TMPDIR}"
@@ -42,10 +49,14 @@ mkdir -p "${RUSTC_DIR}/lib/rustlib/${HOST_TARGET}/bin/gcc-ld"
 mkdir -p "${RUSTC_DIR}/lib/rustlib/wasm32-wasip1"
 
 RUSTC_EXTRACT="${TMPDIR}/rustc-${RUST_VERSION}-${HOST_TARGET}/rustc"
+CARGO_EXTRACT="${TMPDIR}/cargo-${RUST_VERSION}-${HOST_TARGET}/cargo"
 STD_EXTRACT="${TMPDIR}/rust-std-${RUST_VERSION}-wasm32-wasip1/rust-std-wasm32-wasip1"
 
 # rustc binary
 cp "${RUSTC_EXTRACT}/bin/rustc" "${RUSTC_DIR}/bin/"
+
+# cargo binary (used by companion app for crate package management)
+cp "${CARGO_EXTRACT}/bin/cargo" "${RUSTC_DIR}/bin/"
 
 # librustc_driver dylib (loaded via @rpath from rustc)
 # Skip sanitizer dylibs (librustc-stable_rt.*.dylib) — not needed

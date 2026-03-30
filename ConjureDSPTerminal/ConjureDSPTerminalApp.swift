@@ -45,6 +45,7 @@ class TerminalAppServer {
     private var healthCheckFailCount = 0
     private let healthCheckThreshold = 3  // consecutive failures before reset
     private var packageInstaller: PackageInstaller?
+    private var crateInstaller: CrateInstaller?
 
     private let appGroupID = "group.com.MichaelJancsy.ConjureDSP"
 
@@ -61,11 +62,12 @@ class TerminalAppServer {
         log.info("ConjureDSP Terminal starting")
         status = "Waiting for ConjureDSP plugin..."
 
-        // Provision shared runtimes to the App Group container, then init package installer.
-        // uv must be provisioned before PackageInstaller.init so it can find the binary.
+        // Provision shared runtimes to the App Group container, then init installers.
+        // uv/rustc-dist must be provisioned before installer init so they can find binaries.
         DispatchQueue.global(qos: .utility).async { [self] in
             Self.installPythonRuntimeIfNeeded()
             Self.provisionUVIfNeeded()
+            Self.provisionRustToolchainIfNeeded()
 
             Task { @MainActor in
                 if let containerURL = FileManager.default.containerURL(
@@ -76,6 +78,13 @@ class TerminalAppServer {
                         log.info("Package installer ready")
                     } else {
                         log.error("Package installer failed to initialize — uv not available")
+                    }
+
+                    self.crateInstaller = CrateInstaller(appGroupURL: containerURL)
+                    if self.crateInstaller != nil {
+                        log.info("Crate installer ready")
+                    } else {
+                        log.warning("Crate installer not available — cargo not found in rustc-dist")
                     }
                 }
             }
@@ -164,6 +173,45 @@ class TerminalAppServer {
         log.info("Migration complete — old user-packages preserved at \(oldUserPackages.path, privacy: .public)")
     }
 
+    /// Copies the bundled rustc-dist directory (rustc, cargo, wasm32-wasip1 std, conjuredsp rlib)
+    /// to the App Group container so CrateInstaller can compile crates in the sandbox.
+    /// Re-provisions if the rustc binary is missing (e.g. after an app update).
+    nonisolated static func provisionRustToolchainIfNeeded() {
+        guard let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
+        ) else {
+            log.error("App Group container not available — cannot provision Rust toolchain")
+            return
+        }
+
+        let dstRustcDist = containerURL.appendingPathComponent("rustc-dist")
+        let dstCargo = dstRustcDist.appendingPathComponent("bin/cargo")
+
+        // Check if already provisioned (cargo binary exists)
+        if FileManager.default.fileExists(atPath: dstCargo.path) {
+            log.info("Rust toolchain already provisioned at \(dstRustcDist.path, privacy: .public)")
+            return
+        }
+
+        guard let bundledRustcDist = Bundle.main.resourceURL?.appendingPathComponent("rustc-dist"),
+              FileManager.default.fileExists(atPath: bundledRustcDist.path) else {
+            log.warning("Bundled rustc-dist not found in Terminal app bundle — crate management unavailable")
+            return
+        }
+
+        do {
+            let fm = FileManager.default
+            // Remove any partial previous provision
+            if fm.fileExists(atPath: dstRustcDist.path) {
+                try fm.removeItem(at: dstRustcDist)
+            }
+            try fm.copyItem(at: bundledRustcDist, to: dstRustcDist)
+            log.info("Rust toolchain provisioned to App Group at \(dstRustcDist.path, privacy: .public)")
+        } catch {
+            log.error("Failed to provision Rust toolchain: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     /// Copies the bundled `uv` binary to the App Group container so PackageInstaller
     /// can find it reliably regardless of PATH or Bundle.main state. No-op if already present.
     nonisolated static func provisionUVIfNeeded() {
@@ -230,6 +278,9 @@ class TerminalAppServer {
                 // 3. Check for package install/uninstall requests
                 if let installer = self.packageInstaller {
                     await installer.checkForRequests()
+                }
+                if let crateInst = self.crateInstaller {
+                    await crateInst.checkForRequests()
                 }
 
                 // 4. Health check (every ~3 seconds when running)

@@ -617,9 +617,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			// Parse param names from source (only used if no rich metadata)
 			let sourceParamNames = Self.parseRustParamNames(fromSource: source)
 
-			// Check cache first
+			// Check cache first (incorporate installed crate versions into cache key)
+			let depsHash = CrateInstallManager.readManifestHash()
 			let cache = WasmCache()
-			if let cachedWasm = cache.cachedWasm(for: source) {
+			if let cachedWasm = cache.cachedWasm(for: source, depsHash: depsHash) {
 				let result = loadWasm(bytes: cachedWasm)
 				if result.success {
 					currentScriptSource = source
@@ -638,7 +639,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			let compiler = RustCompiler()
 			do {
 				let wasmBytes = try await compiler.compile(source: source)
-				cache.cache(wasm: wasmBytes, for: source)
+				cache.cache(wasm: wasmBytes, for: source, depsHash: depsHash)
 				let result = loadWasm(bytes: wasmBytes)
 				if result.success {
 					currentScriptSource = source

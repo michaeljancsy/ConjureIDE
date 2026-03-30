@@ -77,6 +77,7 @@ struct PresetToolbar: View {
     @State private var showingSettings = false
     @State private var showingPackages = false
     @State private var packageInstallManager = PackageInstallManager()
+    @State private var crateInstallManager = CrateInstallManager()
     @State private var showingExport = false
     @State private var showingPresetBrowser = false
     @State private var showingCommunityBrowser = false
@@ -371,7 +372,7 @@ struct PresetToolbar: View {
                 .accessibilityIdentifier("demoIndicator")
             }
 
-            // Python packages
+            // Packages / Crates
             Button(action: { showingPackages = true }) {
                 Image(systemName: "shippingbox")
             }
@@ -381,7 +382,10 @@ struct PresetToolbar: View {
             .popover(isPresented: $showingPackages) {
                 PackageManagerView(
                     installManager: packageInstallManager,
-                    onDone: { showingPackages = false }
+                    crateInstallManager: crateInstallManager,
+                    onDone: { showingPackages = false },
+                    initialLanguage: selectedLanguage == .rust
+                        ? .rust : .python
                 )
             }
 
@@ -440,6 +444,7 @@ struct PresetToolbar: View {
         }
         .onAppear {
             packageInstallManager.onPackagesChanged = { onRun() }
+            crateInstallManager.onCratesChanged = { onRun() }
         }
     }
 

@@ -68,6 +68,18 @@ final class RustCompiler: ScriptCompiler {
             }
         }
 
+        // Link user-installed crates from crate package manager
+        let userExterns = CrateInstallManager.externArgs()
+        if !userExterns.isEmpty {
+            if let libDir = CrateInstallManager.cratesLibURL()?.path {
+                args = ["-L", "dependency=\(libDir)"] + args
+            }
+            for (name, path) in userExterns {
+                args = ["--extern", "\(name)=\(path)"] + args
+            }
+            log.info("Linking \(userExterns.count) user-installed crate(s)")
+        }
+
         process.arguments = args
 
         let stderrPipe = Pipe()
