@@ -85,6 +85,7 @@ final class CrateInstallManager {
 
     private var resultPollTimer: Timer?
     private var pendingRequestId: String?
+    private var pendingCrateNames: String?
     private var pollStartTime: Date?
     private static let pollTimeoutSeconds: TimeInterval = 300  // cargo compiles from source; first build downloads + compiles all deps
 
@@ -122,6 +123,7 @@ final class CrateInstallManager {
             pendingRequestId = requestId
             isInstalling = true
             let names = crates.map(\.name).joined(separator: ", ")
+            pendingCrateNames = names
             installStatusMessage = "Building \(names)..."
             lastError = nil
             log.info("Wrote crate install request for \(names, privacy: .public)")
@@ -164,6 +166,7 @@ final class CrateInstallManager {
             try data.write(to: requestURL, options: .atomic)
             pendingRequestId = requestId
             isInstalling = true
+            pendingCrateNames = crateName
             installStatusMessage = "Removing \(crateName)..."
             lastError = nil
             log.info("Wrote crate uninstall request for \(crateName, privacy: .public)")
@@ -189,6 +192,7 @@ final class CrateInstallManager {
         resultPollTimer?.invalidate()
         resultPollTimer = nil
         pendingRequestId = nil
+        pendingCrateNames = nil
         pollStartTime = nil
         isInstalling = false
         installStatusMessage = nil
@@ -209,8 +213,10 @@ final class CrateInstallManager {
             let progress = (try? String(contentsOf: progressURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let progress, !progress.isEmpty {
                 installStatusMessage = "\(progress) (\(elapsed)s)"
-            } else if let base = installStatusMessage, !base.contains("(") {
-                installStatusMessage = "\(base) (\(elapsed)s)"
+            } else {
+                // No progress file yet — show generic message with elapsed time
+                let baseName = pendingCrateNames ?? "crates"
+                installStatusMessage = "Building \(baseName)... (\(elapsed)s)"
             }
         }
 
@@ -230,6 +236,7 @@ final class CrateInstallManager {
         try? FileManager.default.removeItem(at: resultURL)
 
         pendingRequestId = nil
+        pendingCrateNames = nil
         isInstalling = false
         installStatusMessage = nil
         resultPollTimer?.invalidate()
