@@ -37,6 +37,7 @@ struct ConjureDSPExtensionMainView: View {
     var onNew: (ScriptLanguage) -> ScriptSaveResult
     var onExport: (String) async -> ExportResult
     var defaultBenchmark: (processTimeMs: Double, budgetMs: Double)?
+    var appGroupContainerURL: URL?
 
     @State private var scriptSource: String = ""
     @State private var selectedLanguage: ScriptLanguage = .python
@@ -193,7 +194,7 @@ struct ConjureDSPExtensionMainView: View {
             // WKWebView is recreated on toggle; WebSocket reconnects automatically.
             if showChat {
                 if daemonChecker.isDaemonAvailable {
-                    TerminalView(colorScheme: colorScheme)
+                    TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
                         .frame(width: chatWidth)
                         .accessibilityIdentifier("terminalPanel")
                 } else {
