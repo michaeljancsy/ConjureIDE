@@ -247,8 +247,9 @@ struct ToneBrowserView: View {
             // Expanded: show models
             if expandedToneId == tone.id.stringValue {
                 if let models = toneModels[tone.id.stringValue] {
+                    let sizesVary = Set(models.compactMap(\.size)).count > 1
                     ForEach(models) { model in
-                        modelRow(tone: tone, model: model)
+                        modelRow(tone: tone, model: model, showSize: sizesVary)
                     }
                 } else {
                     HStack {
@@ -264,18 +265,17 @@ struct ToneBrowserView: View {
     }
 
     @ViewBuilder
-    private func modelRow(tone: Tone, model: ToneModel) -> some View {
+    private func modelRow(tone: Tone, model: ToneModel, showSize: Bool) -> some View {
         let isDownloaded = modelStore.modelURL(toneId: tone.id.stringValue, modelId: model.id.stringValue) != nil
         let isDownloading = downloadingModelId == model.id.stringValue
+        let displayName = Self.shortenModelName(model.name ?? model.id.stringValue, toneTitle: tone.title)
 
         HStack(spacing: 8) {
-            Image(systemName: "doc")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(model.name ?? model.id.stringValue)
-                .font(.caption)
-                .lineLimit(1)
-            if let size = model.size {
+            Text(displayName)
+                .font(.system(size: 11))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            if showSize, let size = model.size {
                 Text(size)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -304,7 +304,7 @@ struct ToneBrowserView: View {
             }
         }
         .padding(.horizontal, 24)
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -448,5 +448,70 @@ struct ToneBrowserView: View {
         } catch {
             log.error("Failed to fetch models: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    // MARK: - Model Name Helpers
+
+    /// Strips redundant tone-title words from a model name to show only the differentiating info.
+    /// e.g. "[AMP] JCM800-2203-MODIFIED-HI Bad Boys" with tone "Marshall JCM800 2203 Modified"
+    /// → "[AMP] HI Bad Boys"
+    static func shortenModelName(_ modelName: String, toneTitle: String) -> String {
+        var name = modelName
+
+        // Extract bracket tag if present, e.g. [AMP], [PRE], [POW], [OD]
+        var tag = ""
+        if name.hasPrefix("["), let closeBracket = name.firstIndex(of: "]") {
+            tag = String(name[name.startIndex...closeBracket])
+            var rest = String(name[name.index(after: closeBracket)...])
+            while rest.first == " " { rest.removeFirst() }
+            name = rest
+        }
+
+        // Build set of title words (lowercase, alphanumeric only)
+        let titleWords = Set(
+            toneTitle.lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { !$0.isEmpty }
+        )
+
+        // Split model name into alphanumeric words for matching
+        let nameWords = name.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+
+        // Count consecutive leading words that appear in the tone title
+        var matchedWords = 0
+        for word in nameWords {
+            if titleWords.contains(word.lowercased()) {
+                matchedWords += 1
+            } else {
+                break
+            }
+        }
+
+        if matchedWords > 0 {
+            // Advance past matched words in the original string
+            var pos = name.startIndex
+            for _ in 0..<matchedWords {
+                while pos < name.endIndex && !name[pos].isLetter && !name[pos].isNumber {
+                    pos = name.index(after: pos)
+                }
+                while pos < name.endIndex && (name[pos].isLetter || name[pos].isNumber) {
+                    pos = name.index(after: pos)
+                }
+            }
+            // Skip trailing separators
+            while pos < name.endIndex && !name[pos].isLetter && !name[pos].isNumber {
+                pos = name.index(after: pos)
+            }
+            let remaining = String(name[pos...])
+            if !remaining.isEmpty {
+                name = remaining
+            }
+        }
+
+        if !tag.isEmpty {
+            return "\(tag) \(name)"
+        }
+        return name
     }
 }
