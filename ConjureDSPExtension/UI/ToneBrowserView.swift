@@ -234,6 +234,17 @@ struct ToneBrowserView: View {
                         }
                         .foregroundStyle(.secondary)
                     }
+                    if let urlStr = tone.url, let url = URL(string: urlStr) {
+                        Button {
+                            NSWorkspace.shared.open(url)
+                        } label: {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Open on tone3000.com")
+                    }
                     Image(systemName: expandedToneId == tone.id.stringValue ? "chevron.up" : "chevron.down")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
