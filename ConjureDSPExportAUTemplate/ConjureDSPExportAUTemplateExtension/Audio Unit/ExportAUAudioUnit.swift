@@ -256,6 +256,8 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
         if success {
             pluginLog.info("WASM preset loaded successfully")
+            // Inject embedded NAM model if present
+            injectEmbeddedNamModel(from: bundle)
             warmStart()
         } else {
             logKernelError("Failed to load WASM preset")
@@ -275,6 +277,13 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
             return
         }
 
+        // Set tones directory to bundle Resources so embedded model.nam is found
+        // by conjuredsp.nam's path resolution (tone3000:// or relative "model.nam")
+        if config?.namModelFile != nil,
+           let resourcesPath = bundle.resourcePath {
+            dsp_kernel_set_tones_dir(kernel, resourcesPath)
+        }
+
         pluginLog.info("Loading Python preset. pythonHome=\(pythonHome, privacy: .public)")
         let success = dsp_kernel_load_script(kernel, pythonHome, presetPath)
 
@@ -284,6 +293,69 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         } else {
             logKernelError("Failed to load Python preset")
             loadError = kernelErrorString() ?? "Failed to load preset"
+        }
+    }
+
+    /// Load and inject an embedded .nam model file from the bundle Resources.
+    /// For WASM presets, reads the .nam JSON, serializes to binary protocol,
+    /// and calls dsp_kernel_inject_nam().
+    private func injectEmbeddedNamModel(from bundle: Bundle) {
+        guard let namFileName = config?.namModelFile else { return }
+
+        let namBaseName = (namFileName as NSString).deletingPathExtension
+        let namExt = (namFileName as NSString).pathExtension
+
+        guard let namURL = bundle.url(forResource: namBaseName, withExtension: namExt.isEmpty ? "nam" : namExt),
+              let namData = try? Data(contentsOf: namURL) else {
+            pluginLog.warning("Embedded NAM model '\(namFileName, privacy: .public)' not found in bundle")
+            return
+        }
+
+        // Parse .nam JSON and serialize to binary protocol for WASM injection
+        guard let namJson = try? JSONSerialization.jsonObject(with: namData) as? [String: Any],
+              let architecture = namJson["architecture"] as? String,
+              let configObj = namJson["config"],
+              let weightsArray = namJson["weights"] as? [Double] else {
+            pluginLog.error("Failed to parse embedded .nam file")
+            return
+        }
+
+        let arch: UInt32 = architecture == "LSTM" ? 1 : 0
+        let sampleRate = Float(namJson["sample_rate"] as? Int ?? 48000)
+
+        // Serialize config JSON
+        guard let configData = try? JSONSerialization.data(withJSONObject: configObj) else {
+            pluginLog.error("Failed to serialize NAM config")
+            return
+        }
+
+        // Build binary protocol
+        var binary = Data()
+        var archLE = arch.littleEndian
+        binary.append(Data(bytes: &archLE, count: 4))
+        var srLE = sampleRate.bitPattern.littleEndian
+        binary.append(Data(bytes: &srLE, count: 4))
+        var configLen = UInt32(configData.count).littleEndian
+        binary.append(Data(bytes: &configLen, count: 4))
+        binary.append(configData)
+        var weightCount = UInt32(weightsArray.count).littleEndian
+        binary.append(Data(bytes: &weightCount, count: 4))
+        for w in weightsArray {
+            var f = Float(w).bitPattern.littleEndian
+            binary.append(Data(bytes: &f, count: 4))
+        }
+
+        let success = binary.withUnsafeBytes { rawBuffer -> Bool in
+            guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                return false
+            }
+            return dsp_kernel_inject_nam(kernel, ptr, UInt(binary.count))
+        }
+
+        if success {
+            pluginLog.info("Injected embedded NAM model (\(binary.count) bytes)")
+        } else {
+            pluginLog.error("Failed to inject embedded NAM model")
         }
     }
 

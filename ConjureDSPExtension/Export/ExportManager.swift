@@ -98,8 +98,14 @@ final class ExportManager {
             }
         }
 
+        // 3b. Detect and embed NAM model file
+        let namModelFile = try embedNamModelIfNeeded(
+            source: source, wasmData: wasmData, language: language,
+            appexResourcesURL: appexResourcesURL
+        )
+
         // 4. Write runtime-config.json
-        let config = makeRuntimeConfig(name: name, language: language, paramNames: paramNames, paramMetadata: paramMetadata, latencySamples: latencySamples)
+        let config = makeRuntimeConfig(name: name, language: language, paramNames: paramNames, paramMetadata: paramMetadata, latencySamples: latencySamples, namModelFile: namModelFile)
         try config.write(to: appexResourcesURL.appendingPathComponent("runtime-config.json"))
 
         // 5. Patch host app Info.plist
@@ -185,12 +191,88 @@ final class ExportManager {
         }
     }
 
+    /// Detect NAM model references in the script source and embed the .nam file
+    /// in the export bundle for portability.
+    private func embedNamModelIfNeeded(
+        source: String,
+        wasmData: Data?,
+        language: ScriptLanguage,
+        appexResourcesURL: URL
+    ) throws -> String? {
+        var namPath: String?
+
+        switch language {
+        case .python:
+            // Scan for load_model("tone3000://...") or load_model("/path/...")
+            if let range = source.range(of: #"load_model\("([^"]+)"\)"#, options: .regularExpression) {
+                let match = source[range]
+                // Extract the path argument
+                if let argRange = match.range(of: #""([^"]+)""#, options: .regularExpression) {
+                    let arg = String(match[argRange].dropFirst().dropLast())
+                    namPath = arg
+                }
+            }
+        case .rust:
+            // For WASM, the host would read the NAM path from WASM exports.
+            // At export time we scan the source for nam!("...") macro invocation.
+            if let range = source.range(of: #"nam!\("([^"]+)"\)"#, options: .regularExpression) {
+                let match = source[range]
+                if let argRange = match.range(of: #""([^"]+)""#, options: .regularExpression) {
+                    let arg = String(match[argRange].dropFirst().dropLast())
+                    namPath = arg
+                }
+            }
+        }
+
+        guard let path = namPath else { return nil }
+
+        // Resolve the path to a filesystem location
+        let resolvedURL: URL?
+        if path.hasPrefix("tone3000://") {
+            // Resolve against App Group tones directory
+            let relative = String(path.dropFirst("tone3000://".count))
+            let relativeWithExt = relative.hasSuffix(".nam") ? relative : relative + ".nam"
+            if let tonesDir = Self.appGroupContainerURL()?.appendingPathComponent("tones") {
+                let fileURL = tonesDir.appendingPathComponent(relativeWithExt)
+                resolvedURL = FileManager.default.fileExists(atPath: fileURL.path) ? fileURL : nil
+            } else {
+                resolvedURL = nil
+            }
+        } else {
+            let expanded = NSString(string: path).expandingTildeInPath
+            resolvedURL = FileManager.default.fileExists(atPath: expanded) ? URL(fileURLWithPath: expanded) : nil
+        }
+
+        guard let sourceURL = resolvedURL else {
+            log.warning("NAM model file not found for export: \(path, privacy: .public)")
+            return nil
+        }
+
+        // Copy .nam file into the export bundle
+        let destFileName = "model.nam"
+        let destURL = appexResourcesURL.appendingPathComponent(destFileName)
+        try FileManager.default.copyItem(at: sourceURL, to: destURL)
+        log.info("Embedded NAM model in export: \(sourceURL.lastPathComponent, privacy: .public)")
+
+        // For Python: rewrite the source to use the embedded model path
+        if language == .python {
+            let rewrittenSource = source.replacingOccurrences(of: path, with: "model.nam")
+            try Data(rewrittenSource.utf8).write(
+                to: appexResourcesURL.appendingPathComponent("preset.py"),
+                options: .atomic
+            )
+        }
+
+        return destFileName
+    }
+
     private func makeRuntimeConfig(
         name: String,
         language: ScriptLanguage,
         paramNames: [Int: String]?,
         paramMetadata: [ConjureDSPExtensionAudioUnit.ParamMetadata]? = nil,
-        latencySamples: UInt32 = 0
+        latencySamples: UInt32 = 0,
+        namModelFile: String? = nil
     ) -> Data {
         var config: [String: Any] = [
             "version": 1,
@@ -202,6 +284,10 @@ final class ExportManager {
 
         if latencySamples > 0 {
             config["latencySamples"] = latencySamples
+        }
+
+        if let namFile = namModelFile {
+            config["namModelFile"] = namFile
         }
 
         // Include rich metadata if available (v2 format)
