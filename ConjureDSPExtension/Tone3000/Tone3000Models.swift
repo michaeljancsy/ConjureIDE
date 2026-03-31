@@ -7,28 +7,67 @@
 
 import Foundation
 
+// MARK: - Flexible ID (API returns int, we need String for Identifiable)
+
+/// The tone3000 API returns `id` as an integer. This enum decodes both int and string
+/// so the types work regardless of API changes.
+enum IntOrString: Codable, Hashable {
+    case int(Int)
+    case string(String)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let intVal = try? container.decode(Int.self) {
+            self = .int(intVal)
+        } else {
+            self = .string(try container.decode(String.self))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .int(let v): try container.encode(v)
+        case .string(let v): try container.encode(v)
+        }
+    }
+
+    var stringValue: String {
+        switch self {
+        case .int(let v): return String(v)
+        case .string(let v): return v
+        }
+    }
+}
+
 // MARK: - API Response Types
 
+/// Tags and makes come as `[{"name": "..."}]` from the API.
+struct TagOrMake: Codable, Hashable {
+    let name: String
+}
+
 struct Tone: Codable, Identifiable, Hashable {
-    let id: String
+    let id: IntOrString
     let title: String
     let description: String?
     let user: ToneUser?
     let gear: String?
     let images: [ToneImage]?
     let sizes: [String]?
-    let makes: [String]?
-    let tags: [String]?
-    let modelCount: Int?
-    let downloadCount: Int?
-    let favoriteCount: Int?
+    let makes: [TagOrMake]?
+    let tags: [TagOrMake]?
+    let modelsCount: Int?
+    let favoritesCount: Int?
+    let downloadsCount: Int?
     let url: String?
+    let platform: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, description, user, gear, images, sizes, makes, tags, url
-        case modelCount = "model_count"
-        case downloadCount = "download_count"
-        case favoriteCount = "favorite_count"
+        case id, title, description, user, gear, images, sizes, makes, tags, url, platform
+        case modelsCount = "models_count"
+        case favoritesCount = "favorites_count"
+        case downloadsCount = "downloads_count"
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -39,9 +78,10 @@ struct ToneUser: Codable, Hashable {
     let id: String
     let username: String
     let avatarUrl: String?
+    let url: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, username
+        case id, username, url
         case avatarUrl = "avatar_url"
     }
 }
@@ -51,11 +91,11 @@ struct ToneImage: Codable, Hashable {
 }
 
 struct ToneModel: Codable, Identifiable, Hashable {
-    let id: String
+    let id: IntOrString
     let name: String?
     let size: String?
     let modelUrl: String?
-    let toneId: String?
+    let toneId: IntOrString?
 
     enum CodingKeys: String, CodingKey {
         case id, name, size

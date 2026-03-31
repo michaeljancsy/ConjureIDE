@@ -197,10 +197,10 @@ struct ToneBrowserView: View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
-                    expandedToneId = expandedToneId == tone.id ? nil : tone.id
+                    expandedToneId = expandedToneId == tone.id.stringValue ? nil : tone.id.stringValue
                 }
-                if expandedToneId == tone.id {
-                    Task { await fetchModels(toneId: tone.id) }
+                if expandedToneId == tone.id.stringValue {
+                    Task { await fetchModels(toneId: tone.id.stringValue) }
                 }
             } label: {
                 HStack(spacing: 8) {
@@ -225,7 +225,7 @@ struct ToneBrowserView: View {
                         }
                     }
                     Spacer()
-                    if let downloads = tone.downloadCount, downloads > 0 {
+                    if let downloads = tone.downloadsCount, downloads > 0 {
                         HStack(spacing: 2) {
                             Image(systemName: "arrow.down.circle")
                                 .font(.caption2)
@@ -234,7 +234,7 @@ struct ToneBrowserView: View {
                         }
                         .foregroundStyle(.secondary)
                     }
-                    Image(systemName: expandedToneId == tone.id ? "chevron.up" : "chevron.down")
+                    Image(systemName: expandedToneId == tone.id.stringValue ? "chevron.up" : "chevron.down")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -245,8 +245,8 @@ struct ToneBrowserView: View {
             .buttonStyle(.plain)
 
             // Expanded: show models
-            if expandedToneId == tone.id {
-                if let models = toneModels[tone.id] {
+            if expandedToneId == tone.id.stringValue {
+                if let models = toneModels[tone.id.stringValue] {
                     ForEach(models) { model in
                         modelRow(tone: tone, model: model)
                     }
@@ -265,14 +265,14 @@ struct ToneBrowserView: View {
 
     @ViewBuilder
     private func modelRow(tone: Tone, model: ToneModel) -> some View {
-        let isDownloaded = modelStore.modelURL(toneId: tone.id, modelId: model.id) != nil
-        let isDownloading = downloadingModelId == model.id
+        let isDownloaded = modelStore.modelURL(toneId: tone.id.stringValue, modelId: model.id.stringValue) != nil
+        let isDownloading = downloadingModelId == model.id.stringValue
 
         HStack(spacing: 8) {
             Image(systemName: "doc")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text(model.name ?? model.id)
+            Text(model.name ?? model.id.stringValue)
                 .font(.caption)
                 .lineLimit(1)
             if let size = model.size {
@@ -290,7 +290,7 @@ struct ToneBrowserView: View {
                     .controlSize(.small)
             } else if isDownloaded {
                 Button("Use") {
-                    insertSnippet(toneId: tone.id, modelId: model.id)
+                    insertSnippet(toneId: tone.id.stringValue, modelId: model.id.stringValue)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -370,17 +370,17 @@ struct ToneBrowserView: View {
             return
         }
 
-        downloadingModelId = model.id
+        downloadingModelId = model.id.stringValue
         error = nil
 
         do {
             try await modelStore.download(
-                toneId: tone.id,
+                toneId: tone.id.stringValue,
                 toneName: tone.title,
                 gear: tone.gear ?? "",
                 author: tone.user?.username ?? "",
-                modelId: model.id,
-                modelName: model.name ?? model.id,
+                modelId: model.id.stringValue,
+                modelName: model.name ?? model.id.stringValue,
                 modelSize: model.size ?? "",
                 modelURL: url,
                 accessToken: token
