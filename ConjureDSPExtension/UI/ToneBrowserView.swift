@@ -18,6 +18,8 @@ struct ToneBrowserView: View {
     let onDone: () -> Void
     let onInsertSnippet: (String) -> Void
 
+    @Environment(\.openURL) private var openURL
+
     enum Tab: String, CaseIterable {
         case search = "Search"
         case myTones = "My Tones"
@@ -195,65 +197,71 @@ struct ToneBrowserView: View {
     @ViewBuilder
     private func toneRow(_ tone: Tone) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    expandedToneId = expandedToneId == tone.id.stringValue ? nil : tone.id.stringValue
-                }
-                if expandedToneId == tone.id.stringValue {
-                    Task { await fetchModels(toneId: tone.id.stringValue) }
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(tone.title)
-                            .font(.system(size: 12, weight: .medium))
-                            .lineLimit(1)
-                        HStack(spacing: 4) {
-                            if let user = tone.user {
-                                Text(user.username)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+            HStack(spacing: 0) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        expandedToneId = expandedToneId == tone.id.stringValue ? nil : tone.id.stringValue
+                    }
+                    if expandedToneId == tone.id.stringValue {
+                        Task { await fetchModels(toneId: tone.id.stringValue) }
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(tone.title)
+                                .font(.system(size: 12, weight: .medium))
+                                .lineLimit(1)
+                            HStack(spacing: 4) {
+                                if let user = tone.user {
+                                    Text(user.username)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let gear = tone.gear {
+                                    Text("·")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Text(gear)
+                                        .font(.caption2)
+                                        .foregroundStyle(.blue)
+                                }
                             }
-                            if let gear = tone.gear {
-                                Text("·")
+                        }
+                        Spacer()
+                        if let downloads = tone.downloadsCount, downloads > 0 {
+                            HStack(spacing: 2) {
+                                Image(systemName: "arrow.down.circle")
                                     .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                Text(gear)
+                                Text("\(downloads)")
                                     .font(.caption2)
-                                    .foregroundStyle(.blue)
                             }
+                            .foregroundStyle(.secondary)
                         }
+                        Image(systemName: expandedToneId == tone.id.stringValue ? "chevron.up" : "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                    Spacer()
-                    if let downloads = tone.downloadsCount, downloads > 0 {
-                        HStack(spacing: 2) {
-                            Image(systemName: "arrow.down.circle")
-                                .font(.caption2)
-                            Text("\(downloads)")
-                                .font(.caption2)
-                        }
-                        .foregroundStyle(.secondary)
-                    }
-                    if let urlStr = tone.url, let url = URL(string: urlStr) {
-                        Button {
-                            NSWorkspace.shared.open(url)
-                        } label: {
-                            Image(systemName: "arrow.up.right.square")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Open on tone3000.com")
-                    }
-                    Image(systemName: expandedToneId == tone.id.stringValue ? "chevron.up" : "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .padding(.leading, 12)
+
+                if let url = URL(string: "https://www.tone3000.com/tones/\(tone.id.stringValue)") {
+                    Button {
+                        openURL(url)
+                    } label: {
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open on tone3000.com")
+                }
             }
-            .buttonStyle(.plain)
 
             // Expanded: show models
             if expandedToneId == tone.id.stringValue {
