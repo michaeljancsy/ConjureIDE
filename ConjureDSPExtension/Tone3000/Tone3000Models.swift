@@ -53,7 +53,7 @@ struct Tone: Codable, Identifiable, Hashable {
     let description: String?
     let user: ToneUser?
     let gear: String?
-    let images: [ToneImage]?
+    let images: [String]?
     let sizes: [String]?
     let makes: [TagOrMake]?
     let tags: [TagOrMake]?
@@ -84,10 +84,6 @@ struct ToneUser: Codable, Hashable {
         case id, username, url
         case avatarUrl = "avatar_url"
     }
-}
-
-struct ToneImage: Codable, Hashable {
-    let url: String?
 }
 
 struct ToneModel: Codable, Identifiable, Hashable {

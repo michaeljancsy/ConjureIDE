@@ -9,7 +9,7 @@ private struct Tone: Codable, Identifiable {
     let description: String?
     let user: ToneUser?
     let gear: String?
-    let images: [ToneImage]?
+    let images: [String]?
     let sizes: [String]?
     let makes: [TagOrMake]?
     let tags: [TagOrMake]?
@@ -75,10 +75,6 @@ private struct ToneUser: Codable, Hashable {
         case id, username, url
         case avatarUrl = "avatar_url"
     }
-}
-
-private struct ToneImage: Codable, Hashable {
-    let url: String?
 }
 
 /// Tags and makes come as `[{"name": "..."}]` from the API.
@@ -147,7 +143,7 @@ struct Tone3000DecodingTests {
                     "created_at": "2025-04-27T23:57:27.583672+00:00",
                     "updated_at": "2025-04-27T23:57:27.583672+00:00",
                     "platform": "nam",
-                    "images": null,
+                    "images": ["https://example.com/tone.png"],
                     "user_id": "fecebf0a-ce34-45a9-9e4c-a2dfc7999d7e",
                     "user": {
                         "username": "cristophercordoba90",
@@ -187,6 +183,7 @@ struct Tone3000DecodingTests {
         #expect(tone.tags?.count == 2)
         #expect(tone.tags?.first?.name == "metal")
         #expect(tone.makes?.isEmpty == true)
+        #expect(tone.images?.first == "https://example.com/tone.png")
     }
 
     @Test("Decode tone with null optional fields")
