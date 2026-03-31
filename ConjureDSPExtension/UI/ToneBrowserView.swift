@@ -121,8 +121,8 @@ struct ToneBrowserView: View {
                 // Results
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        // Downloaded section
-                        if !modelStore.downloadedModels.isEmpty {
+                        // Downloaded section (My Tones tab only)
+                        if tab == .myTones && !modelStore.downloadedModels.isEmpty {
                             Section {
                                 ForEach(modelStore.downloadedModels) { model in
                                     downloadedModelRow(model)
