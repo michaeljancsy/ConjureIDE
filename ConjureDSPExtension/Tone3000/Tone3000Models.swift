@@ -68,24 +68,27 @@ struct ToneModel: Codable, Identifiable, Hashable {
 }
 
 struct ToneSearchResult: Codable {
-    let tones: [Tone]?
+    let data: [Tone]?
     let total: Int?
     let page: Int?
     let pageSize: Int?
+    let totalPages: Int?
 
     enum CodingKeys: String, CodingKey {
-        case tones, total, page
+        case data, total, page
         case pageSize = "page_size"
+        case totalPages = "total_pages"
     }
 
     /// Convenience: the actual tone list (handles nil from API).
-    var items: [Tone] { tones ?? [] }
+    var items: [Tone] { data ?? [] }
 }
 
 struct ToneModelsResult: Codable {
-    let models: [ToneModel]?
+    let data: [ToneModel]?
 
-    var items: [ToneModel] { models ?? [] }
+    /// Convenience: the actual model list (handles nil from API).
+    var items: [ToneModel] { data ?? [] }
 }
 
 // MARK: - Enums
