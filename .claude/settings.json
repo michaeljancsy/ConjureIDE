@@ -22,9 +22,21 @@
         "hooks": [
           {
             "type": "command",
-            "command": "./scripts/setup-worktree.sh",
+            "command": "MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ \"$(pwd)\" != \"$MAIN_WT\" ] && [ ! -d \"ConjureDSPExtension/Resources/monaco/vs\" ]; then if [ -n \"$MAIN_WT\" ] && [ -d \"$MAIN_WT/ConjureDSPExtension/Resources/monaco/vs\" ]; then mkdir -p ConjureDSPExtension/Resources/monaco && ln -s \"$MAIN_WT/ConjureDSPExtension/Resources/monaco/vs\" ConjureDSPExtension/Resources/monaco/vs && echo \"Symlinked Monaco from main worktree\"; else ./scripts/setup-monaco.sh; fi; fi",
             "timeout": 60,
-            "statusMessage": "Setting up worktree symlinks..."
+            "statusMessage": "Setting up Monaco editor..."
+          },
+          {
+            "type": "command",
+            "command": "MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ \"$(pwd)\" != \"$MAIN_WT\" ] && [ ! -f \"ConjureDSPExtension/Resources/terminal/xterm.js\" ]; then if [ -n \"$MAIN_WT\" ] && [ -f \"$MAIN_WT/ConjureDSPExtension/Resources/terminal/xterm.js\" ]; then for f in xterm.js xterm.css addon-fit.js addon-web-links.js; do [ -f \"$MAIN_WT/ConjureDSPExtension/Resources/terminal/$f\" ] && ln -sf \"$MAIN_WT/ConjureDSPExtension/Resources/terminal/$f\" \"ConjureDSPExtension/Resources/terminal/$f\"; done && echo \"Symlinked xterm.js from main worktree\"; else ./scripts/setup-xterm.sh; fi; fi",
+            "timeout": 60,
+            "statusMessage": "Setting up xterm.js..."
+          },
+          {
+            "type": "command",
+            "command": "MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ \"$(pwd)\" != \"$MAIN_WT\" ] && [ ! -d \"uv-dist\" ]; then if [ -n \"$MAIN_WT\" ] && [ -d \"$MAIN_WT/uv-dist\" ]; then ln -s \"$MAIN_WT/uv-dist\" uv-dist && echo \"Symlinked uv-dist from main worktree\"; else ./scripts/setup-uv.sh; fi; fi",
+            "timeout": 60,
+            "statusMessage": "Setting up uv package manager..."
           }
         ]
       }
@@ -35,9 +47,21 @@
         "hooks": [
           {
             "type": "command",
-            "command": "WORKTREE_DIR=$(python3 -c 'import sys,json;print(json.load(sys.stdin)[\"cwd\"])') && cd \"$WORKTREE_DIR\" && ./scripts/setup-worktree.sh",
+            "command": "WORKTREE_DIR=$(python3 -c 'import sys,json;print(json.load(sys.stdin)[\"cwd\"])') && cd \"$WORKTREE_DIR\" && if [ ! -d \"ConjureDSPExtension/Resources/monaco/vs\" ]; then MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ -n \"$MAIN_WT\" ] && [ -d \"$MAIN_WT/ConjureDSPExtension/Resources/monaco/vs\" ]; then mkdir -p ConjureDSPExtension/Resources/monaco && ln -s \"$MAIN_WT/ConjureDSPExtension/Resources/monaco/vs\" ConjureDSPExtension/Resources/monaco/vs && echo \"Symlinked Monaco from main worktree\"; else ./scripts/setup-monaco.sh; fi; fi",
             "timeout": 60,
-            "statusMessage": "Setting up worktree symlinks..."
+            "statusMessage": "Setting up Monaco editor..."
+          },
+          {
+            "type": "command",
+            "command": "WORKTREE_DIR=$(python3 -c 'import sys,json;print(json.load(sys.stdin)[\"cwd\"])') && cd \"$WORKTREE_DIR\" && if [ ! -f \"ConjureDSPExtension/Resources/terminal/xterm.js\" ]; then MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ -n \"$MAIN_WT\" ] && [ -f \"$MAIN_WT/ConjureDSPExtension/Resources/terminal/xterm.js\" ]; then for f in xterm.js xterm.css addon-fit.js addon-web-links.js; do [ -f \"$MAIN_WT/ConjureDSPExtension/Resources/terminal/$f\" ] && ln -sf \"$MAIN_WT/ConjureDSPExtension/Resources/terminal/$f\" \"ConjureDSPExtension/Resources/terminal/$f\"; done && echo \"Symlinked xterm.js from main worktree\"; else ./scripts/setup-xterm.sh; fi; fi",
+            "timeout": 60,
+            "statusMessage": "Setting up xterm.js..."
+          },
+          {
+            "type": "command",
+            "command": "WORKTREE_DIR=$(python3 -c 'import sys,json;print(json.load(sys.stdin)[\"cwd\"])') && cd \"$WORKTREE_DIR\" && if [ ! -d \"uv-dist\" ]; then MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ -n \"$MAIN_WT\" ] && [ -d \"$MAIN_WT/uv-dist\" ]; then ln -s \"$MAIN_WT/uv-dist\" uv-dist && echo \"Symlinked uv-dist from main worktree\"; else ./scripts/setup-uv.sh; fi; fi",
+            "timeout": 60,
+            "statusMessage": "Setting up uv package manager..."
           }
         ]
       }

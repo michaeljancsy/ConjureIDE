@@ -263,9 +263,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     // MARK: - Package listing
 
     private func mcpListPackages() -> (String, Bool) {
-        guard let containerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
-        ) else {
+        guard let containerURL = AppGroupContainer.url else {
             return (jsonStr(["error": "App Group container not available"]), true)
         }
 

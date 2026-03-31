@@ -16,7 +16,6 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "C
 @Observable
 @MainActor
 final class CrateInstallManager {
-    private static let appGroupID = "group.com.MichaelJancsy.ConjureDSP"
     private static let installRequestFile = "crate-install-request.json"
     private static let installResultFile = "crate-install-result.json"
     private static let uninstallRequestFile = "crate-uninstall-request.json"
@@ -349,8 +348,6 @@ final class CrateInstallManager {
     }
 
     nonisolated private static func containerURL() -> URL? {
-        FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: appGroupID
-        )
+        AppGroupContainer.url
     }
 }

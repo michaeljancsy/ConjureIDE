@@ -15,8 +15,13 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "T
 @MainActor
 final class TerminalServer {
 
-    let mcpServer = MCPServer()
-    private let appGroupID = "group.com.MichaelJancsy.ConjureDSP"
+    let mcpServer: MCPServer
+    private let appGroupContainerURL: URL?
+
+    init(appGroupContainerURL: URL?) {
+        self.appGroupContainerURL = appGroupContainerURL
+        self.mcpServer = MCPServer(appGroupContainerURL: appGroupContainerURL)
+    }
 
     // MARK: - Lifecycle
 
@@ -59,7 +64,7 @@ final class TerminalServer {
     // MARK: - App Group helpers
 
     nonisolated private func appGroupURL() -> URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
+        appGroupContainerURL
     }
 
     private func writeMCPPortToAppGroup() {

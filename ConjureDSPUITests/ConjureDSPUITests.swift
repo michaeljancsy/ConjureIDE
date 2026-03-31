@@ -155,6 +155,52 @@ final class ConjureDSPUITests: XCTestCase {
     // The sliders are visually present and functional but not discoverable via XCUI queries.
     // Same limitation as the language segmented picker.
 
+    // MARK: - Terminal / Daemon Launch Prompt
+
+    @MainActor
+    func testTerminalPanelTogglesCorrectly() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        // Wait for toolbar to load
+        let chatToggle = app.buttons["chatToggleButton"]
+        guard chatToggle.waitForExistence(timeout: 10) else {
+            XCTFail("Terminal toggle button not found")
+            return
+        }
+
+        // Before toggling, neither terminal nor prompt should be visible
+        let prompt = app.descendants(matching: .any)["daemonLaunchPrompt"].firstMatch
+        let terminal = app.descendants(matching: .any)["terminalPanel"].firstMatch
+        XCTAssertFalse(prompt.exists, "Daemon launch prompt should not be visible before toggling")
+        XCTAssertFalse(terminal.exists, "Terminal panel should not be visible before toggling")
+
+        // Toggle terminal panel open
+        chatToggle.click()
+        Thread.sleep(forTimeInterval: 2.0)
+
+        // Exactly one of the two views should appear, depending on daemon state:
+        // - If daemon is running: terminalPanel (xterm.js WebView)
+        // - If daemon is NOT running: daemonLaunchPrompt (icon + instructions)
+        let promptAppeared = prompt.waitForExistence(timeout: 3)
+        let terminalAppeared = terminal.waitForExistence(timeout: 1)
+
+        XCTAssertTrue(promptAppeared || terminalAppeared,
+                      "Either daemon launch prompt or terminal panel should appear when toggled")
+        XCTAssertTrue(promptAppeared != terminalAppeared,
+                      "Exactly one of prompt (\(promptAppeared)) or terminal (\(terminalAppeared)) should show, not both or neither")
+
+        // Toggle off — whichever was showing should disappear
+        chatToggle.click()
+        if promptAppeared {
+            XCTAssertTrue(prompt.waitForNonExistence(timeout: 3),
+                          "Daemon launch prompt should disappear when terminal toggled off")
+        } else {
+            XCTAssertTrue(terminal.waitForNonExistence(timeout: 3),
+                          "Terminal panel should disappear when terminal toggled off")
+        }
+    }
+
     // MARK: - Typing Tests
 
     @MainActor

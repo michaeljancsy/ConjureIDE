@@ -47,16 +47,10 @@ class TerminalAppServer {
     private var packageInstaller: PackageInstaller?
     private var crateInstaller: CrateInstaller?
 
-    private let appGroupID = "group.com.MichaelJancsy.ConjureDSP"
-
     /// URL of the shared Python runtime in the App Group container.
     /// This is the single authoritative Python installation used by the AU extension,
     /// package manager, and exported AUs.
-    static let pythonRuntimeURL: URL? = {
-        FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
-        )?.appendingPathComponent("PythonRuntime")
-    }()
+    static let pythonRuntimeURL: URL? = AppGroupContainer.url?.appendingPathComponent("PythonRuntime")
 
     func start() {
         log.info("ConjureDSP Terminal starting")
@@ -70,9 +64,7 @@ class TerminalAppServer {
             Self.provisionRustToolchainIfNeeded()
 
             Task { @MainActor in
-                if let containerURL = FileManager.default.containerURL(
-                    forSecurityApplicationGroupIdentifier: self.appGroupID
-                ) {
+                if let containerURL = AppGroupContainer.url {
                     self.packageInstaller = PackageInstaller(appGroupURL: containerURL)
                     if self.packageInstaller != nil {
                         log.info("Package installer ready")
@@ -177,9 +169,7 @@ class TerminalAppServer {
     /// to the App Group container so CrateInstaller can compile crates in the sandbox.
     /// Re-provisions if the rustc binary is missing (e.g. after an app update).
     nonisolated static func provisionRustToolchainIfNeeded() {
-        guard let containerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
-        ) else {
+        guard let containerURL = AppGroupContainer.url else {
             log.error("App Group container not available — cannot provision Rust toolchain")
             return
         }
@@ -215,9 +205,7 @@ class TerminalAppServer {
     /// Copies the bundled `uv` binary to the App Group container so PackageInstaller
     /// can find it reliably regardless of PATH or Bundle.main state. No-op if already present.
     nonisolated static func provisionUVIfNeeded() {
-        guard let containerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
-        ) else {
+        guard let containerURL = AppGroupContainer.url else {
             log.error("App Group container not available — cannot provision uv")
             return
         }
@@ -415,7 +403,7 @@ class TerminalAppServer {
     // MARK: - App Group helpers
 
     private func appGroupURL() -> URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
+        AppGroupContainer.url
     }
 
     private func readMCPPort() -> UInt16? {

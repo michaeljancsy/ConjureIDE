@@ -55,6 +55,12 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var paramNamesCancellable: AnyCancellable?
     private var paramMetadataCancellable: AnyCancellable?
 
+    /// App Group container URL — uses the cached resolution from AppGroupContainer
+    /// to avoid extra TCC prompts on macOS 26 Tahoe.
+    private var appGroupContainerURL: URL? {
+        AppGroupContainer.url
+    }
+
 	deinit {
         terminalServer?.stop()
         terminalServer = nil
@@ -234,7 +240,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         }
 
         if subscriptionManager == nil {
-            subscriptionManager = SubscriptionManager()
+            subscriptionManager = SubscriptionManager(appGroupContainerURL: appGroupContainerURL)
         }
         let lm = subscriptionManager!
 
@@ -411,6 +417,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         // Note: AUv3 view controllers run in a ViewBridge XPC process even when the
         // audio unit is loaded in-process, so Bundle.main is NOT the host app's bundle.
         // Identity-based host detection doesn't work — use capability-based detection instead.
+        let appGroupURL = self.appGroupContainerURL
         let onExport: (String) async -> ExportResult = { [weak au] name in
             guard let au else {
                 return .error("Audio unit not available")
@@ -436,7 +443,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             }
 
             // Stage unsigned export in App Group — host app finalizes (signs, registers, reveals)
-            guard let outputDir = ExportManager.appGroupContainerURL() else {
+            guard let outputDir = appGroupURL else {
                 return .error("Export failed. App Group container not available — check entitlements.")
             }
 
@@ -504,7 +511,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             onRenamePreset: onRenamePreset,
             onNew: onNew,
             onExport: onExport,
-            defaultBenchmark: initialBenchmark
+            defaultBenchmark: initialBenchmark,
+            appGroupContainerURL: appGroupContainerURL
         )
         let hv = SafeHostingView(rootView: content)
         hv.sizingOptions = []
@@ -520,7 +528,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 
         // Start terminal/MCP infrastructure — direct access to the real AU, no proxy
         if terminalServer == nil {
-            let ts = TerminalServer()
+            let ts = TerminalServer(appGroupContainerURL: appGroupContainerURL)
             ts.mcpServer.toolProvider = au  // Set before start so first connection sees it
             ts.start()
             terminalServer = ts

@@ -44,11 +44,11 @@ final class ExportManager {
     ///   - outputDirectory: Directory where the exported .app will be written.
     /// - Returns: URL to the exported .app bundle.
     /// App Group identifier shared between host app and AU extension.
-    static let appGroupIdentifier = "group.com.MichaelJancsy.ConjureDSP"
+    static let appGroupIdentifier = AppGroupContainer.id
 
     /// Returns the App Group container URL for staging exports.
     static func appGroupContainerURL() -> URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
+        AppGroupContainer.url
     }
 
     func exportPreset(

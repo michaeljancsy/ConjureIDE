@@ -11,11 +11,16 @@
 - Run `scripts/release.sh` end-to-end, store notarization creds in Keychain, verify DMG on clean machine. Full plan at `docs/distribution-plan.md`.
 - Landing page (static site with Buy + Download)
 - Single-source download URL config: one config file in the repo defining the canonical download link, referenced everywhere (landing page, in-app links, etc.) so it only needs updating in one place
+- see if the permissions loop happens with host app opened at same time as AU-loaded-in-DAW
 
 ### Post-Launch
 - Python package management follow-up: vendored exports (import analysis + export UI), community browser dependency badges, auto-launch companion app from sandbox
 
+### Bugs
+- Cmd+Shift+A triggers Ableton's project save as dialog instead of the extension's save as dialog
+
 ### Other
+- tone3000 API and .nam support
 - Export AU instantiation tests: add integration tests that instantiate exported AUs via `AVAudioUnitComponentManager` (the full DAW loading path) rather than just testing the Rust FFI directly. Would catch issues like Debug template stubs, `findPythonHome` sandbox failures, PluginKit registration, and parameter tree setup — bugs that the current `ExportDSPIntegrationTests` miss because they bypass the Swift AU class.
 - Self-contained Python exports: option to bundle a Python runtime directory inside the exported AU (in Resources/python-dist), making Python exports shareable across machines without requiring ConjureDSP to be installed. Tradeoff is ~100MB per exported AU.
 - AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration)

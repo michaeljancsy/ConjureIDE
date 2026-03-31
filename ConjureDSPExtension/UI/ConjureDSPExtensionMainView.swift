@@ -37,6 +37,7 @@ struct ConjureDSPExtensionMainView: View {
     var onNew: (ScriptLanguage) -> ScriptSaveResult
     var onExport: (String) async -> ExportResult
     var defaultBenchmark: (processTimeMs: Double, budgetMs: Double)?
+    var appGroupContainerURL: URL?
 
     @State private var scriptSource: String = ""
     @State private var selectedLanguage: ScriptLanguage = .python
@@ -59,6 +60,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var spectrogramFFTSizeIndex: Int = 2 // default: 2048
     @State private var spectrogramShowNoteNames: Bool = false
     @State private var snippetToInsert: String?
+    @StateObject private var daemonChecker = DaemonStatusChecker()
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("editorTheme") private var selectedTheme: String = "auto"
 
@@ -195,8 +197,14 @@ struct ConjureDSPExtensionMainView: View {
             // MonacoEditorView's pattern (bare WKWebView, simple frame).
             // WKWebView is recreated on toggle; WebSocket reconnects automatically.
             if showChat {
-                TerminalView(colorScheme: colorScheme)
-                    .frame(width: chatWidth)
+                if daemonChecker.isDaemonAvailable {
+                    TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
+                        .frame(width: chatWidth)
+                        .accessibilityIdentifier("terminalPanel")
+                } else {
+                    DaemonLaunchPromptView(colorScheme: colorScheme)
+                        .frame(width: chatWidth)
+                }
 
                 // Resizable divider
                 Rectangle()
@@ -381,6 +389,13 @@ struct ConjureDSPExtensionMainView: View {
         } message: {
             Text(exportAlertMessage ?? "")
         }
+        .onChange(of: showChat) { _, newValue in
+            if newValue {
+                daemonChecker.startChecking()
+            } else {
+                daemonChecker.stopChecking()
+            }
+        }
         .onChange(of: showSpectrogram) { _, newValue in
             captureManager.isActive = newValue
         }
@@ -414,6 +429,8 @@ struct ConjureDSPExtensionMainView: View {
                     .keyboardShortcut("r", modifiers: .command)
                 Button(action: handleCmdN) { EmptyView() }
                     .keyboardShortcut("n", modifiers: .command)
+                Button(action: handleSaveAs) { EmptyView() }
+                    .keyboardShortcut("A", modifiers: .command)
             }
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
@@ -434,6 +451,11 @@ struct ConjureDSPExtensionMainView: View {
             saveAsName = presetManager.currentPreset?.name ?? ""
             showingSaveAs = true
         }
+    }
+
+    private func handleSaveAs() {
+        saveAsName = presetManager.currentPreset?.name ?? ""
+        showingSaveAs = true
     }
 
     private func handleCmdR() {
