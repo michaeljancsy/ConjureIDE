@@ -98,6 +98,12 @@ class SubscriptionManager: ObservableObject {
 
     /// Load cached token from App Group and verify with kernel.
     func loadAndVerify() {
+        #if DEBUG
+        // worktree: always licensed
+        status = .active
+        setSubscriptionStatusInKernel?(SubscriptionStatus.active.rawValue)
+        return
+        #endif
         guard let token = loadToken() else {
             log.info("No cached subscription token found")
             status = .noSubscription
