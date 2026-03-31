@@ -2,6 +2,20 @@
 
 Incomplete test items from open PRs. Check off as you verify each item.
 
+## PR #132 — [Consolidate App Group container URL resolution to reduce TCC prompts](https://github.com/michaeljancsy/conjuredsp-application/pull/132)
+
+- [ ] Launch ConjureDSP host app — count permission prompts (should be reduced from multiple to 0-1)
+- [ ] Load ConjureDSP as AU in Logic Pro — count permission prompts
+- [ ] Verify subscription status loads correctly
+- [ ] Verify MCP server starts and Claude Code terminal connects
+- [ ] Verify export functionality still works
+
+## PR #129 — [Add Cmd+Shift+A keyboard shortcut for Save As](https://github.com/michaeljancsy/conjuredsp-application/pull/129)
+
+- [ ] Press Cmd+Shift+A → Save As popover opens with current preset name pre-filled
+- [ ] Save As still works via toolbar button
+- [ ] Cmd+S still saves directly for mutable modified presets
+
 ## PR #126 — [Fix exported Python AUs failing to load in DAWs](https://github.com/michaeljancsy/conjuredsp-application/pull/126)
 
 - [ ] Export a Python preset that uses `from conjuredsp import ...` — verify it loads and processes audio in Ableton
