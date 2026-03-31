@@ -423,6 +423,8 @@ struct ConjureDSPExtensionMainView: View {
                     .keyboardShortcut("r", modifiers: .command)
                 Button(action: handleCmdN) { EmptyView() }
                     .keyboardShortcut("n", modifiers: .command)
+                Button(action: handleSaveAs) { EmptyView() }
+                    .keyboardShortcut("A", modifiers: .command)
             }
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
@@ -443,6 +445,11 @@ struct ConjureDSPExtensionMainView: View {
             saveAsName = presetManager.currentPreset?.name ?? ""
             showingSaveAs = true
         }
+    }
+
+    private func handleSaveAs() {
+        saveAsName = presetManager.currentPreset?.name ?? ""
+        showingSaveAs = true
     }
 
     private func handleCmdR() {
