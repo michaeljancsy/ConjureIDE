@@ -215,11 +215,9 @@ impl DSPKernel {
     pub fn inject_nam(&mut self, binary_data: &[u8]) -> Result<(), String> {
         let mut guard = self.backend.lock().map_err(|e| format!("Lock failed: {}", e))?;
         if let Some(ref mut backend) = *guard {
-            // Downcast to WasmBackend — this is safe because inject_nam is only
-            // called after load_wasm, so the backend is always a WasmBackend.
-            // We use a raw pointer cast because Backend is not Any.
-            let backend_ptr = &mut **backend as *mut dyn Backend as *mut WasmBackend;
-            unsafe { (*backend_ptr).inject_nam_model(binary_data) }
+            let wasm = backend.as_any_mut().downcast_mut::<WasmBackend>()
+                .ok_or("Backend is not WasmBackend")?;
+            wasm.inject_nam_model(binary_data)
         } else {
             Err("No backend loaded".to_string())
         }

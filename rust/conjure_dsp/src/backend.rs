@@ -1,5 +1,6 @@
 use crate::kernel::TransportState;
 use crate::params::{ParamMetadata, PARAM_COUNT};
+use std::any::Any;
 use std::collections::HashMap;
 
 /// Trait for pluggable DSP processing backends (Python, WASM, etc.).
@@ -7,7 +8,9 @@ use std::collections::HashMap;
 /// Implementations must be real-time safe in `process()`:
 /// - No allocations, no locks, no syscalls
 /// - Pre-allocate everything in `initialize()`
-pub trait Backend {
+pub trait Backend: Any {
+    /// Downcast support for safe runtime type checking.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
     /// Called when render resources are allocated. Pre-allocate any per-channel
     /// buffers sized to `max_frames`.
     fn initialize(&mut self, channel_count: usize, sample_rate: f64, max_frames: u32);

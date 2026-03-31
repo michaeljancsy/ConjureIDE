@@ -520,6 +520,8 @@ impl WasmBackend {
 }
 
 impl Backend for WasmBackend {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+
     fn initialize(&mut self, channel_count: usize, _sample_rate: f64, max_frames: u32) {
         self.channel_count = channel_count;
         self.max_frames = max_frames;
