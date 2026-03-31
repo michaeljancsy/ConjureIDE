@@ -33,6 +33,7 @@ pub mod context;
 pub mod dsp;
 pub mod filters;
 pub mod json;
+pub mod nam;
 pub mod osc;
 pub mod params;
 
@@ -49,6 +50,9 @@ pub use params::{choice, db, freq, mix, pct, ratio, time_ms, toggle};
 
 // Re-export JSON builder for macro use
 pub use json::{write_param_json, JsonBuf};
+
+// NAM (Neural Amp Modeler) inference
+pub use nam::NamModel;
 
 /// Declares all required WASM buffers, exports, and the `ctx()` helper.
 ///
@@ -201,6 +205,64 @@ macro_rules! latency {
         #[no_mangle]
         pub extern "C" fn get_latency_samples() -> i32 {
             $samples as i32
+        }
+    };
+}
+
+/// Declares a NAM (Neural Amp Modeler) model to be loaded by the host.
+///
+/// Expands to:
+/// - `NAM_MODEL` static holding the loaded model
+/// - `NAM_DATA_BUF` static buffer for host data injection (4MB)
+/// - `NAM_IN` / `NAM_OUT` static audio buffers
+/// - WASM exports: `get_nam_data_ptr`, `init_nam`, `get_nam_active`
+/// - Path metadata exports: `get_nam_path_ptr`, `get_nam_path_len`
+///
+/// # Example
+///
+/// ```ignore
+/// use conjuredsp::*;
+/// setup!();
+/// nam!("tone3000://abc123/def456");
+/// ```
+#[macro_export]
+macro_rules! nam {
+    ($path:expr) => {
+        static mut NAM_MODEL: Option<conjuredsp::NamModel> = None;
+        static mut NAM_DATA_BUF: [u8; 4_194_304] = [0u8; 4_194_304];
+        static mut NAM_IN: [f32; MAX_FR] = [0.0; MAX_FR];
+        static mut NAM_OUT: [f32; MAX_FR] = [0.0; MAX_FR];
+
+        static NAM_PATH: &str = $path;
+
+        #[no_mangle]
+        pub extern "C" fn get_nam_data_ptr() -> i32 {
+            unsafe { NAM_DATA_BUF.as_ptr() as i32 }
+        }
+
+        #[no_mangle]
+        pub extern "C" fn init_nam(data_len: i32) -> i32 {
+            unsafe {
+                match conjuredsp::NamModel::from_binary(&NAM_DATA_BUF[..data_len as usize]) {
+                    Some(model) => { NAM_MODEL = Some(model); 1 }
+                    None => 0
+                }
+            }
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_nam_active() -> i32 {
+            unsafe { if NAM_MODEL.is_some() { 1 } else { 0 } }
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_nam_path_ptr() -> i32 {
+            NAM_PATH.as_ptr() as i32
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_nam_path_len() -> i32 {
+            NAM_PATH.len() as i32
         }
     };
 }

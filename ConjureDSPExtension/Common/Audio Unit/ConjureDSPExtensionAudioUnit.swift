@@ -342,6 +342,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			return
 		}
 
+		// Set tones directory so conjuredsp.nam can resolve tone3000:// paths
+		if let tonesDir = Self.appGroupContainerURL?.appendingPathComponent("tones").path {
+			dsp_kernel_set_tones_dir(kernel, tonesDir)
+		}
+
 		pluginLog.info("Loading Python script. pythonHome=\(pythonHome, privacy: .public) scriptPath=\(scriptPath, privacy: .public)")
 		let success = dsp_kernel_load_script(kernel, pythonHome, scriptPath)
 		if success {

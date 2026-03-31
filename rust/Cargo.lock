@@ -136,6 +136,9 @@ dependencies = [
 [[package]]
 name = "conjuredsp"
 version = "0.1.0"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "const-oid"

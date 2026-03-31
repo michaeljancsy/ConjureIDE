@@ -181,6 +181,28 @@ pub unsafe extern "C" fn dsp_kernel_set_extra_site_packages(
     }
 }
 
+/// Set the directory where downloaded NAM tone files are stored.
+/// This sets the `CONJUREDSP_TONES_DIR` environment variable so Python scripts
+/// can resolve `tone3000://` paths via `conjuredsp.nam.load_model()`.
+///
+/// Call this once after kernel creation, before loading scripts.
+/// Pass null to no-op.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+/// - `path` must be a valid null-terminated C string, or null.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_set_tones_dir(
+    _kernel: DSPKernelRef,
+    path: *const c_char,
+) {
+    if !path.is_null() {
+        if let Ok(s) = CStr::from_ptr(path).to_str() {
+            std::env::set_var("CONJUREDSP_TONES_DIR", s);
+        }
+    }
+}
+
 /// Load a WASM module for DSP processing.
 ///
 /// The module must export a `process` function with signature
@@ -203,6 +225,52 @@ pub unsafe extern "C" fn dsp_kernel_load_wasm(
     }
     let bytes = std::slice::from_raw_parts(wasm_bytes, len as usize);
     (*kernel).load_wasm(bytes)
+}
+
+/// Returns the NAM model path embedded in the loaded WASM module, or null if none.
+/// The returned pointer is valid until the next `load_wasm` or `dsp_kernel_destroy`.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_nam_path(kernel: DSPKernelRef) -> *const c_char {
+    match (*kernel).nam_path() {
+        Some(path) => {
+            // Store as CString to ensure pointer lifetime
+            // This is a bit of a hack — ideally we'd cache this
+            static mut NAM_PATH_CACHE: Option<std::ffi::CString> = None;
+            NAM_PATH_CACHE = std::ffi::CString::new(path).ok();
+            NAM_PATH_CACHE.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null())
+        }
+        None => std::ptr::null(),
+    }
+}
+
+/// Inject NAM model binary data into the loaded WASM backend.
+/// Call after `dsp_kernel_load_wasm` when `dsp_kernel_nam_path` returns non-null.
+/// Returns true on success.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+/// - `data` must point to `len` valid bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_inject_nam(
+    kernel: DSPKernelRef,
+    data: *const u8,
+    len: usize,
+) -> bool {
+    if data.is_null() || len == 0 {
+        return false;
+    }
+    let bytes = std::slice::from_raw_parts(data, len);
+    match (*kernel).inject_nam(bytes) {
+        Ok(()) => true,
+        Err(err) => {
+            eprintln!("NAM injection failed: {}", err);
+            (*kernel).set_last_error(Some(err));
+            false
+        }
+    }
 }
 
 /// Benchmark the process function.

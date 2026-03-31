@@ -70,6 +70,9 @@ struct PresetToolbar: View {
 
     @Binding var showingSaveAs: Bool
     @Binding var saveAsName: String
+    /// Callback to insert a code snippet into the Monaco editor at the cursor.
+    var onInsertSnippet: ((String) -> Void)?
+
     @State private var showDeleteConfirm = false
     @State private var showingRename = false
     @State private var renameName = ""
@@ -78,6 +81,9 @@ struct PresetToolbar: View {
     @State private var showingPackages = false
     @State private var packageInstallManager = PackageInstallManager()
     @State private var crateInstallManager = CrateInstallManager()
+    @State private var showingTones = false
+    @State private var toneClient = Tone3000Client()
+    @State private var toneModelStore = ToneModelStore()
     @State private var showingExport = false
     @State private var showingPresetBrowser = false
     @State private var showingCommunityBrowser = false
@@ -467,6 +473,33 @@ struct PresetToolbar: View {
                     onDone: { showingPackages = false },
                     initialLanguage: selectedLanguage == .rust
                         ? .rust : .python
+                )
+            }
+
+            // Tones (NAM models from tone3000)
+            Button(action: { showingTones = true }) {
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: "guitars")
+                        .frame(height: 16)
+                    Text("Tones")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .buttonStyle(.borderless)
+            .fixedSize()
+            .toolbarTooltip("Browse amp/pedal tones")
+            .accessibilityIdentifier("tonesButton")
+            .popover(isPresented: $showingTones) {
+                ToneBrowserView(
+                    client: toneClient,
+                    modelStore: toneModelStore,
+                    selectedLanguage: selectedLanguage,
+                    onDone: { showingTones = false },
+                    onInsertSnippet: { snippet in
+                        showingTones = false
+                        onInsertSnippet?(snippet)
+                    }
                 )
             }
 

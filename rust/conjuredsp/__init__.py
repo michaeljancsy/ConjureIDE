@@ -44,6 +44,9 @@ from .buffers import DelayLine
 from .filters import Biquad, BiquadCoeffs
 from .osc import LFO
 
+# NAM (Neural Amp Modeler) inference
+from .nam import NamModel, load_model
+
 __all__ = [
     # Types
     "AudioBuffer",
@@ -77,4 +80,7 @@ __all__ = [
     "Biquad",
     "BiquadCoeffs",
     "LFO",
+    # NAM inference
+    "NamModel",
+    "load_model",
 ]
