@@ -234,13 +234,16 @@ pub unsafe extern "C" fn dsp_kernel_load_wasm(
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 #[no_mangle]
 pub unsafe extern "C" fn dsp_kernel_nam_path(kernel: DSPKernelRef) -> *const c_char {
+    thread_local! {
+        static NAM_PATH_CACHE: std::cell::RefCell<Option<std::ffi::CString>> = const { std::cell::RefCell::new(None) };
+    }
     match (*kernel).nam_path() {
         Some(path) => {
-            // Store as CString to ensure pointer lifetime
-            // This is a bit of a hack — ideally we'd cache this
-            static mut NAM_PATH_CACHE: Option<std::ffi::CString> = None;
-            NAM_PATH_CACHE = std::ffi::CString::new(path).ok();
-            NAM_PATH_CACHE.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null())
+            NAM_PATH_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                *cache = std::ffi::CString::new(path).ok();
+                cache.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null())
+            })
         }
         None => std::ptr::null(),
     }
