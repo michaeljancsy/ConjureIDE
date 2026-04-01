@@ -153,12 +153,17 @@ def _conv1d(x, weight, bias=None, dilation=1, scratch=None):
     return out
 
 
-def _conv1x1(x, weight, bias=None):
-    """1x1 convolution (channel mixing)."""
-    out = weight @ x
+def _conv1x1(x, weight, bias=None, out=None):
+    """1x1 convolution (channel mixing).  Reuses *out* buffer if provided and big enough."""
+    rows, cols = weight.shape[0], x.shape[1]
+    if out is not None and out.shape[0] >= rows and out.shape[1] >= cols:
+        result = out[:rows, :cols]
+        np.matmul(weight, x, out=result)
+    else:
+        result = weight @ x
     if bias is not None:
-        out += bias[:, np.newaxis]
-    return out
+        result += bias[:, np.newaxis]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -323,13 +328,17 @@ class _WaveNetLayerArray:
         max_c_in_k = channels * kernel_size
         mid_ch = (2 * channels if gated else channels) * kernel_size
         self._scratch_rows = max(max_c_in_k, mid_ch)
+        self._scratch = None  # lazily allocated on first forward(), reused thereafter
 
     def forward(self, x, condition, head_input=None, max_frames=0):
         out_length = min(x.shape[1], condition.shape[1]) - (self.receptive_field - 1)
         if out_length <= 0:
             raise ValueError(f"Input too short: need > {self.receptive_field - 1} samples")
-        # Allocate scratch once per forward pass (sized for this buffer)
-        scratch = np.zeros((self._scratch_rows, out_length + self.receptive_field), dtype=np.float32)
+        # Reuse scratch buffer across calls; only reallocate if buffer size grew
+        scratch_cols = out_length + self.receptive_field
+        if self._scratch is None or self._scratch.shape[1] < scratch_cols:
+            self._scratch = np.zeros((self._scratch_rows, scratch_cols), dtype=np.float32)
+        scratch = self._scratch
         x = _conv1x1(x, self.rechannel_w)
         for layer in self.layers:
             x, head_term = layer.forward(x, condition, out_length, scratch=scratch)
@@ -423,6 +432,8 @@ class NamModel:
         self._warned_sr = False
         # Per-channel LSTM state: each channel needs independent cells
         self._lstm_channels: list[_LSTMModel | None] = []
+        # Pre-allocated buffers for WaveNet (per-channel, lazily sized)
+        self._full_input: list[np.ndarray | None] = []
 
     def process(self, audio: np.ndarray, channel: int) -> np.ndarray:
         """Process a mono audio buffer through the NAM model.
@@ -445,25 +456,37 @@ class NamModel:
             return self._process_lstm(audio, channel)
 
     def _process_wavenet(self, audio: np.ndarray, channel: int) -> np.ndarray:
-        # Grow history list if needed
+        # Grow per-channel lists if needed
         while len(self._history) <= channel:
             self._history.append(None)
+        while len(self._full_input) <= channel:
+            self._full_input.append(None)
 
         rf = self.receptive_field
         hist = self._history[channel]
+        n = len(audio)
+        total_len = (rf - 1) + n
 
         if hist is None:
-            # First call: no history, pad with zeros
             hist = np.zeros(rf - 1, dtype=np.float32)
 
-        full_input = np.concatenate([hist, audio])
-        raw_output = self._model.process(full_input)
+        # Reuse pre-allocated full_input buffer; only reallocate if size grew
+        buf = self._full_input[channel]
+        if buf is None or len(buf) < total_len:
+            buf = np.empty(total_len, dtype=np.float32)
+            self._full_input[channel] = buf
+        fi = buf[:total_len]
+        fi[: rf - 1] = hist
+        fi[rf - 1 :] = audio
 
-        # raw_output length = len(full_input) - (rf - 1) = len(audio)
-        output = raw_output[-len(audio) :]
+        raw_output = self._model.process(fi)
 
-        # Update history (last rf-1 samples of input)
-        self._history[channel] = full_input[-(rf - 1) :].copy()
+        output = raw_output[-n:]
+
+        # Update history in-place (copy last rf-1 samples into existing hist)
+        if self._history[channel] is None or len(self._history[channel]) != rf - 1:
+            self._history[channel] = np.empty(rf - 1, dtype=np.float32)
+        self._history[channel][:] = fi[-(rf - 1) :]
 
         return output.astype(np.float32)
 
@@ -486,6 +509,7 @@ class NamModel:
     def reset(self):
         """Clear all per-channel state (history buffers, LSTM hidden state)."""
         self._history = []
+        self._full_input = []
         if self.architecture == "LSTM":
             self._model.reset()
             for ch_model in self._lstm_channels:

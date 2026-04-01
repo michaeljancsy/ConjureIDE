@@ -310,6 +310,8 @@ pub struct WaveNet {
     // Layout: 6 regions of `region_size` each (input, x, temp, conv_out, head, scratch)
     work: Vec<f32>,
     region_size: usize,
+    // Temp buffer for same-region rechannel copy (avoids per-call vec! allocation)
+    rechannel_temp: Vec<f32>,
 }
 
 impl WaveNet {
@@ -352,11 +354,15 @@ impl WaveNet {
             .max().unwrap_or(3);
         let region_size = (max_mid * max_l).max(max_ch * max_kernel * max_l);
 
+        // rechannel_temp needs to hold max_ch * max_l for same-region rechannel
+        let rechannel_temp_size = max_ch * max_l;
+
         WaveNet {
             layer_arrays, head_layers, head_scale, receptive_field,
             history: Vec::new(),
             work: vec![0.0; region_size * 6],
             region_size,
+            rechannel_temp: vec![0.0; rechannel_temp_size],
         }
     }
 
@@ -417,10 +423,10 @@ impl WaveNet {
                     let (a, b) = self.work.split_at_mut(x_dst_off);
                     (&a[x_src_off..x_src_off + x_ch * x_len], &mut b[..la_channels * x_len])
                 } else if x_src_off == x_dst_off {
-                    // Same region — need temp copy
-                    let mut temp = vec![0.0f32; x_ch * x_len];
-                    temp.copy_from_slice(&self.work[x_src_off..x_src_off + x_ch * x_len]);
-                    conv1x1(&temp, x_ch, x_len, &self.layer_arrays[la_idx].rechannel_w, la_channels, &[],
+                    // Same region — need temp copy (use pre-allocated buffer)
+                    let temp_len = x_ch * x_len;
+                    self.rechannel_temp[..temp_len].copy_from_slice(&self.work[x_src_off..x_src_off + temp_len]);
+                    conv1x1(&self.rechannel_temp[..temp_len], x_ch, x_len, &self.layer_arrays[la_idx].rechannel_w, la_channels, &[],
                             &mut self.work[x_dst_off..x_dst_off + la_channels * x_len]);
                     // Skip the normal conv1x1 below
                     x_ch = la_channels; // update for layer processing
@@ -458,14 +464,25 @@ impl WaveNet {
             let count = *in_c * out_len;
             match act {
                 Activation::Tanh => {
-                    let mut temp = vec![0.0f32; count];
-                    accel::vec_tanh(&self.work[head_off..head_off + count], &mut temp);
-                    self.work[head_off..head_off + count].copy_from_slice(&temp);
+                    // Use temp region (region 3) as scratch — free before conv1x1 below
+                    let work_ptr = self.work.as_mut_ptr();
+                    unsafe {
+                        let inp = core::slice::from_raw_parts(work_ptr.add(head_off), count);
+                        let tmp = core::slice::from_raw_parts_mut(work_ptr.add(temp_off), count);
+                        accel::vec_tanh(inp, tmp);
+                        let dst = core::slice::from_raw_parts_mut(work_ptr.add(head_off), count);
+                        dst.copy_from_slice(tmp);
+                    }
                 }
                 Activation::Sigmoid => {
-                    let mut temp = vec![0.0f32; count];
-                    accel::vec_sigmoid(&self.work[head_off..head_off + count], &mut temp);
-                    self.work[head_off..head_off + count].copy_from_slice(&temp);
+                    let work_ptr = self.work.as_mut_ptr();
+                    unsafe {
+                        let inp = core::slice::from_raw_parts(work_ptr.add(head_off), count);
+                        let tmp = core::slice::from_raw_parts_mut(work_ptr.add(temp_off), count);
+                        accel::vec_sigmoid(inp, tmp);
+                        let dst = core::slice::from_raw_parts_mut(work_ptr.add(head_off), count);
+                        dst.copy_from_slice(tmp);
+                    }
                 }
                 Activation::Relu => {
                     for i in 0..count {
@@ -589,14 +606,25 @@ impl WaveNet {
                 let count = channels * l_out;
                 match activation {
                     Activation::Tanh => {
-                        let mut temp = vec![0.0f32; count];
-                        accel::vec_tanh(&self.work[conv_off..conv_off + count], &mut temp);
-                        self.work[conv_off..conv_off + count].copy_from_slice(&temp);
+                        // Use scratch region as temp (same approach as gated path)
+                        let work_ptr = self.work.as_mut_ptr();
+                        unsafe {
+                            let inp = core::slice::from_raw_parts(work_ptr.add(conv_off), count);
+                            let tmp = core::slice::from_raw_parts_mut(work_ptr.add(scratch_off), count);
+                            accel::vec_tanh(inp, tmp);
+                            let dst = core::slice::from_raw_parts_mut(work_ptr.add(conv_off), count);
+                            dst.copy_from_slice(tmp);
+                        }
                     }
                     Activation::Sigmoid => {
-                        let mut temp = vec![0.0f32; count];
-                        accel::vec_sigmoid(&self.work[conv_off..conv_off + count], &mut temp);
-                        self.work[conv_off..conv_off + count].copy_from_slice(&temp);
+                        let work_ptr = self.work.as_mut_ptr();
+                        unsafe {
+                            let inp = core::slice::from_raw_parts(work_ptr.add(conv_off), count);
+                            let tmp = core::slice::from_raw_parts_mut(work_ptr.add(scratch_off), count);
+                            accel::vec_sigmoid(inp, tmp);
+                            let dst = core::slice::from_raw_parts_mut(work_ptr.add(conv_off), count);
+                            dst.copy_from_slice(tmp);
+                        }
                     }
                     Activation::Relu => {
                         for i in 0..count {
@@ -763,6 +791,8 @@ pub struct Lstm {
     channel_cells: Vec<Vec<LstmCell>>,
     // Pre-allocated scratch for gate computation
     ifgo_scratch: Vec<f32>,
+    // Pre-allocated scratch for inter-cell data passing
+    x_buf: Vec<f32>,
 }
 
 fn clone_cells(cells: &[LstmCell]) -> Vec<LstmCell> {
@@ -779,8 +809,8 @@ fn process_lstm_cells(
     cells: &mut [LstmCell], input: &[f32], output: &mut [f32],
     head_w: &[f32], head_b: &[f32], hidden_size: usize,
     ifgo_scratch: &mut [f32],
+    x_buf: &mut [f32],
 ) {
-    let mut x_buf = vec![0.0f32; hidden_size.max(1)];
 
     for t in 0..input.len() {
         x_buf[0] = input[t];
@@ -828,6 +858,7 @@ impl Lstm {
             cells, head_w, head_b, hidden_size: h,
             channel_cells: Vec::new(),
             ifgo_scratch: vec![0.0; 4 * h],
+            x_buf: vec![0.0; h.max(1)],
         }
     }
 
@@ -842,12 +873,13 @@ impl Lstm {
         let head_w = &self.head_w;
         let head_b = &self.head_b;
         let ifgo = &mut self.ifgo_scratch;
+        let x_buf = &mut self.x_buf;
 
         if channel == 0 {
-            process_lstm_cells(&mut self.cells, input, output, head_w, head_b, h, ifgo);
+            process_lstm_cells(&mut self.cells, input, output, head_w, head_b, h, ifgo, x_buf);
         } else {
             let cells = &mut self.channel_cells[channel - 1];
-            process_lstm_cells(cells, input, output, head_w, head_b, h, ifgo);
+            process_lstm_cells(cells, input, output, head_w, head_b, h, ifgo, x_buf);
         }
     }
 
@@ -1296,6 +1328,7 @@ mod tests {
             history: Vec::new(),
             work: vec![0.0; 10 * 6],  // region_size = 10
             region_size: 10,
+            rechannel_temp: Vec::new(),
         };
 
         // Input of 20 samples: full_len = 0 + 20 = 20 > region_size (10) → passthrough
@@ -1316,6 +1349,7 @@ mod tests {
             history: Vec::new(),
             work: vec![0.0; 1000 * 6],
             region_size: 1000,
+            rechannel_temp: Vec::new(),
         };
 
         // Output smaller than input → passthrough up to output length
