@@ -750,6 +750,15 @@ impl WasmBackend {
         let buf_ptr = get_ptr_fn.call(&mut self.store, ())
             .map_err(|e| format!("get_nam_data_ptr failed: {}", e))? as usize;
 
+        // Validate against the NAM_DATA_BUF size (4MB) to prevent overflow
+        const NAM_DATA_BUF_SIZE: usize = 4 * 1024 * 1024;
+        if binary_data.len() > NAM_DATA_BUF_SIZE {
+            return Err(format!(
+                "NAM model ({} bytes) exceeds maximum buffer size ({} bytes). Model is too large.",
+                binary_data.len(), NAM_DATA_BUF_SIZE
+            ));
+        }
+
         // Write binary data into WASM memory
         let mem_data = self.memory.data_mut(&mut self.store);
         let end = buf_ptr + binary_data.len();

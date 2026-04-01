@@ -378,14 +378,22 @@ impl WaveNet {
         let n = input.len();
         if n == 0 { return; }
 
+        // Validate buffer sizes to prevent work pool overflow
+        let rf = self.receptive_field;
+        let hist_len = rf - 1;
+        let full_len = hist_len + n;
+        if full_len > self.region_size || output.len() < n {
+            // Input too large for work buffer or output too small — passthrough
+            let copy_len = n.min(output.len());
+            output[..copy_len].copy_from_slice(&input[..copy_len]);
+            return;
+        }
+
         // Ensure per-channel history exists
         while self.history.len() <= channel {
             self.history.push(vec![0.0; self.receptive_field - 1]);
         }
 
-        let rf = self.receptive_field;
-        let hist_len = rf - 1;
-        let full_len = hist_len + n;
         let rs = self.region_size;
 
         // Work pool regions (non-overlapping slices of self.work):
@@ -550,7 +558,7 @@ impl WaveNet {
                     for j in 0..cond_len {
                         let cond_j = full_len - cond_len + j;
                         let mut mix_val = 0.0f32;
-                        for c in 0..condition_size.min(1) {
+                        for c in 0..condition_size {
                             mix_val += mix_w[i * condition_size + c] * self.work[c * full_len + cond_j];
                         }
                         self.work[conv_off + i * l_out + j] += mix_val;

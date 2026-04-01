@@ -94,11 +94,13 @@ struct MonacoEditorView: NSViewRepresentable {
             webView.evaluateJavaScript("bridge.setContent(\"\(escaped)\")") { _, _ in }
         }
 
-        // Insert snippet at cursor if requested
+        // Insert snippet at cursor if requested.
+        // Reset synchronously before the JS call to prevent duplicate insertion
+        // if SwiftUI calls updateNSView again before the JS completes.
         if let snippet = snippetToInsert {
+            self.snippetToInsert = nil
             let escaped = snippet.jsEscaped
             webView.evaluateJavaScript("bridge.insertAtCursor(\"\(escaped)\")") { _, _ in }
-            DispatchQueue.main.async { self.snippetToInsert = nil }
         }
 
         // Update error markers if changed

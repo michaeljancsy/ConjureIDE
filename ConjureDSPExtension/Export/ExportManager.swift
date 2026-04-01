@@ -14,6 +14,7 @@ final class ExportManager {
         case codeSignFailed(String)
         case copyFailed(String)
         case validationFailed(String)
+        case namModelNotFound(String)
 
         var errorDescription: String? {
             switch self {
@@ -23,6 +24,7 @@ final class ExportManager {
             case .codeSignFailed(let detail): return "Code signing failed: \(detail)"
             case .copyFailed(let detail): return "Failed to copy template: \(detail)"
             case .validationFailed(let detail): return "Export validation failed: \(detail)"
+            case .namModelNotFound(let path): return "NAM model not found: \(path). Download the tone first."
             }
         }
     }
@@ -244,8 +246,7 @@ final class ExportManager {
         }
 
         guard let sourceURL = resolvedURL else {
-            log.warning("NAM model file not found for export: \(path, privacy: .public)")
-            return nil
+            throw ExportError.namModelNotFound(path)
         }
 
         // Copy .nam file into the export bundle
@@ -254,9 +255,12 @@ final class ExportManager {
         try FileManager.default.copyItem(at: sourceURL, to: destURL)
         log.info("Embedded NAM model in export: \(sourceURL.lastPathComponent, privacy: .public)")
 
-        // For Python: rewrite the source to use the embedded model path
-        if language == .python {
-            let rewrittenSource = source.replacingOccurrences(of: path, with: "model.nam")
+        // For Python: rewrite only the load_model() call to use the embedded model path.
+        // Scoped replacement avoids corrupting comments or other code containing the path.
+        if language == .python,
+           let callRange = source.range(of: #"load_model\("([^"]+)"\)"#, options: .regularExpression) {
+            var rewrittenSource = source
+            rewrittenSource.replaceSubrange(callRange, with: "load_model(\"model.nam\")")
             try Data(rewrittenSource.utf8).write(
                 to: appexResourcesURL.appendingPathComponent("preset.py"),
                 options: .atomic

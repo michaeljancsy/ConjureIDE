@@ -463,6 +463,9 @@ struct ToneBrowserView: View {
     }
 
     private func fetchModels(toneId: String) async {
+        // Skip if already fetched — avoids redundant API calls when re-expanding
+        if toneModels[toneId] != nil { return }
+
         do {
             let models = try await client.models(forToneId: toneId)
             toneModels[toneId] = models
