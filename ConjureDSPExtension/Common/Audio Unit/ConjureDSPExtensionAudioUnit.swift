@@ -658,7 +658,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 
 		let arch: UInt32 = architecture == "LSTM" ? 1 : 0
-		let sampleRate = Float(namJson["sample_rate"] as? Int ?? 48000)
+		let sampleRate = Float((namJson["sample_rate"] as? Double) ?? (namJson["sample_rate"] as? Int).map(Double.init) ?? 48000.0)
 
 		guard let configData = try? JSONSerialization.data(withJSONObject: configObj) else {
 			let msg = "Failed to serialize NAM config for \(namPath)"
