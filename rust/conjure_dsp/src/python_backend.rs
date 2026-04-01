@@ -40,6 +40,9 @@ pub struct PythonBackend {
     py_transport_dict: Option<Py<PyAny>>,
     /// Cached PyDict for params when using rich metadata (created once, values updated in-place).
     py_params_dict: Option<Py<PyAny>>,
+    /// Cached PyList for params in legacy mode (no metadata). Created once, values updated in-place
+    /// each callback to avoid per-callback allocation of 16 Python float objects + list.
+    py_params_list: Option<Py<PyAny>>,
     /// Unique module name in sys.modules for this instance (e.g., "dsp_script_0").
     /// Stored so Drop can remove it from sys.modules to prevent memory leaks.
     module_name: String,
@@ -157,6 +160,7 @@ impl PythonBackend {
                     py_output_list: None,
                     py_transport_dict: None,
                     py_params_dict: None,
+                    py_params_list: None,
                     module_name,
                 })
             }
@@ -353,6 +357,11 @@ impl PythonBackend {
                     let _ = dict.set_item(&meta.key, meta.default);
                 }
                 self.py_params_dict = Some(dict.into_any().unbind());
+            } else {
+                // Cache legacy params list (16 zeros, values updated in-place each callback)
+                if let Ok(list) = PyList::new(py, [0.0f32; PARAM_COUNT].iter()) {
+                    self.py_params_list = Some(list.into_any().unbind());
+                }
             }
         });
         self.py_channel_count = channel_count;
@@ -408,6 +417,12 @@ impl PythonBackend {
                     }
                     dict.into_any()
                 }
+            } else if let Some(ref cached) = self.py_params_list {
+                let list = cached.bind(py);
+                for (i, &val) in params.iter().enumerate() {
+                    list.set_item(i, val)?;
+                }
+                list.clone()
             } else {
                 PyList::new(py, params.iter())?.into_any()
             };
@@ -497,6 +512,7 @@ impl Backend for PythonBackend {
                 self.py_output_list = None;
                 self.py_transport_dict = None;
                 self.py_params_dict = None;
+                self.py_params_list = None;
             });
         }
     }
