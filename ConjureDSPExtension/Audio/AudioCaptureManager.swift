@@ -112,6 +112,10 @@ final class AudioCaptureManager: ObservableObject {
     private var fftMagnitudes: [Float] = []
     private var fftDBValues: [Float] = []
 
+    // Pre-allocated scratch buffers for difference computation (reused across tick calls)
+    private var diffScratch: [Float] = []
+    private var normDiffScratch: [Float] = []
+
     // MARK: - Init
 
     init() {
@@ -155,6 +159,10 @@ final class AudioCaptureManager: ObservableObject {
         fftWindowed = [Float](repeating: 0, count: n)
         fftMagnitudes = [Float](repeating: 0, count: n / 2)
         fftDBValues = [Float](repeating: 0, count: n / 2)
+
+        // Pre-allocated difference scratch buffers
+        diffScratch = [Float](repeating: 0, count: n / 2)
+        normDiffScratch = [Float](repeating: 0, count: n / 2)
 
         // Reset accumulators
         inputAccumulator.removeAll(keepingCapacity: true)
@@ -372,32 +380,30 @@ final class AudioCaptureManager: ObservableObject {
 
     // MARK: - Difference
 
-    /// Compute per-bin difference: output_dB - input_dB
+    /// Compute per-bin difference: output_dB - input_dB.
+    /// Writes into pre-allocated `diffScratch` and returns a copy.
     private func computeDifference(input: [Float], output: [Float]) -> [Float] {
         let count = min(input.count, output.count)
-        guard count > 0 else { return [] }
+        guard count > 0 && count <= diffScratch.count else { return [] }
 
-        var diff = [Float](repeating: 0, count: count)
-        vDSP_vsub(input, 1, output, 1, &diff, 1, vDSP_Length(count))
-        return diff
+        vDSP_vsub(input, 1, output, 1, &diffScratch, 1, vDSP_Length(count))
+        return Array(diffScratch[..<count])
     }
 
     /// Compute per-bin normalized difference: (S_out - S_in) / (S_out + S_in)
     /// where S = 10^(dB/10) converts from dB back to linear power.
     /// Result is in [-1, 1]. Returns 0 where both signals are near silence.
+    /// Writes into pre-allocated `normDiffScratch` and returns a copy.
     private func computeNormalizedDifference(inputDB: [Float], outputDB: [Float]) -> [Float] {
         let count = min(inputDB.count, outputDB.count)
-        guard count > 0 else { return [] }
+        guard count > 0 && count <= normDiffScratch.count else { return [] }
 
-        var result = [Float](repeating: 0, count: count)
         for i in 0..<count {
             let sIn = powf(10.0, inputDB[i] / 10.0)
             let sOut = powf(10.0, outputDB[i] / 10.0)
             let denom = sOut + sIn
-            if denom > 1e-20 {
-                result[i] = (sOut - sIn) / denom
-            }
+            normDiffScratch[i] = denom > 1e-20 ? (sOut - sIn) / denom : 0
         }
-        return result
+        return Array(normDiffScratch[..<count])
     }
 }
