@@ -48,7 +48,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let factory = manager.presets.filter(\.isFactory)
-        #expect(factory.count == 53)
+        #expect(factory.count == 55)
         let names = factory.map(\.name)
         #expect(names.contains("Passthrough (Python)"))
         #expect(names.contains("Tremolo (Python)"))
@@ -98,8 +98,8 @@ struct PresetManagerTests {
         let factory = manager.presets.filter(\.isFactory)
         let rustPresets = factory.filter { $0.language == .rust }
         let pythonPresets = factory.filter { $0.language == .python }
-        #expect(rustPresets.count == 26, "Should have exactly 26 Rust factory presets")
-        #expect(pythonPresets.count == 27, "Should have exactly 27 Python factory presets")
+        #expect(rustPresets.count == 27, "Should have exactly 27 Rust factory presets")
+        #expect(pythonPresets.count == 28, "Should have exactly 28 Python factory presets")
     }
 
     // MARK: - User Preset CRUD
@@ -328,7 +328,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        #expect(manager.presets.count == 53, "Should only have factory presets")
+        #expect(manager.presets.count == 55, "Should only have factory presets")
         let allFactory = manager.presets.allSatisfy(\.isFactory)
         #expect(allFactory)
     }

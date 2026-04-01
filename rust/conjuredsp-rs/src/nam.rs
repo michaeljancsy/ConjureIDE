@@ -39,18 +39,38 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 // ---------------------------------------------------------------------------
-// Math helpers
+// Math helpers (no libm dependency — inline implementations for no_std/wasm)
 // ---------------------------------------------------------------------------
+
+/// Fast f32 exp approximation. Uses the identity exp(x) = 2^(x/ln2) with a
+/// bit-level trick for the integer part and a polynomial for the fraction.
+/// Accurate to ~1e-4 relative error over [-88, 88].
+#[inline]
+fn fast_expf(x: f32) -> f32 {
+    // Clamp to avoid overflow/underflow
+    let x = if x < -88.0 { -88.0 } else if x > 88.0 { 88.0 } else { x };
+    // exp(x) = 2^(x * log2(e))
+    let t = x * core::f32::consts::LOG2_E;
+    let fi = if t >= 0.0 { t as i32 } else { t as i32 - 1 }; // floor
+    let f = t - fi as f32; // fractional part in [0, 1)
+    // Polynomial approximation of 2^f for f in [0,1)
+    let p = 1.0 + f * (0.6931472 + f * (0.2402265 + f * (0.0554953 + f * 0.0096744)));
+    // Multiply by 2^fi via IEEE 754 exponent manipulation
+    let bits = ((fi + 127) as u32) << 23;
+    p * f32::from_bits(bits)
+}
 
 #[inline]
 fn sigmoidf(x: f32) -> f32 {
     let x = if x < -88.0 { -88.0 } else if x > 88.0 { 88.0 } else { x };
-    1.0 / (1.0 + libm::expf(-x))
+    1.0 / (1.0 + fast_expf(-x))
 }
 
 #[inline]
 fn tanhf(x: f32) -> f32 {
-    libm::tanhf(x)
+    let x = if x < -10.0 { -10.0 } else if x > 10.0 { 10.0 } else { x };
+    let e2x = fast_expf(2.0 * x);
+    (e2x - 1.0) / (e2x + 1.0)
 }
 
 #[inline]

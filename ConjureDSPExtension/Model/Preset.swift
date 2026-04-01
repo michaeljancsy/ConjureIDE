@@ -144,5 +144,9 @@ enum FactoryPresetRegistry {
         // Generator
         Entry(name: "White Noise (Python)", number: 42, resourceName: "preset_whitenoise", language: .python, category: .generator),
         Entry(name: "White Noise (Rust)", number: 43, resourceName: "preset_whitenoise_rust", language: .rust, category: .generator),
+
+        // NAM / Amp Modeling
+        Entry(name: "NAM Tone (Python)", number: 53, resourceName: "preset_nam", language: .python, category: .other),
+        Entry(name: "NAM Tone (Rust)", number: 54, resourceName: "preset_nam_rust", language: .rust, category: .other),
     ]
 }

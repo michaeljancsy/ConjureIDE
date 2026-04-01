@@ -581,6 +581,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			pluginLog.info("WASM module loaded successfully")
 			readParamNames()
 
+			// Inject NAM model if the WASM module declares one
+			if let namError = injectNamModelIfNeeded() {
+				return (false, namError, nil, nil)
+			}
+
 			let benchmarkSecs = dsp_kernel_benchmark_process(kernel)
 			var processTimeMs: Double? = nil
 			var budgetMs: Double? = nil
@@ -601,6 +606,96 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			}
 			pluginLog.error("Failed to load WASM: \(errorMsg, privacy: .public)")
 			return (false, errorMsg, nil, nil)
+		}
+	}
+
+	/// Resolve and inject a NAM model after WASM load, if the module declares one via `nam!()`.
+	/// Reads the path from the WASM binary, resolves `tone3000://` paths to the App Group
+	/// tones directory, parses the .nam JSON, serializes to binary protocol, and injects.
+	/// Returns an error string on failure, nil on success or if no NAM model is declared.
+	private func injectNamModelIfNeeded() -> String? {
+		guard let namPathPtr = dsp_kernel_nam_path(kernel) else { return nil }
+		let namPath = String(cString: namPathPtr)
+		pluginLog.info("WASM module declares NAM model: \(namPath, privacy: .public)")
+
+		// Resolve the path to a filesystem URL
+		let namFileURL: URL?
+		if namPath.hasPrefix("tone3000://") {
+			// tone3000://toneId/modelId → App Group tones/toneId/modelId.nam
+			let parts = namPath.dropFirst("tone3000://".count).components(separatedBy: "/")
+			guard parts.count == 2 else {
+				let msg = "Invalid tone3000:// path format: \(namPath). Expected tone3000://toneId/modelId"
+				pluginLog.error("\(msg, privacy: .public)")
+				return msg
+			}
+			let toneId = parts[0]
+			let modelId = parts[1]
+			namFileURL = Self.appGroupContainerURL?
+				.appendingPathComponent("tones")
+				.appendingPathComponent(toneId)
+				.appendingPathComponent("\(modelId).nam")
+		} else if namPath.hasPrefix("~") {
+			namFileURL = URL(fileURLWithPath: NSString(string: namPath).expandingTildeInPath)
+		} else {
+			namFileURL = URL(fileURLWithPath: namPath)
+		}
+
+		guard let fileURL = namFileURL,
+			  let namData = try? Data(contentsOf: fileURL) else {
+			let msg = "NAM tone not found: \(namPath). Use list_tones to see downloaded tones, or download this tone from the Tones browser."
+			pluginLog.error("\(msg, privacy: .public)")
+			return msg
+		}
+
+		// Parse .nam JSON and serialize to binary protocol
+		guard let namJson = try? JSONSerialization.jsonObject(with: namData) as? [String: Any],
+			  let architecture = namJson["architecture"] as? String,
+			  let configObj = namJson["config"],
+			  let weightsArray = namJson["weights"] as? [Double] else {
+			let msg = "Failed to parse .nam file at \(namPath)"
+			pluginLog.error("\(msg, privacy: .public)")
+			return msg
+		}
+
+		let arch: UInt32 = architecture == "LSTM" ? 1 : 0
+		let sampleRate = Float(namJson["sample_rate"] as? Int ?? 48000)
+
+		guard let configData = try? JSONSerialization.data(withJSONObject: configObj) else {
+			let msg = "Failed to serialize NAM config for \(namPath)"
+			pluginLog.error("\(msg, privacy: .public)")
+			return msg
+		}
+
+		// Build binary protocol: [arch:u32][sr:f32][config_len:u32][config_bytes][weight_count:u32][weights:f32...]
+		var binary = Data()
+		var archLE = arch.littleEndian
+		binary.append(Data(bytes: &archLE, count: 4))
+		var srLE = sampleRate.bitPattern.littleEndian
+		binary.append(Data(bytes: &srLE, count: 4))
+		var configLen = UInt32(configData.count).littleEndian
+		binary.append(Data(bytes: &configLen, count: 4))
+		binary.append(configData)
+		var weightCount = UInt32(weightsArray.count).littleEndian
+		binary.append(Data(bytes: &weightCount, count: 4))
+		for w in weightsArray {
+			var f = Float(w).bitPattern.littleEndian
+			binary.append(Data(bytes: &f, count: 4))
+		}
+
+		let injected = binary.withUnsafeBytes { rawBuffer -> Bool in
+			guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+				return false
+			}
+			return dsp_kernel_inject_nam(kernel, ptr, UInt(binary.count))
+		}
+
+		if injected {
+			pluginLog.info("Injected NAM model (\(binary.count) bytes, \(architecture))")
+			return nil
+		} else {
+			let msg = "Failed to inject NAM model data for \(namPath)"
+			pluginLog.error("\(msg, privacy: .public)")
+			return msg
 		}
 	}
 

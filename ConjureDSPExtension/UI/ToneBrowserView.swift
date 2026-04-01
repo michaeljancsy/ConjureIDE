@@ -398,6 +398,8 @@ struct ToneBrowserView: View {
                 toneName: tone.title,
                 gear: tone.gear ?? "",
                 author: tone.user?.username ?? "",
+                tags: tone.tags?.map(\.name) ?? [],
+                makes: tone.makes?.map(\.name) ?? [],
                 modelId: model.id.stringValue,
                 modelName: model.name ?? model.id.stringValue,
                 modelSize: model.size ?? "",

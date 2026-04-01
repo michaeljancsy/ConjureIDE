@@ -35,6 +35,8 @@ final class ToneModelStore {
         let modelSize: String    // e.g. "standard", "lite"
         let gear: String
         let author: String
+        let tags: [String]
+        let makes: [String]
         let downloadDate: Date
         let fileSize: Int64
 
@@ -47,6 +49,8 @@ final class ToneModelStore {
         let toneName: String
         let gear: String
         let author: String
+        let tags: [String]?
+        let makes: [String]?
         let models: [ModelMetadata]
     }
 
@@ -71,6 +75,8 @@ final class ToneModelStore {
         toneName: String,
         gear: String,
         author: String,
+        tags: [String] = [],
+        makes: [String] = [],
         modelId: String,
         modelName: String,
         modelSize: String,
@@ -110,7 +116,7 @@ final class ToneModelStore {
 
         // Update metadata
         var metadata = loadToneMetadata(toneId: toneId, tonesURL: tonesURL) ?? ToneMetadata(
-            toneId: toneId, toneName: toneName, gear: gear, author: author, models: []
+            toneId: toneId, toneName: toneName, gear: gear, author: author, tags: tags, makes: makes, models: []
         )
         var models = metadata.models.filter { $0.modelId != modelId }
         models.append(ModelMetadata(
@@ -118,7 +124,7 @@ final class ToneModelStore {
             modelSize: modelSize, downloadDate: Date()
         ))
         metadata = ToneMetadata(
-            toneId: toneId, toneName: toneName, gear: gear, author: author, models: models
+            toneId: toneId, toneName: toneName, gear: gear, author: author, tags: tags, makes: makes, models: models
         )
         saveToneMetadata(metadata, tonesURL: tonesURL)
 
@@ -158,6 +164,7 @@ final class ToneModelStore {
             metadata = ToneMetadata(
                 toneId: metadata.toneId, toneName: metadata.toneName,
                 gear: metadata.gear, author: metadata.author,
+                tags: metadata.tags, makes: metadata.makes,
                 models: metadata.models.filter { $0.modelId != modelId }
             )
             if metadata.models.isEmpty {
@@ -216,6 +223,8 @@ final class ToneModelStore {
                     modelSize: modelMeta?.modelSize ?? "unknown",
                     gear: metadata?.gear ?? "",
                     author: metadata?.author ?? "",
+                    tags: metadata?.tags ?? [],
+                    makes: metadata?.makes ?? [],
                     downloadDate: modelMeta?.downloadDate ?? Date.distantPast,
                     fileSize: Int64(fileSize)
                 ))

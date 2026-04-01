@@ -8,4 +8,3 @@ description = "DSP building blocks for ConjureDSP Rust/WASM presets"
 crate-type = ["rlib"]
 
 [dependencies]
-libm = "0.2"

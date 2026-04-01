@@ -438,7 +438,7 @@ struct ConjureDSPTests {
         let (_, au) = try await Self.instantiateAU()
         let presets = au.factoryPresets ?? []
         let rustPresets = presets.filter { $0.name.contains("Rust") }
-        #expect(rustPresets.count == 26, "Should have 26 Rust factory presets")
+        #expect(rustPresets.count == 27, "Should have 27 Rust factory presets")
         for rustPreset in rustPresets {
             au.currentPreset = rustPreset
             let state = au.fullState

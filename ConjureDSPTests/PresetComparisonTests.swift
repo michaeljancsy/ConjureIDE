@@ -126,7 +126,9 @@ struct PresetComparisonTests {
             .filter { $0.hasPrefix("preset_") && $0.hasSuffix("_rust.rs") }
             .map { String($0.dropFirst("preset_".count).dropLast("_rust.rs".count)) })
 
-        return pythonNames.intersection(rustNames).sorted()
+        // Exclude presets that require external resources (e.g., NAM tones)
+        let excluded: Set<String> = ["nam"]
+        return pythonNames.intersection(rustNames).subtracting(excluded).sorted()
     }()
 
     // MARK: - FFI Render Helper
