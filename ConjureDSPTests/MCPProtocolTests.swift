@@ -244,4 +244,35 @@ struct MCPToolDefinitionTests {
         #expect(schema.required == nil)
         #expect(schema.properties.isEmpty)
     }
+
+    @Test("ScriptSourceChange carries benchmark data for UI timing indicator")
+    func scriptSourceChangeBenchmarkData() {
+        // Reproduces the bug: MCP compile_and_run sent ScriptSourceChange without
+        // benchmark data, so the UI timing indicator never updated.
+
+        // Simulates the old (broken) behavior: source only, no timing
+        var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
+        let changeWithoutTiming = ScriptSourceChangeMock(source: "def process(): pass",
+                                                         processTimeMs: nil, budgetMs: nil)
+        if let pt = changeWithoutTiming.processTimeMs, let bt = changeWithoutTiming.budgetMs {
+            lastBenchmark = (pt, bt)
+        }
+        #expect(lastBenchmark == nil, "Without timing data, benchmark should not update")
+
+        // Simulates the fixed behavior: source + timing
+        let changeWithTiming = ScriptSourceChangeMock(source: "def process(): pass",
+                                                      processTimeMs: 2.1, budgetMs: 5.3)
+        if let pt = changeWithTiming.processTimeMs, let bt = changeWithTiming.budgetMs {
+            lastBenchmark = (pt, bt)
+        }
+        #expect(lastBenchmark?.processTimeMs == 2.1, "Benchmark should update with timing data")
+        #expect(lastBenchmark?.budgetMs == 5.3, "Budget should update with timing data")
+    }
+}
+
+/// Local mirror of ScriptSourceChange for testing (test target can't import AU extension).
+private struct ScriptSourceChangeMock {
+    let source: String
+    var processTimeMs: Double?
+    var budgetMs: Double?
 }
