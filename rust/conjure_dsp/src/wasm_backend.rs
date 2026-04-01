@@ -1497,4 +1497,59 @@ mod tests {
         }
         assert_eq!(backend.memory_bytes(), 65536 * 3, "should grow by another page");
     }
+
+    /// WAT module with NAM exports for injection testing.
+    const NAM_STUB_WAT: &str = r#"
+        (module
+          (memory (export "memory") 100)
+          (global $buf_ptr (mut i32) (i32.const 1024))
+          (func (export "process")
+            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+          )
+          (func (export "get_nam_data_ptr") (result i32)
+            (global.get $buf_ptr)
+          )
+          (func (export "init_nam") (param $len i32) (result i32)
+            (i32.const 1)
+          )
+          (func (export "get_nam_active") (result i32)
+            (i32.const 0)
+          )
+        )
+    "#;
+
+    #[test]
+    fn test_nam_inject_rejects_oversized_data() {
+        let wasm = wat_to_wasm(NAM_STUB_WAT);
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+
+        // 4MB + 1 byte should be rejected
+        let oversized = vec![0u8; 4 * 1024 * 1024 + 1];
+        let result = backend.inject_nam_model(&oversized);
+        assert!(result.is_err(), "Should reject data exceeding 4MB buffer");
+        let err = result.unwrap_err();
+        assert!(err.contains("exceeds maximum buffer size"), "Error should mention buffer size: {}", err);
+    }
+
+    #[test]
+    fn test_nam_inject_accepts_small_data() {
+        let wasm = wat_to_wasm(NAM_STUB_WAT);
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+
+        // Small data should be accepted (init_nam stub always returns 1)
+        let small = vec![0u8; 1024];
+        let result = backend.inject_nam_model(&small);
+        assert!(result.is_ok(), "Should accept small data: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_nam_inject_accepts_exactly_4mb() {
+        let wasm = wat_to_wasm(NAM_STUB_WAT);
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+
+        // Exactly 4MB should be accepted
+        let exact = vec![0u8; 4 * 1024 * 1024];
+        let result = backend.inject_nam_model(&exact);
+        assert!(result.is_ok(), "Should accept exactly 4MB: {:?}", result.err());
+    }
 }

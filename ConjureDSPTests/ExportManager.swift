@@ -26,6 +26,7 @@ final class ExportManager {
         case codeSignFailed(String)
         case copyFailed(String)
         case validationFailed(String)
+        case namModelNotFound(String)
 
         var errorDescription: String? {
             switch self {
@@ -35,6 +36,7 @@ final class ExportManager {
             case .codeSignFailed(let detail): return "Code signing failed: \(detail)"
             case .copyFailed(let detail): return "Failed to copy template: \(detail)"
             case .validationFailed(let detail): return "Export validation failed: \(detail)"
+            case .namModelNotFound(let path): return "NAM model not found: \(path). Download the tone first."
             }
         }
     }

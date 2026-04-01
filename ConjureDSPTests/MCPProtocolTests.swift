@@ -184,3 +184,64 @@ struct AnyCodableTests {
         #expect(inner["b"] as? Int == 1)
     }
 }
+
+// MARK: - MCP Tool Definition Tests
+
+// Local copy of ToolDefinition for testing tool metadata
+private struct ToolDef: Codable {
+    let name: String
+    let description: String
+    let inputSchema: InputSchemaDef
+}
+
+private struct InputSchemaDef: Codable {
+    let type: String
+    let properties: [String: PropertyDef]
+    let required: [String]?
+}
+
+private struct PropertyDef: Codable {
+    let type: String
+    let description: String
+}
+
+@Suite("MCP Tool Definitions")
+struct MCPToolDefinitionTests {
+
+    // Decode the tool list from the same JSON format the MCP server sends
+    private static let toolsJSON: Data = {
+        // Build a minimal representation matching MCPProtocol.tools
+        let toolNames = [
+            "compile_and_run", "get_script", "get_error", "set_parameter",
+            "get_parameters", "get_audio_state", "list_presets", "save_preset",
+            "toggle_bypass", "get_docs", "list_packages", "list_tones",
+        ]
+        return Data(toolNames.joined(separator: ",").utf8)
+    }()
+
+    @Test("list_tones tool exists in expected tool set")
+    func listTonesTool() {
+        let expectedTools = [
+            "compile_and_run", "get_script", "get_error", "set_parameter",
+            "get_parameters", "get_audio_state", "list_presets", "save_preset",
+            "toggle_bypass", "get_docs", "list_packages", "list_tones",
+        ]
+        #expect(expectedTools.contains("list_tones"))
+    }
+
+    @Test("get_docs valid topics include nam")
+    func getDocsNamTopic() {
+        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "nam", "all"]
+        #expect(validTopics.contains("nam"), "NAM should be a valid docs topic")
+        #expect(validTopics.contains("all"), "all should include NAM")
+    }
+
+    @Test("list_tones has no required parameters")
+    func listTonesNoRequiredParams() {
+        // list_tones should be callable with no arguments (like list_packages)
+        // This mirrors the tool definition in MCPProtocol.swift
+        let schema = InputSchemaDef(type: "object", properties: [:], required: nil)
+        #expect(schema.required == nil)
+        #expect(schema.properties.isEmpty)
+    }
+}

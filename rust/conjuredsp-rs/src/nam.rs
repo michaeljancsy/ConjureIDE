@@ -1254,3 +1254,67 @@ impl NamModel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wavenet_validation_oversized_passthrough() {
+        // Test the validation guard directly: full_len > region_size → passthrough
+        // Uses a tiny region_size (10) to trigger the guard with a small input.
+        let mut wn = WaveNet {
+            layer_arrays: Vec::new(),
+            head_layers: Vec::new(),
+            head_scale: 1.0,
+            receptive_field: 1,  // hist_len = 0, full_len = n
+            history: Vec::new(),
+            work: vec![0.0; 10 * 6],  // region_size = 10
+            region_size: 10,
+        };
+
+        // Input of 20 samples: full_len = 0 + 20 = 20 > region_size (10) → passthrough
+        let input = vec![0.7f32; 20];
+        let mut output = vec![0.0f32; 20];
+        wn.process_buffer(&input, &mut output, 0);
+        assert_eq!(output[0], 0.7, "Oversized input should passthrough");
+        assert_eq!(output[19], 0.7, "Oversized input should passthrough to end");
+    }
+
+    #[test]
+    fn test_wavenet_validation_output_too_small() {
+        let mut wn = WaveNet {
+            layer_arrays: Vec::new(),
+            head_layers: Vec::new(),
+            head_scale: 1.0,
+            receptive_field: 1,
+            history: Vec::new(),
+            work: vec![0.0; 1000 * 6],
+            region_size: 1000,
+        };
+
+        // Output smaller than input → passthrough up to output length
+        let input = vec![0.7f32; 64];
+        let mut output = vec![0.0f32; 32];
+        wn.process_buffer(&input, &mut output, 0);
+        assert_eq!(output[0], 0.7, "Should copy input to output up to output length");
+        assert_eq!(output[31], 0.7);
+    }
+
+    #[test]
+    fn test_from_binary_rejects_too_small() {
+        let tiny = vec![0u8; 8]; // Less than minimum 16 bytes
+        assert!(NamModel::from_binary(&tiny).is_none());
+    }
+
+    #[test]
+    fn test_from_binary_rejects_invalid_arch() {
+        let mut binary = Vec::new();
+        binary.extend_from_slice(&99u32.to_le_bytes()); // invalid arch
+        binary.extend_from_slice(&48000.0f32.to_bits().to_le_bytes());
+        binary.extend_from_slice(&2u32.to_le_bytes()); // config_len
+        binary.extend_from_slice(b"{}");
+        binary.extend_from_slice(&0u32.to_le_bytes()); // 0 weights
+        assert!(NamModel::from_binary(&binary).is_none());
+    }
+}

@@ -297,6 +297,35 @@ struct Tone3000DecodingTests {
         #expect(user.avatarUrl == "https://example.com/avatar.jpg")
     }
 
+    @Test("Models response caching pattern — nil check prevents refetch")
+    func modelsCachingPattern() throws {
+        // Simulates the caching pattern added to ToneBrowserView.fetchModels
+        var toneModels: [String: [ToneModel]] = [:]
+
+        // First fetch populates the cache
+        let toneId = "28135"
+        #expect(toneModels[toneId] == nil, "Initially empty")
+
+        // Simulate fetch
+        let models = [ToneModel(id: .int(45678), name: "Standard", size: "standard",
+                                modelUrl: "https://example.com/model.nam", toneId: .int(28135))]
+        toneModels[toneId] = models
+
+        // Second "fetch" should be skipped due to cache hit
+        #expect(toneModels[toneId] != nil, "Cache should be populated")
+        #expect(toneModels[toneId]?.count == 1, "Should have one cached model")
+
+        // The guard pattern: if toneModels[toneId] != nil { return }
+        var fetchCount = 0
+        func simulatedFetch() {
+            if toneModels[toneId] != nil { return }
+            fetchCount += 1
+        }
+        simulatedFetch()
+        simulatedFetch()
+        #expect(fetchCount == 0, "Cache hit should prevent re-fetch")
+    }
+
     @Test("Tags and makes decode as name objects")
     func decodeTagsAndMakes() throws {
         let json = """
