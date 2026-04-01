@@ -91,7 +91,7 @@ struct SpectrogramView: View {
                 // Always drain to prevent unbounded accumulation,
                 // but only append to the bitmap when not paused.
                 if isPaused {
-                    _ = captureManager.drainColumns(for: channel)
+                    captureManager.discardPendingColumns(for: channel)
                 } else {
                     ensureBuffer(width: width, height: height)
                     drainPendingColumns(height: height)
@@ -134,9 +134,8 @@ struct SpectrogramView: View {
     /// spectrogram column. This ensures no FFT windows are lost when
     /// display link callbacks are delayed (e.g. during slider drags).
     private func drainPendingColumns(height: Int) {
-        let columns = captureManager.drainColumns(for: channel)
-        for mags in columns {
-            if !mags.isEmpty {
+        captureManager.drainColumns(for: channel) { mags in
+            if mags.count > 0 {
                 appendColumn(magnitudes: mags, height: height)
             }
         }
@@ -148,7 +147,7 @@ struct SpectrogramView: View {
         }
     }
 
-    private func appendColumn(magnitudes: [Float], height: Int) {
+    private func appendColumn(magnitudes: UnsafeBufferPointer<Float>, height: Int) {
         guard let buffer = bitmapBuffer else { return }
         let binCount = magnitudes.count
         guard binCount > 0 && height > 0 && height <= buffer.height else { return }
@@ -226,6 +225,8 @@ final class SpectrogramBitmapBuffer {
     /// Next column index to write. After writing, this advances by 1 (wrapping).
     /// The visual order is: columns [writeColumn ..< width] (older), then [0 ..< writeColumn] (newer).
     private(set) var writeColumn: Int = 0
+    private var isDirty: Bool = true
+    private var cachedImage: CGImage?
 
     private let context: CGContext
     let baseAddress: UnsafeMutablePointer<UInt8>
@@ -288,14 +289,20 @@ final class SpectrogramBitmapBuffer {
     /// Advance the write cursor without writing a full column (used when caller writes directly).
     func advanceWriteColumn() {
         writeColumn = (writeColumn + 1) % width
+        isDirty = true
     }
 
     /// Create a CGImage snapshot from the persistent bitmap context.
+    /// Caches the result and only recreates when the bitmap has been modified.
     /// Per Apple docs, CGContext.makeImage() returns an immutable image —
     /// CG manages the copy internally. Thread safety is guaranteed because
     /// both appendColumn() and Canvas rendering run on the main thread
     /// (via CADisplayLink → onChange → Canvas), so they never overlap.
     func makeImage() -> CGImage? {
-        context.makeImage()
+        if isDirty || cachedImage == nil {
+            cachedImage = context.makeImage()
+            isDirty = false
+        }
+        return cachedImage
     }
 }

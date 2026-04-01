@@ -62,6 +62,9 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     }
 
 	deinit {
+        captureManager?.isActive = false
+        processProfiler?.stop()
+        memoryMonitor?.stop()
         terminalServer?.stop()
         terminalServer = nil
         log.info("deinit — terminal server stopped")

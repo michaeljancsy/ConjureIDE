@@ -98,7 +98,7 @@ struct SpectrogramSidePanel: View {
         .onChange(of: showNormalizedDiff) { _, newValue in
             captureManager.isNormalizedDiffEnabled = newValue
             if newValue {
-                captureManager.pendingNormalizedDifferenceColumns.removeAll()
+                captureManager.discardPendingColumns(for: .normalizedDifference)
             }
         }
     }
