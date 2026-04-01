@@ -89,6 +89,7 @@ final class AudioCaptureManager: ObservableObject {
     private var inputReadBuffer: [Float] = []
     private var outputReadBuffer: [Float] = []
     private static let maxReadSamples: Int = 8192
+    private static let maxPendingColumns: Int = 256
 
     // Sample accumulators for overlap
     private var inputAccumulator: [Float] = []
@@ -115,6 +116,10 @@ final class AudioCaptureManager: ObservableObject {
     // Pre-allocated scratch buffers for difference computation (reused across tick calls)
     private var diffScratch: [Float] = []
     private var normDiffScratch: [Float] = []
+
+    // Pre-allocated scratch buffers for FFT results (reused across tick calls)
+    private var fftInputScratch:  [Float] = []
+    private var fftOutputScratch: [Float] = []
 
     // MARK: - Init
 
@@ -163,6 +168,10 @@ final class AudioCaptureManager: ObservableObject {
         // Pre-allocated difference scratch buffers
         diffScratch = [Float](repeating: 0, count: n / 2)
         normDiffScratch = [Float](repeating: 0, count: n / 2)
+
+        // Pre-allocated FFT result scratch buffers
+        fftInputScratch  = [Float](repeating: 0, count: n / 2)
+        fftOutputScratch = [Float](repeating: 0, count: n / 2)
 
         // Reset accumulators
         inputAccumulator.removeAll(keepingCapacity: true)
@@ -239,55 +248,44 @@ final class AudioCaptureManager: ObservableObject {
             outputAccumulator.append(contentsOf: outputReadBuffer[0..<outputCount])
         }
 
-        // Process accumulated samples with overlap, queuing each FFT result
+        // Process accumulated samples in lockstep: only produce a column pair when both
+        // accumulators have enough data. This guarantees 1:1 temporal alignment between
+        // input and output FFT windows, so passthrough shows zero difference.
         let hopSize = Int(Float(fftSize) * hopFraction)
-        var newInputColumns: [[Float]] = []
-        var newOutputColumns: [[Float]] = []
+        var producedColumns = false
 
-        while inputAccumulator.count >= fftSize {
-            var mags = [Float](repeating: 0, count: fftSize / 2)
-            computeFFT(samples: &inputAccumulator, result: &mags)
+        while inputAccumulator.count >= fftSize && outputAccumulator.count >= fftSize {
+            computeFFT(samples: &inputAccumulator,  result: &fftInputScratch)
+            computeFFT(samples: &outputAccumulator, result: &fftOutputScratch)
             inputAccumulator.removeFirst(hopSize)
-            newInputColumns.append(mags)
-        }
-
-        while outputAccumulator.count >= fftSize {
-            var mags = [Float](repeating: 0, count: fftSize / 2)
-            computeFFT(samples: &outputAccumulator, result: &mags)
             outputAccumulator.removeFirst(hopSize)
-            newOutputColumns.append(mags)
+
+            pendingInputColumns.append(Array(fftInputScratch))
+            pendingOutputColumns.append(Array(fftOutputScratch))
+            pendingDifferenceColumns.append(computeDifference(input: fftInputScratch, output: fftOutputScratch))
+            if isNormalizedDiffEnabled {
+                pendingNormalizedDifferenceColumns.append(
+                    computeNormalizedDifference(inputDB: fftInputScratch, outputDB: fftOutputScratch))
+            }
+            producedColumns = true
         }
 
-        // Queue all columns, computing difference for each pair
-        let columnCount = max(newInputColumns.count, newOutputColumns.count)
-        if columnCount > 0 {
-            // Keep track of latest input/output for difference when counts don't match
-            var lastInput = newInputColumns.last ?? pendingInputColumns.last
-                ?? [Float](repeating: Self.floorDB, count: fftSize / 2)
-            var lastOutput = newOutputColumns.last ?? pendingOutputColumns.last
-                ?? [Float](repeating: Self.floorDB, count: fftSize / 2)
+        // Cap queues to prevent unbounded growth if SpectrogramView stops draining
+        let cap = Self.maxPendingColumns
+        if pendingInputColumns.count > cap {
+            pendingInputColumns.removeFirst(pendingInputColumns.count - cap)
+        }
+        if pendingOutputColumns.count > cap {
+            pendingOutputColumns.removeFirst(pendingOutputColumns.count - cap)
+        }
+        if pendingDifferenceColumns.count > cap {
+            pendingDifferenceColumns.removeFirst(pendingDifferenceColumns.count - cap)
+        }
+        if pendingNormalizedDifferenceColumns.count > cap {
+            pendingNormalizedDifferenceColumns.removeFirst(pendingNormalizedDifferenceColumns.count - cap)
+        }
 
-            for i in 0..<columnCount {
-                if i < newInputColumns.count {
-                    lastInput = newInputColumns[i]
-                    pendingInputColumns.append(lastInput)
-                } else {
-                    pendingInputColumns.append(lastInput)
-                }
-
-                if i < newOutputColumns.count {
-                    lastOutput = newOutputColumns[i]
-                    pendingOutputColumns.append(lastOutput)
-                } else {
-                    pendingOutputColumns.append(lastOutput)
-                }
-
-                pendingDifferenceColumns.append(computeDifference(input: lastInput, output: lastOutput))
-                if isNormalizedDiffEnabled {
-                    pendingNormalizedDifferenceColumns.append(computeNormalizedDifference(inputDB: lastInput, outputDB: lastOutput))
-                }
-            }
-
+        if producedColumns {
             updateCounter &+= 1
         }
     }
