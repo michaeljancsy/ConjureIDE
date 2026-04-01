@@ -59,6 +59,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var spectrogramFrequencyScale: FrequencyScale = .log
     @State private var spectrogramFFTSizeIndex: Int = 2 // default: 2048
     @State private var spectrogramShowNoteNames: Bool = false
+    @State private var snippetToInsert: String?
     @StateObject private var daemonChecker = DaemonStatusChecker()
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("editorTheme") private var selectedTheme: String = "auto"
@@ -178,7 +179,10 @@ struct ConjureDSPExtensionMainView: View {
                 },
                 isExporting: isExporting,
                 showingSaveAs: $showingSaveAs,
-                saveAsName: $saveAsName
+                saveAsName: $saveAsName,
+                onInsertSnippet: { snippet in
+                    snippetToInsert = snippet
+                }
             )
 
             Divider()
@@ -228,7 +232,8 @@ struct ConjureDSPExtensionMainView: View {
                     theme: resolvedTheme,
                     language: selectedLanguage,
                     isEditable: true,
-                    markers: editorMarkers
+                    markers: editorMarkers,
+                    snippetToInsert: $snippetToInsert
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .border(Color.secondary.opacity(0.3), width: 1)

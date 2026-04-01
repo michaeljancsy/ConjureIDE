@@ -86,16 +86,11 @@ class TerminalAppServer {
     }
 
     /// Copies the bundled Python distribution to the App Group container so the AU
-    /// extension and package manager can use it. No-op if already installed.
+    /// extension and package manager can use it. No-op if already installed (except
+    /// for the conjuredsp package, which is always updated to pick up new modules).
     nonisolated static func installPythonRuntimeIfNeeded() {
         guard let runtimeURL = pythonRuntimeURL else {
             log.error("App Group container not available — cannot install Python runtime")
-            return
-        }
-
-        let stdlibPath = runtimeURL.appendingPathComponent("lib/python3.14t").path
-        if FileManager.default.fileExists(atPath: stdlibPath) {
-            log.info("Shared Python runtime already installed at \(runtimeURL.path, privacy: .public)")
             return
         }
 
@@ -105,43 +100,77 @@ class TerminalAppServer {
             return
         }
 
+        let stdlibPath = runtimeURL.appendingPathComponent("lib/python3.14t").path
+        if FileManager.default.fileExists(atPath: stdlibPath) {
+            log.info("Shared Python runtime already installed at \(runtimeURL.path, privacy: .public)")
+        } else {
+            do {
+                let fm = FileManager.default
+
+                // Copy bin/python3
+                let srcBin = bundledPythonDist.appendingPathComponent("bin/python3")
+                let dstBin = runtimeURL.appendingPathComponent("bin")
+                try fm.createDirectory(at: dstBin, withIntermediateDirectories: true)
+                let dstPython = dstBin.appendingPathComponent("python3")
+                if fm.fileExists(atPath: dstPython.path) {
+                    try fm.removeItem(at: dstPython)
+                }
+                try fm.copyItem(at: srcBin, to: dstPython)
+
+                // Copy lib/libpython3.14t.dylib
+                let srcDylib = bundledPythonDist.appendingPathComponent("lib/libpython3.14t.dylib")
+                let dstLib = runtimeURL.appendingPathComponent("lib")
+                try fm.createDirectory(at: dstLib, withIntermediateDirectories: true)
+                let dstDylib = dstLib.appendingPathComponent("libpython3.14t.dylib")
+                if fm.fileExists(atPath: dstDylib.path) {
+                    try fm.removeItem(at: dstDylib)
+                }
+                try fm.copyItem(at: srcDylib, to: dstDylib)
+
+                // Copy lib/python3.14t/ (stdlib + numpy + scipy)
+                let srcStdlib = bundledPythonDist.appendingPathComponent("lib/python3.14t")
+                let dstStdlib = dstLib.appendingPathComponent("python3.14t")
+                if fm.fileExists(atPath: dstStdlib.path) {
+                    try fm.removeItem(at: dstStdlib)
+                }
+                try fm.copyItem(at: srcStdlib, to: dstStdlib)
+
+                log.info("Shared Python runtime installed at \(runtimeURL.path, privacy: .public)")
+
+                // Migrate existing user-packages if present
+                migrateUserPackages(to: dstStdlib.appendingPathComponent("site-packages"))
+            } catch {
+                log.error("Failed to install shared Python runtime: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        // Always re-copy the bundled conjuredsp package to pick up new modules (e.g., nam.py)
+        updateConjureDSPPackage(bundledPythonDist: bundledPythonDist, runtimeURL: runtimeURL)
+    }
+
+    /// Re-copies the bundled conjuredsp package into the App Group site-packages.
+    /// This runs every launch to ensure new modules (e.g., nam.py) are picked up
+    /// even when the full Python runtime install is skipped.
+    nonisolated private static func updateConjureDSPPackage(bundledPythonDist: URL, runtimeURL: URL) {
+        let fm = FileManager.default
+        let srcConjuredsp = bundledPythonDist
+            .appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
+        let dstConjuredsp = runtimeURL
+            .appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
+
+        guard fm.fileExists(atPath: srcConjuredsp.path) else {
+            log.warning("Bundled conjuredsp package not found at \(srcConjuredsp.path, privacy: .public)")
+            return
+        }
+
         do {
-            let fm = FileManager.default
-
-            // Copy bin/python3
-            let srcBin = bundledPythonDist.appendingPathComponent("bin/python3")
-            let dstBin = runtimeURL.appendingPathComponent("bin")
-            try fm.createDirectory(at: dstBin, withIntermediateDirectories: true)
-            let dstPython = dstBin.appendingPathComponent("python3")
-            if fm.fileExists(atPath: dstPython.path) {
-                try fm.removeItem(at: dstPython)
+            if fm.fileExists(atPath: dstConjuredsp.path) {
+                try fm.removeItem(at: dstConjuredsp)
             }
-            try fm.copyItem(at: srcBin, to: dstPython)
-
-            // Copy lib/libpython3.14t.dylib
-            let srcDylib = bundledPythonDist.appendingPathComponent("lib/libpython3.14t.dylib")
-            let dstLib = runtimeURL.appendingPathComponent("lib")
-            try fm.createDirectory(at: dstLib, withIntermediateDirectories: true)
-            let dstDylib = dstLib.appendingPathComponent("libpython3.14t.dylib")
-            if fm.fileExists(atPath: dstDylib.path) {
-                try fm.removeItem(at: dstDylib)
-            }
-            try fm.copyItem(at: srcDylib, to: dstDylib)
-
-            // Copy lib/python3.14t/ (stdlib + numpy + scipy)
-            let srcStdlib = bundledPythonDist.appendingPathComponent("lib/python3.14t")
-            let dstStdlib = dstLib.appendingPathComponent("python3.14t")
-            if fm.fileExists(atPath: dstStdlib.path) {
-                try fm.removeItem(at: dstStdlib)
-            }
-            try fm.copyItem(at: srcStdlib, to: dstStdlib)
-
-            log.info("Shared Python runtime installed at \(runtimeURL.path, privacy: .public)")
-
-            // Migrate existing user-packages if present
-            migrateUserPackages(to: dstStdlib.appendingPathComponent("site-packages"))
+            try fm.copyItem(at: srcConjuredsp, to: dstConjuredsp)
+            log.info("Updated conjuredsp package in App Group site-packages")
         } catch {
-            log.error("Failed to install shared Python runtime: \(error.localizedDescription, privacy: .public)")
+            log.error("Failed to update conjuredsp package: \(error.localizedDescription, privacy: .public)")
         }
     }
 

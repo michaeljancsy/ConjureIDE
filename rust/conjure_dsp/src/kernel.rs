@@ -108,6 +108,9 @@ pub struct DSPKernel {
     /// Current WASM linear memory size in bytes (0 if Python backend).
     /// Updated after each process() call on the audio thread.
     wasm_memory_bytes: AtomicU64,
+    /// NAM model path from the loaded WASM module's `get_nam_path_ptr`/`get_nam_path_len` exports.
+    /// Set during `load_wasm()`, read by Swift to resolve and inject the .nam file.
+    nam_path: Option<String>,
 }
 
 /// Get the current process resident memory in bytes via mach task_info.
@@ -198,6 +201,25 @@ impl DSPKernel {
             grace_deadline_unix: AtomicI64::new(0),
             memory_baseline_bytes: AtomicU64::new(0),
             wasm_memory_bytes: AtomicU64::new(0),
+            nam_path: None,
+        }
+    }
+
+    /// Returns the NAM model path declared by the loaded WASM module, if any.
+    pub fn nam_path(&self) -> Option<&str> {
+        self.nam_path.as_deref()
+    }
+
+    /// Inject NAM model binary data into the loaded WASM backend.
+    /// Call after `load_wasm()` when `nam_path()` returns Some.
+    pub fn inject_nam(&mut self, binary_data: &[u8]) -> Result<(), String> {
+        let mut guard = self.backend.lock().map_err(|e| format!("Lock failed: {}", e))?;
+        if let Some(ref mut backend) = *guard {
+            let wasm = backend.as_any_mut().downcast_mut::<WasmBackend>()
+                .ok_or("Backend is not WasmBackend")?;
+            wasm.inject_nam_model(binary_data)
+        } else {
+            Err("No backend loaded".to_string())
         }
     }
 
@@ -272,6 +294,8 @@ impl DSPKernel {
                 let names = wb.param_names();
                 let metadata = wb.param_metadata().map(|m| m.to_vec());
                 let latency = wb.latency_samples();
+                // Store NAM path for Swift to read and inject model data
+                self.nam_path = wb.nam_path().map(String::from);
                 // Lock to swap — render thread will passthrough during this brief window
                 if let Ok(mut guard) = self.backend.lock() {
                     *guard = Some(Box::new(wb));

@@ -1,0 +1,542 @@
+"""NAM (Neural Amp Modeler) inference for ConjureDSP presets.
+
+Load and run NAM models (.nam files) within your ``process()`` function.
+Supports both WaveNet and LSTM architectures.
+
+Quick start::
+
+    from conjuredsp.nam import load_model
+
+    model = load_model("tone3000://abc123/def456")
+
+    def process(inputs, outputs, frame_count, sample_rate, params):
+        for ch in range(len(inputs)):
+            outputs[ch][:frame_count] = model.process(inputs[ch][:frame_count], ch)
+
+Path schemes:
+    - ``tone3000://tone_id/model_id`` — downloaded via tone browser
+    - ``~/path/to/model.nam`` — tilde expansion
+    - ``/absolute/path/to/model.nam`` — absolute path
+    - ``relative/path.nam`` — relative to cwd, then tones dir
+"""
+
+import json
+import os
+import sys
+
+import numpy as np
+
+__all__ = ["NamModel", "load_model"]
+
+# ---------------------------------------------------------------------------
+# Path resolution
+# ---------------------------------------------------------------------------
+
+_TONE3000_SCHEME = "tone3000://"
+
+
+def _resolve_path(path: str) -> str:
+    """Resolve a NAM model path to an absolute filesystem path."""
+    if path.startswith(_TONE3000_SCHEME):
+        tones_dir = os.environ.get("CONJUREDSP_TONES_DIR", "")
+        if not tones_dir:
+            raise FileNotFoundError(
+                f"Cannot resolve {path}: CONJUREDSP_TONES_DIR not set"
+            )
+        relative = path[len(_TONE3000_SCHEME) :]
+        # tone3000://tone_id/model_id -> {tones_dir}/tone_id/model_id.nam
+        if not relative.endswith(".nam"):
+            relative += ".nam"
+        resolved = os.path.join(tones_dir, relative)
+        if os.path.isfile(resolved):
+            return resolved
+        raise FileNotFoundError(f"NAM model not found: {resolved}")
+
+    expanded = os.path.expanduser(path)
+    if os.path.isabs(expanded):
+        if os.path.isfile(expanded):
+            return expanded
+        raise FileNotFoundError(f"NAM model not found: {expanded}")
+
+    # Relative path: try cwd first, then tones dir
+    cwd_path = os.path.abspath(expanded)
+    if os.path.isfile(cwd_path):
+        return cwd_path
+
+    tones_dir = os.environ.get("CONJUREDSP_TONES_DIR", "")
+    if tones_dir:
+        tones_path = os.path.join(tones_dir, expanded)
+        if os.path.isfile(tones_path):
+            return tones_path
+
+    raise FileNotFoundError(f"NAM model not found: {path}")
+
+
+# ---------------------------------------------------------------------------
+# Weight reader
+# ---------------------------------------------------------------------------
+
+
+class _WeightReader:
+    """Sequential reader for NAM's flat weight array."""
+
+    __slots__ = ("weights", "offset")
+
+    def __init__(self, weights):
+        self.weights = np.array(weights, dtype=np.float32)
+        self.offset = 0
+
+    def read(self, count: int) -> np.ndarray:
+        result = self.weights[self.offset : self.offset + count]
+        self.offset += count
+        return result
+
+    def read_conv1d(self, out_ch, in_ch, kernel_size=1, has_bias=True):
+        w = self.read(out_ch * in_ch * kernel_size).reshape(out_ch, in_ch, kernel_size)
+        b = self.read(out_ch) if has_bias else None
+        return w, b
+
+    def read_conv1x1(self, out_ch, in_ch, has_bias=True):
+        w = self.read(out_ch * in_ch).reshape(out_ch, in_ch)
+        b = self.read(out_ch) if has_bias else None
+        return w, b
+
+    @property
+    def remaining(self) -> int:
+        return len(self.weights) - self.offset
+
+
+# ---------------------------------------------------------------------------
+# Activations
+# ---------------------------------------------------------------------------
+
+
+def _sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -88, 88)))
+
+
+_ACTIVATIONS = {
+    "Tanh": np.tanh,
+    "ReLU": lambda x: np.maximum(0, x),
+    "Sigmoid": _sigmoid,
+}
+
+# ---------------------------------------------------------------------------
+# Convolution primitives
+# ---------------------------------------------------------------------------
+
+
+def _conv1d(x, weight, bias=None, dilation=1, scratch=None):
+    """1D causal convolution.  x: (C_in, L), weight: (C_out, C_in, K) -> (C_out, L')."""
+    C_out, C_in, K = weight.shape
+    L = x.shape[1]
+    L_out = L - (K - 1) * dilation
+    if L_out <= 0:
+        return np.zeros((C_out, 0), dtype=np.float32)
+
+    # Use pre-allocated scratch buffer if provided, else allocate
+    if scratch is not None and scratch.shape[0] >= C_in * K and scratch.shape[1] >= L_out:
+        cols = scratch[: C_in * K, :L_out]
+        cols[:] = 0
+    else:
+        cols = np.zeros((C_in * K, L_out), dtype=np.float32)
+
+    for k in range(K):
+        offset = (K - 1 - k) * dilation
+        cols[k * C_in : (k + 1) * C_in, :] = x[:, offset : offset + L_out]
+
+    W_flat = weight.reshape(C_out, C_in * K)
+    out = W_flat @ cols
+
+    if bias is not None:
+        out += bias[:, np.newaxis]
+    return out
+
+
+def _conv1x1(x, weight, bias=None):
+    """1x1 convolution (channel mixing)."""
+    out = weight @ x
+    if bias is not None:
+        out += bias[:, np.newaxis]
+    return out
+
+
+# ---------------------------------------------------------------------------
+# LSTM
+# ---------------------------------------------------------------------------
+
+
+class _LSTMCell:
+    __slots__ = ("input_size", "hidden_size", "W", "b", "_initial_h", "_initial_c", "h", "c")
+
+    def __init__(self, input_size, hidden_size, W, b, initial_h, initial_c):
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.W = W
+        self.b = b
+        self._initial_h = initial_h.copy()
+        self._initial_c = initial_c.copy()
+        self.h = initial_h.copy()
+        self.c = initial_c.copy()
+
+    def reset(self):
+        self.h = self._initial_h.copy()
+        self.c = self._initial_c.copy()
+
+    def process(self, x):
+        H = self.hidden_size
+        xh = np.concatenate([x, self.h])
+        ifgo = self.W @ xh + self.b
+        i_gate = _sigmoid(ifgo[0:H])
+        f_gate = _sigmoid(ifgo[H : 2 * H])
+        g_gate = np.tanh(ifgo[2 * H : 3 * H])
+        o_gate = _sigmoid(ifgo[3 * H : 4 * H])
+        self.c = f_gate * self.c + i_gate * g_gate
+        self.h = o_gate * np.tanh(self.c)
+        return self.h
+
+
+class _LSTMModel:
+    """NAM LSTM model: stacked LSTM cells + linear head."""
+
+    def __init__(self, config, reader):
+        self.input_size = config.get("input_size", 1)
+        self.hidden_size = config["hidden_size"]
+        self.num_layers = config.get("num_layers", 1)
+        H = self.hidden_size
+        self.cells = []
+        for i in range(self.num_layers):
+            in_sz = self.input_size if i == 0 else H
+            W = reader.read(4 * H * (in_sz + H)).reshape(4 * H, in_sz + H)
+            b = reader.read(4 * H)
+            initial_h = reader.read(H)
+            initial_c = reader.read(H)
+            self.cells.append(_LSTMCell(in_sz, H, W, b, initial_h, initial_c))
+        out_ch = config.get("out_channels", 1)
+        self.head_w = reader.read(out_ch * H).reshape(out_ch, H)
+        self.head_b = reader.read(out_ch)
+        self.receptive_field = 1
+
+    def reset(self):
+        for cell in self.cells:
+            cell.reset()
+
+    def process(self, audio):
+        output = np.zeros_like(audio)
+        for t in range(len(audio)):
+            x = np.array([audio[t]], dtype=np.float32)
+            for cell in self.cells:
+                x = cell.process(x)
+            output[t] = (self.head_w @ x + self.head_b)[0]
+        return output
+
+
+# ---------------------------------------------------------------------------
+# WaveNet
+# ---------------------------------------------------------------------------
+
+
+class _WaveNetLayer:
+    __slots__ = (
+        "channels", "dilation", "kernel_size", "gated", "act_fn",
+        "conv_w", "conv_b", "mix_w",
+        "has_layer1x1", "l1x1_w",
+        "has_head1x1", "h1x1_w",
+    )
+
+    def __init__(self, channels, condition_size, kernel_size, dilation, activation,
+                 gated, reader, has_layer1x1=True, has_head1x1=False, head1x1_out=1):
+        self.channels = channels
+        self.dilation = dilation
+        self.kernel_size = kernel_size
+        self.gated = gated
+        mid_ch = 2 * channels if gated else channels
+        self.act_fn = _ACTIVATIONS.get(activation, np.tanh)
+        self.conv_w, self.conv_b = reader.read_conv1d(mid_ch, channels, kernel_size)
+        self.mix_w, _ = reader.read_conv1x1(mid_ch, condition_size, has_bias=False)
+        self.has_layer1x1 = has_layer1x1
+        if has_layer1x1:
+            self.l1x1_w, _ = reader.read_conv1x1(channels, channels, has_bias=False)
+        else:
+            self.l1x1_w = None
+        self.has_head1x1 = has_head1x1
+        if has_head1x1:
+            self.h1x1_w, _ = reader.read_conv1x1(head1x1_out, channels, has_bias=False)
+        else:
+            self.h1x1_w = None
+
+    def forward(self, x, condition, out_length, scratch=None):
+        z_conv = _conv1d(x, self.conv_w, self.conv_b, dilation=self.dilation, scratch=scratch)
+        z_mix = _conv1x1(condition, self.mix_w)
+        L = min(z_conv.shape[1], z_mix.shape[1])
+        z = z_conv[:, -L:] + z_mix[:, -L:]
+        if self.gated:
+            half = self.channels
+            z_act = np.tanh(z[:half]) * _sigmoid(z[half:])
+        else:
+            z_act = self.act_fn(z)
+        if self.has_layer1x1:
+            layer_out = _conv1x1(z_act, self.l1x1_w)
+        else:
+            layer_out = z_act
+        if self.has_head1x1:
+            head_out = _conv1x1(z_act, self.h1x1_w)[:, -out_length:]
+        else:
+            head_out = z_act[:, -out_length:]
+        residual = x[:, -layer_out.shape[1] :] + layer_out
+        return residual, head_out
+
+
+class _WaveNetLayerArray:
+    def __init__(self, config, reader):
+        input_size = config["input_size"]
+        condition_size = config["condition_size"]
+        channels = config["channels"]
+        head_size = config["head_size"]
+        kernel_size = config.get("kernel_size", 3)
+        dilations = config["dilations"]
+        activation = config.get("activation", "Tanh")
+        gated = config.get("gated", False)
+        head_bias = config.get("head_bias", False)
+        l1x1_cfg = config.get("layer1x1", None)
+        h1x1_cfg = config.get("head1x1", None)
+        has_layer1x1 = l1x1_cfg.get("active", True) if isinstance(l1x1_cfg, dict) else True
+        has_head1x1 = h1x1_cfg.get("active", False) if isinstance(h1x1_cfg, dict) else False
+        head1x1_out = h1x1_cfg.get("out_channels", 1) if isinstance(h1x1_cfg, dict) else 1
+        self.receptive_field = 1 + sum((kernel_size - 1) * d for d in dilations)
+        self.rechannel_w, _ = reader.read_conv1x1(channels, input_size, has_bias=False)
+        self.layers = []
+        for dil in dilations:
+            layer = _WaveNetLayer(
+                channels=channels, condition_size=condition_size,
+                kernel_size=kernel_size, dilation=dil,
+                activation=activation, gated=gated, reader=reader,
+                has_layer1x1=has_layer1x1, has_head1x1=has_head1x1,
+                head1x1_out=head1x1_out,
+            )
+            self.layers.append(layer)
+        skip_ch = head1x1_out if has_head1x1 else channels
+        self.head_rechannel_w, self.head_rechannel_b = reader.read_conv1x1(
+            head_size, skip_ch, has_bias=head_bias
+        )
+        # Pre-allocate scratch buffer for conv1d im2col (worst case across layers)
+        max_c_in_k = channels * kernel_size
+        mid_ch = (2 * channels if gated else channels) * kernel_size
+        self._scratch_rows = max(max_c_in_k, mid_ch)
+
+    def forward(self, x, condition, head_input=None, max_frames=0):
+        out_length = min(x.shape[1], condition.shape[1]) - (self.receptive_field - 1)
+        if out_length <= 0:
+            raise ValueError(f"Input too short: need > {self.receptive_field - 1} samples")
+        # Allocate scratch once per forward pass (sized for this buffer)
+        scratch = np.zeros((self._scratch_rows, out_length + self.receptive_field), dtype=np.float32)
+        x = _conv1x1(x, self.rechannel_w)
+        for layer in self.layers:
+            x, head_term = layer.forward(x, condition, out_length, scratch=scratch)
+            if head_input is None:
+                head_input = head_term
+            else:
+                head_input = head_input[:, -out_length:] + head_term
+        head_output = _conv1x1(head_input, self.head_rechannel_w, self.head_rechannel_b)
+        return head_output, x
+
+
+class _WaveNetModel:
+    def __init__(self, config, reader):
+        self.condition_dsp = None
+        if config.get("condition_dsp"):
+            cond_cfg = config["condition_dsp"]
+            cond_reader = _WeightReader(cond_cfg["weights"]) if "weights" in cond_cfg else reader
+            self.condition_dsp = _WaveNetModel(
+                cond_cfg["config"] if "config" in cond_cfg else cond_cfg, cond_reader
+            )
+        self.layer_arrays = []
+        for la_config in config["layers"]:
+            self.layer_arrays.append(_WaveNetLayerArray(la_config, reader))
+        self.head_layers = None
+        head_cfg = config.get("head")
+        if head_cfg is not None:
+            self.head_layers = []
+            in_ch = head_cfg.get("in_channels", config["layers"][-1]["head_size"])
+            ch = head_cfg["channels"]
+            out_ch = head_cfg.get("out_channels", 1)
+            n_layers = head_cfg["num_layers"]
+            act = _ACTIVATIONS.get(head_cfg.get("activation", "ReLU"), lambda x: np.maximum(0, x))
+            for i in range(n_layers):
+                o = out_ch if i == n_layers - 1 else ch
+                c = in_ch if i == 0 else ch
+                w, b = reader.read_conv1x1(o, c, has_bias=True)
+                self.head_layers.append((act, w, b))
+        if reader.remaining >= 1:
+            self.head_scale = reader.read(1)[0]
+        else:
+            self.head_scale = config.get("head_scale", 1.0)
+        self.receptive_field = 1
+        for la in self.layer_arrays:
+            self.receptive_field += la.receptive_field - 1
+
+    def process(self, audio):
+        x = audio[np.newaxis, :]
+        condition = self.condition_dsp._process_2d(x) if self.condition_dsp else x
+        head_input = None
+        y = x
+        for la in self.layer_arrays:
+            head_input, y = la.forward(y, condition, head_input)
+        result = self.head_scale * head_input
+        if self.head_layers:
+            for act, w, b in self.head_layers:
+                result = _conv1x1(act(result), w, b)
+        return result[0]
+
+    def _process_2d(self, x):
+        condition = self.condition_dsp._process_2d(x) if self.condition_dsp else x
+        head_input = None
+        y = x
+        for la in self.layer_arrays:
+            head_input, y = la.forward(y, condition, head_input)
+        return self.head_scale * head_input
+
+
+# ---------------------------------------------------------------------------
+# NamModel — public wrapper with per-channel state + sliding window
+# ---------------------------------------------------------------------------
+
+
+class NamModel:
+    """A loaded NAM model that processes audio buffers.
+
+    Use :func:`load_model` to create instances.
+
+    Attributes:
+        architecture: ``"WaveNet"`` or ``"LSTM"``
+        receptive_field: Number of samples the model needs as context.
+            For LSTM this is 1.  For WaveNet-standard it is typically 4093.
+        sample_rate: The sample rate the model was trained at (usually 48000).
+    """
+
+    def __init__(self, model, architecture: str, sample_rate: int):
+        self._model = model
+        self.architecture = architecture
+        self.receptive_field = model.receptive_field
+        self.sample_rate = sample_rate
+        self._history: list[np.ndarray | None] = []
+        self._warned_sr = False
+        # Per-channel LSTM state: each channel needs independent cells
+        self._lstm_channels: list[_LSTMModel | None] = []
+
+    def process(self, audio: np.ndarray, channel: int) -> np.ndarray:
+        """Process a mono audio buffer through the NAM model.
+
+        Args:
+            audio: 1-D float32 array of input samples for one channel.
+            channel: Channel index (0 = left, 1 = right).  Each channel
+                maintains independent state (history / hidden state).
+
+        Returns:
+            1-D float32 array of the same length as *audio*.
+        """
+        n = len(audio)
+        if n == 0:
+            return audio.copy()
+
+        if self.architecture == "WaveNet":
+            return self._process_wavenet(audio, channel)
+        else:
+            return self._process_lstm(audio, channel)
+
+    def _process_wavenet(self, audio: np.ndarray, channel: int) -> np.ndarray:
+        # Grow history list if needed
+        while len(self._history) <= channel:
+            self._history.append(None)
+
+        rf = self.receptive_field
+        hist = self._history[channel]
+
+        if hist is None:
+            # First call: no history, pad with zeros
+            hist = np.zeros(rf - 1, dtype=np.float32)
+
+        full_input = np.concatenate([hist, audio])
+        raw_output = self._model.process(full_input)
+
+        # raw_output length = len(full_input) - (rf - 1) = len(audio)
+        output = raw_output[-len(audio) :]
+
+        # Update history (last rf-1 samples of input)
+        self._history[channel] = full_input[-(rf - 1) :].copy()
+
+        return output.astype(np.float32)
+
+    def _process_lstm(self, audio: np.ndarray, channel: int) -> np.ndarray:
+        # Each channel needs independent LSTM state.
+        # Channel 0 uses self._model directly.
+        # Additional channels get deep-copied models.
+        while len(self._lstm_channels) <= channel:
+            self._lstm_channels.append(None)
+
+        if channel == 0:
+            return self._model.process(audio)
+
+        if self._lstm_channels[channel] is None:
+            import copy
+            self._lstm_channels[channel] = copy.deepcopy(self._model)
+
+        return self._lstm_channels[channel].process(audio)
+
+    def reset(self):
+        """Clear all per-channel state (history buffers, LSTM hidden state)."""
+        self._history = []
+        if self.architecture == "LSTM":
+            self._model.reset()
+            for ch_model in self._lstm_channels:
+                if ch_model is not None:
+                    ch_model.reset()
+            self._lstm_channels = []
+
+    def _check_sample_rate(self, daw_sr: float):
+        if not self._warned_sr and self.sample_rate and daw_sr != self.sample_rate:
+            print(
+                f"Warning: NAM model trained at {self.sample_rate}Hz "
+                f"but running at {int(daw_sr)}Hz — output may sound wrong",
+                file=sys.stderr,
+            )
+            self._warned_sr = True
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def load_model(path: str) -> NamModel:
+    """Load a NAM model from a ``.nam`` file.
+
+    Args:
+        path: One of:
+            - ``tone3000://tone_id/model_id`` — downloaded tone (resolved via
+              ``CONJUREDSP_TONES_DIR`` environment variable)
+            - ``~/path/to/model.nam`` — tilde-expanded path
+            - ``/absolute/path/to/model.nam`` — absolute path
+            - ``relative/path.nam`` — resolved against cwd, then tones dir
+
+    Returns:
+        A :class:`NamModel` ready for use in ``process()``.
+    """
+    resolved = _resolve_path(path)
+
+    with open(resolved) as f:
+        data = json.load(f)
+
+    arch = data["architecture"]
+    config = data["config"]
+    reader = _WeightReader(data["weights"])
+    sample_rate = data.get("sample_rate", 48000)
+
+    if arch == "LSTM":
+        model = _LSTMModel(config, reader)
+    elif arch == "WaveNet":
+        model = _WaveNetModel(config, reader)
+    else:
+        raise ValueError(f"Unknown NAM architecture: {arch}")
+
+    return NamModel(model, arch, sample_rate)

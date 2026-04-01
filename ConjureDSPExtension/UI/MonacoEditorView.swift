@@ -10,6 +10,8 @@ struct MonacoEditorView: NSViewRepresentable {
     var language: ScriptLanguage = .python
     var isEditable: Bool = true
     var markers: [Marker] = []
+    /// Set to a non-nil value to insert text at the cursor position. Resets to nil after insertion.
+    @Binding var snippetToInsert: String?
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -90,6 +92,15 @@ struct MonacoEditorView: NSViewRepresentable {
             coordinator.lastContent = text
             let escaped = text.jsEscaped
             webView.evaluateJavaScript("bridge.setContent(\"\(escaped)\")") { _, _ in }
+        }
+
+        // Insert snippet at cursor if requested.
+        // Reset synchronously before the JS call to prevent duplicate insertion
+        // if SwiftUI calls updateNSView again before the JS completes.
+        if let snippet = snippetToInsert {
+            self.snippetToInsert = nil
+            let escaped = snippet.jsEscaped
+            webView.evaluateJavaScript("bridge.insertAtCursor(\"\(escaped)\")") { _, _ in }
         }
 
         // Update error markers if changed

@@ -58,6 +58,9 @@ struct RuntimeConfig: Codable {
     /// Algorithmic latency in samples (0 = no latency).
     /// Used by the AU to report `AUAudioUnit.latency` for DAW delay compensation.
     let latencySamples: UInt32?
+    /// Filename of an embedded NAM model (e.g., "model.nam").
+    /// When present, the AU loads this from its bundle Resources and injects it.
+    let namModelFile: String?
 
     /// Load from the given bundle's Resources.
     static func load(from bundle: Bundle) -> RuntimeConfig? {

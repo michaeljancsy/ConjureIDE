@@ -33,11 +33,14 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         case "compile_and_run":
             Task { @MainActor in
                 let result = await self.mcpCompileAndRun(input: input)
-                // Notify Monaco editor of the new script source
-                if !result.1, let source = input["source"] as? String {
-                    self.scriptSourceDidChange.send(ScriptSourceChange(source: source))
+                // Notify Monaco editor and UI of the new script source + benchmark
+                if !result.isError, let source = input["source"] as? String {
+                    var change = ScriptSourceChange(source: source)
+                    change.processTimeMs = result.processTimeMs
+                    change.budgetMs = result.budgetMs
+                    self.scriptSourceDidChange.send(change)
                 }
-                completion(result.0, result.1)
+                completion(result.json, result.isError)
             }
         case "get_script":
             let result = mcpGetScript()
@@ -81,6 +84,11 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         case "list_packages":
             let result = mcpListPackages()
             completion(result.0, result.1)
+        case "list_tones":
+            Task { @MainActor in
+                let result = self.mcpListTones()
+                completion(result.0, result.1)
+            }
         default:
             completion(jsonStr(["error": "Unknown tool: \(name)"]), true)
         }
@@ -88,10 +96,19 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
 
     // MARK: - Tool Implementations
 
+    /// Result from MCP compile_and_run, carrying both the JSON response and benchmark data
+    /// for the UI timing indicator.
+    private struct MCPCompileResult {
+        let json: String
+        let isError: Bool
+        var processTimeMs: Double?
+        var budgetMs: Double?
+    }
+
     @MainActor
-    private func mcpCompileAndRun(input: [String: Any]) async -> (String, Bool) {
+    private func mcpCompileAndRun(input: [String: Any]) async -> MCPCompileResult {
         guard let source = input["source"] as? String else {
-            return (jsonStr(["error": "Missing required parameter: source"]), true)
+            return MCPCompileResult(json: jsonStr(["error": "Missing required parameter: source"]), isError: true)
         }
         let result = await compileAndRun(source: source)
         if result.success {
@@ -106,10 +123,15 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             if _latencySamples > 0 {
                 response["latency_samples"] = Int(_latencySamples)
             }
-            return (jsonStr(response), false)
+            return MCPCompileResult(
+                json: jsonStr(response), isError: false,
+                processTimeMs: result.processTimeMs, budgetMs: result.budgetMs
+            )
         } else {
             mcpLastError = result.error
-            return (jsonStr(["success": false, "error": result.error ?? "Unknown error"]), false)
+            return MCPCompileResult(
+                json: jsonStr(["success": false, "error": result.error ?? "Unknown error"]), isError: false
+            )
         }
     }
 
@@ -245,7 +267,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             return (jsonStr(["error": "Missing required parameter: topic"]), true)
         }
 
-        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "all"]
+        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "nam", "all"]
         guard validTopics.contains(topic) else {
             return (jsonStr(["error": "Invalid topic: \(topic). Valid topics: \(validTopics.joined(separator: ", "))"]), true)
         }
@@ -256,6 +278,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         if topic == "delays" || topic == "all" { sections.append(Self.docsDelays) }
         if topic == "oscillators" || topic == "all" { sections.append(Self.docsOscillators) }
         if topic == "utilities" || topic == "all" { sections.append(Self.docsUtilities) }
+        if topic == "nam" || topic == "all" { sections.append(Self.docsNam) }
 
         return (jsonStr(["topic": topic, "docs": sections.joined(separator: "\n\n")]), false)
     }
@@ -313,6 +336,33 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         crates.sort { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
 
         return (jsonStr(["python_packages": packages, "rust_crates": crates]), false)
+    }
+
+    // MARK: - Tone listing
+
+    @MainActor
+    private func mcpListTones() -> (String, Bool) {
+        let store = ToneModelStore()
+        let tones = store.downloadedModels.map { model -> [String: Any] in
+            var entry: [String: Any] = [
+                "tone_name": model.toneName,
+                "author": model.author,
+                "gear": model.gear,
+                "model_name": model.modelName,
+                "model_size": model.modelSize,
+                "path": model.tone3000Path,
+            ]
+            if !model.tags.isEmpty { entry["tags"] = model.tags }
+            if !model.makes.isEmpty { entry["makes"] = model.makes }
+            return entry
+        }
+        if tones.isEmpty {
+            return (jsonStr([
+                "tones": [] as [Any],
+                "note": "No tones downloaded. Use the Tones browser (toolbar button) to search and download tones from tone3000.com.",
+            ]), false)
+        }
+        return (jsonStr(["tones": tones, "count": tones.count]), false)
     }
 
     // Static documentation strings — comprehensive API reference derived from actual source.
@@ -558,6 +608,102 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
       Preserves perceived loudness at 50% mix (no energy dip).
     """
 
+    private static let docsNam = """
+    # NAM — Neural Amp Modeling
+
+    Load and run NAM (.nam) tone models from tone3000.com for guitar amp/pedal emulation.
+
+    ## Python API
+
+      from conjuredsp.nam import load_model
+
+      model = load_model("tone3000://TONE_ID/MODEL_ID")
+
+      # In process():
+      wet = model.process(audio_array, channel_index)
+
+    ### load_model(path) -> NamModel
+
+    Loads a .nam file. Path formats:
+      "tone3000://toneId/modelId" — downloaded tone (use list_tones tool to see available)
+      "~/path/to/model.nam" — local file with tilde expansion
+      "/absolute/path/to/model.nam" — absolute path
+
+    ### NamModel
+
+    Properties:
+      .architecture — "WaveNet" or "LSTM"
+      .receptive_field — number of history samples needed (WaveNet only)
+      .sample_rate — sample rate the model was trained at
+
+    Methods:
+      .process(audio: np.ndarray, channel: int) -> np.ndarray
+        Process one channel of audio. Returns array of same length.
+        Maintains per-channel history automatically across callbacks.
+      .reset()
+        Clear history buffers / LSTM hidden state.
+
+    ## Python Usage Pattern
+
+      from conjuredsp.nam import load_model
+      from conjuredsp import db, mix
+
+      PARAMS = {
+          "input_gain": db(default=0),
+          "mix": mix(default=1.0),
+      }
+
+      model = load_model("tone3000://12345/67890")
+
+      def process(inputs, outputs, frame_count, sample_rate, params):
+          gain = 10 ** (params["input_gain"] / 20.0)
+          mix_val = params["mix"]
+          for ch in range(len(inputs)):
+              wet = model.process(inputs[ch][:frame_count] * gain, ch)
+              outputs[ch][:frame_count] = inputs[ch][:frame_count] * (1 - mix_val) + wet * mix_val
+
+    ## Rust API
+
+      use conjuredsp::*;
+      setup!();
+      nam!("tone3000://TONE_ID/MODEL_ID");
+
+      // In process():
+      unsafe {
+          if let Some(model) = NAM_MODEL.as_mut() {
+              for c in 0..ctx.channels() {
+                  let n = ctx.frames();
+                  for i in 0..n { NAM_IN[i] = ctx.input(c, i); }
+                  model.process_buffer(&NAM_IN[..n], &mut NAM_OUT[..n], c);
+                  for i in 0..n { ctx.set_output(c, i, NAM_OUT[i]); }
+              }
+          }
+      }
+
+    ### nam!("path") macro
+
+    Declares which NAM model to use. Expands to:
+      - static mut NAM_MODEL: Option<NamModel> — the loaded model
+      - static mut NAM_IN / NAM_OUT: [f32; MAX_FR] — scratch buffers
+      - WASM exports: get_nam_data_ptr, init_nam, get_nam_active
+      - Path metadata exports: get_nam_path_ptr, get_nam_path_len
+
+    The host reads the path from the compiled WASM, loads the .nam file,
+    and injects the model data into WASM memory before the first process() call.
+
+    ### NamModel methods (Rust)
+
+      model.process_buffer(input: &[f32], output: &mut [f32], channel: usize)
+        Process one channel. Input and output slices must be same length.
+
+    ## Notes
+
+    - NAM models are mono — process() runs independently per channel with shared weights
+    - WaveNet models maintain a sliding history window across callbacks (automatic)
+    - If model sample rate != DAW sample rate, a warning is logged on first process() call
+    - Use list_tones tool to see downloaded tones and their tone3000:// paths
+    """
+
     // MARK: - State Summary
 
     /// Synchronous summary of current AU state for MCP initialize instructions.
@@ -598,6 +744,19 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
 
         if _latencySamples > 0 {
             parts.append("Latency: \(_latencySamples) samples.")
+        }
+
+        // Count downloaded NAM tones by scanning the App Group tones directory
+        if let tonesURL = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP")?
+            .appendingPathComponent("tones"),
+           let toneDirs = try? FileManager.default.contentsOfDirectory(at: tonesURL, includingPropertiesForKeys: [.isDirectoryKey]) {
+            let namCount = toneDirs.filter { dir in
+                (try? dir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            }.count
+            if namCount > 0 {
+                parts.append("\(namCount) NAM tone(s) downloaded (use list_tones tool).")
+            }
         }
 
         return parts.joined(separator: " ")

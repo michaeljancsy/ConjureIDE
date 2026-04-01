@@ -63,6 +63,18 @@ const bridge = {
         this._suppressChanges = false;
     },
 
+    insertAtCursor(text) {
+        if (!this.editor) return;
+        const selection = this.editor.getSelection();
+        const op = { range: selection, text: text, forceMoveMarkers: true };
+        this._suppressChanges = true;
+        this.editor.executeEdits('conjuredsp', [op]);
+        this._suppressChanges = false;
+        // Notify Swift of the change
+        const fullText = this.editor.getValue();
+        window.webkit.messageHandlers.editorDidChange.postMessage(fullText);
+    },
+
     setLanguage(lang) {
         if (!this.editor) return;
         const model = this.editor.getModel();

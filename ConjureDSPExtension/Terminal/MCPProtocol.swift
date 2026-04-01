@@ -183,6 +183,11 @@ enum MCPProtocol {
             description: "List all packages available for import in DSP scripts. Returns Python packages (numpy, scipy, conjuredsp, plus user-installed) and Rust crates (conjuredsp built-in, plus user-installed via crate package manager). Call this to check what's available before writing a script.",
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
+        ToolDefinition(
+            name: "list_tones",
+            description: "List downloaded NAM tone models available for use in DSP scripts. Returns tone name, author, gear type, tags, makes, model variants, and the tone3000:// path to use with load_model(). Always call this before writing a NAM preset. If the user hasn't specified which tone to use, show them the available tones and ask which they prefer.",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
     ]
 }
 

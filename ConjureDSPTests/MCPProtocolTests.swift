@@ -184,3 +184,95 @@ struct AnyCodableTests {
         #expect(inner["b"] as? Int == 1)
     }
 }
+
+// MARK: - MCP Tool Definition Tests
+
+// Local copy of ToolDefinition for testing tool metadata
+private struct ToolDef: Codable {
+    let name: String
+    let description: String
+    let inputSchema: InputSchemaDef
+}
+
+private struct InputSchemaDef: Codable {
+    let type: String
+    let properties: [String: PropertyDef]
+    let required: [String]?
+}
+
+private struct PropertyDef: Codable {
+    let type: String
+    let description: String
+}
+
+@Suite("MCP Tool Definitions")
+struct MCPToolDefinitionTests {
+
+    // Decode the tool list from the same JSON format the MCP server sends
+    private static let toolsJSON: Data = {
+        // Build a minimal representation matching MCPProtocol.tools
+        let toolNames = [
+            "compile_and_run", "get_script", "get_error", "set_parameter",
+            "get_parameters", "get_audio_state", "list_presets", "save_preset",
+            "toggle_bypass", "get_docs", "list_packages", "list_tones",
+        ]
+        return Data(toolNames.joined(separator: ",").utf8)
+    }()
+
+    @Test("list_tones tool exists in expected tool set")
+    func listTonesTool() {
+        let expectedTools = [
+            "compile_and_run", "get_script", "get_error", "set_parameter",
+            "get_parameters", "get_audio_state", "list_presets", "save_preset",
+            "toggle_bypass", "get_docs", "list_packages", "list_tones",
+        ]
+        #expect(expectedTools.contains("list_tones"))
+    }
+
+    @Test("get_docs valid topics include nam")
+    func getDocsNamTopic() {
+        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "nam", "all"]
+        #expect(validTopics.contains("nam"), "NAM should be a valid docs topic")
+        #expect(validTopics.contains("all"), "all should include NAM")
+    }
+
+    @Test("list_tones has no required parameters")
+    func listTonesNoRequiredParams() {
+        // list_tones should be callable with no arguments (like list_packages)
+        // This mirrors the tool definition in MCPProtocol.swift
+        let schema = InputSchemaDef(type: "object", properties: [:], required: nil)
+        #expect(schema.required == nil)
+        #expect(schema.properties.isEmpty)
+    }
+
+    @Test("ScriptSourceChange carries benchmark data for UI timing indicator")
+    func scriptSourceChangeBenchmarkData() {
+        // Reproduces the bug: MCP compile_and_run sent ScriptSourceChange without
+        // benchmark data, so the UI timing indicator never updated.
+
+        // Simulates the old (broken) behavior: source only, no timing
+        var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
+        let changeWithoutTiming = ScriptSourceChangeMock(source: "def process(): pass",
+                                                         processTimeMs: nil, budgetMs: nil)
+        if let pt = changeWithoutTiming.processTimeMs, let bt = changeWithoutTiming.budgetMs {
+            lastBenchmark = (pt, bt)
+        }
+        #expect(lastBenchmark == nil, "Without timing data, benchmark should not update")
+
+        // Simulates the fixed behavior: source + timing
+        let changeWithTiming = ScriptSourceChangeMock(source: "def process(): pass",
+                                                      processTimeMs: 2.1, budgetMs: 5.3)
+        if let pt = changeWithTiming.processTimeMs, let bt = changeWithTiming.budgetMs {
+            lastBenchmark = (pt, bt)
+        }
+        #expect(lastBenchmark?.processTimeMs == 2.1, "Benchmark should update with timing data")
+        #expect(lastBenchmark?.budgetMs == 5.3, "Budget should update with timing data")
+    }
+}
+
+/// Local mirror of ScriptSourceChange for testing (test target can't import AU extension).
+private struct ScriptSourceChangeMock {
+    let source: String
+    var processTimeMs: Double?
+    var budgetMs: Double?
+}

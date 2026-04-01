@@ -53,6 +53,12 @@ pub struct WasmBackend {
     param_write_count: usize,
     /// Script-declared algorithmic latency in samples (from `get_latency_samples` export).
     latency_samples: u32,
+    /// NAM model injection support — detected from `get_nam_data_ptr` export.
+    get_nam_data_ptr_fn: Option<TypedFunc<(), i32>>,
+    init_nam_fn: Option<TypedFunc<i32, i32>>,
+    get_nam_active_fn: Option<TypedFunc<(), i32>>,
+    /// NAM model path embedded in the WASM binary via `get_nam_path_ptr`/`get_nam_path_len`.
+    nam_path: Option<String>,
 }
 
 /// Base offset in WASM linear memory to avoid the null page.
@@ -64,6 +70,10 @@ const DEFAULT_FUEL: u64 = 1_000_000;
 /// Higher fuel budget for compiled modules (Rust/C via wasm32-wasip1).
 /// Compiled code includes musl overhead, bounds checking, etc.
 const COMPILED_FUEL: u64 = 10_000_000;
+
+/// Much higher fuel budget for NAM-active WASM modules.
+/// WaveNet matrix ops for a standard model need ~50-100M instructions per buffer.
+const NAM_FUEL: u64 = 200_000_000;
 
 impl WasmBackend {
     /// Load a WASM module from bytes.
@@ -151,6 +161,52 @@ impl WasmBackend {
             .map(|v| if v < 0 { 0 } else { v as u32 })
             .unwrap_or(0);
 
+        // Probe for NAM model injection exports
+        let get_nam_data_ptr_fn = instance
+            .get_typed_func::<(), i32>(&mut store, "get_nam_data_ptr")
+            .ok();
+        let init_nam_fn = instance
+            .get_typed_func::<i32, i32>(&mut store, "init_nam")
+            .ok();
+        let get_nam_active_fn = instance
+            .get_typed_func::<(), i32>(&mut store, "get_nam_active")
+            .ok();
+
+        // Read NAM model path if available
+        let nam_path = {
+            let get_ptr = instance.get_typed_func::<(), i32>(&mut store, "get_nam_path_ptr").ok();
+            let get_len = instance.get_typed_func::<(), i32>(&mut store, "get_nam_path_len").ok();
+            if let (Some(ptr_fn), Some(len_fn)) = (get_ptr, get_len) {
+                let _ = store.set_fuel(COMPILED_FUEL);
+                let ptr = ptr_fn.call(&mut store, ()).ok();
+                let _ = store.set_fuel(COMPILED_FUEL);
+                let len = len_fn.call(&mut store, ()).ok();
+                if let (Some(p), Some(l)) = (ptr, len) {
+                    let data = memory.data(&store);
+                    let start = p as usize;
+                    let end = start + l as usize;
+                    if end <= data.len() {
+                        std::str::from_utf8(&data[start..end]).ok().map(String::from)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        let has_nam = get_nam_data_ptr_fn.is_some();
+
+        // Use higher fuel budget for NAM-active modules
+        let fuel_per_callback = if has_nam {
+            NAM_FUEL
+        } else {
+            fuel_per_callback
+        };
+
         // Determine how many params to write: metadata count, or 8 for backward compat
         let param_write_count = param_metadata
             .as_ref()
@@ -185,6 +241,10 @@ impl WasmBackend {
             param_metadata,
             param_write_count,
             latency_samples,
+            get_nam_data_ptr_fn,
+            init_nam_fn,
+            get_nam_active_fn,
+            nam_path,
         })
     }
 
@@ -460,6 +520,8 @@ impl WasmBackend {
 }
 
 impl Backend for WasmBackend {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+
     fn initialize(&mut self, channel_count: usize, _sample_rate: f64, max_frames: u32) {
         self.channel_count = channel_count;
         self.max_frames = max_frames;
@@ -663,6 +725,61 @@ impl Backend for WasmBackend {
 
     fn memory_bytes(&self) -> u64 {
         self.memory.data_size(&self.store) as u64
+    }
+}
+
+// MARK: - NAM model injection
+
+impl WasmBackend {
+    /// Returns the NAM model path embedded in the WASM binary, if any.
+    pub fn nam_path(&self) -> Option<&str> {
+        self.nam_path.as_deref()
+    }
+
+    /// Inject NAM model binary data into the WASM module's linear memory.
+    /// The host reads a .nam file, serializes it to the binary protocol, and
+    /// calls this to write the data and initialize the model.
+    pub fn inject_nam_model(&mut self, binary_data: &[u8]) -> Result<(), String> {
+        let get_ptr_fn = self.get_nam_data_ptr_fn.as_ref()
+            .ok_or("Module does not export get_nam_data_ptr")?;
+        let init_fn = self.init_nam_fn.as_ref()
+            .ok_or("Module does not export init_nam")?;
+
+        // Get the buffer address in WASM memory
+        let _ = self.store.set_fuel(COMPILED_FUEL);
+        let buf_ptr = get_ptr_fn.call(&mut self.store, ())
+            .map_err(|e| format!("get_nam_data_ptr failed: {}", e))? as usize;
+
+        // Validate against the NAM_DATA_BUF size (4MB) to prevent overflow
+        const NAM_DATA_BUF_SIZE: usize = 4 * 1024 * 1024;
+        if binary_data.len() > NAM_DATA_BUF_SIZE {
+            return Err(format!(
+                "NAM model ({} bytes) exceeds maximum buffer size ({} bytes). Model is too large.",
+                binary_data.len(), NAM_DATA_BUF_SIZE
+            ));
+        }
+
+        // Write binary data into WASM memory
+        let mem_data = self.memory.data_mut(&mut self.store);
+        let end = buf_ptr + binary_data.len();
+        if end > mem_data.len() {
+            return Err(format!(
+                "NAM data ({} bytes) exceeds WASM memory ({} bytes at offset {})",
+                binary_data.len(), mem_data.len(), buf_ptr
+            ));
+        }
+        mem_data[buf_ptr..end].copy_from_slice(binary_data);
+
+        // Call init_nam to parse and initialize the model
+        let _ = self.store.set_fuel(NAM_FUEL);
+        let result = init_fn.call(&mut self.store, binary_data.len() as i32)
+            .map_err(|e| format!("init_nam failed: {}", e))?;
+
+        if result == 1 {
+            Ok(())
+        } else {
+            Err("init_nam returned failure (invalid model data?)".to_string())
+        }
     }
 }
 
@@ -1379,5 +1496,60 @@ mod tests {
             );
         }
         assert_eq!(backend.memory_bytes(), 65536 * 3, "should grow by another page");
+    }
+
+    /// WAT module with NAM exports for injection testing.
+    const NAM_STUB_WAT: &str = r#"
+        (module
+          (memory (export "memory") 100)
+          (global $buf_ptr (mut i32) (i32.const 1024))
+          (func (export "process")
+            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+          )
+          (func (export "get_nam_data_ptr") (result i32)
+            (global.get $buf_ptr)
+          )
+          (func (export "init_nam") (param $len i32) (result i32)
+            (i32.const 1)
+          )
+          (func (export "get_nam_active") (result i32)
+            (i32.const 0)
+          )
+        )
+    "#;
+
+    #[test]
+    fn test_nam_inject_rejects_oversized_data() {
+        let wasm = wat_to_wasm(NAM_STUB_WAT);
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+
+        // 4MB + 1 byte should be rejected
+        let oversized = vec![0u8; 4 * 1024 * 1024 + 1];
+        let result = backend.inject_nam_model(&oversized);
+        assert!(result.is_err(), "Should reject data exceeding 4MB buffer");
+        let err = result.unwrap_err();
+        assert!(err.contains("exceeds maximum buffer size"), "Error should mention buffer size: {}", err);
+    }
+
+    #[test]
+    fn test_nam_inject_accepts_small_data() {
+        let wasm = wat_to_wasm(NAM_STUB_WAT);
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+
+        // Small data should be accepted (init_nam stub always returns 1)
+        let small = vec![0u8; 1024];
+        let result = backend.inject_nam_model(&small);
+        assert!(result.is_ok(), "Should accept small data: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_nam_inject_accepts_exactly_4mb() {
+        let wasm = wat_to_wasm(NAM_STUB_WAT);
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+
+        // Exactly 4MB should be accepted
+        let exact = vec![0u8; 4 * 1024 * 1024];
+        let result = backend.inject_nam_model(&exact);
+        assert!(result.is_ok(), "Should accept exactly 4MB: {:?}", result.err());
     }
 }

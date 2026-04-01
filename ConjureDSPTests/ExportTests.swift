@@ -422,6 +422,50 @@ struct ExportManagerTests {
         }
     }
 
+    @Test("ExportError.namModelNotFound has descriptive message")
+    func exportErrorNamModelNotFoundMessage() {
+        let error = ExportManager.ExportError.namModelNotFound("tone3000://99999/99999")
+        #expect(error.errorDescription?.contains("tone3000://99999/99999") == true)
+        #expect(error.errorDescription?.contains("not found") == true)
+    }
+
+    @Test("NAM load_model regex detects tone3000 paths in Python source")
+    func namLoadModelRegexDetection() {
+        let source = "from conjuredsp.nam import load_model\nmodel = load_model(\"tone3000://34/82524\")\ndef process():\n    pass\n"
+        let regex = #"load_model\("([^"]+)"\)"#
+
+        let range = source.range(of: regex, options: .regularExpression)
+        #expect(range != nil, "Should detect load_model call")
+
+        if let range = range {
+            let match = source[range]
+            // Extract path argument
+            if let argRange = match.range(of: #""([^"]+)""#, options: .regularExpression) {
+                let path = String(match[argRange].dropFirst().dropLast())
+                #expect(path == "tone3000://34/82524")
+            }
+        }
+    }
+
+    @Test("Scoped load_model replacement preserves comments")
+    func scopedLoadModelReplacement() {
+        let path = "/tmp/test/model.nam"
+        let source = "# Path: \(path)\nmodel = load_model(\"\(path)\")\n"
+        let regex = #"load_model\("([^"]+)"\)"#
+
+        if let callRange = source.range(of: regex, options: .regularExpression) {
+            var rewritten = source
+            rewritten.replaceSubrange(callRange, with: "load_model(\"model.nam\")")
+
+            // The load_model call should be rewritten
+            #expect(rewritten.contains("load_model(\"model.nam\")"))
+            // The comment should be preserved
+            #expect(rewritten.contains("# Path: \(path)"))
+        } else {
+            Issue.record("Regex should match")
+        }
+    }
+
     @Test func exportWithSkipSigning() throws {
         let templateURL = try createMockTemplate()
         defer { cleanup(templateURL) }

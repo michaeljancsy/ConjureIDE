@@ -482,6 +482,8 @@ impl PythonBackend {
 }
 
 impl Backend for PythonBackend {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+
     fn initialize(&mut self, channel_count: usize, _sample_rate: f64, max_frames: u32) {
         self.allocate_py_arrays(channel_count, max_frames as usize);
     }

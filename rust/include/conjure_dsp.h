@@ -149,6 +149,20 @@ bool dsp_kernel_load_script(DSPKernelRef kernel, const char *python_home, const 
 void dsp_kernel_set_extra_site_packages(DSPKernelRef kernel, const char *path);
 
 /**
+ * Set the directory where downloaded NAM tone files are stored.
+ * This sets the `CONJUREDSP_TONES_DIR` environment variable so Python scripts
+ * can resolve `tone3000://` paths via `conjuredsp.nam.load_model()`.
+ *
+ * Call this once after kernel creation, before loading scripts.
+ * Pass null to no-op.
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * - `path` must be a valid null-terminated C string, or null.
+ */
+void dsp_kernel_set_tones_dir(DSPKernelRef _kernel, const char *path);
+
+/**
  * Load a WASM module for DSP processing.
  *
  * The module must export a `process` function with signature
@@ -162,6 +176,26 @@ void dsp_kernel_set_extra_site_packages(DSPKernelRef kernel, const char *path);
  * - `wasm_bytes` must point to `len` valid bytes of a WASM module.
  */
 bool dsp_kernel_load_wasm(DSPKernelRef kernel, const uint8_t *wasm_bytes, uint32_t len);
+
+/**
+ * Returns the NAM model path embedded in the loaded WASM module, or null if none.
+ * The returned pointer is valid until the next `load_wasm` or `dsp_kernel_destroy`.
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+const char *dsp_kernel_nam_path(DSPKernelRef kernel);
+
+/**
+ * Inject NAM model binary data into the loaded WASM backend.
+ * Call after `dsp_kernel_load_wasm` when `dsp_kernel_nam_path` returns non-null.
+ * Returns true on success.
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * - `data` must point to `len` valid bytes.
+ */
+bool dsp_kernel_inject_nam(DSPKernelRef kernel, const uint8_t *data, uintptr_t len);
 
 /**
  * Benchmark the process function.
