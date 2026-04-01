@@ -33,11 +33,14 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         case "compile_and_run":
             Task { @MainActor in
                 let result = await self.mcpCompileAndRun(input: input)
-                // Notify Monaco editor of the new script source
-                if !result.1, let source = input["source"] as? String {
-                    self.scriptSourceDidChange.send(ScriptSourceChange(source: source))
+                // Notify Monaco editor and UI of the new script source + benchmark
+                if !result.isError, let source = input["source"] as? String {
+                    var change = ScriptSourceChange(source: source)
+                    change.processTimeMs = result.processTimeMs
+                    change.budgetMs = result.budgetMs
+                    self.scriptSourceDidChange.send(change)
                 }
-                completion(result.0, result.1)
+                completion(result.json, result.isError)
             }
         case "get_script":
             let result = mcpGetScript()
@@ -93,10 +96,19 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
 
     // MARK: - Tool Implementations
 
+    /// Result from MCP compile_and_run, carrying both the JSON response and benchmark data
+    /// for the UI timing indicator.
+    private struct MCPCompileResult {
+        let json: String
+        let isError: Bool
+        var processTimeMs: Double?
+        var budgetMs: Double?
+    }
+
     @MainActor
-    private func mcpCompileAndRun(input: [String: Any]) async -> (String, Bool) {
+    private func mcpCompileAndRun(input: [String: Any]) async -> MCPCompileResult {
         guard let source = input["source"] as? String else {
-            return (jsonStr(["error": "Missing required parameter: source"]), true)
+            return MCPCompileResult(json: jsonStr(["error": "Missing required parameter: source"]), isError: true)
         }
         let result = await compileAndRun(source: source)
         if result.success {
@@ -111,10 +123,15 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             if _latencySamples > 0 {
                 response["latency_samples"] = Int(_latencySamples)
             }
-            return (jsonStr(response), false)
+            return MCPCompileResult(
+                json: jsonStr(response), isError: false,
+                processTimeMs: result.processTimeMs, budgetMs: result.budgetMs
+            )
         } else {
             mcpLastError = result.error
-            return (jsonStr(["success": false, "error": result.error ?? "Unknown error"]), false)
+            return MCPCompileResult(
+                json: jsonStr(["success": false, "error": result.error ?? "Unknown error"]), isError: false
+            )
         }
     }
 
