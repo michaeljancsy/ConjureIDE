@@ -1404,6 +1404,8 @@
 				OTHER_LDFLAGS = (
 					"-lconjure_dsp",
 					"-lpython3.14t",
+					"-framework",
+					Accelerate,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1444,6 +1446,8 @@
 				OTHER_LDFLAGS = (
 					"-lconjure_dsp",
 					"-lpython3.14t",
+					"-framework",
+					Accelerate,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";

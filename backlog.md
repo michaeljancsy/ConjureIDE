@@ -8,6 +8,8 @@
 ## To Do
 
 ### v1 Release
+- NAM exports work
+- export pipeline flags/gates exporting NAM tones without explicit authorization from the creator of the tone
 - Run `scripts/release.sh` end-to-end, store notarization creds in Keychain, verify DMG on clean machine. Full plan at `docs/distribution-plan.md`.
 - Landing page (static site with Buy + Download)
 - Single-source download URL config: one config file in the repo defining the canonical download link, referenced everywhere (landing page, in-app links, etc.) so it only needs updating in one place
