@@ -51,6 +51,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var lastRunSource: String = ""
     @State private var showSpectrogram: Bool = false
     @State private var showChat: Bool = false
+    @State private var terminalHasBeenOpened: Bool = false
     @State private var chatWidth: CGFloat = 280
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
@@ -225,7 +226,7 @@ struct ConjureDSPExtensionMainView: View {
             }
             .padding(.bottom, 4)
 
-            // Spectrogram side panel (collapsible)
+            // Spectrogram side panel (collapsible, slides from right)
             if showSpectrogram {
                 // Resizable divider
                 Rectangle()
@@ -253,48 +254,50 @@ struct ConjureDSPExtensionMainView: View {
                     showNoteNames: $spectrogramShowNoteNames
                 )
                 .frame(width: spectrogramWidth)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
             } // HStack
+            .animation(.easeOut(duration: 0.15), value: showSpectrogram)
 
-            // Terminal drawer — slides over the editor from the left
-            Group {
-                if showChat {
-                    HStack(spacing: 0) {
-                        Group {
-                            if daemonChecker.isDaemonAvailable {
-                                TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
-                                    .accessibilityIdentifier("terminalPanel")
+            // Terminal drawer — animates frame width so the WKWebView is never
+            // destroyed mid-animation (avoids choppiness from WebView teardown).
+            // Rendered lazily on first open, then kept alive.
+            if terminalHasBeenOpened {
+                HStack(spacing: 0) {
+                    Group {
+                        if daemonChecker.isDaemonAvailable {
+                            TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
+                                .accessibilityIdentifier("terminalPanel")
+                        } else {
+                            DaemonLaunchPromptView(colorScheme: colorScheme)
+                        }
+                    }
+                    .frame(width: showChat ? chatWidth : 0)
+                    .clipped()
+
+                    // Drag handle (only interactive when open)
+                    Rectangle()
+                        .fill(Color.secondary.opacity(showChat ? 0.2 : 0))
+                        .frame(width: showChat ? 4 : 0)
+                        .contentShape(Rectangle().inset(by: -4))
+                        .gesture(
+                            DragGesture()
+                                .onChanged { value in
+                                    chatWidth = max(200, min(450, chatWidth + value.translation.width))
+                                }
+                        )
+                        .onHover { hovering in
+                            if hovering && showChat {
+                                NSCursor.resizeLeftRight.push()
                             } else {
-                                DaemonLaunchPromptView(colorScheme: colorScheme)
+                                NSCursor.pop()
                             }
                         }
-                        .frame(width: chatWidth)
 
-                        // Resizable drag handle
-                        Rectangle()
-                            .fill(Color.secondary.opacity(0.2))
-                            .frame(width: 4)
-                            .contentShape(Rectangle().inset(by: -4))
-                            .gesture(
-                                DragGesture()
-                                    .onChanged { value in
-                                        chatWidth = max(200, min(450, chatWidth + value.translation.width))
-                                    }
-                            )
-                            .onHover { hovering in
-                                if hovering {
-                                    NSCursor.resizeLeftRight.push()
-                                } else {
-                                    NSCursor.pop()
-                                }
-                            }
-
-                        Spacer()
-                    }
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                    Spacer(minLength: 0)
                 }
+                .animation(.easeOut(duration: 0.15), value: showChat)
             }
-            .animation(.easeInOut(duration: 0.22), value: showChat)
 
             // Demo expired overlay
             if !subscriptionManager.isLicensed && subscriptionManager.demoSecondsRemaining <= 0 {
@@ -362,6 +365,7 @@ struct ConjureDSPExtensionMainView: View {
         }
         .onChange(of: showChat) { _, newValue in
             if newValue {
+                terminalHasBeenOpened = true
                 daemonChecker.startChecking()
             } else {
                 daemonChecker.stopChecking()

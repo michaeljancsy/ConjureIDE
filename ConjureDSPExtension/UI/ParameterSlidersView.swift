@@ -7,6 +7,8 @@
 
 import SwiftUI
 
+private let panelAnimation = Animation.easeOut(duration: 0.15)
+
 struct ParameterSlidersView: View {
     @ObservedObject var parameterState: ParameterState
     @State private var isExpanded: Bool = true
@@ -17,12 +19,10 @@ struct ParameterSlidersView: View {
         return Array(names.keys).sorted()
     }
 
-    /// Label for a parameter at the given index.
     private func label(for index: Int) -> String {
         parameterState.paramNames?[index] ?? "Param \(index)"
     }
 
-    /// Metadata for a parameter at the given index (nil for legacy 0–1 params).
     private func metadata(for index: Int) -> ConjureDSPExtensionAudioUnit.ParamMetadata? {
         guard let meta = parameterState.paramMetadata, index < meta.count else { return nil }
         return meta[index]
@@ -30,19 +30,44 @@ struct ParameterSlidersView: View {
 
     var body: some View {
         if !visibleIndices.isEmpty {
-            DisclosureGroup("Parameters", isExpanded: $isExpanded) {
-                VStack(spacing: 4) {
-                    ForEach(visibleIndices, id: \.self) { index in
-                        ParameterSliderRow(
-                            label: label(for: index),
-                            value: parameterState.binding(for: index),
-                            metadata: metadata(for: index)
-                        )
+            VStack(spacing: 0) {
+                // Custom disclosure header — gives us full animation control
+                Button(action: {
+                    withAnimation(panelAnimation) { isExpanded.toggle() }
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                            .animation(panelAnimation, value: isExpanded)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text("Parameters")
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        Spacer()
                     }
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
                 }
-                .padding(.vertical, 4)
+                .buttonStyle(.plain)
+
+                if isExpanded {
+                    VStack(spacing: 4) {
+                        ForEach(visibleIndices, id: \.self) { index in
+                            ParameterSliderRow(
+                                label: label(for: index),
+                                value: parameterState.binding(for: index),
+                                metadata: metadata(for: index)
+                            )
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 4)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
-            .padding(.horizontal)
+            .clipped()
             .accessibilityIdentifier("parameterSlidersPanel")
         }
     }
@@ -52,6 +77,14 @@ struct ParameterSliderRow: View {
     let label: String
     @Binding var value: Float
     let metadata: ConjureDSPExtensionAudioUnit.ParamMetadata?
+
+    @State private var isEditing = false
+    @State private var editText = ""
+    @FocusState private var fieldFocused: Bool
+
+    private var isSlider: Bool {
+        !(metadata?.isToggle ?? false) && !(metadata?.isChoice ?? false)
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -82,21 +115,48 @@ struct ParameterSliderRow: View {
                     .accessibilityIdentifier("\(label)Slider")
             }
 
-            // Recessed value display
-            Text(formattedValue)
-                .font(.caption.monospaced())
-                .frame(width: 64, alignment: .trailing)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.primary.opacity(0.06))
-                )
-                .accessibilityIdentifier("\(label)Value")
+            // Value display — tappable for inline editing on slider params
+            if isEditing {
+                TextField("", text: $editText)
+                    .font(.caption.monospaced())
+                    .frame(width: 64)
+                    .textFieldStyle(.plain)
+                    .multilineTextAlignment(.trailing)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.accentColor.opacity(0.10)))
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1))
+                    .focused($fieldFocused)
+                    .onSubmit { commitEdit() }
+                    .onChange(of: fieldFocused) { _, focused in
+                        if !focused { commitEdit() }
+                    }
+            } else {
+                Text(formattedValue)
+                    .font(.caption.monospaced())
+                    .frame(width: 64, alignment: .trailing)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.06)))
+                    .accessibilityIdentifier("\(label)Value")
+                    .onTapGesture {
+                        guard isSlider else { return }
+                        editText = String(format: "%g", value)
+                        isEditing = true
+                        fieldFocused = true
+                    }
+            }
         }
     }
 
-    /// Bridge Float 0/1 to Bool for SwiftUI Toggle.
+    private func commitEdit() {
+        isEditing = false
+        guard let parsed = Float(editText) else { return }
+        let lo = metadata?.min ?? 0
+        let hi = metadata?.max ?? 1
+        value = max(lo, min(hi, parsed))
+    }
+
     private var toggleBinding: Binding<Bool> {
         Binding<Bool>(
             get: { value >= 0.5 },
@@ -104,7 +164,6 @@ struct ParameterSliderRow: View {
         )
     }
 
-    /// Bridge Float index to Int for SwiftUI Picker.
     private func choiceBinding(optionCount: Int) -> Binding<Int> {
         Binding<Int>(
             get: {
@@ -179,7 +238,6 @@ private struct DSPSlider: View {
                     )
             }
             .frame(maxHeight: .infinity)
-            // Invisible full-height hit target
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
