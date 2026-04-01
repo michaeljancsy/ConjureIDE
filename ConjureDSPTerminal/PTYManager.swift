@@ -493,6 +493,18 @@ final class PTYManager {
     **Utilities** — `db_to_gain`, `gain_to_db`, `smooth_coeff`, `ms_to_samples`, \
     `soft_clip`, `lerp`, `crossfade`, and more.
 
+    **Accelerated math** (`accel` module) — hardware-accelerated vectorized operations \
+    backed by Apple Accelerate (vDSP/vecLib) via WASM host imports. Functions: `matmul`, \
+    `vec_add`, `vec_mul`, `vec_tanh`, `vec_sigmoid`, `vec_add_scalar`. In Rust: \
+    `use conjuredsp::accel;` then `accel::matmul(a, b, out, m, k, n)`. In Python: \
+    `from conjuredsp.accel import matmul, vec_add, ...`. Used internally by NAM inference \
+    but available to any preset for batch math operations. Call `get_docs` with topic \
+    "accel" for full API reference.
+
+    **NAM tone models** — Neural Amp Modeling inference for guitar amp/pedal emulation. \
+    Call `list_tones` to see available tone models, then use `load_model("tone3000://...")` \
+    in a Python script. Call `get_docs` with topic "nam" for usage details.
+
     **Internal precision** — All conjuredsp library types use f64 internally for precision, \
     even though WASM I/O buffers are f32. In Rust, cast to/from f64 when interfacing with \
     library types. In Python, this is handled automatically.
@@ -520,8 +532,8 @@ final class PTYManager {
     - Call `list_packages` to see what Python packages are available for import (built-in and user-installed). \
     Do not assume a package is unavailable — always check first.
     - Before writing a script, call `get_docs` for the language-specific API reference. Topics: \
-    params, filters, delays, oscillators, utilities. Python and Rust have different syntax for \
-    the same concepts — always check.
+    params, filters, delays, oscillators, utilities, accel, nam. Python and Rust have different \
+    syntax for the same concepts — always check.
     - Python loads instantly; Rust compiles to WASM (a few seconds) but runs much faster
     - **Language selection**: Write in whatever language the user asks for. If the user doesn't specify, \
     call `get_script` to check the currently loaded script and write in the same language.

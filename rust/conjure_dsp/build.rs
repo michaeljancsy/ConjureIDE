@@ -9,4 +9,9 @@ fn main() {
     if python_lib.exists() {
         println!("cargo:rustc-link-search=native={}", python_lib.display());
     }
+
+    // Link Accelerate framework for vDSP/vecLib host imports (macOS only).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-lib=framework=Accelerate");
+    }
 }

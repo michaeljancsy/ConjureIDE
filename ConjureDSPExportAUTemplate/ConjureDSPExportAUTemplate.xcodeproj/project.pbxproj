@@ -414,6 +414,8 @@
 				OTHER_LDFLAGS = (
 					"-lconjure_dsp",
 					"-lpython3.14t",
+					"-framework",
+					Accelerate,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.ConjureDSP-user.ExportTemplate.Extension";
 				SDKROOT = macosx;
@@ -464,6 +466,8 @@
 				OTHER_LDFLAGS = (
 					"-lconjure_dsp",
 					"-lpython3.14t",
+					"-framework",
+					Accelerate,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.ConjureDSP-user.ExportTemplate.Extension";
 				SDKROOT = macosx;
@@ -558,6 +562,8 @@
 				OTHER_LDFLAGS = (
 					"-lconjure_dsp",
 					"-lpython3.14t",
+					"-framework",
+					Accelerate,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.ConjureDSP-user.ConjureDSPExportAUTemplateTests";
 				SDKROOT = macosx;
@@ -587,6 +593,8 @@
 				OTHER_LDFLAGS = (
 					"-lconjure_dsp",
 					"-lpython3.14t",
+					"-framework",
+					Accelerate,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.ConjureDSP-user.ConjureDSPExportAUTemplateTests";
 				SDKROOT = macosx;

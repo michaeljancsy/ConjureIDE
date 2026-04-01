@@ -44,6 +44,9 @@ from .buffers import DelayLine
 from .filters import Biquad, BiquadCoeffs
 from .osc import LFO
 
+# Accelerated math (NumPy-backed, mirrors Rust conjuredsp::accel)
+from . import accel
+
 # NAM (Neural Amp Modeler) inference
 from .nam import NamModel, load_model
 
@@ -80,6 +83,8 @@ __all__ = [
     "Biquad",
     "BiquadCoeffs",
     "LFO",
+    # Accelerated math
+    "accel",
     # NAM inference
     "NamModel",
     "load_model",

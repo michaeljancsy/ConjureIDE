@@ -411,4 +411,74 @@ uint64_t dsp_kernel_memory_baseline_bytes(DSPKernelRef kernel);
  */
 uint64_t dsp_kernel_wasm_memory_bytes(DSPKernelRef kernel);
 
+/**
+ * C = A * B where A is m×k, B is k×n, C is m×n. Stride params are element strides.
+ */
+extern void vDSP_mmul(const float *a,
+                      int32_t a_stride,
+                      const float *b,
+                      int32_t b_stride,
+                      float *c,
+                      int32_t c_stride,
+                      uint32_t m,
+                      uint32_t k,
+                      uint32_t n);
+
+/**
+ * C[i] = A[i] + B[i]
+ */
+extern void vDSP_vadd(const float *a,
+                      int32_t a_stride,
+                      const float *b,
+                      int32_t b_stride,
+                      float *c,
+                      int32_t c_stride,
+                      uint32_t n);
+
+/**
+ * C[i] = A[i] * B[i]
+ */
+extern void vDSP_vmul(const float *a,
+                      int32_t a_stride,
+                      const float *b,
+                      int32_t b_stride,
+                      float *c,
+                      int32_t c_stride,
+                      uint32_t n);
+
+/**
+ * C[i] = A[i] + *B (add scalar)
+ */
+extern void vDSP_vsadd(const float *a,
+                       int32_t a_stride,
+                       const float *b,
+                       float *c,
+                       int32_t c_stride,
+                       uint32_t n);
+
+/**
+ * y[i] = tanh(x[i])
+ */
+extern void vvtanhf(float *y, const float *x, const int32_t *n);
+
+/**
+ * y[i] = exp(x[i])
+ */
+extern void vvexpf(float *y, const float *x, const int32_t *n);
+
+/**
+ * C[i] = -A[i]
+ */
+extern void vDSP_vneg(const float *a, int32_t a_stride, float *c, int32_t c_stride, uint32_t n);
+
+/**
+ * C[i] = *A / B[i]
+ */
+extern void vDSP_svdiv(const float *a,
+                       const float *b,
+                       int32_t b_stride,
+                       float *c,
+                       int32_t c_stride,
+                       uint32_t n);
+
 #endif  /* CONJURE_DSP_H */
