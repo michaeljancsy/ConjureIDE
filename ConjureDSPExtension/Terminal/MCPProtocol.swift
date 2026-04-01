@@ -173,7 +173,7 @@ enum MCPProtocol {
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "topic": PropertySchema(type: "string", description: "Documentation topic: \"params\", \"filters\", \"delays\", \"oscillators\", \"utilities\", or \"all\".")
+                    "topic": PropertySchema(type: "string", description: "Documentation topic: \"params\", \"filters\", \"delays\", \"oscillators\", \"utilities\", \"accel\", \"nam\", or \"all\".")
                 ],
                 required: ["topic"]
             )

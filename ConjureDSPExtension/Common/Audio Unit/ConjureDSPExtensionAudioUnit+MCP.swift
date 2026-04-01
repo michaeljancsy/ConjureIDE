@@ -267,7 +267,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             return (jsonStr(["error": "Missing required parameter: topic"]), true)
         }
 
-        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "nam", "all"]
+        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "accel", "nam", "all"]
         guard validTopics.contains(topic) else {
             return (jsonStr(["error": "Invalid topic: \(topic). Valid topics: \(validTopics.joined(separator: ", "))"]), true)
         }
@@ -278,6 +278,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         if topic == "delays" || topic == "all" { sections.append(Self.docsDelays) }
         if topic == "oscillators" || topic == "all" { sections.append(Self.docsOscillators) }
         if topic == "utilities" || topic == "all" { sections.append(Self.docsUtilities) }
+        if topic == "accel" || topic == "all" { sections.append(Self.docsAccel) }
         if topic == "nam" || topic == "all" { sections.append(Self.docsNam) }
 
         return (jsonStr(["topic": topic, "docs": sections.joined(separator: "\n\n")]), false)
@@ -606,6 +607,66 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     Python-only: equal_power_crossfade(dry, wet, mix, out, n)
       Constant-energy crossfade using sine/cosine curves.
       Preserves perceived loudness at 50% mix (no energy dip).
+    """
+
+    private static let docsAccel = """
+    # Accelerated Math — conjuredsp.accel
+
+    Hardware-accelerated vectorized math operations. On WASM, these call Apple's
+    Accelerate framework (vDSP/vecLib) via host imports for AMX/NEON-optimized
+    performance. Use these instead of writing your own loops for matrix math,
+    element-wise operations, or activation functions.
+
+    ## Rust API
+
+      use conjuredsp::accel;
+
+      // Matrix multiply: out[m×n] = a[m×k] @ b[k×n], row-major
+      accel::matmul(a: &[f32], b: &[f32], out: &mut [f32], m: usize, k: usize, n: usize)
+
+      // Element-wise operations (all slices must be same length)
+      accel::vec_add(a: &[f32], b: &[f32], out: &mut [f32])    // out = a + b
+      accel::vec_mul(a: &[f32], b: &[f32], out: &mut [f32])    // out = a * b
+      accel::vec_tanh(input: &[f32], output: &mut [f32])        // out = tanh(in)
+      accel::vec_sigmoid(input: &[f32], output: &mut [f32])     // out = sigmoid(in)
+      accel::vec_add_scalar(input: &[f32], scalar: f32, output: &mut [f32])  // out = in + s
+
+    ### Rust Example
+
+      use conjuredsp::accel;
+
+      // 2x2 matrix multiply
+      let a = [1.0, 2.0, 3.0, 4.0];
+      let b = [5.0, 6.0, 7.0, 8.0];
+      let mut c = [0.0f32; 4];
+      accel::matmul(&a, &b, &mut c, 2, 2, 2);
+      // c = [19.0, 22.0, 43.0, 50.0]
+
+    ## Python API
+
+      from conjuredsp.accel import matmul, vec_add, vec_mul, vec_tanh, vec_sigmoid, vec_add_scalar
+
+      matmul(a, b, out=None)           # numpy.matmul (Accelerate BLAS)
+      vec_add(a, b, out=None)          # numpy.add
+      vec_mul(a, b, out=None)          # numpy.multiply
+      vec_tanh(x, out=None)            # numpy.tanh
+      vec_sigmoid(x, out=None)         # 1 / (1 + exp(-clip(x)))
+      vec_add_scalar(x, scalar, out=None)  # numpy.add(x, scalar)
+
+    Note: In Python, you can also use numpy directly (e.g., `a @ b`). The
+    conjuredsp.accel wrappers exist for API symmetry with Rust. Both use
+    Accelerate under the hood.
+
+    ## Performance
+
+    These functions are 10-30x faster than equivalent scalar loops for
+    matrix-heavy workloads (e.g., NAM inference, convolutions) because they
+    use Apple's AMX coprocessor (dedicated matrix math hardware).
+
+    Always prefer accel:: functions over hand-written loops for:
+    - Matrix multiplication
+    - Bulk activation functions (tanh, sigmoid on arrays)
+    - Element-wise vector operations on large buffers
     """
 
     private static let docsNam = """

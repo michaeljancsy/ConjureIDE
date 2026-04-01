@@ -38,8 +38,10 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::accel;
+
 // ---------------------------------------------------------------------------
-// Math helpers (no libm dependency — inline implementations for no_std/wasm)
+// Math helpers (scalar versions for single-value use in LSTM gates etc.)
 // ---------------------------------------------------------------------------
 
 /// Fast f32 exp approximation. Uses the identity exp(x) = 2^(x/ln2) with a
@@ -76,22 +78,6 @@ fn tanhf(x: f32) -> f32 {
 #[inline]
 fn reluf(x: f32) -> f32 {
     if x > 0.0 { x } else { 0.0 }
-}
-
-/// Flat-slice matrix multiply: out[m×n] = a[m×k] @ b[k×n].
-/// All slices are row-major.
-fn matmul(a: &[f32], b: &[f32], out: &mut [f32], m: usize, k: usize, n: usize) {
-    for i in 0..m {
-        let a_row = i * k;
-        let o_row = i * n;
-        for j in 0..n {
-            let mut sum = 0.0f32;
-            for p in 0..k {
-                sum += a[a_row + p] * b[p * n + j];
-            }
-            out[o_row + j] = sum;
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +126,7 @@ impl Activation {
     }
 
     #[inline]
+    #[allow(dead_code)]
     fn apply(self, x: f32) -> f32 {
         match self {
             Activation::Tanh => tanhf(x),
@@ -187,9 +174,9 @@ fn conv1d(
     }
 
     // W_flat[c_out × cik] @ cols[cik × l_out] → out[c_out × l_out]
-    matmul(weight, scratch, out, c_out, cik, l_out);
+    accel::matmul(weight, scratch, out, c_out, cik, l_out);
 
-    // Add bias
+    // Add bias (simple O(n) loop — not the bottleneck)
     if !bias.is_empty() {
         for i in 0..c_out {
             let row = i * l_out;
@@ -212,7 +199,7 @@ fn conv1x1(
     bias: &[f32],
     out: &mut [f32],
 ) {
-    matmul(weight, x, out, c_out, c_in, l);
+    accel::matmul(weight, x, out, c_out, c_in, l);
     if !bias.is_empty() {
         for i in 0..c_out {
             let row = i * l;
@@ -468,8 +455,23 @@ impl WaveNet {
         // Head layers (post-processing MLP)
         let temp_off = 3 * rs;
         for (act, w, b, out_c, in_c) in &self.head_layers {
-            for i in 0..*in_c * out_len {
-                self.work[head_off + i] = act.apply(self.work[head_off + i]);
+            let count = *in_c * out_len;
+            match act {
+                Activation::Tanh => {
+                    let mut temp = vec![0.0f32; count];
+                    accel::vec_tanh(&self.work[head_off..head_off + count], &mut temp);
+                    self.work[head_off..head_off + count].copy_from_slice(&temp);
+                }
+                Activation::Sigmoid => {
+                    let mut temp = vec![0.0f32; count];
+                    accel::vec_sigmoid(&self.work[head_off..head_off + count], &mut temp);
+                    self.work[head_off..head_off + count].copy_from_slice(&temp);
+                }
+                Activation::Relu => {
+                    for i in 0..count {
+                        self.work[head_off + i] = reluf(self.work[head_off + i]);
+                    }
+                }
             }
             // conv1x1 from head region → temp region
             let (head_slice, temp_slice) = if head_off < temp_off {
@@ -568,16 +570,39 @@ impl WaveNet {
 
             // Activation (in-place in conv region)
             if gated {
-                for j in 0..l_out {
-                    for c in 0..channels {
-                        let t = tanhf(self.work[conv_off + c * l_out + j]);
-                        let s = sigmoidf(self.work[conv_off + (c + channels) * l_out + j]);
-                        self.work[conv_off + c * l_out + j] = t * s;
-                    }
+                let half = channels * l_out;
+                // Use scratch region as temp for tanh/sigmoid results
+                let work_ptr = self.work.as_mut_ptr();
+                unsafe {
+                    let tanh_in = core::slice::from_raw_parts(work_ptr.add(conv_off), half);
+                    let sig_in = core::slice::from_raw_parts(work_ptr.add(conv_off + half), half);
+                    let tanh_out = core::slice::from_raw_parts_mut(work_ptr.add(scratch_off), half);
+                    let sig_out = core::slice::from_raw_parts_mut(work_ptr.add(scratch_off + half), half);
+                    // Vectorized tanh and sigmoid
+                    accel::vec_tanh(tanh_in, tanh_out);
+                    accel::vec_sigmoid(sig_in, sig_out);
+                    // Element-wise multiply: result → conv region first half
+                    let result = core::slice::from_raw_parts_mut(work_ptr.add(conv_off), half);
+                    accel::vec_mul(tanh_out, sig_out, result);
                 }
             } else {
-                for i in 0..channels * l_out {
-                    self.work[conv_off + i] = activation.apply(self.work[conv_off + i]);
+                let count = channels * l_out;
+                match activation {
+                    Activation::Tanh => {
+                        let mut temp = vec![0.0f32; count];
+                        accel::vec_tanh(&self.work[conv_off..conv_off + count], &mut temp);
+                        self.work[conv_off..conv_off + count].copy_from_slice(&temp);
+                    }
+                    Activation::Sigmoid => {
+                        let mut temp = vec![0.0f32; count];
+                        accel::vec_sigmoid(&self.work[conv_off..conv_off + count], &mut temp);
+                        self.work[conv_off..conv_off + count].copy_from_slice(&temp);
+                    }
+                    Activation::Relu => {
+                        for i in 0..count {
+                            self.work[conv_off + i] = reluf(self.work[conv_off + i]);
+                        }
+                    }
                 }
             }
 

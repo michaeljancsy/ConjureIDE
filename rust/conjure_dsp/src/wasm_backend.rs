@@ -4,6 +4,59 @@ use crate::params::PARAM_COUNT;
 use std::collections::HashMap;
 use wasmtime::*;
 
+// ---------------------------------------------------------------------------
+// Accelerate framework FFI (Apple vDSP / vecLib)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    /// C = A * B where A is m×k, B is k×n, C is m×n. Stride params are element strides.
+    fn vDSP_mmul(
+        a: *const f32, a_stride: i32,
+        b: *const f32, b_stride: i32,
+        c: *mut f32, c_stride: i32,
+        m: u32, k: u32, n: u32,
+    );
+    /// C[i] = A[i] + B[i]
+    fn vDSP_vadd(
+        a: *const f32, a_stride: i32,
+        b: *const f32, b_stride: i32,
+        c: *mut f32, c_stride: i32,
+        n: u32,
+    );
+    /// C[i] = A[i] * B[i]
+    fn vDSP_vmul(
+        a: *const f32, a_stride: i32,
+        b: *const f32, b_stride: i32,
+        c: *mut f32, c_stride: i32,
+        n: u32,
+    );
+    /// C[i] = A[i] + *B (add scalar)
+    fn vDSP_vsadd(
+        a: *const f32, a_stride: i32,
+        b: *const f32,
+        c: *mut f32, c_stride: i32,
+        n: u32,
+    );
+    /// y[i] = tanh(x[i])
+    fn vvtanhf(y: *mut f32, x: *const f32, n: *const i32);
+    /// y[i] = exp(x[i])
+    fn vvexpf(y: *mut f32, x: *const f32, n: *const i32);
+    /// C[i] = -A[i]
+    fn vDSP_vneg(
+        a: *const f32, a_stride: i32,
+        c: *mut f32, c_stride: i32,
+        n: u32,
+    );
+    /// C[i] = *A / B[i]
+    fn vDSP_svdiv(
+        a: *const f32,
+        b: *const f32, b_stride: i32,
+        c: *mut f32, c_stride: i32,
+        n: u32,
+    );
+}
+
 /// How I/O buffer addresses are determined in WASM memory.
 enum BufferMode {
     /// Backend chooses fixed offsets (for hand-written WAT modules without getters).
@@ -101,9 +154,10 @@ impl WasmBackend {
             .set_fuel(COMPILED_FUEL)
             .map_err(|e| format!("Failed to set fuel: {}", e))?;
 
-        // Use Linker for instantiation so we can provide WASI stubs
+        // Use Linker for instantiation so we can provide WASI stubs and Accelerate imports
         let mut linker = Linker::new(&engine);
         Self::add_wasi_stubs(&mut linker)?;
+        Self::add_conjuredsp_imports(&mut linker)?;
 
         let instance = linker
             .instantiate(&mut store, &module)
@@ -515,6 +569,215 @@ impl WasmBackend {
             )
             .map_err(e)?;
 
+        Ok(())
+    }
+
+    /// Register Accelerate-backed host imports under the "conjuredsp" module.
+    ///
+    /// These provide hardware-accelerated math to WASM modules that declare
+    /// `#[link(wasm_import_module = "conjuredsp")]` imports.  Modules that
+    /// don't import these functions are unaffected.
+    #[cfg(target_os = "macos")]
+    fn add_conjuredsp_imports(linker: &mut Linker<()>) -> Result<(), String> {
+        let e = |err: Error| format!("Failed to register conjuredsp import: {}", err);
+
+        // matmul(a_ptr, b_ptr, out_ptr, m, k, n)
+        linker
+            .func_wrap(
+                "conjuredsp",
+                "host_matmul",
+                |mut caller: Caller<'_, ()>,
+                 a_ptr: i32, b_ptr: i32, out_ptr: i32,
+                 m: i32, k: i32, n: i32| {
+                    if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        let data = memory.data_mut(&mut caller);
+                        let a_off = a_ptr as usize;
+                        let b_off = b_ptr as usize;
+                        let out_off = out_ptr as usize;
+                        let a_bytes = (m as usize) * (k as usize) * 4;
+                        let b_bytes = (k as usize) * (n as usize) * 4;
+                        let out_bytes = (m as usize) * (n as usize) * 4;
+                        if a_off + a_bytes > data.len()
+                            || b_off + b_bytes > data.len()
+                            || out_off + out_bytes > data.len()
+                        {
+                            return;
+                        }
+                        let base = data.as_mut_ptr();
+                        unsafe {
+                            vDSP_mmul(
+                                base.add(a_off) as *const f32, 1,
+                                base.add(b_off) as *const f32, 1,
+                                base.add(out_off) as *mut f32, 1,
+                                m as u32, k as u32, n as u32,
+                            );
+                        }
+                    }
+                },
+            )
+            .map_err(e)?;
+
+        // vec_add(a_ptr, b_ptr, out_ptr, len)
+        linker
+            .func_wrap(
+                "conjuredsp",
+                "host_vec_add",
+                |mut caller: Caller<'_, ()>,
+                 a_ptr: i32, b_ptr: i32, out_ptr: i32, len: i32| {
+                    if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        let data = memory.data_mut(&mut caller);
+                        let bytes = (len as usize) * 4;
+                        let (a, b, o) = (a_ptr as usize, b_ptr as usize, out_ptr as usize);
+                        if a + bytes > data.len() || b + bytes > data.len() || o + bytes > data.len() {
+                            return;
+                        }
+                        let base = data.as_mut_ptr();
+                        unsafe {
+                            vDSP_vadd(
+                                base.add(a) as *const f32, 1,
+                                base.add(b) as *const f32, 1,
+                                base.add(o) as *mut f32, 1,
+                                len as u32,
+                            );
+                        }
+                    }
+                },
+            )
+            .map_err(e)?;
+
+        // vec_mul(a_ptr, b_ptr, out_ptr, len)
+        linker
+            .func_wrap(
+                "conjuredsp",
+                "host_vec_mul",
+                |mut caller: Caller<'_, ()>,
+                 a_ptr: i32, b_ptr: i32, out_ptr: i32, len: i32| {
+                    if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        let data = memory.data_mut(&mut caller);
+                        let bytes = (len as usize) * 4;
+                        let (a, b, o) = (a_ptr as usize, b_ptr as usize, out_ptr as usize);
+                        if a + bytes > data.len() || b + bytes > data.len() || o + bytes > data.len() {
+                            return;
+                        }
+                        let base = data.as_mut_ptr();
+                        unsafe {
+                            vDSP_vmul(
+                                base.add(a) as *const f32, 1,
+                                base.add(b) as *const f32, 1,
+                                base.add(o) as *mut f32, 1,
+                                len as u32,
+                            );
+                        }
+                    }
+                },
+            )
+            .map_err(e)?;
+
+        // vec_tanh(inp_ptr, out_ptr, len)
+        linker
+            .func_wrap(
+                "conjuredsp",
+                "host_vec_tanh",
+                |mut caller: Caller<'_, ()>,
+                 inp_ptr: i32, out_ptr: i32, len: i32| {
+                    if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        let data = memory.data_mut(&mut caller);
+                        let bytes = (len as usize) * 4;
+                        let (i, o) = (inp_ptr as usize, out_ptr as usize);
+                        if i + bytes > data.len() || o + bytes > data.len() {
+                            return;
+                        }
+                        let base = data.as_mut_ptr();
+                        let n = len;
+                        unsafe {
+                            vvtanhf(
+                                base.add(o) as *mut f32,
+                                base.add(i) as *const f32,
+                                &n,
+                            );
+                        }
+                    }
+                },
+            )
+            .map_err(e)?;
+
+        // vec_sigmoid(inp_ptr, out_ptr, len)
+        // sigmoid(x) = 1 / (1 + exp(-x))
+        // Implemented as: negate → exp → add 1 → reciprocal divide
+        linker
+            .func_wrap(
+                "conjuredsp",
+                "host_vec_sigmoid",
+                |mut caller: Caller<'_, ()>,
+                 inp_ptr: i32, out_ptr: i32, len: i32| {
+                    if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        let data = memory.data_mut(&mut caller);
+                        let bytes = (len as usize) * 4;
+                        let (i_off, o_off) = (inp_ptr as usize, out_ptr as usize);
+                        if i_off + bytes > data.len() || o_off + bytes > data.len() {
+                            return;
+                        }
+                        // Use a host-side temp buffer to avoid aliasing issues
+                        let count = len as usize;
+                        let mut temp = vec![0.0f32; count];
+                        let base = data.as_mut_ptr();
+                        let n = len;
+                        let one = 1.0f32;
+                        unsafe {
+                            let inp = base.add(i_off) as *const f32;
+                            let out = base.add(o_off) as *mut f32;
+                            // temp = -inp
+                            vDSP_vneg(inp, 1, temp.as_mut_ptr(), 1, count as u32);
+                            // Clamp to [-88, 88] to avoid overflow
+                            for v in temp.iter_mut() {
+                                *v = v.clamp(-88.0, 88.0);
+                            }
+                            // temp = exp(-inp)
+                            vvexpf(temp.as_mut_ptr(), temp.as_ptr(), &n);
+                            // temp = 1 + exp(-inp)
+                            vDSP_vsadd(temp.as_ptr(), 1, &one, temp.as_mut_ptr(), 1, count as u32);
+                            // out = 1 / (1 + exp(-inp))
+                            vDSP_svdiv(&one, temp.as_ptr(), 1, out, 1, count as u32);
+                        }
+                    }
+                },
+            )
+            .map_err(e)?;
+
+        // vec_add_scalar(vec_ptr, scalar_ptr, out_ptr, len)
+        linker
+            .func_wrap(
+                "conjuredsp",
+                "host_vec_add_scalar",
+                |mut caller: Caller<'_, ()>,
+                 vec_ptr: i32, scalar_ptr: i32, out_ptr: i32, len: i32| {
+                    if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        let data = memory.data_mut(&mut caller);
+                        let bytes = (len as usize) * 4;
+                        let (v, s, o) = (vec_ptr as usize, scalar_ptr as usize, out_ptr as usize);
+                        if v + bytes > data.len() || s + 4 > data.len() || o + bytes > data.len() {
+                            return;
+                        }
+                        let base = data.as_mut_ptr();
+                        unsafe {
+                            vDSP_vsadd(
+                                base.add(v) as *const f32, 1,
+                                base.add(s) as *const f32,
+                                base.add(o) as *mut f32, 1,
+                                len as u32,
+                            );
+                        }
+                    }
+                },
+            )
+            .map_err(e)?;
+
+        Ok(())
+    }
+
+    /// Non-macOS stub — conjuredsp host imports are not available.
+    #[cfg(not(target_os = "macos"))]
+    fn add_conjuredsp_imports(_linker: &mut Linker<()>) -> Result<(), String> {
         Ok(())
     }
 }
