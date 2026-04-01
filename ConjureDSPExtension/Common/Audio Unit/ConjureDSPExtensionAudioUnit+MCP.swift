@@ -646,16 +646,27 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
 
       from conjuredsp.accel import matmul, vec_add, vec_mul, vec_tanh, vec_sigmoid, vec_add_scalar
 
-      matmul(a, b, out=None)           # numpy.matmul (Accelerate BLAS)
-      vec_add(a, b, out=None)          # numpy.add
-      vec_mul(a, b, out=None)          # numpy.multiply
-      vec_tanh(x, out=None)            # numpy.tanh
-      vec_sigmoid(x, out=None)         # 1 / (1 + exp(-clip(x)))
-      vec_add_scalar(x, scalar, out=None)  # numpy.add(x, scalar)
+      matmul(a, b, out)               # numpy.matmul (Accelerate BLAS)
+      vec_add(a, b, out)              # numpy.add
+      vec_mul(a, b, out)              # numpy.multiply
+      vec_tanh(x, out)                # numpy.tanh
+      vec_sigmoid(x, out)             # 1 / (1 + exp(-clip(x)))
+      vec_add_scalar(x, scalar, out)  # numpy.add(x, scalar)
 
-    Note: In Python, you can also use numpy directly (e.g., `a @ b`). The
-    conjuredsp.accel wrappers exist for API symmetry with Rust. Both use
-    Accelerate under the hood.
+    IMPORTANT: `out` is REQUIRED in all functions (not optional). Pre-allocate
+    output buffers and reuse them across calls. This is critical for real-time
+    audio — per-call allocation causes memory growth because the macOS allocator
+    retains pages. Example:
+
+      # Pre-allocate once (e.g., in module scope or __init__)
+      _buf = np.empty((rows, cols), dtype=np.float32)
+
+      # Reuse every callback
+      matmul(a, b, _buf)
+
+    Note: You can also use numpy directly (e.g., `a @ b`) but be aware that
+    numpy operators allocate new arrays each call. Use conjuredsp.accel with
+    pre-allocated buffers for zero-allocation real-time code.
 
     ## Performance
 
