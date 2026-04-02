@@ -169,7 +169,7 @@ struct AIPromptHelperView: View {
             ## Rust Conventions
 
             - Declare all static state with `static mut` at module scope (e.g., filters, delay lines, LFO).
-            - Call `lfo.init(sample_rate, freq)` at the start of each `process()` callback.
+            - Call `lfo.init(ctx.sample_rate() as f64, ctx.param(RATE) as f64)` at the start of each `process()` callback. Both args are f64; cast f32 values with `as f64`.
             - Use `unsafe` blocks for `static mut` access.
             - Initialize gain/envelope state to `1.0f32` (unity gain), not `0.0`.
             """

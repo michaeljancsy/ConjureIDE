@@ -175,6 +175,7 @@ enum DSPDocumentation {
 
     Python: LFO(sample_rate, freq=1.0, waveform="sine")
     Rust: Lfo::new() → defaults to 1 Hz sine at 44100 Hz. Call .init(sr, freq) each callback.
+      Both args are f64. Cast f32 values: .init(ctx.sample_rate() as f64, rate_hz as f64)
 
     Methods:
       .tick() -> float          — advance one sample, returns value in [-1, 1]
@@ -189,7 +190,7 @@ enum DSPDocumentation {
                                   More efficient than calling tick() in a loop.
 
     Rust-only:
-      .init(sample_rate, freq)  — set sample rate and frequency. Call at start of each process()
+      .init(sr: f64, freq: f64)  — set sample rate and frequency. Call at start of each process()
                                   callback to handle sample rate changes.
 
     ## Waveform enum (Rust)
