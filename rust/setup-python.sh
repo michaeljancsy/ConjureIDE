@@ -37,9 +37,26 @@ mv /tmp/python-extract/python/install "${PYTHON_DIR}"
 
 rm -rf /tmp/python-extract "/tmp/${ARCHIVE}"
 
-echo "Installing numpy and scipy..."
 "${PYTHON_DIR}/bin/python3" -m pip install --upgrade pip
-"${PYTHON_DIR}/bin/python3" -m pip install numpy scipy
+
+echo "Installing numpy/scipy build tools..."
+"${PYTHON_DIR}/bin/python3" -m pip install meson-python meson ninja cython
+
+echo "Building numpy against Accelerate..."
+"${PYTHON_DIR}/bin/python3" -m pip install numpy --no-binary=numpy \
+  -Csetup-args=-Dblas=accelerate \
+  -Csetup-args=-Dlapack=accelerate
+
+echo "Building scipy against Accelerate..."
+if command -v gfortran &>/dev/null; then
+    "${PYTHON_DIR}/bin/python3" -m pip install scipy --no-binary=scipy \
+      -Csetup-args=-Dblas=accelerate \
+      -Csetup-args=-Dlapack=accelerate
+else
+    echo "gfortran not found — installing scipy from pre-built wheel (uses OpenBLAS)"
+    echo "Install gfortran via Homebrew (brew install gcc) and re-run setup-python.sh to get Accelerate-linked scipy."
+    "${PYTHON_DIR}/bin/python3" -m pip install scipy
+fi
 
 echo "Installing conjuredsp package..."
 SITE_PACKAGES="$(${PYTHON_DIR}/bin/python3 -c 'import site; print(site.getsitepackages()[0])')"
@@ -47,5 +64,5 @@ rm -rf "${SITE_PACKAGES}/conjuredsp"
 cp -r "${SCRIPT_DIR}/conjuredsp" "${SITE_PACKAGES}/conjuredsp"
 
 echo ""
-echo "Done! Free-threaded Python ${PYTHON_VERSION} (no-GIL) with numpy+scipy+conjuredsp installed at: ${PYTHON_DIR}"
+echo "Done! Free-threaded Python ${PYTHON_VERSION} (no-GIL) with numpy+scipy (Accelerate-linked)+conjuredsp installed at: ${PYTHON_DIR}"
 echo "You can now build the project with Xcode."
