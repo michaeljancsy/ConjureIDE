@@ -95,12 +95,21 @@ struct MonacoEditorView: NSViewRepresentable {
         }
 
         // Insert snippet at cursor if requested.
-        // Reset synchronously before the JS call to prevent duplicate insertion
-        // if SwiftUI calls updateNSView again before the JS completes.
+        // Use coordinator.snippetConsumed to guard against duplicate insertion:
+        // setting the binding to nil inside updateNSView may not take effect before
+        // the next SwiftUI render (e.g. triggered by a keystroke), so without this
+        // guard the same snippet would be re-inserted on every keypress.
         if let snippet = snippetToInsert {
-            self.snippetToInsert = nil
-            let escaped = snippet.jsEscaped
-            webView.evaluateJavaScript("bridge.insertAtCursor(\"\(escaped)\")") { _, _ in }
+            if !coordinator.snippetConsumed {
+                coordinator.snippetConsumed = true
+                let escaped = snippet.jsEscaped
+                webView.evaluateJavaScript("bridge.insertAtCursor(\"\(escaped)\")") { _, _ in }
+            }
+            DispatchQueue.main.async {
+                self.snippetToInsert = nil
+            }
+        } else {
+            coordinator.snippetConsumed = false
         }
 
         // Update error markers if changed
@@ -145,6 +154,9 @@ struct MonacoEditorView: NSViewRepresentable {
         var pendingLanguage: ScriptLanguage = .python
         var pendingTheme: String = "vs-dark"
         var pendingReadOnly: Bool = false
+
+        // Guard against duplicate snippet insertion from SwiftUI re-renders
+        var snippetConsumed = false
 
         // Last-sent markers for diffing
         var lastMarkers: [Marker] = []
