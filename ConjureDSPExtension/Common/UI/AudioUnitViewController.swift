@@ -56,7 +56,6 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var paramNamesCancellable: AnyCancellable?
     private var paramMetadataCancellable: AnyCancellable?
     private var renderResourcesCancellable: AnyCancellable?
-    private var sentryActive: Bool = true
 
     /// App Group container URL — uses the cached resolution from AppGroupContainer
     /// to avoid extra TCC prompts on macOS 26 Tahoe.
@@ -528,19 +527,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             defaultBenchmark: initialBenchmark,
             appGroupContainerURL: appGroupContainerURL,
             isBypassed: { [weak au] in au?.shouldBypassEffect ?? false },
-            setBypass: { [weak au] bypass in au?.shouldBypassEffect = bypass },
-            isSentryEnabled: { [weak self] in self?.sentryActive ?? true },
-            setSentryEnabled: { [weak self] enabled in
-                if enabled {
-                    SentrySetup.start()
-                    self?.sentryActive = true
-                    log.info("Sentry re-enabled")
-                } else {
-                    SentrySDK.close()
-                    self?.sentryActive = false
-                    log.info("Sentry disabled for diagnostic")
-                }
-            }
+            setBypass: { [weak au] bypass in au?.shouldBypassEffect = bypass }
         )
         let hv = SafeHostingView(rootView: content)
         hv.sizingOptions = []

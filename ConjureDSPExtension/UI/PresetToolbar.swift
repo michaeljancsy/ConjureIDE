@@ -67,6 +67,8 @@ struct PresetToolbar: View {
     var onNew: (ScriptLanguage) -> Void
     var onExport: (String) -> Void
     var isExporting: Bool = false
+    @Binding var bypassed: Bool
+    var onBypassToggle: () -> Void
 
     @Binding var showingSaveAs: Bool
     @Binding var saveAsName: String
@@ -169,6 +171,22 @@ struct PresetToolbar: View {
             .disabled(isCompiling)
             .toolbarTooltip("Run (\u{2318}R)")
             .accessibilityIdentifier("runButton")
+
+            // Bypass
+            Button(action: { bypassed.toggle(); onBypassToggle() }) {
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: bypassed ? "waveform.slash" : "waveform")
+                        .frame(height: 16)
+                        .foregroundColor(bypassed ? .orange : .primary)
+                    Text("Bypass")
+                        .font(.system(size: 9))
+                        .foregroundColor(bypassed ? .orange : .secondary)
+                }
+            }
+            .buttonStyle(.borderless)
+            .fixedSize()
+            .toolbarTooltip(bypassed ? "Bypass ON — click to enable processing" : "Bypass processing (A/B compare)")
+            .accessibilityIdentifier("bypassButton")
 
             // Save (overwrite current user preset)
             if currentIsMutable {
