@@ -273,6 +273,7 @@ struct ConjureDSPExtensionMainView: View {
                                 }
                             }
                             .frame(height: 28)
+                            .clipped() // prevent button backgrounds bleeding below the 28pt frame
                             .background(colorScheme == .dark
                                 ? Color(white: 0.10)
                                 : Color(nsColor: .windowBackgroundColor))
@@ -292,7 +293,14 @@ struct ConjureDSPExtensionMainView: View {
                                 DaemonLaunchPromptView(colorScheme: colorScheme)
                             }
                         }
-                        .frame(maxHeight: .infinity, alignment: .top)
+                        // Background on the VStack (not individual children) guarantees the
+                        // full chatWidth × full height area is opaque — child views like
+                        // DaemonLaunchPromptView and AIPromptHelperView may not stretch to
+                        // fill the entire width, leaving transparent gaps where Monaco bleeds.
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .background(colorScheme == .dark
+                            ? Color(white: 0.12)
+                            : Color(nsColor: .controlBackgroundColor))
                     }
                     .frame(width: showChat ? chatWidth : 0)
                     .clipped()
