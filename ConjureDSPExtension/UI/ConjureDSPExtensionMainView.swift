@@ -558,6 +558,12 @@ private struct StatusBarView: View {
     var onBypassToggle: () -> Void
     var onSentryToggle: () -> Void
 
+    /// Convert milliseconds to a sample frame count using the profiler's current sample rate.
+    private func frames(_ ms: Double) -> Int {
+        guard processProfiler.sampleRate > 0 else { return 0 }
+        return Int((ms / 1000.0 * processProfiler.sampleRate).rounded())
+    }
+
     private var timingColor: Color {
         let ratio: Double
         if processProfiler.isActive && processProfiler.budgetMs > 0 {
@@ -593,19 +599,24 @@ private struct StatusBarView: View {
                 let budget = processProfiler.budgetMs
                 let avgFrac = budget > 0 ? processProfiler.avgMs / budget : 0
                 let peakFrac = budget > 0 ? processProfiler.peakMs / budget : 0
+                let budgetFr = Int(processProfiler.maxFrames)
 
                 HStack(spacing: 4) {
                     MeterBar(fraction: avgFrac, color: timingColor)
-                    Text(String(format: "%.1fms", processProfiler.avgMs))
+                    Text(String(format: "%.1fms (%dfr)", processProfiler.avgMs, frames(processProfiler.avgMs)))
                         .accessibilityIdentifier("profilerStatus")
                 }
-                .help(String(format: "avg %.1fms / %.1fms budget", processProfiler.avgMs, budget))
+                .help(String(format: "avg %.2fms (%d frames)", processProfiler.avgMs, frames(processProfiler.avgMs)))
 
                 HStack(spacing: 4) {
                     MeterBar(fraction: peakFrac, color: timingColor)
-                    Text(String(format: "%.1fms pk", processProfiler.peakMs))
+                    Text(String(format: "%.1fms pk (%dfr)", processProfiler.peakMs, frames(processProfiler.peakMs)))
                 }
-                .help(String(format: "peak %.1fms / %.1fms budget", processProfiler.peakMs, budget))
+                .help(String(format: "peak %.2fms (%d frames)", processProfiler.peakMs, frames(processProfiler.peakMs)))
+
+                Text(String(format: "budget %.1fms (%dfr)", budget, budgetFr))
+                    .foregroundColor(.secondary)
+                    .help(String(format: "buffer budget: %.2fms = %d frames @ %.0f Hz", budget, budgetFr, processProfiler.sampleRate))
 
                 if memoryMonitor.leakStatus != .ok {
                     HStack(spacing: 3) {
@@ -619,11 +630,14 @@ private struct StatusBarView: View {
                 }
             } else if let b = lastBenchmark {
                 let frac = b.budgetMs > 0 ? b.processTimeMs / b.budgetMs : 0
+                let budgetFr = Int(processProfiler.maxFrames)
                 HStack(spacing: 4) {
                     MeterBar(fraction: frac, color: timingColor)
-                    Text(String(format: "%.1fms / %.1fms", b.processTimeMs, b.budgetMs))
+                    Text(String(format: "%.1fms (%dfr)", b.processTimeMs, frames(b.processTimeMs)))
                         .foregroundColor(timingColor)
                         .accessibilityIdentifier("successStatus")
+                    Text(String(format: "/ budget %.1fms (%dfr)", b.budgetMs, budgetFr))
+                        .foregroundColor(.secondary)
                 }
             } else {
                 Text("Ready")
