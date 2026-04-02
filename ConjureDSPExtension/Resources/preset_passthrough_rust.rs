@@ -9,8 +9,7 @@ setup!();
 /// Passthrough — copies input to output unchanged.
 ///
 /// Iterates over all channel-sequential samples (channels x frames) and copies each
-/// input sample directly to the output buffer. DAW-automatable parameters are
-/// available in PARAMS_BUF[0..16] but unused by this preset.
+/// input sample directly to the output buffer. No parameters are declared.
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
