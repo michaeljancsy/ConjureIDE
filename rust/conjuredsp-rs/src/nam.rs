@@ -352,7 +352,13 @@ impl WaveNet {
         let max_kernel = layer_arrays.iter()
             .flat_map(|la| la.layers.iter().map(|l| l.kernel_size))
             .max().unwrap_or(3);
-        let region_size = (max_mid * max_l).max(max_ch * max_kernel * max_l);
+        // condition_size governs scratch usage during condition mix gather (condition_size * max_l floats)
+        let max_condition_size = layer_arrays.iter()
+            .flat_map(|la| la.layers.iter().map(|l| l.condition_size))
+            .max().unwrap_or(1);
+        let region_size = (max_mid * max_l)
+            .max(max_ch * max_kernel * max_l)
+            .max(max_condition_size * max_l);
 
         // rechannel_temp needs to hold max_ch * max_l for same-region rechannel
         let rechannel_temp_size = max_ch * max_l;
