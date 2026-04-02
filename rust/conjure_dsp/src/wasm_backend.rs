@@ -125,8 +125,9 @@ const DEFAULT_FUEL: u64 = 1_000_000;
 const COMPILED_FUEL: u64 = 10_000_000;
 
 /// Much higher fuel budget for NAM-active WASM modules.
-/// WaveNet matrix ops for a standard model need ~50-100M instructions per buffer.
-const NAM_FUEL: u64 = 200_000_000;
+/// WaveNet standard (16ch, 4 arrays × 10 layers) needs ~230M WASM instructions per buffer;
+/// WaveNet large (32ch) needs ~460M. Use 2B to give headroom for all current model sizes.
+const NAM_FUEL: u64 = 2_000_000_000;
 
 impl WasmBackend {
     /// Load a WASM module from bytes.

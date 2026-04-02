@@ -418,13 +418,16 @@ class _WaveNetLayerArray:
         x = _conv1x1(x, self.rechannel_w)
         for layer in self.layers:
             x, head_term = layer.forward(x, condition, out_length, scratch=scratch, bufs=bufs)
+            ha = bufs["head_acc"]
+            ht_cols = head_term.shape[1]
+            ht_rows = head_term.shape[0]
             if head_input is None:
-                head_input = head_term
+                # Copy into stable head_acc buffer — head_term is a view into bufs["z_act"]
+                # which gets overwritten on the next layer iteration.
+                ha[:ht_rows, :ht_cols] = head_term
+                head_input = ha[:ht_rows, :ht_cols]
             else:
                 # In-place accumulation into head_acc buffer
-                ha = bufs["head_acc"]
-                ht_cols = head_term.shape[1]
-                ht_rows = head_term.shape[0]
                 np.add(head_input[:, -ht_cols:], head_term, out=ha[:ht_rows, :ht_cols])
                 head_input = ha[:ht_rows, :ht_cols]
         head_output = _conv1x1(head_input, self.head_rechannel_w, self.head_rechannel_b)
