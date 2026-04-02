@@ -8,6 +8,7 @@
 import Combine
 import CoreAudioKit
 import os
+import Sentry
 import SwiftUI
 
 private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSPExtension", category: "AudioUnitViewController")
@@ -54,6 +55,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var terminalServer: TerminalServer?
     private var paramNamesCancellable: AnyCancellable?
     private var paramMetadataCancellable: AnyCancellable?
+    private var sentryActive: Bool = true
 
     /// App Group container URL — uses the cached resolution from AppGroupContainer
     /// to avoid extra TCC prompts on macOS 26 Tahoe.
@@ -62,6 +64,9 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     }
 
 	deinit {
+        captureManager?.isActive = false
+        processProfiler?.stop()
+        memoryMonitor?.stop()
         terminalServer?.stop()
         terminalServer = nil
         log.info("deinit — terminal server stopped")
@@ -512,7 +517,21 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             onNew: onNew,
             onExport: onExport,
             defaultBenchmark: initialBenchmark,
-            appGroupContainerURL: appGroupContainerURL
+            appGroupContainerURL: appGroupContainerURL,
+            isBypassed: { [weak au] in au?.shouldBypassEffect ?? false },
+            setBypass: { [weak au] bypass in au?.shouldBypassEffect = bypass },
+            isSentryEnabled: { [weak self] in self?.sentryActive ?? true },
+            setSentryEnabled: { [weak self] enabled in
+                if enabled {
+                    SentrySetup.start()
+                    self?.sentryActive = true
+                    log.info("Sentry re-enabled")
+                } else {
+                    SentrySDK.close()
+                    self?.sentryActive = false
+                    log.info("Sentry disabled for diagnostic")
+                }
+            }
         )
         let hv = SafeHostingView(rootView: content)
         hv.sizingOptions = []

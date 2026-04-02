@@ -21,13 +21,21 @@ struct ConjureDSPExtensionMainView: View {
     var defaultLanguage: ScriptLanguage = .python
     var extensionBundle: Bundle
     var scriptSourcePublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.ScriptSourceChange, Never>?
-    @ObservedObject var presetManager: PresetManager
-    @ObservedObject var captureManager: AudioCaptureManager
-    @ObservedObject var processProfiler: ProcessProfiler
-    @ObservedObject var memoryMonitor: MemoryMonitor
-    @ObservedObject var parameterState: ParameterState
+    // These are NOT @ObservedObject because this view never reads their
+    // @Published properties in its body — it only passes them to child views
+    // or uses them in action callbacks. Child views (StatusBarView,
+    // PresetToolbar, etc.) have their own @ObservedObject declarations.
+    // Observing them here would re-evaluate this entire body on every
+    // publish (processProfiler fires 4x/sec, which caused ~12MB/min growth).
+    var presetManager: PresetManager
+    var captureManager: AudioCaptureManager
+    var processProfiler: ProcessProfiler
+    var memoryMonitor: MemoryMonitor
+    var parameterState: ParameterState
+    // subscriptionManager MUST be @ObservedObject — the demo expired overlay
+    // reads isLicensed and demoSecondsRemaining directly in this view's body.
     @ObservedObject var subscriptionManager: SubscriptionManager
-    @ObservedObject var gitHubService: GitHubService
+    var gitHubService: GitHubService
     var onRun: (String) async -> ScriptSaveResult
     var onSelectPreset: (Preset) async -> ScriptSaveResult
     var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
@@ -38,7 +46,13 @@ struct ConjureDSPExtensionMainView: View {
     var onExport: (String) async -> ExportResult
     var defaultBenchmark: (processTimeMs: Double, budgetMs: Double)?
     var appGroupContainerURL: URL?
+    var isBypassed: () -> Bool = { false }
+    var setBypass: (Bool) -> Void = { _ in }
+    var isSentryEnabled: () -> Bool = { true }
+    var setSentryEnabled: (Bool) -> Void = { _ in }
 
+    @State private var bypassed: Bool = false
+    @State private var sentryEnabled: Bool = true
     @State private var scriptSource: String = ""
     @State private var selectedLanguage: ScriptLanguage = .python
     @State private var errorMessage: String?
@@ -71,28 +85,6 @@ struct ConjureDSPExtensionMainView: View {
             return colorScheme == .dark ? "vs-dark" : "vs"
         }
         return selectedTheme
-    }
-
-    /// Color for the timing display based on how close to budget.
-    /// Uses profiler peak when live data is available, otherwise static benchmark.
-    private var timingColor: Color {
-        let ratio: Double
-        if processProfiler.isActive && processProfiler.budgetMs > 0 {
-            ratio = processProfiler.peakMs / processProfiler.budgetMs
-        } else if let benchmark = lastBenchmark, benchmark.budgetMs > 0 {
-            ratio = benchmark.processTimeMs / benchmark.budgetMs
-        } else {
-            return .green
-        }
-        if ratio > 1.0 { return .red }
-        if ratio > 0.5 { return .orange }
-        return .green
-    }
-
-    /// Format milliseconds with frame equivalent, e.g. "0.3ms (13 frames)"
-    private func formatTimeWithFrames(_ ms: Double) -> String {
-        let frames = ms / 1000.0 * processProfiler.sampleRate
-        return String(format: "%.1fms (%d frames)", ms, Int(frames.rounded()))
     }
 
     private static let buildIDFormatter: ISO8601DateFormatter = {
@@ -216,12 +208,16 @@ struct ConjureDSPExtensionMainView: View {
                     memoryMonitor: memoryMonitor,
                     lastBenchmark: lastBenchmark,
                     buildIDFormatted: buildID != 0 ? Self.formatBuildID(buildID) : nil,
+                    bypassed: $bypassed,
+                    sentryEnabled: $sentryEnabled,
                     onCopyError: {
                         if let err = errorMessage {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(err, forType: .string)
                         }
-                    }
+                    },
+                    onBypassToggle: { setBypass(bypassed) },
+                    onSentryToggle: { setSentryEnabled(sentryEnabled) }
                 )
             }
             .padding(.bottom, 4)
@@ -381,6 +377,8 @@ struct ConjureDSPExtensionMainView: View {
             if let bench = defaultBenchmark {
                 lastBenchmark = bench
             }
+            bypassed = isBypassed()
+            sentryEnabled = isSentryEnabled()
         }
         .onReceive(scriptSourcePublisher ?? Empty().eraseToAnyPublisher()) { change in
             scriptSource = change.source
@@ -502,7 +500,11 @@ private struct StatusBarView: View {
     @ObservedObject var memoryMonitor: MemoryMonitor
     var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
     var buildIDFormatted: String?
+    @Binding var bypassed: Bool
+    @Binding var sentryEnabled: Bool
     var onCopyError: () -> Void
+    var onBypassToggle: () -> Void
+    var onSentryToggle: () -> Void
 
     private var timingColor: Color {
         let ratio: Double
@@ -577,6 +579,27 @@ private struct StatusBarView: View {
             }
 
             Spacer()
+
+            // Diagnostic toggles
+            Button {
+                bypassed.toggle()
+                onBypassToggle()
+            } label: {
+                Text("Bypass")
+                    .foregroundColor(bypassed ? .red : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(bypassed ? "Audio bypass ON — processing disabled" : "Enable audio bypass")
+
+            Button {
+                sentryEnabled.toggle()
+                onSentryToggle()
+            } label: {
+                Text("Sentry")
+                    .foregroundColor(sentryEnabled ? .secondary : .red)
+            }
+            .buttonStyle(.plain)
+            .help(sentryEnabled ? "Sentry crash reporting active" : "Sentry disabled")
 
             if let formatted = buildIDFormatted {
                 Text(verbatim: "Build \(formatted)")

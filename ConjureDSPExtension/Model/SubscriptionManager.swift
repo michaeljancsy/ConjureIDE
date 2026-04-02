@@ -197,9 +197,7 @@ class SubscriptionManager: ObservableObject {
     private func startDemoTimer() {
         guard demoTimer == nil else { return }
         demoTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.updateDemoTime()
-            }
+            self?.updateDemoTime()
         }
     }
 

@@ -11,6 +11,125 @@ import AppKit
 import Combine
 import QuartzCore
 
+// MARK: - ColumnRingBuffer
+
+/// Pre-allocated contiguous ring buffer for FFT magnitude columns.
+/// Stores up to `maxColumns` columns of `columnSize` floats each in a single
+/// contiguous `[Float]` allocation. Zero per-tick heap allocations.
+struct ColumnRingBuffer {
+    private var storage: [Float]
+    let columnSize: Int
+    let maxColumns: Int
+    private var writeIndex: Int = 0
+    private var readIndex: Int = 0
+    private(set) var count: Int = 0
+
+    init(columnSize: Int, maxColumns: Int) {
+        self.columnSize = columnSize
+        self.maxColumns = maxColumns
+        self.storage = [Float](repeating: 0, count: columnSize * maxColumns)
+    }
+
+    /// Append a column from a source buffer. Overwrites oldest column if full.
+    mutating func append(from source: [Float]) {
+        let n = min(source.count, columnSize)
+        let offset = writeIndex * columnSize
+        for i in 0..<n { storage[offset + i] = source[i] }
+        // Zero-fill remainder if source is smaller than columnSize
+        for i in n..<columnSize { storage[offset + i] = 0 }
+        writeIndex = (writeIndex + 1) % maxColumns
+        if count < maxColumns {
+            count += 1
+        } else {
+            // Overwrite oldest — advance read index
+            readIndex = (readIndex + 1) % maxColumns
+        }
+    }
+
+    /// Iterate over all pending columns, calling `body` with a buffer pointer to each.
+    /// Resets the ring after iteration. Zero heap allocations.
+    mutating func drainAll(_ body: (UnsafeBufferPointer<Float>) -> Void) {
+        guard count > 0 else { return }
+        storage.withUnsafeBufferPointer { buf in
+            for i in 0..<count {
+                let idx = (readIndex + i) % maxColumns
+                let offset = idx * columnSize
+                let slice = UnsafeBufferPointer(rebasing: buf[offset..<(offset + columnSize)])
+                body(slice)
+            }
+        }
+        count = 0
+        readIndex = 0
+        writeIndex = 0
+    }
+
+    /// Discard all pending columns without iterating.
+    mutating func removeAll() {
+        count = 0
+        readIndex = 0
+        writeIndex = 0
+    }
+}
+
+// MARK: - CircularFloatBuffer
+
+/// Fixed-capacity circular buffer for audio sample accumulation.
+/// Replaces `[Float]` + `append`/`removeFirst` to avoid O(n) copies
+/// and capacity ratcheting.
+struct CircularFloatBuffer {
+    private var storage: [Float]
+    private var head: Int = 0     // read position
+    private var tail: Int = 0     // write position
+    private(set) var count: Int = 0
+    let capacity: Int
+
+    init(capacity: Int) {
+        self.capacity = capacity
+        self.storage = [Float](repeating: 0, count: capacity)
+    }
+
+    /// Append samples. Drops oldest if buffer would overflow.
+    mutating func append(contentsOf source: ArraySlice<Float>) {
+        for sample in source {
+            storage[tail] = sample
+            tail = (tail + 1) % capacity
+            if count < capacity {
+                count += 1
+            } else {
+                head = (head + 1) % capacity  // overwrite oldest
+            }
+        }
+    }
+
+    /// Copy the first `n` elements into `dest` (must have at least `n` elements).
+    /// Handles wrap-around transparently.
+    func copyPrefix(_ n: Int, into dest: inout [Float]) {
+        let n = min(n, count)
+        let firstChunk = min(n, capacity - head)
+        for i in 0..<firstChunk {
+            dest[i] = storage[head + i]
+        }
+        let secondChunk = n - firstChunk
+        for i in 0..<secondChunk {
+            dest[firstChunk + i] = storage[i]
+        }
+    }
+
+    /// Advance the read position by `n`, discarding the oldest samples. O(1).
+    mutating func dropFirst(_ n: Int) {
+        let n = min(n, count)
+        head = (head + n) % capacity
+        count -= n
+    }
+
+    /// Reset to empty state without releasing memory.
+    mutating func reset() {
+        head = 0
+        tail = 0
+        count = 0
+    }
+}
+
 /// Reads audio samples from the Rust kernel's lock-free ring buffers,
 /// computes FFT magnitudes via Accelerate/vDSP, and publishes results
 /// for spectrogram rendering.
@@ -22,19 +141,12 @@ final class AudioCaptureManager: ObservableObject {
 
     // MARK: - Published FFT Results
 
-    /// Queued FFT magnitude snapshots for the input signal.
-    /// Each entry is one FFT window's worth of dB magnitudes (length = fftSize / 2).
-    /// SpectrogramView drains this queue each frame, appending one column per entry.
-    var pendingInputColumns: [[Float]] = []
-
-    /// Queued FFT magnitude snapshots for the output signal.
-    var pendingOutputColumns: [[Float]] = []
-
-    /// Queued difference magnitude snapshots (output_dB - input_dB per bin).
-    var pendingDifferenceColumns: [[Float]] = []
-
-    /// Queued normalized difference: (S_out - S_in) / (S_out + S_in) per bin, in [-1, 1].
-    var pendingNormalizedDifferenceColumns: [[Float]] = []
+    /// Pre-allocated ring buffers for pending FFT magnitude columns.
+    /// SpectrogramView drains these each frame via `drainColumns(for:body:)`.
+    private var inputColumnRing: ColumnRingBuffer!
+    private var outputColumnRing: ColumnRingBuffer!
+    private var differenceColumnRing: ColumnRingBuffer!
+    private var normalizedDiffColumnRing: ColumnRingBuffer!
 
     /// Monotonically increasing counter, incremented every time new FFT data
     /// is queued. Use this in `.onChange` to trigger SpectrogramView updates.
@@ -91,9 +203,12 @@ final class AudioCaptureManager: ObservableObject {
     private static let maxReadSamples: Int = 8192
     private static let maxPendingColumns: Int = 256
 
-    // Sample accumulators for overlap
-    private var inputAccumulator: [Float] = []
-    private var outputAccumulator: [Float] = []
+    // Circular sample accumulators for overlap (fixed capacity, no heap churn)
+    private var inputAccumulator: CircularFloatBuffer!
+    private var outputAccumulator: CircularFloatBuffer!
+
+    // Linearization buffer for FFT input (circular buffer may wrap)
+    private var linearizationBuffer: [Float] = []
 
     /// When false, skips computing normalized-difference columns (saves ~50μs/window).
     /// Set by SpectrogramSidePanel based on whether that spectrogram mode is visible.
@@ -143,6 +258,7 @@ final class AudioCaptureManager: ObservableObject {
 
     private func setupFFT() {
         let n = fftSize
+        let halfN = n / 2
         fftLog2n = vDSP_Length(log2(Double(n)))
 
         if let old = fftSetup {
@@ -155,33 +271,37 @@ final class AudioCaptureManager: ObservableObject {
         vDSP_hann_window(&windowBuffer, vDSP_Length(n), Int32(vDSP_HANN_NORM))
 
         // FFT work buffers
-        fftRealInput = [Float](repeating: 0, count: n / 2)
-        fftImagInput = [Float](repeating: 0, count: n / 2)
-        fftRealOutput = [Float](repeating: 0, count: n / 2)
-        fftImagOutput = [Float](repeating: 0, count: n / 2)
+        fftRealInput = [Float](repeating: 0, count: halfN)
+        fftImagInput = [Float](repeating: 0, count: halfN)
+        fftRealOutput = [Float](repeating: 0, count: halfN)
+        fftImagOutput = [Float](repeating: 0, count: halfN)
 
         // Pre-allocated computeFFT scratch buffers
         fftWindowed = [Float](repeating: 0, count: n)
-        fftMagnitudes = [Float](repeating: 0, count: n / 2)
-        fftDBValues = [Float](repeating: 0, count: n / 2)
+        fftMagnitudes = [Float](repeating: 0, count: halfN)
+        fftDBValues = [Float](repeating: 0, count: halfN)
 
         // Pre-allocated difference scratch buffers
-        diffScratch = [Float](repeating: 0, count: n / 2)
-        normDiffScratch = [Float](repeating: 0, count: n / 2)
+        diffScratch = [Float](repeating: 0, count: halfN)
+        normDiffScratch = [Float](repeating: 0, count: halfN)
 
         // Pre-allocated FFT result scratch buffers
-        fftInputScratch  = [Float](repeating: 0, count: n / 2)
-        fftOutputScratch = [Float](repeating: 0, count: n / 2)
+        fftInputScratch  = [Float](repeating: 0, count: halfN)
+        fftOutputScratch = [Float](repeating: 0, count: halfN)
 
-        // Reset accumulators
-        inputAccumulator.removeAll(keepingCapacity: true)
-        outputAccumulator.removeAll(keepingCapacity: true)
+        // Linearization buffer for circular accumulator → contiguous FFT input
+        linearizationBuffer = [Float](repeating: 0, count: n)
 
-        // Reset pending columns
-        pendingInputColumns.removeAll()
-        pendingOutputColumns.removeAll()
-        pendingDifferenceColumns.removeAll()
-        pendingNormalizedDifferenceColumns.removeAll()
+        // Circular accumulators: capacity for one full read + one FFT window
+        let accumulatorCapacity = Self.maxReadSamples + n
+        inputAccumulator = CircularFloatBuffer(capacity: accumulatorCapacity)
+        outputAccumulator = CircularFloatBuffer(capacity: accumulatorCapacity)
+
+        // Column ring buffers: pre-allocated contiguous storage
+        inputColumnRing = ColumnRingBuffer(columnSize: halfN, maxColumns: Self.maxPendingColumns)
+        outputColumnRing = ColumnRingBuffer(columnSize: halfN, maxColumns: Self.maxPendingColumns)
+        differenceColumnRing = ColumnRingBuffer(columnSize: halfN, maxColumns: Self.maxPendingColumns)
+        normalizedDiffColumnRing = ColumnRingBuffer(columnSize: halfN, maxColumns: Self.maxPendingColumns)
     }
 
     // MARK: - Display Link Management
@@ -199,8 +319,8 @@ final class AudioCaptureManager: ObservableObject {
         dsp_kernel_set_capture_enabled(kernel, true)
 
         // Reset accumulators
-        inputAccumulator.removeAll(keepingCapacity: true)
-        outputAccumulator.removeAll(keepingCapacity: true)
+        inputAccumulator.reset()
+        outputAccumulator.reset()
 
         displayLink?.invalidate()
 
@@ -218,6 +338,13 @@ final class AudioCaptureManager: ObservableObject {
         if let kernel = kernel {
             dsp_kernel_set_capture_enabled(kernel, false)
         }
+        // Reset ring buffers and accumulators (memory stays allocated but bounded)
+        inputAccumulator?.reset()
+        outputAccumulator?.reset()
+        inputColumnRing?.removeAll()
+        outputColumnRing?.removeAll()
+        differenceColumnRing?.removeAll()
+        normalizedDiffColumnRing?.removeAll()
     }
 
     // MARK: - Display Link Callback
@@ -255,34 +382,27 @@ final class AudioCaptureManager: ObservableObject {
         var producedColumns = false
 
         while inputAccumulator.count >= fftSize && outputAccumulator.count >= fftSize {
-            computeFFT(samples: &inputAccumulator,  result: &fftInputScratch)
-            computeFFT(samples: &outputAccumulator, result: &fftOutputScratch)
-            inputAccumulator.removeFirst(hopSize)
-            outputAccumulator.removeFirst(hopSize)
+            // Linearize circular buffer into contiguous memory for FFT
+            inputAccumulator.copyPrefix(fftSize, into: &linearizationBuffer)
+            computeFFT(samples: linearizationBuffer, result: &fftInputScratch)
+            inputAccumulator.dropFirst(hopSize)
 
-            pendingInputColumns.append(Array(fftInputScratch))
-            pendingOutputColumns.append(Array(fftOutputScratch))
-            pendingDifferenceColumns.append(computeDifference(input: fftInputScratch, output: fftOutputScratch))
+            outputAccumulator.copyPrefix(fftSize, into: &linearizationBuffer)
+            computeFFT(samples: linearizationBuffer, result: &fftOutputScratch)
+            outputAccumulator.dropFirst(hopSize)
+
+            // Append to column ring buffers (zero heap allocation — copies into pre-allocated storage)
+            inputColumnRing.append(from: fftInputScratch)
+            outputColumnRing.append(from: fftOutputScratch)
+
+            computeDifference(input: fftInputScratch, output: fftOutputScratch)
+            differenceColumnRing.append(from: diffScratch)
+
             if isNormalizedDiffEnabled {
-                pendingNormalizedDifferenceColumns.append(
-                    computeNormalizedDifference(inputDB: fftInputScratch, outputDB: fftOutputScratch))
+                computeNormalizedDifference(inputDB: fftInputScratch, outputDB: fftOutputScratch)
+                normalizedDiffColumnRing.append(from: normDiffScratch)
             }
             producedColumns = true
-        }
-
-        // Cap queues to prevent unbounded growth if SpectrogramView stops draining
-        let cap = Self.maxPendingColumns
-        if pendingInputColumns.count > cap {
-            pendingInputColumns.removeFirst(pendingInputColumns.count - cap)
-        }
-        if pendingOutputColumns.count > cap {
-            pendingOutputColumns.removeFirst(pendingOutputColumns.count - cap)
-        }
-        if pendingDifferenceColumns.count > cap {
-            pendingDifferenceColumns.removeFirst(pendingDifferenceColumns.count - cap)
-        }
-        if pendingNormalizedDifferenceColumns.count > cap {
-            pendingNormalizedDifferenceColumns.removeFirst(pendingNormalizedDifferenceColumns.count - cap)
         }
 
         if producedColumns {
@@ -292,8 +412,8 @@ final class AudioCaptureManager: ObservableObject {
 
     // MARK: - FFT Computation
 
-    /// Compute FFT of the first `fftSize` samples, store magnitude dB in `result`.
-    private func computeFFT(samples: inout [Float], result: inout [Float]) {
+    /// Compute FFT of the first `fftSize` samples from `samples`, store magnitude dB in `result`.
+    private func computeFFT(samples: [Float], result: inout [Float]) {
         guard let fftSetup: OpaquePointer = fftSetup else { return }
         let n = fftSize
         let halfN = n / 2
@@ -353,48 +473,43 @@ final class AudioCaptureManager: ObservableObject {
 
     // MARK: - Column Draining
 
-    /// Remove and return all pending columns for the given channel.
-    /// Called by SpectrogramView to consume queued FFT results.
-    func drainColumns(for channel: SpectrogramChannel) -> [[Float]] {
+    /// Drain all pending columns for the given channel, calling `body` for each column.
+    /// Zero heap allocations — columns are provided as buffer pointers into pre-allocated storage.
+    func drainColumns(for channel: SpectrogramChannel, body: (UnsafeBufferPointer<Float>) -> Void) {
         switch channel {
-        case .input:
-            let cols = pendingInputColumns
-            pendingInputColumns.removeAll(keepingCapacity: true)
-            return cols
-        case .output:
-            let cols = pendingOutputColumns
-            pendingOutputColumns.removeAll(keepingCapacity: true)
-            return cols
-        case .difference:
-            let cols = pendingDifferenceColumns
-            pendingDifferenceColumns.removeAll(keepingCapacity: true)
-            return cols
-        case .normalizedDifference:
-            let cols = pendingNormalizedDifferenceColumns
-            pendingNormalizedDifferenceColumns.removeAll(keepingCapacity: true)
-            return cols
+        case .input: inputColumnRing.drainAll(body)
+        case .output: outputColumnRing.drainAll(body)
+        case .difference: differenceColumnRing.drainAll(body)
+        case .normalizedDifference: normalizedDiffColumnRing.drainAll(body)
+        }
+    }
+
+    /// Discard all pending columns for the given channel without processing them.
+    func discardPendingColumns(for channel: SpectrogramChannel) {
+        switch channel {
+        case .input: inputColumnRing.removeAll()
+        case .output: outputColumnRing.removeAll()
+        case .difference: differenceColumnRing.removeAll()
+        case .normalizedDifference: normalizedDiffColumnRing.removeAll()
         }
     }
 
     // MARK: - Difference
 
     /// Compute per-bin difference: output_dB - input_dB.
-    /// Writes into pre-allocated `diffScratch` and returns a copy.
-    private func computeDifference(input: [Float], output: [Float]) -> [Float] {
+    /// Result is written into pre-allocated `diffScratch`.
+    private func computeDifference(input: [Float], output: [Float]) {
         let count = min(input.count, output.count)
-        guard count > 0 && count <= diffScratch.count else { return [] }
-
+        guard count > 0 && count <= diffScratch.count else { return }
         vDSP_vsub(input, 1, output, 1, &diffScratch, 1, vDSP_Length(count))
-        return Array(diffScratch[..<count])
     }
 
     /// Compute per-bin normalized difference: (S_out - S_in) / (S_out + S_in)
     /// where S = 10^(dB/10) converts from dB back to linear power.
-    /// Result is in [-1, 1]. Returns 0 where both signals are near silence.
-    /// Writes into pre-allocated `normDiffScratch` and returns a copy.
-    private func computeNormalizedDifference(inputDB: [Float], outputDB: [Float]) -> [Float] {
+    /// Result is in [-1, 1], written into pre-allocated `normDiffScratch`.
+    private func computeNormalizedDifference(inputDB: [Float], outputDB: [Float]) {
         let count = min(inputDB.count, outputDB.count)
-        guard count > 0 && count <= normDiffScratch.count else { return [] }
+        guard count > 0 && count <= normDiffScratch.count else { return }
 
         for i in 0..<count {
             let sIn = powf(10.0, inputDB[i] / 10.0)
@@ -402,6 +517,5 @@ final class AudioCaptureManager: ObservableObject {
             let denom = sOut + sIn
             normDiffScratch[i] = denom > 1e-20 ? (sOut - sIn) / denom : 0
         }
-        return Array(normDiffScratch[..<count])
     }
 }

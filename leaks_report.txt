@@ -1,0 +1,34 @@
+[invalid usage]: no process specified
+
+leaks: Search through a process for leaked memory.
+
+Usage: leaks [options] pid | partial-process-name | memory-graph-file
+       leaks [options] --atExit -- <command-and-arguments>
+
+        -e/--exclude <sym>     exclude leaked blocks whose backtraces include the specified symbol
+        -h/--help              show this helpful usage message!
+        -q/--quiet             suppress the process description header and footer
+        --list                 print the leaks as a list ("classic"-style) rather than as a tree
+        --groupByType          in leak trees, group children by type rather than showing individual instances
+                                  (for normal leak detection output, and --referenceTree, --dominatorTree, and --autoreleasePools modes)
+        --nostacks             do not print backtraces or save them in the memory graph file, even when available
+        --fullStacks           print backtraces with one line per frame
+        --nosources            do not show sourceFile:lineNumber in backtraces
+        --fullStackHistory     collects all memory allocation call stacks that are available, including historical allocations that have been freed.
+        --outputGraph=<path>   save a memory graph file into the given directory or file
+        --fullContent          print or save full allocation content descriptions
+                                  (this is the default for printing output for live processes)
+        --readonlyContent      print or save just readonly allocation content descriptions
+                                  (this is the default for saving memory graphs)
+        --noContent            do not save or print any allocation content descriptions
+        --hex                  show the hex content of leaked allocations, if there is no description of content
+        -c/--conservative      don't attempt smart ivar-based scanning, scan byte-by-byte ignoring field information
+        --forkCorpse           generate a corpse fork from process and run leaks on it
+        --diffFrom=<memgraph>  show only the new leaks since the specified memgraph
+        --trace=<address>      print chains of references from process 'roots' (e.g., global data) to the given block
+        --traceTree=<address>  print a reverse tree of references, from the given block up to the process roots
+        --referenceTree        print a reference tree of allocated memory starting at root nodes
+        --autoreleasePools     print contents of autorelease pools, by thread
+        --debug=[mode]         enable additional debugging modes; list available modes with --debug=help
+        --atExit               launch the specified command and run leaks when that process exits.
+                                  This should be the last argument; use '--atExit -- <command-and-arguments>'

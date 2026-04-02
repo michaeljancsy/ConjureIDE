@@ -10,7 +10,13 @@ import SwiftUI
 /// Side panel with three stacked spectrograms (input, output, difference)
 /// and a mini toolbar for configuration.
 struct SpectrogramSidePanel: View {
-    @ObservedObject var captureManager: AudioCaptureManager
+    // NOT @ObservedObject — this view never reads @Published properties from
+    // captureManager in its body (only passes it to children and writes to it).
+    // Using @ObservedObject here caused the entire body (including Pickers) to
+    // re-evaluate on every updateCounter tick (~60fps), leaking SwiftUI
+    // TagIndexProjection dictionaries. Child SpectrogramViews have their own
+    // @ObservedObject and update independently.
+    var captureManager: AudioCaptureManager
     @Binding var frequencyScale: FrequencyScale
     @Binding var fftSizeIndex: Int
     @Binding var showNoteNames: Bool
@@ -25,61 +31,17 @@ struct SpectrogramSidePanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Mini toolbar — uses GeometryReader to constrain controls to panel width
-            GeometryReader { geo in
-                HStack(spacing: 6) {
-                    // Frequency scale picker
-                    Picker(selection: $frequencyScale) {
-                        ForEach(FrequencyScale.allCases) { scale in
-                            Text(scale.rawValue).tag(scale)
-                        }
-                    } label: {
-                        EmptyView()
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-
-                    Spacer(minLength: 0)
-
-                    // FFT size picker
-                    Picker("FFT", selection: $fftSizeIndex) {
-                        ForEach(0..<Self.fftSizes.count, id: \.self) { i in
-                            Text("\(Self.fftSizes[i])").tag(i)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .onChange(of: fftSizeIndex) { _, newValue in
-                        captureManager.fftSize = Self.fftSizes[newValue]
-                    }
-
-                    // Hz / Notes toggle
-                    Button {
-                        showNoteNames.toggle()
-                    } label: {
-                        Image(systemName: showNoteNames ? "music.note" : "number")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.plain)
-                    .help(showNoteNames ? "Show Hz labels" : "Show note names")
-
-                    // Pause / Resume
-                    Button {
-                        isPaused.toggle()
-                    } label: {
-                        Image(systemName: isPaused ? "play.fill" : "pause.fill")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.plain)
-                    .help(isPaused ? "Resume spectrogram" : "Pause spectrogram")
-                }
-                .padding(.horizontal, 6)
-                .frame(width: geo.size.width, height: geo.size.height)
-            }
-            .frame(height: 28)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .controlSize(.small)
-            .background(.bar)
+            // Toolbar is a separate view with NO closure parameters so SwiftUI
+            // can skip re-evaluating its body when only captureManager changes.
+            // Closures aren't Equatable, so passing one forces SwiftUI to
+            // re-evaluate the toolbar body on every parent render (~60fps),
+            // which leaks Picker TagIndexProjection dictionaries.
+            SpectrogramToolbar(
+                frequencyScale: $frequencyScale,
+                fftSizeIndex: $fftSizeIndex,
+                showNoteNames: $showNoteNames,
+                isPaused: $isPaused
+            )
 
             Divider()
 
@@ -95,10 +57,13 @@ struct SpectrogramSidePanel: View {
             }
         }
         .accessibilityIdentifier("spectrogramSidePanel")
+        .onChange(of: fftSizeIndex) { _, newValue in
+            captureManager.fftSize = Self.fftSizes[newValue]
+        }
         .onChange(of: showNormalizedDiff) { _, newValue in
             captureManager.isNormalizedDiffEnabled = newValue
             if newValue {
-                captureManager.pendingNormalizedDifferenceColumns.removeAll()
+                captureManager.discardPendingColumns(for: .normalizedDifference)
             }
         }
     }
@@ -143,5 +108,72 @@ struct SpectrogramSidePanel: View {
                 .frame(maxHeight: .infinity)
             }
         }
+    }
+}
+
+// MARK: - Toolbar (isolated from captureManager updates)
+
+/// Extracted toolbar with ONLY Binding parameters (no closures).
+/// SwiftUI can compare Binding identity across renders and skip body
+/// re-evaluation when nothing changed. This prevents Picker
+/// TagIndexProjection dictionary leaks that occur on every body eval.
+private struct SpectrogramToolbar: View {
+    @Binding var frequencyScale: FrequencyScale
+    @Binding var fftSizeIndex: Int
+    @Binding var showNoteNames: Bool
+    @Binding var isPaused: Bool
+
+    var body: some View {
+        GeometryReader { geo in
+            HStack(spacing: 6) {
+                // Frequency scale picker
+                Picker(selection: $frequencyScale) {
+                    ForEach(FrequencyScale.allCases) { scale in
+                        Text(scale.rawValue).tag(scale)
+                    }
+                } label: {
+                    EmptyView()
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+
+                Spacer(minLength: 0)
+
+                // FFT size picker
+                Picker("FFT", selection: $fftSizeIndex) {
+                    ForEach(0..<SpectrogramSidePanel.fftSizes.count, id: \.self) { i in
+                        Text("\(SpectrogramSidePanel.fftSizes[i])").tag(i)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                // Hz / Notes toggle
+                Button {
+                    showNoteNames.toggle()
+                } label: {
+                    Image(systemName: showNoteNames ? "music.note" : "number")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .help(showNoteNames ? "Show Hz labels" : "Show note names")
+
+                // Pause / Resume
+                Button {
+                    isPaused.toggle()
+                } label: {
+                    Image(systemName: isPaused ? "play.fill" : "pause.fill")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .help(isPaused ? "Resume spectrogram" : "Pause spectrogram")
+            }
+            .padding(.horizontal, 6)
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .frame(height: 28)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .controlSize(.small)
+        .background(.bar)
     }
 }
