@@ -494,4 +494,23 @@ extern void vDSP_svdiv(const float *a,
                        int32_t c_stride,
                        uint32_t n);
 
+/**
+ * BLAS general matrix multiply: C = alpha*A*B + beta*C
+ * order: 101=RowMajor, transA/transB: 111=NoTrans
+ */
+extern void cblas_sgemm(int32_t order,
+                        int32_t trans_a,
+                        int32_t trans_b,
+                        int32_t m,
+                        int32_t n,
+                        int32_t k,
+                        float alpha,
+                        const float *a,
+                        int32_t lda,
+                        const float *b,
+                        int32_t ldb,
+                        float beta,
+                        float *c,
+                        int32_t ldc);
+
 #endif  /* CONJURE_DSP_H */

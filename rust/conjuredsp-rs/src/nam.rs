@@ -352,7 +352,13 @@ impl WaveNet {
         let max_kernel = layer_arrays.iter()
             .flat_map(|la| la.layers.iter().map(|l| l.kernel_size))
             .max().unwrap_or(3);
-        let region_size = (max_mid * max_l).max(max_ch * max_kernel * max_l);
+        // condition_size governs scratch usage during condition mix gather (condition_size * max_l floats)
+        let max_condition_size = layer_arrays.iter()
+            .flat_map(|la| la.layers.iter().map(|l| l.condition_size))
+            .max().unwrap_or(1);
+        let region_size = (max_mid * max_l)
+            .max(max_ch * max_kernel * max_l)
+            .max(max_condition_size * max_l);
 
         // rechannel_temp needs to hold max_ch * max_l for same-region rechannel
         let rechannel_temp_size = max_ch * max_l;
@@ -630,19 +636,31 @@ impl WaveNet {
                 }
             }
 
-            // Add condition mix (condition = original input in region 0)
+            // Add condition mix via matmul_acc: conv_out += mix_w @ condition_gathered
+            // mix_w is [mid_ch × condition_size], condition is strided in work region 0
             {
                 let mix_w = &self.layer_arrays[la_idx].layers[l_idx].mix_w;
-                let cond_len = full_len.min(l_out);
-                for i in 0..mid_ch {
-                    for j in 0..cond_len {
-                        let cond_j = full_len - cond_len + j;
-                        let mut mix_val = 0.0f32;
-                        for c in 0..condition_size {
-                            mix_val += mix_w[i * condition_size + c] * self.work[c * full_len + cond_j];
-                        }
-                        self.work[conv_off + i * l_out + j] += mix_val;
-                    }
+                // x_len only decreases across layers (each conv shrinks the sequence), so
+                // l_out ≤ curr_x_len ≤ full_len — cond_len always equals l_out.
+                debug_assert!(l_out <= full_len, "l_out={} > full_len={}", l_out, full_len);
+                let cond_len = l_out;
+
+                // Gather strided condition rows into contiguous scratch (free after conv1d).
+                // Condition channel c is at work[c * full_len ..], we want the last cond_len elements.
+                let cond_start = full_len - cond_len;
+                for c in 0..condition_size {
+                    let src_off = c * full_len + cond_start;
+                    let dst_off = scratch_off + c * cond_len;
+                    self.work.copy_within(src_off..src_off + cond_len, dst_off);
+                }
+
+                let work_ptr = self.work.as_mut_ptr();
+                unsafe {
+                    let b_slice = core::slice::from_raw_parts(
+                        work_ptr.add(scratch_off), condition_size * cond_len);
+                    let c_slice = core::slice::from_raw_parts_mut(
+                        work_ptr.add(conv_off), mid_ch * l_out);
+                    accel::matmul_acc(&mix_w[..], b_slice, c_slice, mid_ch, condition_size, cond_len);
                 }
             }
 
