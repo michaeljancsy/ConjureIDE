@@ -68,6 +68,13 @@ final class ProcessProfiler: ObservableObject {
         currentMs = Double(dsp_kernel_profiler_current_us(kernel)) / 1000.0
         avgMs = Double(dsp_kernel_profiler_avg_us(kernel)) / 1000.0
         peakMs = Double(dsp_kernel_profiler_peak_us(kernel)) / 1000.0
+        // Use actual render frame count if available — DAW buffers smaller than
+        // the AU framework minimum (64) are clamped in maximumFramesToRender but
+        // arrive at their true size in the render block.
+        let actualFrames = dsp_kernel_last_render_frame_count(kernel)
+        if actualFrames > 0, actualFrames != maxFrames {
+            maxFrames = actualFrames
+        }
     }
 
     private func updateBudget() {

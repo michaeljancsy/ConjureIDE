@@ -412,6 +412,19 @@ uint64_t dsp_kernel_memory_baseline_bytes(DSPKernelRef kernel);
 uint64_t dsp_kernel_wasm_memory_bytes(DSPKernelRef kernel);
 
 /**
+ * Get the actual frame count from the most recent render callback.
+ * Returns 0 before the first render call. Use this instead of
+ * `dsp_kernel_get_max_frames` to display the true audio budget, since
+ * DAW buffer sizes below the AU framework minimum (64) are clamped in
+ * `maximumFramesToRender` but still arrive as smaller `frameCount` values
+ * in the render block.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+uint32_t dsp_kernel_last_render_frame_count(DSPKernelRef kernel);
+
+/**
  * C = A * B where A is m×k, B is k×n, C is m×n. Stride params are element strides.
  */
 extern void vDSP_mmul(const float *a,

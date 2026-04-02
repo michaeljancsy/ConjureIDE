@@ -55,6 +55,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var terminalServer: TerminalServer?
     private var paramNamesCancellable: AnyCancellable?
     private var paramMetadataCancellable: AnyCancellable?
+    private var renderResourcesCancellable: AnyCancellable?
     private var sentryActive: Bool = true
 
     /// App Group container URL — uses the cached resolution from AppGroupContainer
@@ -209,6 +210,14 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         profiler.sampleRate = sr > 0 ? sr : 44100.0
         profiler.maxFrames = au.maximumFramesToRender > 0 ? au.maximumFramesToRender : 512
         profiler.start()
+        if let conjureAU = au as? ConjureDSPExtensionAudioUnit {
+            renderResourcesCancellable = conjureAU.renderConfigurationChanged
+                .receive(on: RunLoop.main)
+                .sink { [weak profiler] maxFrames, sampleRate in
+                    profiler?.maxFrames = maxFrames
+                    profiler?.sampleRate = sampleRate
+                }
+        }
 
         if memoryMonitor == nil {
             memoryMonitor = MemoryMonitor()
