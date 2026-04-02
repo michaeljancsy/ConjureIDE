@@ -25,17 +25,16 @@ struct SpectrogramSidePanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Toolbar is a separate view so it doesn't re-render on every
-            // captureManager.updateCounter change (which would leak SwiftUI
-            // Picker TagIndexProjection dictionaries at ~60fps).
+            // Toolbar is a separate view with NO closure parameters so SwiftUI
+            // can skip re-evaluating its body when only captureManager changes.
+            // Closures aren't Equatable, so passing one forces SwiftUI to
+            // re-evaluate the toolbar body on every parent render (~60fps),
+            // which leaks Picker TagIndexProjection dictionaries.
             SpectrogramToolbar(
                 frequencyScale: $frequencyScale,
                 fftSizeIndex: $fftSizeIndex,
                 showNoteNames: $showNoteNames,
-                isPaused: $isPaused,
-                onFFTSizeChanged: { newValue in
-                    captureManager.fftSize = Self.fftSizes[newValue]
-                }
+                isPaused: $isPaused
             )
 
             Divider()
@@ -52,6 +51,9 @@ struct SpectrogramSidePanel: View {
             }
         }
         .accessibilityIdentifier("spectrogramSidePanel")
+        .onChange(of: fftSizeIndex) { _, newValue in
+            captureManager.fftSize = Self.fftSizes[newValue]
+        }
         .onChange(of: showNormalizedDiff) { _, newValue in
             captureManager.isNormalizedDiffEnabled = newValue
             if newValue {
@@ -105,16 +107,15 @@ struct SpectrogramSidePanel: View {
 
 // MARK: - Toolbar (isolated from captureManager updates)
 
-/// Extracted toolbar so that Picker views are NOT re-evaluated on every
-/// captureManager.updateCounter tick. SwiftUI Pickers leak internal
-/// TagIndexProjection dictionaries on each body evaluation; isolating
-/// them here ensures they only re-render when bindings actually change.
+/// Extracted toolbar with ONLY Binding parameters (no closures).
+/// SwiftUI can compare Binding identity across renders and skip body
+/// re-evaluation when nothing changed. This prevents Picker
+/// TagIndexProjection dictionary leaks that occur on every body eval.
 private struct SpectrogramToolbar: View {
     @Binding var frequencyScale: FrequencyScale
     @Binding var fftSizeIndex: Int
     @Binding var showNoteNames: Bool
     @Binding var isPaused: Bool
-    var onFFTSizeChanged: (Int) -> Void
 
     var body: some View {
         GeometryReader { geo in
@@ -139,9 +140,6 @@ private struct SpectrogramToolbar: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .onChange(of: fftSizeIndex) { _, newValue in
-                    onFFTSizeChanged(newValue)
-                }
 
                 // Hz / Notes toggle
                 Button {
