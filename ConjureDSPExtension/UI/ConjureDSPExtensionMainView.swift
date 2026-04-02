@@ -21,16 +21,21 @@ struct ConjureDSPExtensionMainView: View {
     var defaultLanguage: ScriptLanguage = .python
     var extensionBundle: Bundle
     var scriptSourcePublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.ScriptSourceChange, Never>?
-    @ObservedObject var presetManager: PresetManager
-    // NOT @ObservedObject — this view never reads @Published properties from
-    // captureManager (only passes it to children and writes to it). Observing
-    // it would re-evaluate this entire body on every updateCounter tick (~60fps).
+    // These are NOT @ObservedObject because this view never reads their
+    // @Published properties in its body — it only passes them to child views
+    // or uses them in action callbacks. Child views (StatusBarView,
+    // PresetToolbar, etc.) have their own @ObservedObject declarations.
+    // Observing them here would re-evaluate this entire body on every
+    // publish (processProfiler fires 4x/sec, which caused ~12MB/min growth).
+    var presetManager: PresetManager
     var captureManager: AudioCaptureManager
-    @ObservedObject var processProfiler: ProcessProfiler
-    @ObservedObject var memoryMonitor: MemoryMonitor
-    @ObservedObject var parameterState: ParameterState
+    var processProfiler: ProcessProfiler
+    var memoryMonitor: MemoryMonitor
+    var parameterState: ParameterState
+    // subscriptionManager MUST be @ObservedObject — the demo expired overlay
+    // reads isLicensed and demoSecondsRemaining directly in this view's body.
     @ObservedObject var subscriptionManager: SubscriptionManager
-    @ObservedObject var gitHubService: GitHubService
+    var gitHubService: GitHubService
     var onRun: (String) async -> ScriptSaveResult
     var onSelectPreset: (Preset) async -> ScriptSaveResult
     var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
