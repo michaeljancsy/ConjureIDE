@@ -66,6 +66,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var showSpectrogram: Bool = false
     @State private var showChat: Bool = false
     @State private var terminalHasBeenOpened: Bool = false
+    @AppStorage("showAIPromptTab") private var showAIPromptTab: Bool = false
     @State private var chatWidth: CGFloat = 280
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
@@ -261,11 +262,35 @@ struct ConjureDSPExtensionMainView: View {
             if terminalHasBeenOpened {
                 HStack(spacing: 0) {
                     Group {
-                        if daemonChecker.isDaemonAvailable {
-                            TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
-                                .accessibilityIdentifier("terminalPanel")
-                        } else {
-                            DaemonLaunchPromptView(colorScheme: colorScheme)
+                        VStack(spacing: 0) {
+                            // Tab switcher header
+                            HStack(spacing: 0) {
+                                chatTabButton(label: "Claude Code", isSelected: !showAIPromptTab) {
+                                    showAIPromptTab = false
+                                }
+                                chatTabButton(label: "AI Prompt", isSelected: showAIPromptTab) {
+                                    showAIPromptTab = true
+                                }
+                            }
+                            .frame(height: 28)
+                            .background(colorScheme == .dark
+                                ? Color(white: 0.10)
+                                : Color(nsColor: .windowBackgroundColor))
+
+                            Divider()
+
+                            if showAIPromptTab {
+                                AIPromptHelperView(
+                                    currentScript: scriptSource,
+                                    currentLanguage: selectedLanguage,
+                                    colorScheme: colorScheme
+                                )
+                            } else if daemonChecker.isDaemonAvailable {
+                                TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
+                                    .accessibilityIdentifier("terminalPanel")
+                            } else {
+                                DaemonLaunchPromptView(colorScheme: colorScheme)
+                            }
                         }
                     }
                     .frame(width: showChat ? chatWidth : 0)
@@ -469,6 +494,24 @@ struct ConjureDSPExtensionMainView: View {
                 )
             }
         }
+    }
+
+    @ViewBuilder
+    private func chatTabButton(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                .foregroundColor(isSelected ? .primary : .secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    isSelected
+                        ? (colorScheme == .dark
+                            ? Color(white: 0.20)
+                            : Color(nsColor: .controlBackgroundColor))
+                        : Color.clear
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
 
