@@ -576,6 +576,20 @@ pub unsafe extern "C" fn dsp_kernel_wasm_memory_bytes(kernel: DSPKernelRef) -> u
     (*kernel).wasm_memory_bytes()
 }
 
+/// Get the actual frame count from the most recent render callback.
+/// Returns 0 before the first render call. Use this instead of
+/// `dsp_kernel_get_max_frames` to display the true audio budget, since
+/// DAW buffer sizes below the AU framework minimum (64) are clamped in
+/// `maximumFramesToRender` but still arrive as smaller `frameCount` values
+/// in the render block.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_last_render_frame_count(kernel: DSPKernelRef) -> u32 {
+    (*kernel).last_render_frame_count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

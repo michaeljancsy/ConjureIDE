@@ -81,6 +81,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Fires after every script load with the new param metadata (or nil).
 	public let paramMetadataDidChange = PassthroughSubject<[ParamMetadata]?, Never>()
 
+	/// Fires each time render resources are allocated (on load and on DAW buffer/sample-rate changes).
+	/// Carries the new maximum frame count and sample rate so the UI can update its budget display.
+	public let renderConfigurationChanged = PassthroughSubject<(maxFrames: UInt32, sampleRate: Double), Never>()
+
 	/// Script-declared algorithmic latency in samples (0 = no latency).
 	/// Updated after each script load from the Rust kernel FFI.
 	private(set) var _latencySamples: UInt32 = 0
@@ -1037,6 +1041,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		dsp_kernel_initialize(kernel, Int32(inputChannelCount), Int32(outputChannelCount), _outputBus.format.sampleRate)
 
 		try super.allocateRenderResources()
+		renderConfigurationChanged.send((maxFrames: _maxFrames, sampleRate: _outputBus.format.sampleRate))
 	}
 
 	public override func deallocateRenderResources() {

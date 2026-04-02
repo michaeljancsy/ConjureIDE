@@ -108,6 +108,10 @@ pub struct DSPKernel {
     /// Current WASM linear memory size in bytes (0 if Python backend).
     /// Updated after each process() call on the audio thread.
     wasm_memory_bytes: AtomicU64,
+    /// Actual frame count from the most recent render callback.
+    /// May be smaller than max_frames_to_render (e.g. DAW buffers < AU framework minimum).
+    /// Written by audio thread, read by UI thread — lock-free.
+    last_render_frame_count: AtomicU32,
     /// NAM model path from the loaded WASM module's `get_nam_path_ptr`/`get_nam_path_len` exports.
     /// Set during `load_wasm()`, read by Swift to resolve and inject the .nam file.
     nam_path: Option<String>,
@@ -201,6 +205,7 @@ impl DSPKernel {
             grace_deadline_unix: AtomicI64::new(0),
             memory_baseline_bytes: AtomicU64::new(0),
             wasm_memory_bytes: AtomicU64::new(0),
+            last_render_frame_count: AtomicU32::new(0),
             nam_path: None,
         }
     }
@@ -404,6 +409,12 @@ impl DSPKernel {
     /// Get the current WASM linear memory size in bytes (0 if Python backend).
     pub fn wasm_memory_bytes(&self) -> u64 {
         self.wasm_memory_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Get the actual frame count from the most recent render callback.
+    /// Returns 0 before the first render call.
+    pub fn last_render_frame_count(&self) -> u32 {
+        self.last_render_frame_count.load(Ordering::Relaxed)
     }
 
     /// Reset profiler statistics. Called when a new script/WASM is loaded.
@@ -739,6 +750,8 @@ impl DSPKernel {
         let frame_count = frame_count as usize;
         let inputs = std::slice::from_raw_parts(input_buffers, channel_count);
         let outputs = std::slice::from_raw_parts(output_buffers, channel_count);
+
+        self.last_render_frame_count.store(frame_count as u32, Ordering::Relaxed);
 
         let capturing = self.capture_enabled.load(Ordering::Relaxed);
 
