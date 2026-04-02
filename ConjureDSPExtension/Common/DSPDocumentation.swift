@@ -231,16 +231,29 @@ enum DSPDocumentation {
     ## Multi-voice LFO phase spread
 
     For chorus/flanger with N voices, spread LFO phases evenly. Pre-seed each LFO at module scope
-    by advancing it by phase_offset * samples_per_cycle at a reference frequency:
+    by advancing it by phase_offset * samples_per_cycle at a reference frequency.
+    The reference sample rate cancels in the ratio (ticks × phase-per-tick = v/N regardless),
+    so any value works for seeding — but use the actual sample_rate for correct LFO speed.
+    Re-seed when sample_rate changes:
 
-      NUM_VOICES = 4
-      _lfos = []
-      for v in range(NUM_VOICES):
-          lfo = LFO(44100, freq=1.0)
-          phase_samples = int((v / NUM_VOICES) * 44100 / 1.0)
-          for _ in range(phase_samples):
-              lfo.tick()
-          _lfos.append(lfo)
+      NUM_VOICES = 3
+      _lfos = None
+      _last_sr = None
+
+      def _init_lfos(sample_rate, rate_hz):
+          global _lfos, _last_sr
+          _lfos = []
+          for v in range(NUM_VOICES):
+              lfo = LFO(sample_rate, freq=rate_hz)
+              for _ in range(int((v / NUM_VOICES) * sample_rate / rate_hz)):
+                  lfo.tick()
+              _lfos.append(lfo)
+          _last_sr = sample_rate
+
+      def process(inputs, outputs, frame_count, sample_rate, params):
+          if _last_sr != sample_rate:
+              _init_lfos(sample_rate, params["rate"])
+          ...
     """
 
     static let utilities = """
