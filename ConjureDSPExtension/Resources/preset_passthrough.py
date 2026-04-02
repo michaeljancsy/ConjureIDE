@@ -13,7 +13,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         outputs:     list of numpy.float32 arrays, one per channel
         frame_count: number of valid samples this callback
         sample_rate: current sample rate in Hz
-        params:      list of 8 floats (0.0–1.0), DAW-automatable parameters (unused)
+        params:      dict of parameter values keyed by PARAMS name (empty — no PARAMS defined)
     """
     for ch in range(len(inputs)):
         outputs[ch][:frame_count] = inputs[ch][:frame_count]
