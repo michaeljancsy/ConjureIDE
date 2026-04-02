@@ -292,6 +292,7 @@ struct ConjureDSPExtensionMainView: View {
                                 DaemonLaunchPromptView(colorScheme: colorScheme)
                             }
                         }
+                        .frame(maxHeight: .infinity, alignment: .top)
                     }
                     .frame(width: showChat ? chatWidth : 0)
                     .clipped()
