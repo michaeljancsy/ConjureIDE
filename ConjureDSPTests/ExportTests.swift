@@ -1492,6 +1492,214 @@ struct ExportDSPIntegrationTests {
         }
         #expect(maxDiff > 1e-4, "Output should differ from input (maxDiff: \(maxDiff))")
     }
+
+    // MARK: - NAM Export Pipeline Tests
+
+    @Test("Export Python NAM preset: bundle has model.nam, preset.py is rewritten, runtime-config has namModelFile")
+    func exportPythonNamPresetBundleIsCorrect() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        // 1. Read Python NAM preset and replace placeholder with a real absolute path
+        let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/lstm_tiny.nam")
+        let resourcesURL = try Self.extensionResourcesURL
+        var source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam.py"), encoding: .utf8)
+        source = source.replacingOccurrences(of: "tone3000://TONE_ID/MODEL_ID", with: namURL.path)
+        #expect(source.contains(namURL.path), "Source should contain absolute NAM path after substitution")
+
+        // 2. Export
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: "ExportTest_PythonNAM_\(testId)",
+            source: source,
+            wasmData: nil,
+            language: .python,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true
+        )
+
+        let resources = appexResourcesPath(in: appURL)
+
+        // 3. model.nam must be present in the bundle
+        let exportedNamURL = resources.appendingPathComponent("model.nam")
+        #expect(FileManager.default.fileExists(atPath: exportedNamURL.path),
+                "model.nam should be present in exported bundle")
+
+        // 4. preset.py must have the load_model call rewritten to "model.nam"
+        let exportedPy = try String(contentsOf: resources.appendingPathComponent("preset.py"), encoding: .utf8)
+        #expect(exportedPy.contains(#"load_model("model.nam")"#),
+                "Exported preset.py should reference model.nam, not the original path")
+        // The load_model() call itself must not have the original path (comments may still contain it)
+        #expect(!exportedPy.contains("load_model(\"\(namURL.path)\")"),
+                "load_model() call in exported preset.py should not contain the original absolute path")
+
+        // 5. runtime-config.json must record namModelFile
+        let configData = try Data(contentsOf: resources.appendingPathComponent("runtime-config.json"))
+        let config = try JSONSerialization.jsonObject(with: configData) as! [String: Any]
+        #expect(config["namModelFile"] as? String == "model.nam",
+                "runtime-config.json should have namModelFile = \"model.nam\"")
+
+        // 6. Exported model.nam must be byte-for-byte identical to the source file
+        let exportedNamData = try Data(contentsOf: exportedNamURL)
+        let originalNamData = try Data(contentsOf: namURL)
+        #expect(exportedNamData == originalNamData,
+                "Exported model.nam should match original lstm_tiny.nam")
+    }
+
+    @Test("Export Rust NAM preset: bundle has model.nam, runtime-config correct, audio processes correctly")
+    func exportRustNamPresetBundleAndVerifyAudio() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        // 1. Read Rust NAM preset and replace placeholder with a real absolute path
+        let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/lstm_tiny.nam")
+        let resourcesURL = try Self.extensionResourcesURL
+        var source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam_rust.rs"), encoding: .utf8)
+        source = source.replacingOccurrences(of: "tone3000://TONE_ID/MODEL_ID", with: namURL.path)
+        #expect(source.contains(namURL.path), "Source should contain absolute NAM path after substitution")
+
+        // 2. Compile to WASM
+        let wasmData = try Self.compileToWasm(source: source)
+
+        // 3. Export
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: "ExportTest_RustNAM_\(testId)",
+            source: source,
+            wasmData: wasmData,
+            language: .rust,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true
+        )
+
+        let resources = appexResourcesPath(in: appURL)
+
+        // 4. model.nam must be present in the bundle
+        let exportedNamURL = resources.appendingPathComponent("model.nam")
+        #expect(FileManager.default.fileExists(atPath: exportedNamURL.path),
+                "model.nam should be present in exported bundle")
+
+        // 5. runtime-config.json must record namModelFile
+        let configData = try Data(contentsOf: resources.appendingPathComponent("runtime-config.json"))
+        let config = try JSONSerialization.jsonObject(with: configData) as! [String: Any]
+        #expect(config["namModelFile"] as? String == "model.nam",
+                "runtime-config.json should have namModelFile = \"model.nam\"")
+
+        // 6. Exported model.nam must be byte-for-byte identical to the source file
+        let exportedNamData = try Data(contentsOf: exportedNamURL)
+        let originalNamData = try Data(contentsOf: namURL)
+        #expect(exportedNamData == originalNamData,
+                "Exported model.nam should match original lstm_tiny.nam")
+
+        // 7. Audio round-trip: load exported WASM + inject exported model.nam, verify output
+        let exportedWasm = try Data(contentsOf: resources.appendingPathComponent("preset.wasm"))
+
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+        dsp_kernel_set_licensed(kernel, true)
+        dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
+        dsp_kernel_set_max_frames(kernel, UInt32(Self.chunkSize))
+
+        let loaded = exportedWasm.withUnsafeBytes { buf in
+            dsp_kernel_load_wasm(kernel, buf.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(buf.count))
+        }
+        #expect(loaded, "Exported WASM should load successfully into kernel")
+
+        // Serialize and inject the exported model.nam (same binary protocol as ExportAUAudioUnit)
+        let binary = try Self.serializeNamFile(at: exportedNamURL)
+        let injected = binary.withUnsafeBytes { rawBuffer -> Bool in
+            guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return false }
+            return dsp_kernel_inject_nam(kernel, ptr, UInt(binary.count))
+        }
+        #expect(injected, "NAM injection from exported model.nam should succeed. Error: \(Self.kernelError(kernel))")
+
+        // Process silence — must not produce loud output (not static)
+        let silenceL = [Float](repeating: 0, count: Int(Self.sampleRate * Self.durationSeconds))
+        let silenceR = silenceL
+        let (silOutL, silOutR) = Self.renderSignal(kernel: kernel, inputL: silenceL, inputR: silenceR)
+        let silencePeakL = silOutL.map { abs($0) }.max() ?? 0
+        let silencePeakR = silOutR.map { abs($0) }.max() ?? 0
+        #expect(silencePeakL < 0.1, "Silence input should not produce loud output (peak L: \(silencePeakL))")
+        #expect(silencePeakR < 0.1, "Silence input should not produce loud output (peak R: \(silencePeakR))")
+
+        // Process sine wave — must be finite, non-silent, and differ from input
+        let (inputL, inputR) = Self.generateSineSignal()
+        let (outputL, outputR) = Self.renderSignal(kernel: kernel, inputL: inputL, inputR: inputR)
+
+        for i in 0..<outputL.count {
+            #expect(outputL[i].isFinite, "Output L[\(i)] is not finite: \(outputL[i])")
+            #expect(outputR[i].isFinite, "Output R[\(i)] is not finite: \(outputR[i])")
+        }
+
+        let outputPeakL = outputL.map { abs($0) }.max() ?? 0
+        #expect(outputPeakL > 1e-6, "Output should not be silent (peak L: \(outputPeakL))")
+
+        var maxDiff: Float = 0
+        for i in 0..<inputL.count {
+            maxDiff = max(maxDiff, abs(outputL[i] - inputL[i]))
+        }
+        #expect(maxDiff > 1e-4, "Output should differ from input (maxDiff: \(maxDiff))")
+    }
+
+    @Test("Export NAM preset throws namModelNotFound when model file does not exist")
+    func exportNamPresetThrowsWhenModelMissing() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        // Minimal Python NAM source referencing a nonexistent absolute path
+        let source = """
+            from conjuredsp.nam import load_model
+            model = load_model("/nonexistent/bogus/model.nam")
+            def process(inputs, outputs, frame_count, sample_rate, params):
+                pass
+            """
+
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+
+        #expect(throws: ExportManager.ExportError.self) {
+            try manager.exportPreset(
+                name: "ExportTest_MissingNAM_\(testId)",
+                source: source,
+                wasmData: nil,
+                language: .python,
+                templateURL: templateURL,
+                outputDirectory: outputDir,
+                skipSigning: true
+            )
+        }
+    }
 }
 
 // MARK: - Edge Case Tests
