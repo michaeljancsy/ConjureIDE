@@ -789,6 +789,13 @@ struct ExportDSPIntegrationTests {
         }
     }
 
+    /// Repo root derived from this source file's path.
+    private static var repoRootURL: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // ConjureDSPTests/
+            .deletingLastPathComponent()   // repo root
+    }
+
     // MARK: - Signal Generation
 
     private static func generateSineSignal() -> ([Float], [Float]) {
@@ -1303,6 +1310,187 @@ struct ExportDSPIntegrationTests {
         let attrs = nsExt["NSExtensionAttributes"] as! [String: Any]
         let components = attrs["AudioComponents"] as! [[String: Any]]
         #expect(components[0]["name"] as? String == "ConjureDSP: \(longName)")
+    }
+
+    // MARK: - NAM Serialization Helper
+
+    /// Serialize a .nam JSON file to the binary protocol used by `dsp_kernel_inject_nam()`.
+    /// This replicates the serialization in `ExportAUAudioUnit.injectEmbeddedNamModel()` exactly.
+    private static func serializeNamFile(at url: URL) throws -> Data {
+        let namData = try Data(contentsOf: url)
+        let namJson = try JSONSerialization.jsonObject(with: namData) as! [String: Any]
+
+        let architecture = namJson["architecture"] as! String
+        let configObj = namJson["config"]!
+        let weightsArray = namJson["weights"] as! [Double]
+
+        let arch: UInt32 = architecture == "LSTM" ? 1 : 0
+        let sampleRate = Float(
+            (namJson["sample_rate"] as? Double)
+            ?? (namJson["sample_rate"] as? Int).map(Double.init)
+            ?? 48000.0
+        )
+
+        let configData = try JSONSerialization.data(withJSONObject: configObj)
+
+        var binary = Data()
+        var archLE = arch.littleEndian
+        binary.append(Data(bytes: &archLE, count: 4))
+        var srLE = sampleRate.bitPattern.littleEndian
+        binary.append(Data(bytes: &srLE, count: 4))
+        var configLen = UInt32(configData.count).littleEndian
+        binary.append(Data(bytes: &configLen, count: 4))
+        binary.append(configData)
+        var weightCount = UInt32(weightsArray.count).littleEndian
+        binary.append(Data(bytes: &weightCount, count: 4))
+        for w in weightsArray {
+            var f = Float(w).bitPattern.littleEndian
+            binary.append(Data(bytes: &f, count: 4))
+        }
+
+        return binary
+    }
+
+    /// Helper to get the last kernel error as a Swift string.
+    private static func kernelError(_ kernel: DSPKernelRef) -> String {
+        if let ptr = dsp_kernel_last_error(kernel) {
+            return String(cString: ptr)
+        }
+        return "(none)"
+    }
+
+    // MARK: - NAM Integration Tests
+
+    @Test("NAM LSTM preset processes audio correctly (not static)")
+    func namLstmPresetProducesCorrectAudio() throws {
+        // 1. Compile NAM preset source to WASM
+        let resourcesURL = try Self.extensionResourcesURL
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam_rust.rs"), encoding: .utf8)
+        let wasmData = try Self.compileToWasm(source: source)
+
+        // 2. Create kernel and load WASM
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+        dsp_kernel_set_licensed(kernel, true)
+        dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
+        dsp_kernel_set_max_frames(kernel, UInt32(Self.chunkSize))
+
+        let loaded = wasmData.withUnsafeBytes { buf in
+            dsp_kernel_load_wasm(kernel, buf.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(buf.count))
+        }
+        #expect(loaded, "WASM should load successfully")
+
+        // 3. Verify WASM declares a NAM path
+        let namPathPtr = dsp_kernel_nam_path(kernel)
+        #expect(namPathPtr != nil, "NAM preset should report a NAM path")
+
+        // 4. Read and serialize .nam file (same as ExportAUAudioUnit does)
+        let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/lstm_tiny.nam")
+        let binary = try Self.serializeNamFile(at: namURL)
+
+        // 5. Inject NAM model
+        let injected = binary.withUnsafeBytes { rawBuffer -> Bool in
+            guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return false }
+            return dsp_kernel_inject_nam(kernel, ptr, UInt(binary.count))
+        }
+        #expect(injected, "NAM injection should succeed. Error: \(Self.kernelError(kernel))")
+
+        // 6a. Process SILENCE — output should be near-zero, not static
+        let silenceL = [Float](repeating: 0, count: Int(Self.sampleRate * Self.durationSeconds))
+        let silenceR = silenceL
+        let (silOutL, silOutR) = Self.renderSignal(kernel: kernel, inputL: silenceL, inputR: silenceR)
+
+        let silencePeakL = silOutL.map { abs($0) }.max() ?? 0
+        let silencePeakR = silOutR.map { abs($0) }.max() ?? 0
+        #expect(silencePeakL < 0.1, "Silence input should not produce loud output (peak L: \(silencePeakL))")
+        #expect(silencePeakR < 0.1, "Silence input should not produce loud output (peak R: \(silencePeakR))")
+
+        // 6b. Process SINE WAVE
+        let (inputL, inputR) = Self.generateSineSignal()
+        let (outputL, outputR) = Self.renderSignal(kernel: kernel, inputL: inputL, inputR: inputR)
+
+        // Verify output is finite (no NaN/Inf)
+        for i in 0..<outputL.count {
+            #expect(outputL[i].isFinite, "Output L[\(i)] is not finite: \(outputL[i])")
+            #expect(outputR[i].isFinite, "Output R[\(i)] is not finite: \(outputR[i])")
+        }
+
+        // Verify output is not all zeros (model is processing)
+        let outputPeakL = outputL.map { abs($0) }.max() ?? 0
+        #expect(outputPeakL > 1e-6, "Output should not be silent (peak L: \(outputPeakL))")
+
+        // Verify output differs from input (model modifies signal)
+        var maxDiff: Float = 0
+        for i in 0..<inputL.count {
+            maxDiff = max(maxDiff, abs(outputL[i] - inputL[i]))
+        }
+        #expect(maxDiff > 1e-4, "Output should differ from input (maxDiff: \(maxDiff))")
+    }
+
+    @Test("NAM WaveNet preset processes audio correctly (not static)")
+    func namWavenetPresetProducesCorrectAudio() throws {
+        // 1. Compile NAM preset source to WASM
+        let resourcesURL = try Self.extensionResourcesURL
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam_rust.rs"), encoding: .utf8)
+        let wasmData = try Self.compileToWasm(source: source)
+
+        // 2. Create kernel and load WASM
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+        dsp_kernel_set_licensed(kernel, true)
+        dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
+        dsp_kernel_set_max_frames(kernel, UInt32(Self.chunkSize))
+
+        let loaded = wasmData.withUnsafeBytes { buf in
+            dsp_kernel_load_wasm(kernel, buf.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(buf.count))
+        }
+        #expect(loaded, "WASM should load successfully")
+
+        // 3. Verify WASM declares a NAM path
+        let namPathPtr = dsp_kernel_nam_path(kernel)
+        #expect(namPathPtr != nil, "NAM preset should report a NAM path")
+
+        // 4. Read and serialize .nam file (same as ExportAUAudioUnit does)
+        let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/wavenet_tiny.nam")
+        let binary = try Self.serializeNamFile(at: namURL)
+
+        // 5. Inject NAM model
+        let injected = binary.withUnsafeBytes { rawBuffer -> Bool in
+            guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return false }
+            return dsp_kernel_inject_nam(kernel, ptr, UInt(binary.count))
+        }
+        #expect(injected, "NAM injection should succeed. Error: \(Self.kernelError(kernel))")
+
+        // 6a. Process SILENCE — output should be near-zero, not static
+        let silenceL = [Float](repeating: 0, count: Int(Self.sampleRate * Self.durationSeconds))
+        let silenceR = silenceL
+        let (silOutL, silOutR) = Self.renderSignal(kernel: kernel, inputL: silenceL, inputR: silenceR)
+
+        let silencePeakL = silOutL.map { abs($0) }.max() ?? 0
+        let silencePeakR = silOutR.map { abs($0) }.max() ?? 0
+        #expect(silencePeakL < 0.1, "Silence input should not produce loud output (peak L: \(silencePeakL))")
+        #expect(silencePeakR < 0.1, "Silence input should not produce loud output (peak R: \(silencePeakR))")
+
+        // 6b. Process SINE WAVE
+        let (inputL, inputR) = Self.generateSineSignal()
+        let (outputL, outputR) = Self.renderSignal(kernel: kernel, inputL: inputL, inputR: inputR)
+
+        // Verify output is finite (no NaN/Inf)
+        for i in 0..<outputL.count {
+            #expect(outputL[i].isFinite, "Output L[\(i)] is not finite: \(outputL[i])")
+            #expect(outputR[i].isFinite, "Output R[\(i)] is not finite: \(outputR[i])")
+        }
+
+        // Verify output is not all zeros (model is processing)
+        let outputPeakL = outputL.map { abs($0) }.max() ?? 0
+        #expect(outputPeakL > 1e-6, "Output should not be silent (peak L: \(outputPeakL))")
+
+        // Verify output differs from input (model modifies signal)
+        var maxDiff: Float = 0
+        for i in 0..<inputL.count {
+            maxDiff = max(maxDiff, abs(outputL[i] - inputL[i]))
+        }
+        #expect(maxDiff > 1e-4, "Output should differ from input (maxDiff: \(maxDiff))")
     }
 }
 

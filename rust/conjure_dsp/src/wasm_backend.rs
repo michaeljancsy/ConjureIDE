@@ -605,11 +605,15 @@ impl WasmBackend {
                         }
                         let base = data.as_mut_ptr();
                         unsafe {
+                            // vDSP_mmul(A, 1, B, 1, C, 1, M, N, P)
+                            // A is M×P, B is P×N, C is M×N
+                            // Our contract: a is m×k, b is k×n, out is m×n
+                            // So: M=m, P=k, N=n
                             vDSP_mmul(
                                 base.add(a_off) as *const f32, 1,
                                 base.add(b_off) as *const f32, 1,
                                 base.add(out_off) as *mut f32, 1,
-                                m as u32, k as u32, n as u32,
+                                m as u32, n as u32, k as u32,
                             );
                         }
                     }

@@ -70,9 +70,9 @@ const bridge = {
         this._suppressChanges = true;
         this.editor.executeEdits('conjuredsp', [op]);
         this._suppressChanges = false;
-        // Notify Swift of the change
+        // Notify Swift of the change via the registered handler
         const fullText = this.editor.getValue();
-        window.webkit.messageHandlers.editorDidChange.postMessage(fullText);
+        webkit.messageHandlers.contentChanged.postMessage(fullText);
     },
 
     setLanguage(lang) {
