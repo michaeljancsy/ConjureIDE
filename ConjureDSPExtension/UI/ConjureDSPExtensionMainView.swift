@@ -48,11 +48,8 @@ struct ConjureDSPExtensionMainView: View {
     var appGroupContainerURL: URL?
     var isBypassed: () -> Bool = { false }
     var setBypass: (Bool) -> Void = { _ in }
-    var isSentryEnabled: () -> Bool = { true }
-    var setSentryEnabled: (Bool) -> Void = { _ in }
 
     @State private var bypassed: Bool = false
-    @State private var sentryEnabled: Bool = true
     @State private var scriptSource: String = ""
     @State private var selectedLanguage: ScriptLanguage = .python
     @State private var errorMessage: String?
@@ -172,6 +169,8 @@ struct ConjureDSPExtensionMainView: View {
                     }
                 },
                 isExporting: isExporting,
+                bypassed: $bypassed,
+                onBypassToggle: { setBypass(bypassed) },
                 showingSaveAs: $showingSaveAs,
                 saveAsName: $saveAsName,
                 onInsertSnippet: { snippet in
@@ -209,16 +208,12 @@ struct ConjureDSPExtensionMainView: View {
                     memoryMonitor: memoryMonitor,
                     lastBenchmark: lastBenchmark,
                     buildIDFormatted: buildID != 0 ? Self.formatBuildID(buildID) : nil,
-                    bypassed: $bypassed,
-                    sentryEnabled: $sentryEnabled,
                     onCopyError: {
                         if let err = errorMessage {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(err, forType: .string)
                         }
-                    },
-                    onBypassToggle: { setBypass(bypassed) },
-                    onSentryToggle: { setSentryEnabled(sentryEnabled) }
+                    }
                 )
             }
             .padding(.bottom, 4)
@@ -412,7 +407,6 @@ struct ConjureDSPExtensionMainView: View {
                 lastBenchmark = bench
             }
             bypassed = isBypassed()
-            sentryEnabled = isSentryEnabled()
         }
         .onReceive(scriptSourcePublisher ?? Empty().eraseToAnyPublisher()) { change in
             scriptSource = change.source
@@ -552,11 +546,7 @@ private struct StatusBarView: View {
     @ObservedObject var memoryMonitor: MemoryMonitor
     var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
     var buildIDFormatted: String?
-    @Binding var bypassed: Bool
-    @Binding var sentryEnabled: Bool
     var onCopyError: () -> Void
-    var onBypassToggle: () -> Void
-    var onSentryToggle: () -> Void
 
     /// Convert milliseconds to a sample frame count using the profiler's current sample rate.
     private func frames(_ ms: Double) -> Int {
@@ -645,27 +635,6 @@ private struct StatusBarView: View {
             }
 
             Spacer()
-
-            // Diagnostic toggles
-            Button {
-                bypassed.toggle()
-                onBypassToggle()
-            } label: {
-                Text("Bypass")
-                    .foregroundColor(bypassed ? .red : .secondary)
-            }
-            .buttonStyle(.plain)
-            .help(bypassed ? "Audio bypass ON — processing disabled" : "Enable audio bypass")
-
-            Button {
-                sentryEnabled.toggle()
-                onSentryToggle()
-            } label: {
-                Text("Sentry")
-                    .foregroundColor(sentryEnabled ? .secondary : .red)
-            }
-            .buttonStyle(.plain)
-            .help(sentryEnabled ? "Sentry crash reporting active" : "Sentry disabled")
 
             if let formatted = buildIDFormatted {
                 Text(verbatim: "Build \(formatted)")
