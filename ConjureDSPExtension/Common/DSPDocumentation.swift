@@ -94,6 +94,8 @@ enum DSPDocumentation {
 
     Python: BiquadCoeffs.lowpass(freq, q, sr) — returns BiquadCoeffs instance
     Rust: BiquadCoeffs::lowpass(freq, q, sr) — returns BiquadCoeffs (Copy type)
+      IMPORTANT (Rust): all three arguments must be f64. Cast with `as f64`:
+        BiquadCoeffs::lowpass(cutoff as f64, q as f64, sample_rate as f64)
 
     ## Biquad — stateful filter (Direct Form II Transposed)
 
@@ -173,6 +175,7 @@ enum DSPDocumentation {
 
     Python: LFO(sample_rate, freq=1.0, waveform="sine")
     Rust: Lfo::new() → defaults to 1 Hz sine at 44100 Hz. Call .init(sr, freq) each callback.
+      Both args are f64. Cast f32 values: .init(ctx.sample_rate() as f64, rate_hz as f64)
 
     Methods:
       .tick() -> float          — advance one sample, returns value in [-1, 1]
@@ -187,7 +190,7 @@ enum DSPDocumentation {
                                   More efficient than calling tick() in a loop.
 
     Rust-only:
-      .init(sample_rate, freq)  — set sample rate and frequency. Call at start of each process()
+      .init(sr: f64, freq: f64)  — set sample rate and frequency. Call at start of each process()
                                   callback to handle sample rate changes.
 
     ## Waveform enum (Rust)
@@ -205,9 +208,53 @@ enum DSPDocumentation {
 
     ## Multi-channel LFO pattern
 
-    Only call tick() once per sample (not once per channel). Use .value for subsequent channels:
+    Call tick() once per frame (every frame iteration) to advance the phase by one sample.
+    Do NOT call tick() once per channel — that would advance the phase too fast.
+
+    Frames-outer loop (most common — call tick() unconditionally every frame, no if-condition):
+      Python:
+        for i in range(frame_count):
+            mod = lfo.tick()          # tick every iteration, no condition
+            for ch in range(len(inputs)):
+                outputs[ch][i] = inputs[ch][i] * mod
+      Rust:
+        for f in 0..ctx.frames() {
+            let mod_val = unsafe { LFO.tick() };  // tick once per frame
+            for c in 0..ctx.channels() {
+                ctx.set_output(c, f, ctx.input(c, f) * mod_val);
+            }
+        }
+
+    Channels-outer loop (tick on channel 0, use .value for others):
       Python: mod = lfo.tick() if ch == 0 else lfo.value
-      Rust: let mod_val = if c == 0 { LFO.tick() } else { LFO.value };
+      Rust: let mod_val = if c == 0 { unsafe { LFO.tick() } } else { unsafe { LFO.value } };
+
+    ## Multi-voice LFO phase spread
+
+    For chorus/flanger with N voices, spread LFO phases evenly. Pre-seed each LFO at module scope
+    by advancing it by phase_offset * samples_per_cycle at a reference frequency.
+    The reference sample rate cancels in the ratio (ticks × phase-per-tick = v/N regardless),
+    so any value works for seeding — but use the actual sample_rate for correct LFO speed.
+    Re-seed when sample_rate changes:
+
+      NUM_VOICES = 3
+      _lfos = None
+      _last_sr = None
+
+      def _init_lfos(sample_rate, rate_hz):
+          global _lfos, _last_sr
+          _lfos = []
+          for v in range(NUM_VOICES):
+              lfo = LFO(sample_rate, freq=rate_hz)
+              for _ in range(int((v / NUM_VOICES) * sample_rate / rate_hz)):
+                  lfo.tick()
+              _lfos.append(lfo)
+          _last_sr = sample_rate
+
+      def process(inputs, outputs, frame_count, sample_rate, params):
+          if _last_sr != sample_rate:
+              _init_lfos(sample_rate, params["rate"])
+          ...
     """
 
     static let utilities = """

@@ -24,10 +24,11 @@
 ### Other
 - Export AU instantiation tests: add integration tests that instantiate exported AUs via `AVAudioUnitComponentManager` (the full DAW loading path) rather than just testing the Rust FFI directly. Would catch issues like Debug template stubs, `findPythonHome` sandbox failures, PluginKit registration, and parameter tree setup — bugs that the current `ExportDSPIntegrationTests` miss because they bypass the Swift AU class.
 - Self-contained Python exports: option to bundle a Python runtime directory inside the exported AU (in Resources/python-dist), making Python exports shareable across machines without requiring ConjureDSP to be installed. Tradeoff is ~100MB per exported AU.
-- AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration)
+- AI Python quality: verify AI-generated scripts use numpy vectorized ops (not per-sample iteration) — prompt improvements made 2026-04-02 (tick_n, conventions section, array indexing)
 
 ## Done
 
+- AI prompt helper quality pass: tested 8 iterations across tremolo/compressor/chorus/flanger/filter-sweep/reverb/distortion, fixed conventions (imports, tick_n, 1.0 init, inputs indexing, lazy SR init), LFO tick() docs (frames-outer code examples), f64 cast requirement for Rust BiquadCoeffs (2026-04-02)
 - tone3000 NAM support: Python `conjuredsp.nam.load_model()`, Rust `nam!()` macro, tone browser UI with OAuth, download/store .nam files, export embedding (2026-03-31)
 - Terminal app icon from daemon-icon.png (2026-03-28)
 - Smoother scrolling in editor (2026-03-28)
