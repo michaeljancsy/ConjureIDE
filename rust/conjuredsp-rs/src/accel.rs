@@ -26,6 +26,7 @@
 #[link(wasm_import_module = "conjuredsp")]
 extern "C" {
     fn host_matmul(a: *const f32, b: *const f32, out: *mut f32, m: i32, k: i32, n: i32);
+    fn host_matmul_acc(a: *const f32, b: *const f32, c: *mut f32, m: i32, k: i32, n: i32);
     fn host_vec_add(a: *const f32, b: *const f32, out: *mut f32, len: i32);
     fn host_vec_mul(a: *const f32, b: *const f32, out: *mut f32, len: i32);
     fn host_vec_tanh(inp: *const f32, out: *mut f32, len: i32);
@@ -64,6 +65,39 @@ pub fn matmul(a: &[f32], b: &[f32], out: &mut [f32], m: usize, k: usize, n: usiz
                     sum += a[a_row + p] * b[p * n + j];
                 }
                 out[o_row + j] = sum;
+            }
+        }
+    }
+}
+
+/// Matrix multiply-accumulate: `c[m×n] += a[m×k] @ b[k×n]`. All slices are row-major.
+///
+/// Like `matmul` but adds to `c` instead of overwriting it. On WASM, calls
+/// `cblas_sgemm` with `alpha=1, beta=1` via host import (AMX-accelerated).
+pub fn matmul_acc(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
+    debug_assert!(a.len() >= m * k, "a too small: {} < {}", a.len(), m * k);
+    debug_assert!(b.len() >= k * n, "b too small: {} < {}", b.len(), k * n);
+    debug_assert!(c.len() >= m * n, "c too small: {} < {}", c.len(), m * n);
+
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        host_matmul_acc(
+            a.as_ptr(), b.as_ptr(), c.as_mut_ptr(),
+            m as i32, k as i32, n as i32,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        for i in 0..m {
+            let a_row = i * k;
+            let c_row = i * n;
+            for j in 0..n {
+                let mut sum = 0.0f32;
+                for p in 0..k {
+                    sum += a[a_row + p] * b[p * n + j];
+                }
+                c[c_row + j] += sum;
             }
         }
     }
@@ -196,6 +230,30 @@ mod tests {
         let mut c = [99.0f32; 4];
         matmul(&a, &zero, &mut c, 2, 2, 2);
         assert_eq!(c, [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_matmul_acc_accumulates() {
+        // A = [[1, 2, 3], [4, 5, 6]]  (2x3)
+        // B = [[7, 8], [9, 10], [11, 12]]  (3x2)
+        // A@B = [[58, 64], [139, 154]]
+        // c starts as [[1, 2], [3, 4]]
+        // expected: [[59, 66], [142, 158]]
+        let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let b = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+        let mut c = [1.0, 2.0, 3.0, 4.0f32];
+        matmul_acc(&a, &b, &mut c, 2, 3, 2);
+        assert_eq!(c, [59.0, 66.0, 142.0, 158.0]);
+    }
+
+    #[test]
+    fn test_matmul_acc_zero_matrix_unchanged() {
+        // Accumulating zero matrix leaves c unchanged
+        let a = [0.0f32; 4]; // 2x2 zeros
+        let b = [1.0, 2.0, 3.0, 4.0f32]; // 2x2
+        let mut c = [5.0, 6.0, 7.0, 8.0f32];
+        matmul_acc(&a, &b, &mut c, 2, 2, 2);
+        assert_eq!(c, [5.0, 6.0, 7.0, 8.0]);
     }
 
     #[test]

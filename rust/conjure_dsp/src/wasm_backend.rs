@@ -55,6 +55,15 @@ extern "C" {
         c: *mut f32, c_stride: i32,
         n: u32,
     );
+    /// BLAS general matrix multiply: C = alpha*A*B + beta*C
+    /// order: 101=RowMajor, transA/transB: 111=NoTrans
+    fn cblas_sgemm(
+        order: i32, trans_a: i32, trans_b: i32,
+        m: i32, n: i32, k: i32,
+        alpha: f32, a: *const f32, lda: i32,
+        b: *const f32, ldb: i32,
+        beta: f32, c: *mut f32, ldc: i32,
+    );
 }
 
 /// How I/O buffer addresses are determined in WASM memory.
@@ -614,6 +623,47 @@ impl WasmBackend {
                                 base.add(b_off) as *const f32, 1,
                                 base.add(out_off) as *mut f32, 1,
                                 m as u32, n as u32, k as u32,
+                            );
+                        }
+                    }
+                },
+            )
+            .map_err(e)?;
+
+        // matmul_acc(a_ptr, b_ptr, c_ptr, m, k, n) — C += A @ B via cblas_sgemm(beta=1)
+        linker
+            .func_wrap(
+                "conjuredsp",
+                "host_matmul_acc",
+                |mut caller: Caller<'_, ()>,
+                 a_ptr: i32, b_ptr: i32, c_ptr: i32,
+                 m: i32, k: i32, n: i32| {
+                    if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        let data = memory.data_mut(&mut caller);
+                        let a_off = a_ptr as usize;
+                        let b_off = b_ptr as usize;
+                        let c_off = c_ptr as usize;
+                        let a_bytes = (m as usize) * (k as usize) * 4;
+                        let b_bytes = (k as usize) * (n as usize) * 4;
+                        let c_bytes = (m as usize) * (n as usize) * 4;
+                        if a_off + a_bytes > data.len()
+                            || b_off + b_bytes > data.len()
+                            || c_off + c_bytes > data.len()
+                        {
+                            return;
+                        }
+                        let base = data.as_mut_ptr();
+                        unsafe {
+                            // CblasRowMajor=101, CblasNoTrans=111
+                            // C = 1.0 * A @ B + 1.0 * C  →  C += A @ B
+                            cblas_sgemm(
+                                101, 111, 111,
+                                m, n, k,
+                                1.0_f32,
+                                base.add(a_off) as *const f32, k,
+                                base.add(b_off) as *const f32, n,
+                                1.0_f32,
+                                base.add(c_off) as *mut f32, n,
                             );
                         }
                     }

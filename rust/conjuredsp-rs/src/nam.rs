@@ -630,18 +630,49 @@ impl WaveNet {
                 }
             }
 
-            // Add condition mix (condition = original input in region 0)
+            // Add condition mix via matmul_acc: conv_out += mix_w @ condition_gathered
+            // mix_w is [mid_ch × condition_size], condition is strided in work region 0
             {
                 let mix_w = &self.layer_arrays[la_idx].layers[l_idx].mix_w;
                 let cond_len = full_len.min(l_out);
-                for i in 0..mid_ch {
-                    for j in 0..cond_len {
-                        let cond_j = full_len - cond_len + j;
-                        let mut mix_val = 0.0f32;
-                        for c in 0..condition_size {
-                            mix_val += mix_w[i * condition_size + c] * self.work[c * full_len + cond_j];
+                let cond_start = full_len - cond_len;
+
+                // Gather strided condition rows into contiguous scratch (free after conv1d).
+                // Condition channel c is at work[c * full_len ..], we want the last cond_len elements.
+                for c in 0..condition_size {
+                    let src_off = c * full_len + cond_start;
+                    let dst_off = scratch_off + c * cond_len;
+                    self.work.copy_within(src_off..src_off + cond_len, dst_off);
+                }
+
+                if cond_len == l_out {
+                    // Common case: result layout matches conv_out exactly (mid_ch × l_out).
+                    let work_ptr = self.work.as_mut_ptr();
+                    unsafe {
+                        let b_slice = core::slice::from_raw_parts(
+                            work_ptr.add(scratch_off), condition_size * cond_len);
+                        let c_slice = core::slice::from_raw_parts_mut(
+                            work_ptr.add(conv_off), mid_ch * l_out);
+                        accel::matmul_acc(&mix_w[..], b_slice, c_slice, mid_ch, condition_size, cond_len);
+                    }
+                } else {
+                    // Startup frames: cond_len < l_out — result stride (cond_len) ≠ conv_out stride (l_out).
+                    // Compute into scratch past the gathered data, then row-add into conv_out.
+                    let result_off = scratch_off + condition_size * cond_len;
+                    self.work[result_off..result_off + mid_ch * cond_len].fill(0.0);
+                    let work_ptr = self.work.as_mut_ptr();
+                    unsafe {
+                        let b_slice = core::slice::from_raw_parts(
+                            work_ptr.add(scratch_off), condition_size * cond_len);
+                        let c_slice = core::slice::from_raw_parts_mut(
+                            work_ptr.add(result_off), mid_ch * cond_len);
+                        accel::matmul_acc(&mix_w[..], b_slice, c_slice, mid_ch, condition_size, cond_len);
+                    }
+                    for i in 0..mid_ch {
+                        for j in 0..cond_len {
+                            self.work[conv_off + i * l_out + j] +=
+                                self.work[result_off + i * cond_len + j];
                         }
-                        self.work[conv_off + i * l_out + j] += mix_val;
                     }
                 }
             }
