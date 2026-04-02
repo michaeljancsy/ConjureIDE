@@ -10,7 +10,13 @@ import SwiftUI
 /// Side panel with three stacked spectrograms (input, output, difference)
 /// and a mini toolbar for configuration.
 struct SpectrogramSidePanel: View {
-    @ObservedObject var captureManager: AudioCaptureManager
+    // NOT @ObservedObject — this view never reads @Published properties from
+    // captureManager in its body (only passes it to children and writes to it).
+    // Using @ObservedObject here caused the entire body (including Pickers) to
+    // re-evaluate on every updateCounter tick (~60fps), leaking SwiftUI
+    // TagIndexProjection dictionaries. Child SpectrogramViews have their own
+    // @ObservedObject and update independently.
+    var captureManager: AudioCaptureManager
     @Binding var frequencyScale: FrequencyScale
     @Binding var fftSizeIndex: Int
     @Binding var showNoteNames: Bool
