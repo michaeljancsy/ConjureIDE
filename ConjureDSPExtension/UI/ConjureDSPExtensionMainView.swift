@@ -22,7 +22,10 @@ struct ConjureDSPExtensionMainView: View {
     var extensionBundle: Bundle
     var scriptSourcePublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.ScriptSourceChange, Never>?
     @ObservedObject var presetManager: PresetManager
-    @ObservedObject var captureManager: AudioCaptureManager
+    // NOT @ObservedObject — this view never reads @Published properties from
+    // captureManager (only passes it to children and writes to it). Observing
+    // it would re-evaluate this entire body on every updateCounter tick (~60fps).
+    var captureManager: AudioCaptureManager
     @ObservedObject var processProfiler: ProcessProfiler
     @ObservedObject var memoryMonitor: MemoryMonitor
     @ObservedObject var parameterState: ParameterState
