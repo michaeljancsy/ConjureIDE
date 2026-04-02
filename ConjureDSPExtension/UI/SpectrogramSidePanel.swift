@@ -25,61 +25,18 @@ struct SpectrogramSidePanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Mini toolbar — uses GeometryReader to constrain controls to panel width
-            GeometryReader { geo in
-                HStack(spacing: 6) {
-                    // Frequency scale picker
-                    Picker(selection: $frequencyScale) {
-                        ForEach(FrequencyScale.allCases) { scale in
-                            Text(scale.rawValue).tag(scale)
-                        }
-                    } label: {
-                        EmptyView()
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-
-                    Spacer(minLength: 0)
-
-                    // FFT size picker
-                    Picker("FFT", selection: $fftSizeIndex) {
-                        ForEach(0..<Self.fftSizes.count, id: \.self) { i in
-                            Text("\(Self.fftSizes[i])").tag(i)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .onChange(of: fftSizeIndex) { _, newValue in
-                        captureManager.fftSize = Self.fftSizes[newValue]
-                    }
-
-                    // Hz / Notes toggle
-                    Button {
-                        showNoteNames.toggle()
-                    } label: {
-                        Image(systemName: showNoteNames ? "music.note" : "number")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.plain)
-                    .help(showNoteNames ? "Show Hz labels" : "Show note names")
-
-                    // Pause / Resume
-                    Button {
-                        isPaused.toggle()
-                    } label: {
-                        Image(systemName: isPaused ? "play.fill" : "pause.fill")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.plain)
-                    .help(isPaused ? "Resume spectrogram" : "Pause spectrogram")
+            // Toolbar is a separate view so it doesn't re-render on every
+            // captureManager.updateCounter change (which would leak SwiftUI
+            // Picker TagIndexProjection dictionaries at ~60fps).
+            SpectrogramToolbar(
+                frequencyScale: $frequencyScale,
+                fftSizeIndex: $fftSizeIndex,
+                showNoteNames: $showNoteNames,
+                isPaused: $isPaused,
+                onFFTSizeChanged: { newValue in
+                    captureManager.fftSize = Self.fftSizes[newValue]
                 }
-                .padding(.horizontal, 6)
-                .frame(width: geo.size.width, height: geo.size.height)
-            }
-            .frame(height: 28)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .controlSize(.small)
-            .background(.bar)
+            )
 
             Divider()
 
@@ -143,5 +100,76 @@ struct SpectrogramSidePanel: View {
                 .frame(maxHeight: .infinity)
             }
         }
+    }
+}
+
+// MARK: - Toolbar (isolated from captureManager updates)
+
+/// Extracted toolbar so that Picker views are NOT re-evaluated on every
+/// captureManager.updateCounter tick. SwiftUI Pickers leak internal
+/// TagIndexProjection dictionaries on each body evaluation; isolating
+/// them here ensures they only re-render when bindings actually change.
+private struct SpectrogramToolbar: View {
+    @Binding var frequencyScale: FrequencyScale
+    @Binding var fftSizeIndex: Int
+    @Binding var showNoteNames: Bool
+    @Binding var isPaused: Bool
+    var onFFTSizeChanged: (Int) -> Void
+
+    var body: some View {
+        GeometryReader { geo in
+            HStack(spacing: 6) {
+                // Frequency scale picker
+                Picker(selection: $frequencyScale) {
+                    ForEach(FrequencyScale.allCases) { scale in
+                        Text(scale.rawValue).tag(scale)
+                    }
+                } label: {
+                    EmptyView()
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+
+                Spacer(minLength: 0)
+
+                // FFT size picker
+                Picker("FFT", selection: $fftSizeIndex) {
+                    ForEach(0..<SpectrogramSidePanel.fftSizes.count, id: \.self) { i in
+                        Text("\(SpectrogramSidePanel.fftSizes[i])").tag(i)
+                    }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: fftSizeIndex) { _, newValue in
+                    onFFTSizeChanged(newValue)
+                }
+
+                // Hz / Notes toggle
+                Button {
+                    showNoteNames.toggle()
+                } label: {
+                    Image(systemName: showNoteNames ? "music.note" : "number")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .help(showNoteNames ? "Show Hz labels" : "Show note names")
+
+                // Pause / Resume
+                Button {
+                    isPaused.toggle()
+                } label: {
+                    Image(systemName: isPaused ? "play.fill" : "pause.fill")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .help(isPaused ? "Resume spectrogram" : "Pause spectrogram")
+            }
+            .padding(.horizontal, 6)
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .frame(height: 28)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .controlSize(.small)
+        .background(.bar)
     }
 }

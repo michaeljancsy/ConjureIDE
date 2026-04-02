@@ -38,7 +38,13 @@ struct ConjureDSPExtensionMainView: View {
     var onExport: (String) async -> ExportResult
     var defaultBenchmark: (processTimeMs: Double, budgetMs: Double)?
     var appGroupContainerURL: URL?
+    var isBypassed: () -> Bool = { false }
+    var setBypass: (Bool) -> Void = { _ in }
+    var isSentryEnabled: () -> Bool = { true }
+    var setSentryEnabled: (Bool) -> Void = { _ in }
 
+    @State private var bypassed: Bool = false
+    @State private var sentryEnabled: Bool = true
     @State private var scriptSource: String = ""
     @State private var selectedLanguage: ScriptLanguage = .python
     @State private var errorMessage: String?
@@ -282,6 +288,27 @@ struct ConjureDSPExtensionMainView: View {
 
                     Spacer()
 
+                    // Diagnostic toggles
+                    Button {
+                        bypassed.toggle()
+                        setBypass(bypassed)
+                    } label: {
+                        Text("Bypass")
+                            .foregroundColor(bypassed ? .red : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(bypassed ? "Audio bypass ON — processing disabled" : "Enable audio bypass")
+
+                    Button {
+                        sentryEnabled.toggle()
+                        setSentryEnabled(sentryEnabled)
+                    } label: {
+                        Text("Sentry")
+                            .foregroundColor(sentryEnabled ? .secondary : .red)
+                    }
+                    .buttonStyle(.plain)
+                    .help(sentryEnabled ? "Sentry crash reporting active" : "Sentry disabled")
+
                     if buildID != 0 {
                         Text(verbatim: "Build \(Self.formatBuildID(buildID))")
                             .foregroundColor(.secondary)
@@ -406,6 +433,8 @@ struct ConjureDSPExtensionMainView: View {
             if let bench = defaultBenchmark {
                 lastBenchmark = bench
             }
+            bypassed = isBypassed()
+            sentryEnabled = isSentryEnabled()
         }
         .onReceive(scriptSourcePublisher ?? Empty().eraseToAnyPublisher()) { change in
             scriptSource = change.source
