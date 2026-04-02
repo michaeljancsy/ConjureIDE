@@ -66,7 +66,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var showSpectrogram: Bool = false
     @State private var showChat: Bool = false
     @State private var terminalHasBeenOpened: Bool = false
-    @AppStorage("showAIPromptTab") private var showAIPromptTab: Bool = false
+    @State private var showAIPromptTab: Bool = false
     @State private var chatWidth: CGFloat = 280
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
