@@ -404,9 +404,11 @@ impl WaveNet {
         let mut x_off = 0usize;        // region offset of current x
         let mut x_len = full_len;
         let mut x_ch = 1usize;
-        let mut head_acc_len = 0usize;
-        let mut head_ch = 0usize;
+        let mut global_head_acc_len = 0usize;
+        let mut global_head_ch = 0usize;
         let mut x_region = 1usize;      // ping-pong between regions 1 and 2
+
+        let head_off = 4 * rs;
 
         for la_idx in 0..self.layer_arrays.len() {
             let la_rf = self.layer_arrays[la_idx].receptive_field;
@@ -414,6 +416,20 @@ impl WaveNet {
             let _la_input_size = self.layer_arrays[la_idx].input_size;
             let out_length = x_len.saturating_sub(la_rf - 1);
             if out_length == 0 { break; }
+
+            // Save previous rechanneled head data before this layer array
+            // overwrites head_off with its own accumulation.
+            let had_prev_head = global_head_acc_len > 0;
+            let prev_head_size = global_head_ch * global_head_acc_len;
+            if had_prev_head {
+                // Save to rechannel_temp (already allocated to max_ch * max_l)
+                self.rechannel_temp[..prev_head_size]
+                    .copy_from_slice(&self.work[head_off..head_off + prev_head_size]);
+            }
+
+            // Each layer array accumulates fresh into head_off
+            let mut la_head_acc_len = 0usize;
+            let mut la_head_ch = 0usize;
 
             // Rechannel: x → region x_region
             let x_src_off = if x_ch == 1 && x_off == 0 { 0 } else { x_region * rs };
@@ -424,15 +440,40 @@ impl WaveNet {
                     (&a[x_src_off..x_src_off + x_ch * x_len], &mut b[..la_channels * x_len])
                 } else if x_src_off == x_dst_off {
                     // Same region — need temp copy (use pre-allocated buffer)
+                    // Save rechannel_temp head data to work scratch first if needed
                     let temp_len = x_ch * x_len;
-                    self.rechannel_temp[..temp_len].copy_from_slice(&self.work[x_src_off..x_src_off + temp_len]);
-                    conv1x1(&self.rechannel_temp[..temp_len], x_ch, x_len, &self.layer_arrays[la_idx].rechannel_w, la_channels, &[],
-                            &mut self.work[x_dst_off..x_dst_off + la_channels * x_len]);
+                    if had_prev_head {
+                        // rechannel_temp is in use for saved head — use a stack copy for x rechannel
+                        let mut x_temp = vec![0.0f32; temp_len];
+                        x_temp.copy_from_slice(&self.work[x_src_off..x_src_off + temp_len]);
+                        conv1x1(&x_temp, x_ch, x_len, &self.layer_arrays[la_idx].rechannel_w, la_channels, &[],
+                                &mut self.work[x_dst_off..x_dst_off + la_channels * x_len]);
+                    } else {
+                        self.rechannel_temp[..temp_len].copy_from_slice(&self.work[x_src_off..x_src_off + temp_len]);
+                        conv1x1(&self.rechannel_temp[..temp_len], x_ch, x_len, &self.layer_arrays[la_idx].rechannel_w, la_channels, &[],
+                                &mut self.work[x_dst_off..x_dst_off + la_channels * x_len]);
+                    }
                     // Skip the normal conv1x1 below
                     x_ch = la_channels; // update for layer processing
                     // Process layers in this array
                     self._process_layer_array(la_idx, out_length, &mut x_len, &mut x_ch,
-                                              x_region, full_len, &mut head_acc_len, &mut head_ch);
+                                              x_region, full_len, &mut la_head_acc_len, &mut la_head_ch);
+                    // Sum this layer array's rechanneled head with the saved global head
+                    if had_prev_head && la_head_acc_len > 0 {
+                        let sum_ch = la_head_ch.min(global_head_ch);
+                        let sum_len = la_head_acc_len.min(global_head_acc_len);
+                        for i in 0..sum_ch * sum_len {
+                            self.work[head_off + i] += self.rechannel_temp[i];
+                        }
+                    } else if had_prev_head && la_head_acc_len == 0 {
+                        // Restore saved head data
+                        self.work[head_off..head_off + prev_head_size]
+                            .copy_from_slice(&self.rechannel_temp[..prev_head_size]);
+                    }
+                    if la_head_acc_len > 0 {
+                        global_head_acc_len = la_head_acc_len;
+                        global_head_ch = la_head_ch;
+                    }
                     x_region = if x_region == 1 { 2 } else { 1 };
                     continue;
                 } else {
@@ -445,11 +486,31 @@ impl WaveNet {
             x_ch = la_channels;
 
             self._process_layer_array(la_idx, out_length, &mut x_len, &mut x_ch,
-                                      x_region, full_len, &mut head_acc_len, &mut head_ch);
+                                      x_region, full_len, &mut la_head_acc_len, &mut la_head_ch);
+
+            // Sum this layer array's rechanneled head with the saved global head
+            if had_prev_head && la_head_acc_len > 0 {
+                let sum_ch = la_head_ch.min(global_head_ch);
+                let sum_len = la_head_acc_len.min(global_head_acc_len);
+                for i in 0..sum_ch * sum_len {
+                    self.work[head_off + i] += self.rechannel_temp[i];
+                }
+            } else if had_prev_head && la_head_acc_len == 0 {
+                // Restore saved head data
+                self.work[head_off..head_off + prev_head_size]
+                    .copy_from_slice(&self.rechannel_temp[..prev_head_size]);
+            }
+            if la_head_acc_len > 0 {
+                global_head_acc_len = la_head_acc_len;
+                global_head_ch = la_head_ch;
+            }
 
             x_off = x_region * rs;
             x_region = if x_region == 1 { 2 } else { 1 };
         }
+
+        let head_acc_len = global_head_acc_len;
+        let head_ch = global_head_ch;
 
         // Apply head_scale
         let head_off = 4 * rs;
@@ -1358,6 +1419,133 @@ mod tests {
         wn.process_buffer(&input, &mut output, 0);
         assert_eq!(output[0], 0.7, "Should copy input to output up to output length");
         assert_eq!(output[31], 0.7);
+    }
+
+    /// Helper: read a .nam JSON file and serialize to the binary protocol.
+    fn serialize_nam_file(path: &str) -> Vec<u8> {
+        let json_str = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("Failed to read {}: {}", path, e));
+        // Minimal JSON parsing for test — extract architecture, sample_rate, config, weights
+        let json_str = json_str.trim();
+
+        // Extract architecture
+        let arch_start = json_str.find("\"architecture\"").unwrap();
+        let arch_val_start = json_str[arch_start..].find(':').unwrap() + arch_start + 1;
+        let arch_str_start = json_str[arch_val_start..].find('"').unwrap() + arch_val_start + 1;
+        let arch_str_end = json_str[arch_str_start..].find('"').unwrap() + arch_str_start;
+        let architecture = &json_str[arch_str_start..arch_str_end];
+
+        // Extract sample_rate
+        let sr_start = json_str.find("\"sample_rate\"").unwrap();
+        let sr_val_start = json_str[sr_start..].find(':').unwrap() + sr_start + 1;
+        let sr_val_str = json_str[sr_val_start..].trim_start();
+        let sr_end = sr_val_str.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(sr_val_str.len());
+        let sample_rate: f32 = sr_val_str[..sr_end].trim().parse().unwrap_or(48000.0);
+
+        // Extract config object (find matching braces)
+        let config_key = json_str.find("\"config\"").unwrap();
+        let config_colon = json_str[config_key..].find(':').unwrap() + config_key + 1;
+        let config_start = json_str[config_colon..].find('{').unwrap() + config_colon;
+        let mut depth = 0;
+        let mut config_end = config_start;
+        for (i, c) in json_str[config_start..].chars().enumerate() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        config_end = config_start + i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let config_json = &json_str[config_start..config_end];
+
+        // Extract weights array
+        let weights_key = json_str.find("\"weights\"").unwrap();
+        let weights_bracket = json_str[weights_key..].find('[').unwrap() + weights_key;
+        let weights_end = json_str[weights_bracket..].find(']').unwrap() + weights_bracket + 1;
+        let weights_str = &json_str[weights_bracket + 1..weights_end - 1];
+        let weights: Vec<f32> = weights_str.split(',')
+            .filter_map(|s| s.trim().parse::<f64>().ok())
+            .map(|v| v as f32)
+            .collect();
+
+        // Serialize to binary protocol
+        let arch: u32 = if architecture == "LSTM" { 1 } else { 0 };
+        let mut binary = Vec::new();
+        binary.extend_from_slice(&arch.to_le_bytes());
+        binary.extend_from_slice(&sample_rate.to_bits().to_le_bytes());
+        let config_bytes = config_json.as_bytes();
+        binary.extend_from_slice(&(config_bytes.len() as u32).to_le_bytes());
+        binary.extend_from_slice(config_bytes);
+        binary.extend_from_slice(&(weights.len() as u32).to_le_bytes());
+        for w in &weights {
+            binary.extend_from_slice(&w.to_bits().to_le_bytes());
+        }
+        binary
+    }
+
+    #[test]
+    fn test_wavenet_tiny_silence_no_static() {
+        // Path relative to Cargo.toml (which is in rust/conjuredsp-rs/)
+        let nam_path = "../../tone3000_py_demo/wavenet_tiny.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+
+        let binary = serialize_nam_file(nam_path);
+        let mut model = NamModel::from_binary(&binary)
+            .expect("Failed to parse wavenet_tiny.nam");
+
+        // Process silence
+        let input = vec![0.0f32; 512];
+        let mut output = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut output, 0);
+
+        let peak = output.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        eprintln!("WaveNet silence output peak: {}", peak);
+        eprintln!("First 10 output samples: {:?}", &output[..10]);
+
+        assert!(peak < 0.1,
+            "WaveNet silence output should be near-zero, got peak {}. First 10: {:?}",
+            peak, &output[..10]);
+
+        // Process again (check accumulation)
+        let mut output2 = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut output2, 0);
+        let peak2 = output2.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        eprintln!("WaveNet silence output peak (2nd call): {}", peak2);
+        eprintln!("First 10 output samples (2nd): {:?}", &output2[..10]);
+
+        assert!(peak2 < 0.1,
+            "WaveNet silence 2nd buffer peak too high: {}", peak2);
+    }
+
+    #[test]
+    fn test_lstm_tiny_silence_no_static() {
+        let nam_path = "../../tone3000_py_demo/lstm_tiny.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+
+        let binary = serialize_nam_file(nam_path);
+        let mut model = NamModel::from_binary(&binary)
+            .expect("Failed to parse lstm_tiny.nam");
+
+        let input = vec![0.0f32; 512];
+        let mut output = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut output, 0);
+
+        let peak = output.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        eprintln!("LSTM silence output peak: {}", peak);
+
+        assert!(peak < 0.1,
+            "LSTM silence output should be near-zero, got peak {}", peak);
     }
 
     #[test]
