@@ -151,6 +151,30 @@ struct AIPromptHelperView: View {
             outputInstruction = "Reply with ONLY the raw Rust code. No markdown code fences, no explanation. I will paste it directly into the code editor and press ⌘R to run."
         }
 
+        let conventions: String
+        switch lang {
+        case .python:
+            conventions = """
+            ## Python Conventions
+
+            - All imports must be at module scope (top of file), never inside `process()`.
+            - Pre-allocate fixed-size state (numpy arrays, lists) at module scope. For objects that depend on `sample_rate` (e.g., LFO, DelayLine with time-based sizing), lazy-initialize on the first `process()` call and re-create only when `sample_rate` changes.
+            - Initialize gain/envelope state variables to `1.0` (unity gain), not `0.0`.
+            - For LFO modulation, prefer `lfo.tick_n(frame_count)` to generate a full buffer of modulation values at once, then apply with numpy. Avoid calling `lfo.tick()` in a per-sample loop.
+            - Use numpy vectorized operations over per-sample Python loops wherever the algorithm allows it.
+            - `inputs` and `outputs` are **lists of 1D numpy float32 arrays**, one per channel — NOT a 2D array. Use `len(inputs)` for channel count, `inputs[ch][i]` for per-sample access, and `inputs[ch][:frame_count]` for channel slices.
+            """
+        case .rust:
+            conventions = """
+            ## Rust Conventions
+
+            - Declare all static state with `static mut` at module scope (e.g., filters, delay lines, LFO).
+            - Call `lfo.init(sample_rate, freq)` at the start of each `process()` callback.
+            - Use `unsafe` blocks for `static mut` access.
+            - Initialize gain/envelope state to `1.0f32` (unity gain), not `0.0`.
+            """
+        }
+
         var parts: [String] = []
 
         parts.append("""
@@ -165,6 +189,8 @@ struct AIPromptHelperView: View {
         }
 
         parts.append("## ConjureDSP API Reference\n\n\(DSPDocumentation.allDocs)")
+
+        parts.append(conventions)
 
         parts.append("## Output Format\n\n\(outputInstruction)")
 

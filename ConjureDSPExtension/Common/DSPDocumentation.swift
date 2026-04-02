@@ -94,6 +94,8 @@ enum DSPDocumentation {
 
     Python: BiquadCoeffs.lowpass(freq, q, sr) — returns BiquadCoeffs instance
     Rust: BiquadCoeffs::lowpass(freq, q, sr) — returns BiquadCoeffs (Copy type)
+      IMPORTANT (Rust): all three arguments must be f64. Cast with `as f64`:
+        BiquadCoeffs::lowpass(cutoff as f64, q as f64, sample_rate as f64)
 
     ## Biquad — stateful filter (Direct Form II Transposed)
 
@@ -205,9 +207,40 @@ enum DSPDocumentation {
 
     ## Multi-channel LFO pattern
 
-    Only call tick() once per sample (not once per channel). Use .value for subsequent channels:
+    Call tick() once per frame (every frame iteration) to advance the phase by one sample.
+    Do NOT call tick() once per channel — that would advance the phase too fast.
+
+    Frames-outer loop (most common — call tick() unconditionally every frame, no if-condition):
+      Python:
+        for i in range(frame_count):
+            mod = lfo.tick()          # tick every iteration, no condition
+            for ch in range(len(inputs)):
+                outputs[ch][i] = inputs[ch][i] * mod
+      Rust:
+        for f in 0..ctx.frames() {
+            let mod_val = unsafe { LFO.tick() };  // tick once per frame
+            for c in 0..ctx.channels() {
+                ctx.set_output(c, f, ctx.input(c, f) * mod_val);
+            }
+        }
+
+    Channels-outer loop (tick on channel 0, use .value for others):
       Python: mod = lfo.tick() if ch == 0 else lfo.value
-      Rust: let mod_val = if c == 0 { LFO.tick() } else { LFO.value };
+      Rust: let mod_val = if c == 0 { unsafe { LFO.tick() } } else { unsafe { LFO.value } };
+
+    ## Multi-voice LFO phase spread
+
+    For chorus/flanger with N voices, spread LFO phases evenly. Pre-seed each LFO at module scope
+    by advancing it by phase_offset * samples_per_cycle at a reference frequency:
+
+      NUM_VOICES = 4
+      _lfos = []
+      for v in range(NUM_VOICES):
+          lfo = LFO(44100, freq=1.0)
+          phase_samples = int((v / NUM_VOICES) * 44100 / 1.0)
+          for _ in range(phase_samples):
+              lfo.tick()
+          _lfos.append(lfo)
     """
 
     static let utilities = """
