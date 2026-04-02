@@ -66,6 +66,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var showSpectrogram: Bool = false
     @State private var showChat: Bool = false
     @State private var terminalHasBeenOpened: Bool = false
+    @State private var showAIPromptTab: Bool = false
     @State private var chatWidth: CGFloat = 280
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
@@ -261,12 +262,45 @@ struct ConjureDSPExtensionMainView: View {
             if terminalHasBeenOpened {
                 HStack(spacing: 0) {
                     Group {
-                        if daemonChecker.isDaemonAvailable {
-                            TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
-                                .accessibilityIdentifier("terminalPanel")
-                        } else {
-                            DaemonLaunchPromptView(colorScheme: colorScheme)
+                        VStack(spacing: 0) {
+                            // Tab switcher header
+                            HStack(spacing: 0) {
+                                chatTabButton(label: "Claude Code", isSelected: !showAIPromptTab) {
+                                    showAIPromptTab = false
+                                }
+                                chatTabButton(label: "AI Prompt", isSelected: showAIPromptTab) {
+                                    showAIPromptTab = true
+                                }
+                            }
+                            .frame(height: 28)
+                            .clipped() // prevent button backgrounds bleeding below the 28pt frame
+                            .background(colorScheme == .dark
+                                ? Color(white: 0.10)
+                                : Color(nsColor: .windowBackgroundColor))
+
+                            Divider()
+
+                            if showAIPromptTab {
+                                AIPromptHelperView(
+                                    currentScript: scriptSource,
+                                    currentLanguage: selectedLanguage,
+                                    colorScheme: colorScheme
+                                )
+                            } else if daemonChecker.isDaemonAvailable {
+                                TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
+                                    .accessibilityIdentifier("terminalPanel")
+                            } else {
+                                DaemonLaunchPromptView(colorScheme: colorScheme)
+                            }
                         }
+                        // Background on the VStack (not individual children) guarantees the
+                        // full chatWidth × full height area is opaque — child views like
+                        // DaemonLaunchPromptView and AIPromptHelperView may not stretch to
+                        // fill the entire width, leaving transparent gaps where Monaco bleeds.
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .background(colorScheme == .dark
+                            ? Color(white: 0.12)
+                            : Color(nsColor: .controlBackgroundColor))
                     }
                     .frame(width: showChat ? chatWidth : 0)
                     .clipped()
@@ -470,6 +504,24 @@ struct ConjureDSPExtensionMainView: View {
             }
         }
     }
+
+    @ViewBuilder
+    private func chatTabButton(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                .foregroundColor(isSelected ? .primary : .secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    isSelected
+                        ? (colorScheme == .dark
+                            ? Color(white: 0.20)
+                            : Color(nsColor: .controlBackgroundColor))
+                        : Color.clear
+                )
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 // MARK: - Status Bar
@@ -506,6 +558,12 @@ private struct StatusBarView: View {
     var onBypassToggle: () -> Void
     var onSentryToggle: () -> Void
 
+    /// Convert milliseconds to a sample frame count using the profiler's current sample rate.
+    private func frames(_ ms: Double) -> Int {
+        guard processProfiler.sampleRate > 0 else { return 0 }
+        return Int((ms / 1000.0 * processProfiler.sampleRate).rounded())
+    }
+
     private var timingColor: Color {
         let ratio: Double
         if processProfiler.isActive && processProfiler.budgetMs > 0 {
@@ -541,19 +599,24 @@ private struct StatusBarView: View {
                 let budget = processProfiler.budgetMs
                 let avgFrac = budget > 0 ? processProfiler.avgMs / budget : 0
                 let peakFrac = budget > 0 ? processProfiler.peakMs / budget : 0
+                let budgetFr = Int(processProfiler.maxFrames)
 
                 HStack(spacing: 4) {
                     MeterBar(fraction: avgFrac, color: timingColor)
-                    Text(String(format: "%.1fms", processProfiler.avgMs))
+                    Text(String(format: "%.1fms (%dfr)", processProfiler.avgMs, frames(processProfiler.avgMs)))
                         .accessibilityIdentifier("profilerStatus")
                 }
-                .help(String(format: "avg %.1fms / %.1fms budget", processProfiler.avgMs, budget))
+                .help(String(format: "avg %.2fms (%d frames)", processProfiler.avgMs, frames(processProfiler.avgMs)))
 
                 HStack(spacing: 4) {
                     MeterBar(fraction: peakFrac, color: timingColor)
-                    Text(String(format: "%.1fms pk", processProfiler.peakMs))
+                    Text(String(format: "%.1fms pk (%dfr)", processProfiler.peakMs, frames(processProfiler.peakMs)))
                 }
-                .help(String(format: "peak %.1fms / %.1fms budget", processProfiler.peakMs, budget))
+                .help(String(format: "peak %.2fms (%d frames)", processProfiler.peakMs, frames(processProfiler.peakMs)))
+
+                Text(String(format: "budget %.1fms (%dfr)", budget, budgetFr))
+                    .foregroundColor(.secondary)
+                    .help(String(format: "buffer budget: %.2fms = %d frames @ %.0f Hz", budget, budgetFr, processProfiler.sampleRate))
 
                 if memoryMonitor.leakStatus != .ok {
                     HStack(spacing: 3) {
@@ -567,11 +630,14 @@ private struct StatusBarView: View {
                 }
             } else if let b = lastBenchmark {
                 let frac = b.budgetMs > 0 ? b.processTimeMs / b.budgetMs : 0
+                let budgetFr = Int(processProfiler.maxFrames)
                 HStack(spacing: 4) {
                     MeterBar(fraction: frac, color: timingColor)
-                    Text(String(format: "%.1fms / %.1fms", b.processTimeMs, b.budgetMs))
+                    Text(String(format: "%.1fms (%dfr)", b.processTimeMs, frames(b.processTimeMs)))
                         .foregroundColor(timingColor)
                         .accessibilityIdentifier("successStatus")
+                    Text(String(format: "/ budget %.1fms (%dfr)", b.budgetMs, budgetFr))
+                        .foregroundColor(.secondary)
                 }
             } else {
                 Text("Ready")

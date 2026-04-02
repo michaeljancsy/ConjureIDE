@@ -82,6 +82,22 @@ struct ParameterSliderRow: View {
     @State private var editText = ""
     @FocusState private var fieldFocused: Bool
 
+    /// True while editText is empty (still starting) or parses as a valid Float.
+    private var isEditTextValid: Bool {
+        editText.isEmpty || Float(editText) != nil
+    }
+
+    private var fieldHelpText: String {
+        let lo = metadata?.min ?? 0
+        let hi = metadata?.max ?? 1
+        let unit = (metadata?.unit.isEmpty == false) ? " \(metadata!.unit)" : ""
+        let range = "\(String(format: "%g", lo))–\(String(format: "%g", hi))\(unit)"
+        if !isEditTextValid {
+            return "\"\(editText)\" is not a valid number. Enter a value between \(range)."
+        }
+        return "Valid range: \(range). Press Return to apply, Escape to cancel."
+    }
+
     private var isSlider: Bool {
         !(metadata?.isToggle ?? false) && !(metadata?.isChoice ?? false)
     }
@@ -124,12 +140,27 @@ struct ParameterSliderRow: View {
                     .multilineTextAlignment(.trailing)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.accentColor.opacity(0.10)))
-                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1))
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(isEditTextValid
+                                ? Color.accentColor.opacity(0.10)
+                                : Color.red.opacity(0.12))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(isEditTextValid
+                                ? Color.accentColor.opacity(0.5)
+                                : Color.red.opacity(0.8), lineWidth: 1)
+                    )
+                    .help(fieldHelpText)
                     .focused($fieldFocused)
-                    .onSubmit { commitEdit() }
+                    .onSubmit { commitEdit(exitOnError: false) }
                     .onChange(of: fieldFocused) { _, focused in
-                        if !focused { commitEdit() }
+                        if !focused { commitEdit(exitOnError: true) }
+                    }
+                    .onKeyPress(.escape) {
+                        isEditing = false
+                        return .handled
                     }
             } else {
                 Text(formattedValue)
@@ -149,12 +180,21 @@ struct ParameterSliderRow: View {
         }
     }
 
-    private func commitEdit() {
-        isEditing = false
-        guard let parsed = Float(editText) else { return }
+    /// - exitOnError: true when triggered by losing focus (blur) — always exits edit mode.
+    ///                false when triggered by Return — keeps edit mode open so user can fix invalid input.
+    private func commitEdit(exitOnError: Bool = true) {
+        guard let parsed = Float(editText) else {
+            if exitOnError {
+                isEditing = false   // blur: silently revert to old value
+            } else {
+                fieldFocused = true // Return with invalid input: stay in edit mode (red border is the signal)
+            }
+            return
+        }
         let lo = metadata?.min ?? 0
         let hi = metadata?.max ?? 1
         value = max(lo, min(hi, parsed))
+        isEditing = false
     }
 
     private var toggleBinding: Binding<Bool> {
