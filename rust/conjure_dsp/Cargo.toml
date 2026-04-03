@@ -10,6 +10,7 @@ crate-type = ["staticlib"]
 pyo3 = { version = "0.27", features = ["auto-initialize"] }
 numpy = "0.27"
 wasmtime = "42"
+conjuredsp = { path = "../conjuredsp-rs" }
 wat = "1"
 ed25519-dalek = { version = "2", features = ["std"] }
 base64 = "0.22"

@@ -32,8 +32,21 @@ final class WasmCache {
     }
 
     private func hash(_ string: String, depsHash: String? = nil) -> String {
-        let combined = string + (depsHash ?? "")
+        var combined = string + (depsHash ?? "")
+        // Include the rlib modification time so cache invalidates when the
+        // conjuredsp library changes (e.g., new nam!() macro, new accel ops).
+        if let rlibDate = rlibModificationDate() {
+            combined += "\(rlibDate.timeIntervalSince1970)"
+        }
         let digest = SHA256.hash(data: Data(combined.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Returns the modification date of the bundled conjuredsp rlib, if found.
+    private func rlibModificationDate() -> Date? {
+        guard let resourcePath = Bundle(for: WasmCache.self).resourcePath else { return nil }
+        let rlibPath = (resourcePath as NSString)
+            .appendingPathComponent("rustc-dist/lib/libconjuredsp.rlib")
+        return (try? FileManager.default.attributesOfItem(atPath: rlibPath))?[.modificationDate] as? Date
     }
 }

@@ -212,11 +212,13 @@ macro_rules! latency {
 
 /// Declares a NAM (Neural Amp Modeler) model to be loaded by the host.
 ///
+/// NAM inference runs natively on the host side (not inside WASM) for
+/// both correctness and performance. The WASM module calls a host import
+/// (`__conjuredsp_nam_process`) that routes to a native `NamModel`.
+///
 /// Expands to:
-/// - `NAM_MODEL` static holding the loaded model
-/// - `NAM_DATA_BUF` static buffer for host data injection (4MB)
 /// - `NAM_IN` / `NAM_OUT` static audio buffers
-/// - WASM exports: `get_nam_data_ptr`, `init_nam`, `get_nam_active`
+/// - `nam_process()` helper that calls the host import
 /// - Path metadata exports: `get_nam_path_ptr`, `get_nam_path_len`
 ///
 /// # Example
@@ -225,35 +227,50 @@ macro_rules! latency {
 /// use conjuredsp::*;
 /// setup!();
 /// nam!("tone3000://abc123/def456");
+///
+/// #[no_mangle]
+/// pub extern "C" fn process(
+///     input: *const f32, output: *mut f32,
+///     channels: i32, frame_count: i32, sample_rate: f32,
+/// ) {
+///     let ctx = ctx(input, output, channels, frame_count, sample_rate);
+///     unsafe {
+///         for c in 0..ctx.channels() {
+///             let n = ctx.frames();
+///             for i in 0..n { NAM_IN[i] = ctx.input(c, i); }
+///             nam_process(&NAM_IN[..n], &mut NAM_OUT[..n], c);
+///             for i in 0..n { ctx.set_output(c, i, NAM_OUT[i]); }
+///         }
+///     }
+/// }
 /// ```
 #[macro_export]
 macro_rules! nam {
     ($path:expr) => {
-        static mut NAM_MODEL: Option<conjuredsp::NamModel> = None;
-        static mut NAM_DATA_BUF: [u8; 4_194_304] = [0u8; 4_194_304];
         static mut NAM_IN: [f32; MAX_FR] = [0.0; MAX_FR];
         static mut NAM_OUT: [f32; MAX_FR] = [0.0; MAX_FR];
 
         static NAM_PATH: &str = $path;
 
-        #[no_mangle]
-        pub extern "C" fn get_nam_data_ptr() -> i32 {
-            unsafe { NAM_DATA_BUF.as_ptr() as i32 }
+        extern "C" {
+            fn __conjuredsp_nam_process(
+                input_ptr: *const f32,
+                output_ptr: *mut f32,
+                frames: i32,
+                channel: i32,
+            ) -> i32;
         }
 
-        #[no_mangle]
-        pub extern "C" fn init_nam(data_len: i32) -> i32 {
-            unsafe {
-                match conjuredsp::NamModel::from_binary(&NAM_DATA_BUF[..data_len as usize]) {
-                    Some(model) => { NAM_MODEL = Some(model); 1 }
-                    None => 0
-                }
-            }
-        }
-
-        #[no_mangle]
-        pub extern "C" fn get_nam_active() -> i32 {
-            unsafe { if NAM_MODEL.is_some() { 1 } else { 0 } }
+        /// Process audio through the host-side NAM model.
+        /// Returns true if the model was active and processed successfully.
+        #[inline]
+        unsafe fn nam_process(input: &[f32], output: &mut [f32], channel: usize) -> bool {
+            __conjuredsp_nam_process(
+                input.as_ptr(),
+                output.as_mut_ptr(),
+                input.len() as i32,
+                channel as i32,
+            ) == 1
         }
 
         #[no_mangle]

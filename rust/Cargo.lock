@@ -123,6 +123,7 @@ name = "conjure_dsp"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "conjuredsp",
  "ed25519-dalek",
  "numpy",
  "pyo3",

@@ -2,8 +2,8 @@ use conjuredsp::*;
 
 setup!();
 
-// Replace "tone3000://TONE_ID/MODEL_ID" with an actual path from list_tones.
-nam!("tone3000://TONE_ID/MODEL_ID");
+conjuredsp::nam!("tone3000://60092/351559");
+
 
 params! {
     INPUT_GAIN = db().min(-12.0).max(12.0).default(0.0),
@@ -25,22 +25,20 @@ pub extern "C" fn process(
 ) {
     let ctx = ctx(input, output, channels, frame_count, sample_rate);
     unsafe {
-        if let Some(model) = NAM_MODEL.as_mut() {
-            let gain = db_to_gain(ctx.param(INPUT_GAIN) as f64) as f32;
-            let mix_val = ctx.param(MIX);
-            for c in 0..ctx.channels() {
-                let n = ctx.frames();
-                for i in 0..n {
-                    NAM_IN[i] = ctx.input(c, i) * gain;
-                }
-                model.process_buffer(&NAM_IN[..n], &mut NAM_OUT[..n], c);
-                for i in 0..n {
-                    ctx.set_output(
-                        c,
-                        i,
-                        ctx.input(c, i) * (1.0 - mix_val) + NAM_OUT[i] * mix_val,
-                    );
-                }
+        let gain = db_to_gain(ctx.param(INPUT_GAIN) as f64) as f32;
+        let mix_val = ctx.param(MIX);
+        for c in 0..ctx.channels() {
+            let n = ctx.frames();
+            for i in 0..n {
+                NAM_IN[i] = ctx.input(c, i) * gain;
+            }
+            nam_process(&NAM_IN[..n], &mut NAM_OUT[..n], c);
+            for i in 0..n {
+                ctx.set_output(
+                    c,
+                    i,
+                    ctx.input(c, i) * (1.0 - mix_val) + NAM_OUT[i] * mix_val,
+                );
             }
         }
     }

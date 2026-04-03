@@ -438,7 +438,7 @@ impl WaveNet {
             let mut la_head_ch = 0usize;
 
             // Rechannel: x → region x_region
-            let x_src_off = if x_ch == 1 && x_off == 0 { 0 } else { x_region * rs };
+            let x_src_off = if x_ch == 1 && x_off == 0 { 0 } else { x_off };
             let x_dst_off = x_region * rs;
             {
                 let (src, dst) = if x_src_off < x_dst_off {
@@ -464,18 +464,14 @@ impl WaveNet {
                     // Process layers in this array
                     self._process_layer_array(la_idx, out_length, &mut x_len, &mut x_ch,
                                               x_region, full_len, &mut la_head_acc_len, &mut la_head_ch);
-                    // Sum this layer array's rechanneled head with the saved global head
-                    if had_prev_head && la_head_acc_len > 0 {
-                        let sum_ch = la_head_ch.min(global_head_ch);
-                        let sum_len = la_head_acc_len.min(global_head_acc_len);
-                        for i in 0..sum_ch * sum_len {
-                            self.work[head_off + i] += self.rechannel_temp[i];
-                        }
-                    } else if had_prev_head && la_head_acc_len == 0 {
-                        // Restore saved head data
-                        self.work[head_off..head_off + prev_head_size]
-                            .copy_from_slice(&self.rechannel_temp[..prev_head_size]);
-                    }
+                    // Broadcast-add previous rechanneled head, then rechannel current head
+                    Self::_finalize_head(
+                        &mut self.work, &self.rechannel_temp,
+                        &self.layer_arrays[la_idx],
+                        head_off, 3 * rs,
+                        had_prev_head, global_head_ch, global_head_acc_len,
+                        &mut la_head_acc_len, &mut la_head_ch,
+                    );
                     if la_head_acc_len > 0 {
                         global_head_acc_len = la_head_acc_len;
                         global_head_ch = la_head_ch;
@@ -494,18 +490,14 @@ impl WaveNet {
             self._process_layer_array(la_idx, out_length, &mut x_len, &mut x_ch,
                                       x_region, full_len, &mut la_head_acc_len, &mut la_head_ch);
 
-            // Sum this layer array's rechanneled head with the saved global head
-            if had_prev_head && la_head_acc_len > 0 {
-                let sum_ch = la_head_ch.min(global_head_ch);
-                let sum_len = la_head_acc_len.min(global_head_acc_len);
-                for i in 0..sum_ch * sum_len {
-                    self.work[head_off + i] += self.rechannel_temp[i];
-                }
-            } else if had_prev_head && la_head_acc_len == 0 {
-                // Restore saved head data
-                self.work[head_off..head_off + prev_head_size]
-                    .copy_from_slice(&self.rechannel_temp[..prev_head_size]);
-            }
+            // Broadcast-add previous rechanneled head, then rechannel current head
+            Self::_finalize_head(
+                &mut self.work, &self.rechannel_temp,
+                &self.layer_arrays[la_idx],
+                head_off, 3 * rs,
+                had_prev_head, global_head_ch, global_head_acc_len,
+                &mut la_head_acc_len, &mut la_head_ch,
+            );
             if la_head_acc_len > 0 {
                 global_head_acc_len = la_head_acc_len;
                 global_head_ch = la_head_ch;
@@ -784,23 +776,72 @@ impl WaveNet {
             *x_ch = channels;
         }
 
-        // Head rechannel
-        if *head_acc_len > 0 {
-            let la_head_size = self.layer_arrays[la_idx].head_size;
-            let la_skip_ch = self.layer_arrays[la_idx].skip_ch;
-            let head_rechannel_w = &self.layer_arrays[la_idx].head_rechannel_w;
-            let head_rechannel_b = &self.layer_arrays[la_idx].head_rechannel_b;
-            let tmp_size = la_head_size * *head_acc_len;
-            let work_ptr = self.work.as_mut_ptr();
-            unsafe {
-                let head_src = core::slice::from_raw_parts(work_ptr.add(head_off), la_skip_ch * *head_acc_len);
-                let tmp = core::slice::from_raw_parts_mut(work_ptr.add(conv_off), tmp_size);
-                conv1x1(head_src, la_skip_ch, *head_acc_len, head_rechannel_w, la_head_size, head_rechannel_b, tmp);
-                // Copy back to head region
-                core::ptr::copy_nonoverlapping(work_ptr.add(conv_off), work_ptr.add(head_off), tmp_size);
+        // Note: head rechannel is done in process_buffer after cross-array
+        // accumulation, matching Python's behavior where the previous
+        // rechanneled head is broadcast-added before rechanneling.
+    }
+
+    /// Broadcast-add previous rechanneled head to current un-rechanneled head,
+    /// then apply head rechannel. Matches Python's behavior where the previous
+    /// rechanneled head is accumulated BEFORE the current array's rechannel.
+    fn _finalize_head(
+        work: &mut [f32],
+        prev_head_data: &[f32],
+        la: &WaveNetLayerArray,
+        head_off: usize,
+        conv_off: usize,
+        had_prev_head: bool,
+        prev_head_ch: usize,
+        prev_head_len: usize,
+        la_head_acc_len: &mut usize,
+        la_head_ch: &mut usize,
+    ) {
+        if *la_head_acc_len == 0 {
+            if had_prev_head {
+                // Restore saved head data (no current head to combine)
+                let prev_size = prev_head_ch * prev_head_len;
+                work[head_off..head_off + prev_size]
+                    .copy_from_slice(&prev_head_data[..prev_size]);
+                *la_head_acc_len = prev_head_len;
+                *la_head_ch = prev_head_ch;
             }
-            *head_ch = la_head_size;
+            return;
         }
+
+        let skip_ch = la.skip_ch;
+        let acc_len = *la_head_acc_len;
+
+        // Broadcast-add previous rechanneled head to current un-rechanneled head.
+        // Python: head_input[:, -ht_cols:] + head_term → broadcast (1,L) to (skip_ch,L)
+        // Each row of the current head gets the previous head added.
+        if had_prev_head && prev_head_len > 0 {
+            let add_len = acc_len.min(prev_head_len);
+            let prev_offset = prev_head_len - add_len; // right-align
+            // prev_head_data is [prev_head_ch × prev_head_len], current head is [skip_ch × acc_len]
+            // Broadcast: add each row of prev to all rows of current
+            for c in 0..skip_ch {
+                for j in 0..add_len {
+                    // Broadcast row 0 (or row c if prev_head_ch > 1, clamped)
+                    let prev_row = c.min(prev_head_ch - 1);
+                    work[head_off + c * acc_len + (acc_len - add_len) + j]
+                        += prev_head_data[prev_row * prev_head_len + prev_offset + j];
+                }
+            }
+        }
+
+        // Head rechannel: conv1x1 on head_off [skip_ch × acc_len] → [head_size × acc_len]
+        let la_head_size = la.head_size;
+        let head_rechannel_w = &la.head_rechannel_w;
+        let head_rechannel_b = &la.head_rechannel_b;
+        let tmp_size = la_head_size * acc_len;
+        let work_ptr = work.as_mut_ptr();
+        unsafe {
+            let head_src = core::slice::from_raw_parts(work_ptr.add(head_off), skip_ch * acc_len);
+            let tmp = core::slice::from_raw_parts_mut(work_ptr.add(conv_off), tmp_size);
+            conv1x1(head_src, skip_ch, acc_len, head_rechannel_w, la_head_size, head_rechannel_b, tmp);
+            core::ptr::copy_nonoverlapping(work_ptr.add(conv_off), work_ptr.add(head_off), tmp_size);
+        }
+        *la_head_ch = la_head_size;
     }
 
     /// Reset per-channel state.
@@ -1453,12 +1494,15 @@ mod tests {
         let arch_str_end = json_str[arch_str_start..].find('"').unwrap() + arch_str_start;
         let architecture = &json_str[arch_str_start..arch_str_end];
 
-        // Extract sample_rate
-        let sr_start = json_str.find("\"sample_rate\"").unwrap();
-        let sr_val_start = json_str[sr_start..].find(':').unwrap() + sr_start + 1;
-        let sr_val_str = json_str[sr_val_start..].trim_start();
-        let sr_end = sr_val_str.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(sr_val_str.len());
-        let sample_rate: f32 = sr_val_str[..sr_end].trim().parse().unwrap_or(48000.0);
+        // Extract sample_rate (optional — defaults to 48000)
+        let sample_rate: f32 = if let Some(sr_start) = json_str.find("\"sample_rate\"") {
+            let sr_val_start = json_str[sr_start..].find(':').unwrap() + sr_start + 1;
+            let sr_val_str = json_str[sr_val_start..].trim_start();
+            let sr_end = sr_val_str.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(sr_val_str.len());
+            sr_val_str[..sr_end].trim().parse().unwrap_or(48000.0)
+        } else {
+            48000.0
+        };
 
         // Extract config object (find matching braces)
         let config_key = json_str.find("\"config\"").unwrap();
@@ -1564,6 +1608,302 @@ mod tests {
 
         assert!(peak < 0.1,
             "LSTM silence output should be near-zero, got peak {}", peak);
+    }
+
+    /// Generate a 440Hz sine wave for testing.
+    fn sine_wave(num_samples: usize, sample_rate: f32) -> Vec<f32> {
+        (0..num_samples)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sample_rate).sin() * 0.5)
+            .collect()
+    }
+
+    #[test]
+    fn test_wavenet_tiny_sine_produces_output() {
+        let nam_path = "../../tone3000_py_demo/wavenet_tiny.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+
+        let binary = serialize_nam_file(nam_path);
+        let mut model = NamModel::from_binary(&binary)
+            .expect("Failed to parse wavenet_tiny.nam");
+
+        let input = sine_wave(512, 48000.0);
+        let mut output = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut output, 0);
+
+        let peak = output.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        let rms = (output.iter().map(|x| x * x).sum::<f32>() / output.len() as f32).sqrt();
+        eprintln!("WaveNet tiny sine: peak={:.6}, rms={:.6}", peak, rms);
+        eprintln!("First 10 output: {:?}", &output[..10]);
+
+        // Output should not be all near-zero (model transforms signal)
+        assert!(rms > 1e-4,
+            "WaveNet output RMS too low ({}) — likely reading wrong region", rms);
+
+        // Output should be bounded (not garbage/explosion)
+        assert!(peak < 10.0,
+            "WaveNet output peak too high ({}) — numerical instability", peak);
+
+        // Second buffer should also work (state continuity)
+        let mut output2 = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut output2, 0);
+        let peak2 = output2.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        let rms2 = (output2.iter().map(|x| x * x).sum::<f32>() / output2.len() as f32).sqrt();
+        eprintln!("WaveNet tiny sine (2nd): peak={:.6}, rms={:.6}", peak2, rms2);
+
+        assert!(rms2 > 1e-4, "2nd buffer RMS too low ({})", rms2);
+        assert!(peak2 < 10.0, "2nd buffer peak too high ({})", peak2);
+    }
+
+    #[test]
+    fn test_wavenet_standard_sine_produces_output() {
+        let nam_path = "../../tone3000_py_demo/wavenet_standard.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+
+        let binary = serialize_nam_file(nam_path);
+        let mut model = NamModel::from_binary(&binary)
+            .expect("Failed to parse wavenet_standard.nam");
+
+        let input = sine_wave(512, 48000.0);
+        let mut output = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut output, 0);
+
+        let peak = output.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        let rms = (output.iter().map(|x| x * x).sum::<f32>() / output.len() as f32).sqrt();
+        eprintln!("WaveNet standard sine: peak={:.6}, rms={:.6}", peak, rms);
+
+        assert!(rms > 1e-4,
+            "WaveNet output RMS too low ({}) — likely reading wrong region", rms);
+        assert!(peak < 10.0,
+            "WaveNet output peak too high ({}) — numerical instability", peak);
+
+        // Second buffer
+        let mut output2 = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut output2, 0);
+        let peak2 = output2.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        let rms2 = (output2.iter().map(|x| x * x).sum::<f32>() / output2.len() as f32).sqrt();
+        eprintln!("WaveNet standard sine (2nd): peak={:.6}, rms={:.6}", peak2, rms2);
+
+        assert!(rms2 > 1e-4, "2nd buffer RMS too low ({})", rms2);
+        assert!(peak2 < 10.0, "2nd buffer peak too high ({})", peak2);
+    }
+
+    /// Performance regression test: ensures NAM inference is fast enough for real-time audio.
+    /// Without compiler optimizations (opt-level=0), standard WaveNet takes ~77ms for 471
+    /// stereo frames — 15x over a typical 10.7ms budget. With opt-level=3, it takes ~5ms.
+    /// This test catches the regression if the [profile.dev.package.conjuredsp] opt-level
+    /// override is removed from workspace Cargo.toml.
+    #[test]
+    fn test_wavenet_standard_realtime_performance() {
+        let nam_path = "../../tone3000_py_demo/wavenet_standard.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+
+        let binary = serialize_nam_file(nam_path);
+        let mut model = NamModel::from_binary(&binary)
+            .expect("Failed to parse wavenet_standard.nam");
+
+        let n = 471; // typical callback size
+        let input = sine_wave(n, 44100.0);
+        let mut output = vec![0.0f32; n];
+
+        // Warm up
+        model.process_buffer(&input, &mut output, 0);
+        model.process_buffer(&input, &mut output, 1);
+
+        // Time stereo processing (2 channels)
+        let t0 = std::time::Instant::now();
+        let iterations = 5;
+        for _ in 0..iterations {
+            model.process_buffer(&input, &mut output, 0);
+            model.process_buffer(&input, &mut output, 1);
+        }
+        let avg_ms = t0.elapsed().as_secs_f64() * 1000.0 / iterations as f64;
+
+        eprintln!("WaveNet standard 471fr stereo: {:.1}ms (budget ~10.7ms)", avg_ms);
+
+        // With optimizations: ~5ms. Without: ~77ms. Use 20ms as threshold —
+        // well above optimized time, well below unoptimized time.
+        assert!(avg_ms < 20.0,
+            "NAM inference too slow ({:.1}ms for 471 stereo frames, budget ~10.7ms). \
+             Check that [profile.dev.package.conjuredsp] opt-level = 3 is set in workspace Cargo.toml.",
+            avg_ms);
+    }
+
+    /// Python-vs-Rust parity test for standard WaveNet model.
+    /// This catches bugs that only manifest with larger models (16+ channels, 10+ dilations).
+    #[test]
+    fn test_wavenet_standard_python_parity() {
+        let nam_path = "../../tone3000_py_demo/wavenet_standard.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+        let python = "../../rust/python-dist/bin/python3";
+        if !std::path::Path::new(python).exists() {
+            eprintln!("Skipping: python3 not found");
+            return;
+        }
+
+        let num_samples = 512usize;
+        let sample_rate = 48000.0f32;
+
+        let parity_script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/nam_parity.py");
+        let py_output = std::process::Command::new(python)
+            .arg(&parity_script)
+            .arg(nam_path)
+            .arg(num_samples.to_string())
+            .arg(sample_rate.to_string())
+            .env("DYLD_LIBRARY_PATH", "../../rust/python-dist/lib")
+            .output()
+            .expect("Failed to run Python parity script");
+        assert!(py_output.status.success(), "Python failed: {}", String::from_utf8_lossy(&py_output.stderr));
+
+        let py_stdout = String::from_utf8_lossy(&py_output.stdout);
+        fn extract_arr(json: &str, key: &str) -> Vec<f32> {
+            let kp = format!("\"{}\":", key);
+            let s = json.find(&kp).unwrap();
+            let bs = json[s..].find('[').unwrap() + s + 1;
+            let be = json[bs..].find(']').unwrap() + bs;
+            json[bs..be].split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect()
+        }
+        let py_out1 = extract_arr(&py_stdout, "output1");
+        let py_out2 = extract_arr(&py_stdout, "output2");
+
+        let binary = serialize_nam_file(nam_path);
+        let mut model = NamModel::from_binary(&binary).expect("Failed to parse .nam file");
+        let input = sine_wave(num_samples, sample_rate);
+        let mut rust_out1 = vec![0.0f32; num_samples];
+        let mut rust_out2 = vec![0.0f32; num_samples];
+        model.process_buffer(&input, &mut rust_out1, 0);
+        model.process_buffer(&input, &mut rust_out2, 0);
+
+        for (label, ro, po) in [("Buf1", &rust_out1, &py_out1), ("Buf2", &rust_out2, &py_out2)] {
+            let mut max_err = 0.0f32;
+            let mut worst_i = 0usize;
+            for i in 0..num_samples.min(po.len()) {
+                let err = (ro[i] - po[i]).abs();
+                if err > max_err { max_err = err; worst_i = i; }
+            }
+            eprintln!("{} max_err={:.6} at [{}] (Rust={:.6}, Py={:.6})", label, max_err, worst_i, ro[worst_i], po[worst_i]);
+            assert!(max_err < 1e-3, "{} parity FAILED: max_err={:.6}", label, max_err);
+        }
+    }
+
+    #[test]
+    fn test_wavenet_tiny_python_parity() {
+        let nam_path = "../../tone3000_py_demo/wavenet_tiny.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+
+        let python = "../../rust/python-dist/bin/python3";
+        if !std::path::Path::new(python).exists() {
+            eprintln!("Skipping: python3 not found at {}", python);
+            return;
+        }
+
+        let num_samples = 512usize;
+        let sample_rate = 48000.0f32;
+
+        // Get Python reference output
+        let parity_script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/nam_parity.py");
+        let py_output = std::process::Command::new(python)
+            .arg(&parity_script)
+            .arg(nam_path)
+            .arg(num_samples.to_string())
+            .arg(sample_rate.to_string())
+            .env("DYLD_LIBRARY_PATH", "../../rust/python-dist/lib")
+            .output()
+            .expect("Failed to run Python parity script");
+
+        if !py_output.status.success() {
+            let stderr = String::from_utf8_lossy(&py_output.stderr);
+            panic!("Python parity script failed:\n{}", stderr);
+        }
+
+        let py_stdout = String::from_utf8_lossy(&py_output.stdout);
+        // Parse JSON manually: extract "output1": [...] and "output2": [...]
+        fn extract_array(json: &str, key: &str) -> Vec<f32> {
+            let key_pattern = format!("\"{}\":", key);
+            let start = json.find(&key_pattern).expect(&format!("Missing key: {}", key));
+            let bracket_start = json[start..].find('[').unwrap() + start + 1;
+            let bracket_end = json[bracket_start..].find(']').unwrap() + bracket_start;
+            json[bracket_start..bracket_end]
+                .split(',')
+                .filter_map(|s| s.trim().parse::<f32>().ok())
+                .collect()
+        }
+        let py_out1 = extract_array(&py_stdout, "output1");
+        let py_out2 = extract_array(&py_stdout, "output2");
+
+        if py_out1.is_empty() || py_out2.is_empty() {
+            let stderr = String::from_utf8_lossy(&py_output.stderr);
+            panic!("Python output arrays empty.\nstdout: {}\nstderr: {}", py_stdout, stderr);
+        }
+
+        // Get Rust output
+        let binary = serialize_nam_file(nam_path);
+        let mut model = NamModel::from_binary(&binary)
+            .expect("Failed to parse .nam file");
+
+        let input = sine_wave(num_samples, sample_rate);
+        let mut rust_out1 = vec![0.0f32; num_samples];
+        let mut rust_out2 = vec![0.0f32; num_samples];
+        model.process_buffer(&input, &mut rust_out1, 0);
+        model.process_buffer(&input, &mut rust_out2, 0);
+
+        // Compare buffer 1
+        let mut max_err1 = 0.0f32;
+        let mut max_err1_idx = 0;
+        for i in 0..num_samples.min(py_out1.len()) {
+            let err = (rust_out1[i] - py_out1[i]).abs();
+            if err > max_err1 {
+                max_err1 = err;
+                max_err1_idx = i;
+            }
+        }
+
+        // Compare buffer 2
+        let mut max_err2 = 0.0f32;
+        let mut max_err2_idx = 0;
+        for i in 0..num_samples.min(py_out2.len()) {
+            let err = (rust_out2[i] - py_out2[i]).abs();
+            if err > max_err2 {
+                max_err2 = err;
+                max_err2_idx = i;
+            }
+        }
+
+        eprintln!("Buffer 1 max error: {:.6} at sample {}", max_err1, max_err1_idx);
+        eprintln!("  Rust[{}]={:.6}, Python[{}]={:.6}", max_err1_idx, rust_out1[max_err1_idx], max_err1_idx, py_out1[max_err1_idx]);
+        eprintln!("Buffer 2 max error: {:.6} at sample {}", max_err2, max_err2_idx);
+        eprintln!("  Rust[{}]={:.6}, Python[{}]={:.6}", max_err2_idx, rust_out2[max_err2_idx], max_err2_idx, py_out2[max_err2_idx]);
+
+        // Print first 10 samples for debugging
+        eprintln!("Buffer 1 first 10:");
+        for i in 0..10.min(num_samples) {
+            eprintln!("  [{}] Rust={:.6} Python={:.6} err={:.6}",
+                i, rust_out1[i], py_out1[i], (rust_out1[i] - py_out1[i]).abs());
+        }
+
+        assert!(max_err1 < 1e-3,
+            "Buffer 1 parity failed: max error {:.6} at sample {} (Rust={:.6}, Python={:.6})",
+            max_err1, max_err1_idx, rust_out1[max_err1_idx], py_out1[max_err1_idx]);
+
+        assert!(max_err2 < 1e-3,
+            "Buffer 2 parity failed: max error {:.6} at sample {} (Rust={:.6}, Python={:.6})",
+            max_err2, max_err2_idx, rust_out2[max_err2_idx], py_out2[max_err2_idx]);
     }
 
     #[test]

@@ -7,8 +7,8 @@ PARAMS = {
     "mix": mix(default=1.0),
 }
 
-# Replace "tone3000://TONE_ID/MODEL_ID" with an actual path from list_tones.
-model = load_model("tone3000://TONE_ID/MODEL_ID")
+model = load_model("tone3000://60092/351559")
+
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
