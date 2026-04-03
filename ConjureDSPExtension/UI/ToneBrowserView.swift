@@ -26,7 +26,16 @@ struct ToneBrowserView: View {
         case favorites = "Favorites"
     }
 
-    @State private var tab: Tab = .search
+    @State private var tab: Tab
+
+    init(client: Tone3000Client, modelStore: ToneModelStore, selectedLanguage: ScriptLanguage = .python, onDone: @escaping () -> Void, onInsertSnippet: @escaping (String) -> Void) {
+        self.client = client
+        self.modelStore = modelStore
+        self.selectedLanguage = selectedLanguage
+        self.onDone = onDone
+        self.onInsertSnippet = onInsertSnippet
+        _tab = State(initialValue: modelStore.downloadedModels.isEmpty ? .search : .myTones)
+    }
     @State private var searchText = ""
     @State private var searchResults: [Tone] = []
     @State private var isSearching = false
