@@ -28,6 +28,7 @@
 
 ## Done
 
+- Host-side NAM inference for Rust/WASM presets: fixed two WaveNet buffer bugs (ping-pong addressing, cross-array head accumulation order), moved NAM inference from WASM sandbox to native host via `__conjuredsp_nam_process` import for correctness and performance parity with Python (2026-04-02)
 - AI prompt helper quality pass: tested 8 iterations across tremolo/compressor/chorus/flanger/filter-sweep/reverb/distortion, fixed conventions (imports, tick_n, 1.0 init, inputs indexing, lazy SR init), LFO tick() docs (frames-outer code examples), f64 cast requirement for Rust BiquadCoeffs (2026-04-02)
 - tone3000 NAM support: Python `conjuredsp.nam.load_model()`, Rust `nam!()` macro, tone browser UI with OAuth, download/store .nam files, export embedding (2026-03-31)
 - Terminal app icon from daemon-icon.png (2026-03-28)
