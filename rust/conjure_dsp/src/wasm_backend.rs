@@ -583,68 +583,44 @@ impl WasmBackend {
                 "__conjuredsp_nam_process",
                 |mut caller: Caller<'_, HostState>,
                  input_ptr: i32, output_ptr: i32, frames: i32, channel: i32| -> i32 {
-                    use std::sync::atomic::{AtomicU32, Ordering};
-                    static CALL_COUNT: AtomicU32 = AtomicU32::new(0);
-                    let count = CALL_COUNT.fetch_add(1, Ordering::Relaxed);
-
-                    fn nam_log(msg: &str) {
-                        use std::io::Write;
-                        if let Ok(mut f) = std::fs::OpenOptions::new()
-                            .create(true).append(true)
-                            .open("/tmp/conjuredsp-nam-debug.log")
-                            .or_else(|_| std::fs::OpenOptions::new()
-                                .create(true).append(true)
-                                .open(format!("{}/conjuredsp-nam-debug.log",
-                                    std::env::var("HOME").unwrap_or_default())))
-                        {
-                            let _ = writeln!(f, "{}", msg);
-                        }
-                    }
-
                     let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                         Some(m) => m,
-                        None => {
-                            if count < 3 { nam_log("[NAM import] no memory export"); }
-                            return 0;
-                        }
+                        None => return 0,
                     };
 
                     let n = frames as usize;
                     let in_off = input_ptr as usize;
                     let out_off = output_ptr as usize;
-                    let in_bytes = n * 4;
-                    let out_bytes = n * 4;
 
+                    // Read input as zero-copy f32 slice from WASM memory.
+                    // Safe: both WASM and ARM64 are little-endian, static f32 arrays are 4-byte aligned.
                     let data = memory.data(&caller);
-                    if in_off + in_bytes > data.len() || out_off + out_bytes > data.len() {
+                    if in_off + n * 4 > data.len() || out_off + n * 4 > data.len() {
                         return 0;
                     }
-
-                    // Bulk memcpy: reinterpret WASM memory bytes as f32 slice
-                    // (safe: both WASM and ARM64 macOS are little-endian, WASM
-                    // static arrays are 4-byte aligned)
-                    let input_buf: Vec<f32> = unsafe {
-                        let ptr = data.as_ptr().add(in_off) as *const f32;
-                        std::slice::from_raw_parts(ptr, n).to_vec()
+                    let input_slice = unsafe {
+                        std::slice::from_raw_parts(data.as_ptr().add(in_off) as *const f32, n)
                     };
 
-                    let state = caller.data_mut();
-                    if let Some(ref mut model) = state.nam_model {
-                        let mut output_buf = vec![0.0f32; n];
-                        model.process_buffer(&input_buf, &mut output_buf, channel as usize);
+                    // Copy input because caller.data_mut() below invalidates the data slice.
+                    let input_copy: Vec<f32> = input_slice.to_vec();
 
-                        // Bulk memcpy output back to WASM memory
-                        let data = memory.data_mut(&mut caller);
-                        unsafe {
-                            let dst = data.as_mut_ptr().add(out_off) as *mut f32;
-                            std::ptr::copy_nonoverlapping(
-                                output_buf.as_ptr(), dst, n
-                            );
-                        }
-                        1
-                    } else {
-                        0
-                    }
+                    // Take model out of HostState so we can borrow caller for memory access.
+                    let mut model = match caller.data_mut().nam_model.take() {
+                        Some(m) => m,
+                        None => return 0,
+                    };
+
+                    // Zero-copy output: write directly into WASM memory.
+                    let data = memory.data_mut(&mut caller);
+                    let output_slice = unsafe {
+                        std::slice::from_raw_parts_mut(data.as_mut_ptr().add(out_off) as *mut f32, n)
+                    };
+                    model.process_buffer(&input_copy, output_slice, channel as usize);
+
+                    // Put model back.
+                    caller.data_mut().nam_model = Some(model);
+                    1
                 },
             )
             .map_err(|e| format!("Failed to register NAM import: {}", e))?;
@@ -1084,39 +1060,6 @@ impl Backend for WasmBackend {
         let mem_data = self.memory.data(&self.store);
         let output_byte_offset = self.output_offset as usize;
 
-        // Diagnostic: log first output samples from WASM OUTPUT buffer
-        {
-            use std::sync::atomic::{AtomicU32, Ordering};
-            static PROCESS_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
-            let log_count = PROCESS_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
-            if log_count < 3 {
-                fn nam_log2(msg: &str) {
-                    use std::io::Write;
-                    if let Ok(mut f) = std::fs::OpenOptions::new()
-                        .create(true).append(true)
-                        .open("/tmp/conjuredsp-nam-debug.log")
-                        .or_else(|_| std::fs::OpenOptions::new()
-                            .create(true).append(true)
-                            .open(format!("{}/conjuredsp-nam-debug.log",
-                                std::env::var("HOME").unwrap_or_default())))
-                    {
-                        let _ = writeln!(f, "{}", msg);
-                    }
-                }
-                // Read first 4 f32 samples from WASM OUTPUT buffer
-                let mut out_samples = [0.0f32; 4];
-                for i in 0..4.min(frame_count) {
-                    let off = output_byte_offset + i * 4;
-                    if off + 4 <= mem_data.len() {
-                        out_samples[i] = f32::from_le_bytes([
-                            mem_data[off], mem_data[off+1], mem_data[off+2], mem_data[off+3]
-                        ]);
-                    }
-                }
-                nam_log2(&format!("[process] call={} output_offset={} frames={} ch={} OUTPUT[0..4]={:?}",
-                    log_count, output_byte_offset, frame_count, channel_count, out_samples));
-            }
-        }
         for ch in 0..channel_count {
             let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
             let src_offset = output_byte_offset + ch * frame_count * 4;
@@ -1161,43 +1104,8 @@ impl WasmBackend {
     /// Parse NAM model binary data and store natively for host-side inference.
     /// The WASM module calls `__conjuredsp_nam_process` which routes to this model.
     pub fn inject_nam_model(&mut self, binary_data: &[u8]) -> Result<(), String> {
-        // Log to file since AU extension runs out-of-process (stderr doesn't reach Xcode console)
-        fn nam_log(msg: &str) {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true).append(true)
-                .open("/tmp/conjuredsp-nam-debug.log")
-                            .or_else(|_| std::fs::OpenOptions::new()
-                                .create(true).append(true)
-                                .open(format!("{}/conjuredsp-nam-debug.log",
-                                    std::env::var("HOME").unwrap_or_default())))
-            {
-                let _ = writeln!(f, "{}", msg);
-            }
-        }
-        nam_log(&format!("[NAM inject] parsing {} bytes of binary data", binary_data.len()));
-        // Dump config JSON from binary protocol for debugging
-        if binary_data.len() >= 12 {
-            let config_len = u32::from_le_bytes([binary_data[8], binary_data[9], binary_data[10], binary_data[11]]) as usize;
-            if binary_data.len() >= 12 + config_len {
-                let config_str = std::str::from_utf8(&binary_data[12..12+config_len]).unwrap_or("(invalid utf8)");
-                nam_log(&format!("[NAM inject] config_len={} config={}", config_len, config_str));
-                // Also dump the binary to a file for offline comparison
-                if let Ok(mut f) = std::fs::File::create(
-                    format!("{}/conjuredsp-nam-binary.bin", std::env::var("HOME").unwrap_or_default())
-                ) {
-                    use std::io::Write;
-                    let _ = f.write_all(binary_data);
-                    nam_log("[NAM inject] binary dumped to ~/conjuredsp-nam-binary.bin");
-                }
-            }
-        }
         let model = conjuredsp::NamModel::from_binary(binary_data)
-            .ok_or_else(|| {
-                nam_log("[NAM inject] FAILED to parse model");
-                "Failed to parse NAM model from binary data".to_string()
-            })?;
-        nam_log("[NAM inject] model parsed successfully, storing in HostState");
+            .ok_or_else(|| "Failed to parse NAM model from binary data".to_string())?;
         self.store.data_mut().nam_model = Some(model);
         Ok(())
     }
