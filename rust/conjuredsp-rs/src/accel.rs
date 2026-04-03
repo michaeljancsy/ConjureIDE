@@ -1,10 +1,7 @@
 //! Hardware-accelerated vectorized math operations.
 //!
-//! When compiled to `wasm32`, these functions call host imports backed by
-//! Apple's Accelerate framework (vDSP/vecLib), providing AMX-accelerated
-//! matrix multiply and NEON-vectorized element-wise operations.
-//!
-//! On native targets (for testing), they fall back to scalar implementations.
+//! On `wasm32`, these call host imports backed by Apple's Accelerate framework.
+//! On native macOS (host-side NAM inference), they call Accelerate directly.
 //!
 //! # Example
 //!
@@ -35,12 +32,63 @@ extern "C" {
 }
 
 // ---------------------------------------------------------------------------
+// Native Accelerate FFI (direct calls on macOS)
+// ---------------------------------------------------------------------------
+
+#[cfg(not(target_arch = "wasm32"))]
+#[link(name = "Accelerate", kind = "framework")]
+extern "C" {
+    fn vDSP_mmul(
+        a: *const f32, a_stride: i32,
+        b: *const f32, b_stride: i32,
+        c: *mut f32, c_stride: i32,
+        m: u32, n: u32, k: u32,
+    );
+    fn cblas_sgemm(
+        order: i32, transa: i32, transb: i32,
+        m: i32, n: i32, k: i32,
+        alpha: f32, a: *const f32, lda: i32,
+        b: *const f32, ldb: i32,
+        beta: f32, c: *mut f32, ldc: i32,
+    );
+    fn vDSP_vadd(
+        a: *const f32, a_stride: i32,
+        b: *const f32, b_stride: i32,
+        c: *mut f32, c_stride: i32,
+        n: u32,
+    );
+    fn vDSP_vmul(
+        a: *const f32, a_stride: i32,
+        b: *const f32, b_stride: i32,
+        c: *mut f32, c_stride: i32,
+        n: u32,
+    );
+    fn vvtanhf(y: *mut f32, x: *const f32, n: *const i32);
+    fn vvexpf(y: *mut f32, x: *const f32, n: *const i32);
+    fn vDSP_vneg(
+        a: *const f32, a_stride: i32,
+        c: *mut f32, c_stride: i32,
+        n: u32,
+    );
+    fn vDSP_svdiv(
+        a: *const f32,
+        b: *const f32, b_stride: i32,
+        c: *mut f32, c_stride: i32,
+        n: u32,
+    );
+    fn vDSP_vsadd(
+        a: *const f32, a_stride: i32,
+        b: *const f32,
+        c: *mut f32, c_stride: i32,
+        n: u32,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 /// Matrix multiply: `out[m×n] = a[m×k] @ b[k×n]`. All slices are row-major.
-///
-/// On WASM, calls `vDSP_mmul` via host import (AMX-accelerated).
 pub fn matmul(a: &[f32], b: &[f32], out: &mut [f32], m: usize, k: usize, n: usize) {
     debug_assert!(a.len() >= m * k, "a too small: {} < {}", a.len(), m * k);
     debug_assert!(b.len() >= k * n, "b too small: {} < {}", b.len(), k * n);
@@ -48,32 +96,16 @@ pub fn matmul(a: &[f32], b: &[f32], out: &mut [f32], m: usize, k: usize, n: usiz
 
     #[cfg(target_arch = "wasm32")]
     unsafe {
-        host_matmul(
-            a.as_ptr(), b.as_ptr(), out.as_mut_ptr(),
-            m as i32, k as i32, n as i32,
-        );
+        host_matmul(a.as_ptr(), b.as_ptr(), out.as_mut_ptr(), m as i32, k as i32, n as i32);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        for i in 0..m {
-            let a_row = i * k;
-            let o_row = i * n;
-            for j in 0..n {
-                let mut sum = 0.0f32;
-                for p in 0..k {
-                    sum += a[a_row + p] * b[p * n + j];
-                }
-                out[o_row + j] = sum;
-            }
-        }
+    unsafe {
+        vDSP_mmul(a.as_ptr(), 1, b.as_ptr(), 1, out.as_mut_ptr(), 1, m as u32, n as u32, k as u32);
     }
 }
 
 /// Matrix multiply-accumulate: `c[m×n] += a[m×k] @ b[k×n]`. All slices are row-major.
-///
-/// Like `matmul` but adds to `c` instead of overwriting it. On WASM, calls
-/// `cblas_sgemm` with `alpha=1, beta=1` via host import (AMX-accelerated).
 pub fn matmul_acc(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
     debug_assert!(a.len() >= m * k, "a too small: {} < {}", a.len(), m * k);
     debug_assert!(b.len() >= k * n, "b too small: {} < {}", b.len(), k * n);
@@ -81,114 +113,84 @@ pub fn matmul_acc(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: us
 
     #[cfg(target_arch = "wasm32")]
     unsafe {
-        host_matmul_acc(
-            a.as_ptr(), b.as_ptr(), c.as_mut_ptr(),
-            m as i32, k as i32, n as i32,
-        );
+        host_matmul_acc(a.as_ptr(), b.as_ptr(), c.as_mut_ptr(), m as i32, k as i32, n as i32);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        for i in 0..m {
-            let a_row = i * k;
-            let c_row = i * n;
-            for j in 0..n {
-                let mut sum = 0.0f32;
-                for p in 0..k {
-                    sum += a[a_row + p] * b[p * n + j];
-                }
-                c[c_row + j] += sum;
-            }
-        }
+    unsafe {
+        // CblasRowMajor=101, CblasNoTrans=111; C = 1.0 * A @ B + 1.0 * C
+        cblas_sgemm(101, 111, 111, m as i32, n as i32, k as i32,
+                    1.0, a.as_ptr(), k as i32, b.as_ptr(), n as i32,
+                    1.0, c.as_mut_ptr(), n as i32);
     }
 }
 
 /// Element-wise addition: `out[i] = a[i] + b[i]`.
-///
-/// On WASM, calls `vDSP_vadd` via host import.
 pub fn vec_add(a: &[f32], b: &[f32], out: &mut [f32]) {
     let len = a.len().min(b.len()).min(out.len());
 
     #[cfg(target_arch = "wasm32")]
-    unsafe {
-        host_vec_add(a.as_ptr(), b.as_ptr(), out.as_mut_ptr(), len as i32);
-    }
+    unsafe { host_vec_add(a.as_ptr(), b.as_ptr(), out.as_mut_ptr(), len as i32); }
 
     #[cfg(not(target_arch = "wasm32"))]
-    for i in 0..len {
-        out[i] = a[i] + b[i];
-    }
+    unsafe { vDSP_vadd(a.as_ptr(), 1, b.as_ptr(), 1, out.as_mut_ptr(), 1, len as u32); }
 }
 
 /// Element-wise multiplication: `out[i] = a[i] * b[i]`.
-///
-/// On WASM, calls `vDSP_vmul` via host import.
 pub fn vec_mul(a: &[f32], b: &[f32], out: &mut [f32]) {
     let len = a.len().min(b.len()).min(out.len());
 
     #[cfg(target_arch = "wasm32")]
-    unsafe {
-        host_vec_mul(a.as_ptr(), b.as_ptr(), out.as_mut_ptr(), len as i32);
-    }
+    unsafe { host_vec_mul(a.as_ptr(), b.as_ptr(), out.as_mut_ptr(), len as i32); }
 
     #[cfg(not(target_arch = "wasm32"))]
-    for i in 0..len {
-        out[i] = a[i] * b[i];
-    }
+    unsafe { vDSP_vmul(a.as_ptr(), 1, b.as_ptr(), 1, out.as_mut_ptr(), 1, len as u32); }
 }
 
 /// Element-wise tanh: `out[i] = tanh(input[i])`.
-///
-/// On WASM, calls `vvtanhf` via host import.
 pub fn vec_tanh(input: &[f32], output: &mut [f32]) {
     let len = input.len().min(output.len());
 
     #[cfg(target_arch = "wasm32")]
-    unsafe {
-        host_vec_tanh(input.as_ptr(), output.as_mut_ptr(), len as i32);
-    }
+    unsafe { host_vec_tanh(input.as_ptr(), output.as_mut_ptr(), len as i32); }
 
     #[cfg(not(target_arch = "wasm32"))]
-    for i in 0..len {
-        let x = input[i].clamp(-10.0, 10.0);
-        let e2x = (2.0 * x).exp();
-        output[i] = (e2x - 1.0) / (e2x + 1.0);
+    unsafe {
+        let n = len as i32;
+        vvtanhf(output.as_mut_ptr(), input.as_ptr(), &n);
     }
 }
 
 /// Element-wise sigmoid: `out[i] = 1 / (1 + exp(-input[i]))`.
-///
-/// On WASM, calls vectorized exp + division via host import.
 pub fn vec_sigmoid(input: &[f32], output: &mut [f32]) {
     let len = input.len().min(output.len());
 
     #[cfg(target_arch = "wasm32")]
-    unsafe {
-        host_vec_sigmoid(input.as_ptr(), output.as_mut_ptr(), len as i32);
-    }
+    unsafe { host_vec_sigmoid(input.as_ptr(), output.as_mut_ptr(), len as i32); }
 
     #[cfg(not(target_arch = "wasm32"))]
-    for i in 0..len {
-        let x = input[i].clamp(-88.0, 88.0);
-        output[i] = 1.0 / (1.0 + (-x).exp());
+    unsafe {
+        let count = len as u32;
+        let n = len as i32;
+        let one = 1.0f32;
+        // sigmoid(x) = 1 / (1 + exp(-x))
+        vDSP_vneg(input.as_ptr(), 1, output.as_mut_ptr(), 1, count);
+        for i in 0..len { *output.as_mut_ptr().add(i) = (*output.as_ptr().add(i)).clamp(-88.0, 88.0); }
+        vvexpf(output.as_mut_ptr(), output.as_ptr(), &n);
+        vDSP_vsadd(output.as_ptr(), 1, &one, output.as_mut_ptr(), 1, count);
+        vDSP_svdiv(&one, output.as_ptr(), 1, output.as_mut_ptr(), 1, count);
     }
 }
 
 /// Add scalar to each element: `out[i] = input[i] + scalar`.
-///
-/// On WASM, calls `vDSP_vsadd` via host import.
 pub fn vec_add_scalar(input: &[f32], scalar: f32, output: &mut [f32]) {
     let len = input.len().min(output.len());
 
     #[cfg(target_arch = "wasm32")]
-    unsafe {
-        host_vec_add_scalar(input.as_ptr(), &scalar as *const f32, output.as_mut_ptr(), len as i32);
-    }
+    unsafe { host_vec_add_scalar(input.as_ptr(), &scalar as *const f32, output.as_mut_ptr(), len as i32); }
 
     #[cfg(not(target_arch = "wasm32"))]
-    for i in 0..len {
-        output[i] = input[i] + scalar;
-    }
+    unsafe { vDSP_vsadd(input.as_ptr(), 1, &scalar, output.as_mut_ptr(), 1, len as u32); }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,13 +201,8 @@ pub fn vec_add_scalar(input: &[f32], scalar: f32, output: &mut [f32]) {
 mod tests {
     use super::*;
 
-    // These test vectors are shared with the Python accel tests for parity.
-
     #[test]
     fn test_matmul_2x3_times_3x2() {
-        // A = [[1, 2, 3], [4, 5, 6]]  (2x3)
-        // B = [[7, 8], [9, 10], [11, 12]]  (3x2)
-        // C = [[58, 64], [139, 154]]  (2x2)
         let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let b = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
         let mut c = [0.0f32; 4];
@@ -215,9 +212,8 @@ mod tests {
 
     #[test]
     fn test_matmul_identity() {
-        // I @ A = A
-        let identity = [1.0, 0.0, 0.0, 1.0]; // 2x2
-        let a = [3.0, 7.0, 2.0, 5.0]; // 2x2
+        let identity = [1.0, 0.0, 0.0, 1.0];
+        let a = [3.0, 7.0, 2.0, 5.0];
         let mut c = [0.0f32; 4];
         matmul(&identity, &a, &mut c, 2, 2, 2);
         assert_eq!(c, [3.0, 7.0, 2.0, 5.0]);
@@ -234,11 +230,6 @@ mod tests {
 
     #[test]
     fn test_matmul_acc_accumulates() {
-        // A = [[1, 2, 3], [4, 5, 6]]  (2x3)
-        // B = [[7, 8], [9, 10], [11, 12]]  (3x2)
-        // A@B = [[58, 64], [139, 154]]
-        // c starts as [[1, 2], [3, 4]]
-        // expected: [[59, 66], [142, 158]]
         let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let b = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
         let mut c = [1.0, 2.0, 3.0, 4.0f32];
@@ -248,9 +239,8 @@ mod tests {
 
     #[test]
     fn test_matmul_acc_zero_matrix_unchanged() {
-        // Accumulating zero matrix leaves c unchanged
-        let a = [0.0f32; 4]; // 2x2 zeros
-        let b = [1.0, 2.0, 3.0, 4.0f32]; // 2x2
+        let a = [0.0f32; 4];
+        let b = [1.0, 2.0, 3.0, 4.0f32];
         let mut c = [5.0, 6.0, 7.0, 8.0f32];
         matmul_acc(&a, &b, &mut c, 2, 2, 2);
         assert_eq!(c, [5.0, 6.0, 7.0, 8.0]);
