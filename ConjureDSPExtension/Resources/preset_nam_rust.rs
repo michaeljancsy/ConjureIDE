@@ -2,8 +2,8 @@ use conjuredsp::*;
 
 setup!();
 
-// Replace "tone3000://TONE_ID/MODEL_ID" with an actual path from list_tones.
-nam!("tone3000://TONE_ID/MODEL_ID");
+conjuredsp::nam!("tone3000://60092/351559");
+
 
 params! {
     INPUT_GAIN = db().min(-12.0).max(12.0).default(0.0),

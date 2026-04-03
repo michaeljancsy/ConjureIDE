@@ -1693,6 +1693,67 @@ mod tests {
         assert!(peak2 < 10.0, "2nd buffer peak too high ({})", peak2);
     }
 
+    /// Python-vs-Rust parity test for standard WaveNet model.
+    /// This catches bugs that only manifest with larger models (16+ channels, 10+ dilations).
+    #[test]
+    fn test_wavenet_standard_python_parity() {
+        let nam_path = "../../tone3000_py_demo/wavenet_standard.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+        let python = "../../rust/python-dist/bin/python3";
+        if !std::path::Path::new(python).exists() {
+            eprintln!("Skipping: python3 not found");
+            return;
+        }
+
+        let num_samples = 512usize;
+        let sample_rate = 48000.0f32;
+
+        let parity_script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/nam_parity.py");
+        let py_output = std::process::Command::new(python)
+            .arg(&parity_script)
+            .arg(nam_path)
+            .arg(num_samples.to_string())
+            .arg(sample_rate.to_string())
+            .env("DYLD_LIBRARY_PATH", "../../rust/python-dist/lib")
+            .output()
+            .expect("Failed to run Python parity script");
+        assert!(py_output.status.success(), "Python failed: {}", String::from_utf8_lossy(&py_output.stderr));
+
+        let py_stdout = String::from_utf8_lossy(&py_output.stdout);
+        fn extract_arr(json: &str, key: &str) -> Vec<f32> {
+            let kp = format!("\"{}\":", key);
+            let s = json.find(&kp).unwrap();
+            let bs = json[s..].find('[').unwrap() + s + 1;
+            let be = json[bs..].find(']').unwrap() + bs;
+            json[bs..be].split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect()
+        }
+        let py_out1 = extract_arr(&py_stdout, "output1");
+        let py_out2 = extract_arr(&py_stdout, "output2");
+
+        let binary = serialize_nam_file(nam_path);
+        let mut model = NamModel::from_binary(&binary).expect("Failed to parse .nam file");
+        let input = sine_wave(num_samples, sample_rate);
+        let mut rust_out1 = vec![0.0f32; num_samples];
+        let mut rust_out2 = vec![0.0f32; num_samples];
+        model.process_buffer(&input, &mut rust_out1, 0);
+        model.process_buffer(&input, &mut rust_out2, 0);
+
+        for (label, ro, po) in [("Buf1", &rust_out1, &py_out1), ("Buf2", &rust_out2, &py_out2)] {
+            let mut max_err = 0.0f32;
+            let mut worst_i = 0usize;
+            for i in 0..num_samples.min(po.len()) {
+                let err = (ro[i] - po[i]).abs();
+                if err > max_err { max_err = err; worst_i = i; }
+            }
+            eprintln!("{} max_err={:.6} at [{}] (Rust={:.6}, Py={:.6})", label, max_err, worst_i, ro[worst_i], po[worst_i]);
+            assert!(max_err < 1e-3, "{} parity FAILED: max_err={:.6}", label, max_err);
+        }
+    }
+
     #[test]
     fn test_wavenet_tiny_python_parity() {
         let nam_path = "../../tone3000_py_demo/wavenet_tiny.nam";
