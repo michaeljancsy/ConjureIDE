@@ -186,8 +186,14 @@ struct ToneBrowserView: View {
             )
         }
         .task {
-            if client.isAuthenticated && tab == .search && searchResults.isEmpty {
-                await performSearch(query: "")
+            guard client.isAuthenticated else { return }
+            switch tab {
+            case .search:
+                if searchResults.isEmpty { await performSearch(query: "") }
+            case .myTones:
+                await fetchMyTones()
+            case .favorites:
+                await fetchFavorites()
             }
         }
         .onChange(of: tab) { _, newTab in
