@@ -20,6 +20,7 @@ class AudioUnitHostModel {
     var viewModel = AudioUnitViewModel()
 
     var isPlaying: Bool { playEngine.isPlaying }
+    var currentAudioFileName: String = "Synth.aif"
 
     var audioUnitCrashed = false
 
@@ -101,6 +102,7 @@ class AudioUnitHostModel {
         #endif
 
         setupNotifications()
+        restorePersistedAudioFile()
 
         if subType == "????" {
             self.viewModel = AudioUnitViewModel(showAudioControls: false,
@@ -203,5 +205,34 @@ class AudioUnitHostModel {
 
     func stopPlaying() {
         playEngine.stopPlaying()
+    }
+
+    // MARK: - Audio File Selection
+
+    private static let audioFilePathKey = "selectedAudioFilePath"
+
+    func selectAudioFile(_ url: URL) {
+        do {
+            try playEngine.setAudioFile(url)
+            currentAudioFileName = url.lastPathComponent
+            UserDefaults.standard.set(url.path, forKey: Self.audioFilePathKey)
+        } catch {
+            print("Failed to load audio file: \(error)")
+        }
+    }
+
+    private func restorePersistedAudioFile() {
+        guard let path = UserDefaults.standard.string(forKey: Self.audioFilePathKey),
+              FileManager.default.fileExists(atPath: path) else {
+            UserDefaults.standard.removeObject(forKey: Self.audioFilePathKey)
+            return
+        }
+        do {
+            try playEngine.setAudioFile(URL(fileURLWithPath: path))
+            currentAudioFileName = URL(fileURLWithPath: path).lastPathComponent
+        } catch {
+            print("Failed to restore persisted audio file: \(error)")
+            UserDefaults.standard.removeObject(forKey: Self.audioFilePathKey)
+        }
     }
 }
