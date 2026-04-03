@@ -438,7 +438,7 @@ impl WaveNet {
             let mut la_head_ch = 0usize;
 
             // Rechannel: x → region x_region
-            let x_src_off = if x_ch == 1 && x_off == 0 { 0 } else { x_region * rs };
+            let x_src_off = if x_ch == 1 && x_off == 0 { 0 } else { x_off };
             let x_dst_off = x_region * rs;
             {
                 let (src, dst) = if x_src_off < x_dst_off {
@@ -1453,12 +1453,15 @@ mod tests {
         let arch_str_end = json_str[arch_str_start..].find('"').unwrap() + arch_str_start;
         let architecture = &json_str[arch_str_start..arch_str_end];
 
-        // Extract sample_rate
-        let sr_start = json_str.find("\"sample_rate\"").unwrap();
-        let sr_val_start = json_str[sr_start..].find(':').unwrap() + sr_start + 1;
-        let sr_val_str = json_str[sr_val_start..].trim_start();
-        let sr_end = sr_val_str.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(sr_val_str.len());
-        let sample_rate: f32 = sr_val_str[..sr_end].trim().parse().unwrap_or(48000.0);
+        // Extract sample_rate (optional — defaults to 48000)
+        let sample_rate: f32 = if let Some(sr_start) = json_str.find("\"sample_rate\"") {
+            let sr_val_start = json_str[sr_start..].find(':').unwrap() + sr_start + 1;
+            let sr_val_str = json_str[sr_val_start..].trim_start();
+            let sr_end = sr_val_str.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(sr_val_str.len());
+            sr_val_str[..sr_end].trim().parse().unwrap_or(48000.0)
+        } else {
+            48000.0
+        };
 
         // Extract config object (find matching braces)
         let config_key = json_str.find("\"config\"").unwrap();
@@ -1564,6 +1567,89 @@ mod tests {
 
         assert!(peak < 0.1,
             "LSTM silence output should be near-zero, got peak {}", peak);
+    }
+
+    /// Generate a 440Hz sine wave for testing.
+    fn sine_wave(num_samples: usize, sample_rate: f32) -> Vec<f32> {
+        (0..num_samples)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sample_rate).sin() * 0.5)
+            .collect()
+    }
+
+    #[test]
+    fn test_wavenet_tiny_sine_produces_output() {
+        let nam_path = "../../tone3000_py_demo/wavenet_tiny.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+
+        let binary = serialize_nam_file(nam_path);
+        let mut model = NamModel::from_binary(&binary)
+            .expect("Failed to parse wavenet_tiny.nam");
+
+        let input = sine_wave(512, 48000.0);
+        let mut output = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut output, 0);
+
+        let peak = output.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        let rms = (output.iter().map(|x| x * x).sum::<f32>() / output.len() as f32).sqrt();
+        eprintln!("WaveNet tiny sine: peak={:.6}, rms={:.6}", peak, rms);
+        eprintln!("First 10 output: {:?}", &output[..10]);
+
+        // Output should not be all near-zero (model transforms signal)
+        assert!(rms > 1e-4,
+            "WaveNet output RMS too low ({}) — likely reading wrong region", rms);
+
+        // Output should be bounded (not garbage/explosion)
+        assert!(peak < 10.0,
+            "WaveNet output peak too high ({}) — numerical instability", peak);
+
+        // Second buffer should also work (state continuity)
+        let mut output2 = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut output2, 0);
+        let peak2 = output2.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        let rms2 = (output2.iter().map(|x| x * x).sum::<f32>() / output2.len() as f32).sqrt();
+        eprintln!("WaveNet tiny sine (2nd): peak={:.6}, rms={:.6}", peak2, rms2);
+
+        assert!(rms2 > 1e-4, "2nd buffer RMS too low ({})", rms2);
+        assert!(peak2 < 10.0, "2nd buffer peak too high ({})", peak2);
+    }
+
+    #[test]
+    fn test_wavenet_standard_sine_produces_output() {
+        let nam_path = "../../tone3000_py_demo/wavenet_standard.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+
+        let binary = serialize_nam_file(nam_path);
+        let mut model = NamModel::from_binary(&binary)
+            .expect("Failed to parse wavenet_standard.nam");
+
+        let input = sine_wave(512, 48000.0);
+        let mut output = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut output, 0);
+
+        let peak = output.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        let rms = (output.iter().map(|x| x * x).sum::<f32>() / output.len() as f32).sqrt();
+        eprintln!("WaveNet standard sine: peak={:.6}, rms={:.6}", peak, rms);
+
+        assert!(rms > 1e-4,
+            "WaveNet output RMS too low ({}) — likely reading wrong region", rms);
+        assert!(peak < 10.0,
+            "WaveNet output peak too high ({}) — numerical instability", peak);
+
+        // Second buffer
+        let mut output2 = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut output2, 0);
+        let peak2 = output2.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        let rms2 = (output2.iter().map(|x| x * x).sum::<f32>() / output2.len() as f32).sqrt();
+        eprintln!("WaveNet standard sine (2nd): peak={:.6}, rms={:.6}", peak2, rms2);
+
+        assert!(rms2 > 1e-4, "2nd buffer RMS too low ({})", rms2);
+        assert!(peak2 < 10.0, "2nd buffer peak too high ({})", peak2);
     }
 
     #[test]
