@@ -1693,6 +1693,50 @@ mod tests {
         assert!(peak2 < 10.0, "2nd buffer peak too high ({})", peak2);
     }
 
+    /// Performance regression test: ensures NAM inference is fast enough for real-time audio.
+    /// Without compiler optimizations (opt-level=0), standard WaveNet takes ~77ms for 471
+    /// stereo frames — 15x over a typical 10.7ms budget. With opt-level=3, it takes ~5ms.
+    /// This test catches the regression if the [profile.dev.package.conjuredsp] opt-level
+    /// override is removed from workspace Cargo.toml.
+    #[test]
+    fn test_wavenet_standard_realtime_performance() {
+        let nam_path = "../../tone3000_py_demo/wavenet_standard.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+
+        let binary = serialize_nam_file(nam_path);
+        let mut model = NamModel::from_binary(&binary)
+            .expect("Failed to parse wavenet_standard.nam");
+
+        let n = 471; // typical callback size
+        let input = sine_wave(n, 44100.0);
+        let mut output = vec![0.0f32; n];
+
+        // Warm up
+        model.process_buffer(&input, &mut output, 0);
+        model.process_buffer(&input, &mut output, 1);
+
+        // Time stereo processing (2 channels)
+        let t0 = std::time::Instant::now();
+        let iterations = 5;
+        for _ in 0..iterations {
+            model.process_buffer(&input, &mut output, 0);
+            model.process_buffer(&input, &mut output, 1);
+        }
+        let avg_ms = t0.elapsed().as_secs_f64() * 1000.0 / iterations as f64;
+
+        eprintln!("WaveNet standard 471fr stereo: {:.1}ms (budget ~10.7ms)", avg_ms);
+
+        // With optimizations: ~5ms. Without: ~77ms. Use 20ms as threshold —
+        // well above optimized time, well below unoptimized time.
+        assert!(avg_ms < 20.0,
+            "NAM inference too slow ({:.1}ms for 471 stereo frames, budget ~10.7ms). \
+             Check that [profile.dev.package.conjuredsp] opt-level = 3 is set in workspace Cargo.toml.",
+            avg_ms);
+    }
+
     /// Python-vs-Rust parity test for standard WaveNet model.
     /// This catches bugs that only manifest with larger models (16+ channels, 10+ dilations).
     #[test]
