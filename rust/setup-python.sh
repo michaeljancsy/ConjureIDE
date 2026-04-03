@@ -12,10 +12,16 @@ RELEASE_TAG="20260211"
 ARCHIVE="cpython-${PYTHON_VERSION}+${RELEASE_TAG}-aarch64-apple-darwin-freethreaded+pgo+lto-full.tar.zst"
 URL="https://github.com/astral-sh/python-build-standalone/releases/download/${RELEASE_TAG}/${ARCHIVE}"
 
-if [ -d "${PYTHON_DIR}" ]; then
+if [ -f "${PYTHON_DIR}/.setup-complete" ]; then
     echo "Python distribution already exists at ${PYTHON_DIR}"
     echo "Delete it first if you want to re-download: rm -rf ${PYTHON_DIR}"
     exit 0
+fi
+
+# Clean up any incomplete previous run
+if [ -d "${PYTHON_DIR}" ]; then
+    echo "Found incomplete Python distribution — removing and starting fresh..."
+    rm -rf "${PYTHON_DIR}"
 fi
 
 # Ensure zstd is available (needed for .tar.zst archives)
@@ -62,6 +68,9 @@ echo "Installing conjuredsp package..."
 SITE_PACKAGES="$(${PYTHON_DIR}/bin/python3 -c 'import site; print(site.getsitepackages()[0])')"
 rm -rf "${SITE_PACKAGES}/conjuredsp"
 cp -r "${SCRIPT_DIR}/conjuredsp" "${SITE_PACKAGES}/conjuredsp"
+
+# Mark setup as complete so the guard clause knows this isn't a partial install
+touch "${PYTHON_DIR}/.setup-complete"
 
 echo ""
 echo "Done! Free-threaded Python ${PYTHON_VERSION} (no-GIL) with numpy+scipy (Accelerate-linked)+conjuredsp installed at: ${PYTHON_DIR}"
