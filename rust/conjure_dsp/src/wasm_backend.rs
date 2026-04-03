@@ -90,8 +90,14 @@ enum BufferMode {
 /// Compiled modules (Rust/C targeting wasm32-wasip1) should export `get_input_ptr()` and
 /// `get_output_ptr()` functions that return the addresses of pre-allocated static buffers.
 /// This avoids memory layout conflicts with the compiler's stack/heap.
+/// Host-side state accessible from WASM import functions via `Caller<'_, HostState>`.
+pub struct HostState {
+    /// Native NAM model for host-side inference (avoids running NAM inside WASM sandbox).
+    pub nam_model: Option<conjuredsp::NamModel>,
+}
+
 pub struct WasmBackend {
-    store: Store<()>,
+    store: Store<HostState>,
     memory: Memory,
     process_fn: TypedFunc<(i32, i32, i32, i32, f32), ()>,
     get_input_ptr_fn: Option<TypedFunc<(), i32>>,
@@ -115,10 +121,6 @@ pub struct WasmBackend {
     param_write_count: usize,
     /// Script-declared algorithmic latency in samples (from `get_latency_samples` export).
     latency_samples: u32,
-    /// NAM model injection support — detected from `get_nam_data_ptr` export.
-    get_nam_data_ptr_fn: Option<TypedFunc<(), i32>>,
-    init_nam_fn: Option<TypedFunc<i32, i32>>,
-    get_nam_active_fn: Option<TypedFunc<(), i32>>,
     /// NAM model path embedded in the WASM binary via `get_nam_path_ptr`/`get_nam_path_len`.
     nam_path: Option<String>,
 }
@@ -159,7 +161,7 @@ impl WasmBackend {
         let module =
             Module::new(&engine, wasm_bytes).map_err(|e| format!("Invalid WASM module: {}", e))?;
 
-        let mut store = Store::new(&engine, ());
+        let mut store = Store::new(&engine, HostState { nam_model: None });
         store
             .set_fuel(COMPILED_FUEL)
             .map_err(|e| format!("Failed to set fuel: {}", e))?;
@@ -168,6 +170,7 @@ impl WasmBackend {
         let mut linker = Linker::new(&engine);
         Self::add_wasi_stubs(&mut linker)?;
         Self::add_conjuredsp_imports(&mut linker)?;
+        Self::add_nam_import(&mut linker)?;
 
         let instance = linker
             .instantiate(&mut store, &module)
@@ -225,17 +228,6 @@ impl WasmBackend {
             .map(|v| if v < 0 { 0 } else { v as u32 })
             .unwrap_or(0);
 
-        // Probe for NAM model injection exports
-        let get_nam_data_ptr_fn = instance
-            .get_typed_func::<(), i32>(&mut store, "get_nam_data_ptr")
-            .ok();
-        let init_nam_fn = instance
-            .get_typed_func::<i32, i32>(&mut store, "init_nam")
-            .ok();
-        let get_nam_active_fn = instance
-            .get_typed_func::<(), i32>(&mut store, "get_nam_active")
-            .ok();
-
         // Read NAM model path if available
         let nam_path = {
             let get_ptr = instance.get_typed_func::<(), i32>(&mut store, "get_nam_path_ptr").ok();
@@ -262,9 +254,10 @@ impl WasmBackend {
             }
         };
 
-        let has_nam = get_nam_data_ptr_fn.is_some();
+        let has_nam = nam_path.is_some();
 
-        // Use higher fuel budget for NAM-active modules
+        // Use higher fuel budget for NAM-active modules (host import call still
+        // needs fuel for WASM-side copy loops around the import).
         let fuel_per_callback = if has_nam {
             NAM_FUEL
         } else {
@@ -305,9 +298,6 @@ impl WasmBackend {
             param_metadata,
             param_write_count,
             latency_samples,
-            get_nam_data_ptr_fn,
-            init_nam_fn,
-            get_nam_active_fn,
             nam_path,
         })
     }
@@ -315,7 +305,7 @@ impl WasmBackend {
     /// Extract parameter names and metadata from WASM module exports.
     fn extract_params(
         instance: &Instance,
-        store: &mut Store<()>,
+        store: &mut Store<HostState>,
         memory: &Memory,
     ) -> (HashMap<u8, String>, Option<Vec<crate::params::ParamMetadata>>) {
         // Try get_param_metadata_ptr/len first (rich metadata).
@@ -396,7 +386,7 @@ impl WasmBackend {
 
     /// Register minimal WASI preview1 stubs so compiled modules can instantiate.
     /// These stubs provide no real I/O — they return success with empty results.
-    fn add_wasi_stubs(linker: &mut Linker<()>) -> Result<(), String> {
+    fn add_wasi_stubs(linker: &mut Linker<HostState>) -> Result<(), String> {
         let e = |err: Error| format!("Failed to register WASI stub: {}", err);
 
         // fd_write(fd, iovs_ptr, iovs_len, nwritten_ptr) -> errno
@@ -404,7 +394,7 @@ impl WasmBackend {
             .func_wrap(
                 "wasi_snapshot_preview1",
                 "fd_write",
-                |mut caller: Caller<'_, ()>,
+                |mut caller: Caller<'_, HostState>,
                  _fd: i32,
                  _iovs: i32,
                  _iovs_len: i32,
@@ -429,7 +419,7 @@ impl WasmBackend {
             .func_wrap(
                 "wasi_snapshot_preview1",
                 "fd_read",
-                |mut caller: Caller<'_, ()>,
+                |mut caller: Caller<'_, HostState>,
                  _fd: i32,
                  _iovs: i32,
                  _iovs_len: i32,
@@ -495,7 +485,7 @@ impl WasmBackend {
             .func_wrap(
                 "wasi_snapshot_preview1",
                 "environ_sizes_get",
-                |mut caller: Caller<'_, ()>, count_ptr: i32, size_ptr: i32| -> i32 {
+                |mut caller: Caller<'_, HostState>, count_ptr: i32, size_ptr: i32| -> i32 {
                     if let Some(memory) =
                         caller.get_export("memory").and_then(|e| e.into_memory())
                     {
@@ -528,7 +518,7 @@ impl WasmBackend {
             .func_wrap(
                 "wasi_snapshot_preview1",
                 "args_sizes_get",
-                |mut caller: Caller<'_, ()>, count_ptr: i32, size_ptr: i32| -> i32 {
+                |mut caller: Caller<'_, HostState>, count_ptr: i32, size_ptr: i32| -> i32 {
                     if let Some(memory) =
                         caller.get_export("memory").and_then(|e| e.into_memory())
                     {
@@ -582,13 +572,70 @@ impl WasmBackend {
         Ok(())
     }
 
+    /// Register `__conjuredsp_nam_process` host import for native NAM inference.
+    ///
+    /// When a WASM module calls this import, the host reads audio from WASM memory,
+    /// runs `NamModel::process_buffer()` natively, and writes results back.
+    fn add_nam_import(linker: &mut Linker<HostState>) -> Result<(), String> {
+        linker
+            .func_wrap(
+                "env",
+                "__conjuredsp_nam_process",
+                |mut caller: Caller<'_, HostState>,
+                 input_ptr: i32, output_ptr: i32, frames: i32, channel: i32| -> i32 {
+                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        Some(m) => m,
+                        None => return 0,
+                    };
+
+                    let n = frames as usize;
+                    let in_off = input_ptr as usize;
+                    let out_off = output_ptr as usize;
+                    let in_bytes = n * 4;
+                    let out_bytes = n * 4;
+
+                    // Read input from WASM memory into a host-side buffer
+                    let data = memory.data(&caller);
+                    if in_off + in_bytes > data.len() || out_off + out_bytes > data.len() {
+                        return 0;
+                    }
+                    let mut input_buf = vec![0.0f32; n];
+                    for i in 0..n {
+                        let off = in_off + i * 4;
+                        input_buf[i] = f32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+                    }
+
+                    // Run native NAM inference
+                    let state = caller.data_mut();
+                    if let Some(ref mut model) = state.nam_model {
+                        let mut output_buf = vec![0.0f32; n];
+                        model.process_buffer(&input_buf, &mut output_buf, channel as usize);
+
+                        // Write output back to WASM memory
+                        let data = memory.data_mut(&mut caller);
+                        for i in 0..n {
+                            let bytes = output_buf[i].to_le_bytes();
+                            let off = out_off + i * 4;
+                            data[off..off + 4].copy_from_slice(&bytes);
+                        }
+                        1 // success
+                    } else {
+                        0 // no model loaded
+                    }
+                },
+            )
+            .map_err(|e| format!("Failed to register NAM import: {}", e))?;
+
+        Ok(())
+    }
+
     /// Register Accelerate-backed host imports under the "conjuredsp" module.
     ///
     /// These provide hardware-accelerated math to WASM modules that declare
     /// `#[link(wasm_import_module = "conjuredsp")]` imports.  Modules that
     /// don't import these functions are unaffected.
     #[cfg(target_os = "macos")]
-    fn add_conjuredsp_imports(linker: &mut Linker<()>) -> Result<(), String> {
+    fn add_conjuredsp_imports(linker: &mut Linker<HostState>) -> Result<(), String> {
         let e = |err: Error| format!("Failed to register conjuredsp import: {}", err);
 
         // matmul(a_ptr, b_ptr, out_ptr, m, k, n)
@@ -596,7 +643,7 @@ impl WasmBackend {
             .func_wrap(
                 "conjuredsp",
                 "host_matmul",
-                |mut caller: Caller<'_, ()>,
+                |mut caller: Caller<'_, HostState>,
                  a_ptr: i32, b_ptr: i32, out_ptr: i32,
                  m: i32, k: i32, n: i32| {
                     if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
@@ -636,7 +683,7 @@ impl WasmBackend {
             .func_wrap(
                 "conjuredsp",
                 "host_matmul_acc",
-                |mut caller: Caller<'_, ()>,
+                |mut caller: Caller<'_, HostState>,
                  a_ptr: i32, b_ptr: i32, c_ptr: i32,
                  m: i32, k: i32, n: i32| {
                     if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
@@ -677,7 +724,7 @@ impl WasmBackend {
             .func_wrap(
                 "conjuredsp",
                 "host_vec_add",
-                |mut caller: Caller<'_, ()>,
+                |mut caller: Caller<'_, HostState>,
                  a_ptr: i32, b_ptr: i32, out_ptr: i32, len: i32| {
                     if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
                         let data = memory.data_mut(&mut caller);
@@ -705,7 +752,7 @@ impl WasmBackend {
             .func_wrap(
                 "conjuredsp",
                 "host_vec_mul",
-                |mut caller: Caller<'_, ()>,
+                |mut caller: Caller<'_, HostState>,
                  a_ptr: i32, b_ptr: i32, out_ptr: i32, len: i32| {
                     if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
                         let data = memory.data_mut(&mut caller);
@@ -733,7 +780,7 @@ impl WasmBackend {
             .func_wrap(
                 "conjuredsp",
                 "host_vec_tanh",
-                |mut caller: Caller<'_, ()>,
+                |mut caller: Caller<'_, HostState>,
                  inp_ptr: i32, out_ptr: i32, len: i32| {
                     if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
                         let data = memory.data_mut(&mut caller);
@@ -763,7 +810,7 @@ impl WasmBackend {
             .func_wrap(
                 "conjuredsp",
                 "host_vec_sigmoid",
-                |mut caller: Caller<'_, ()>,
+                |mut caller: Caller<'_, HostState>,
                  inp_ptr: i32, out_ptr: i32, len: i32| {
                     if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
                         let data = memory.data_mut(&mut caller);
@@ -804,7 +851,7 @@ impl WasmBackend {
             .func_wrap(
                 "conjuredsp",
                 "host_vec_add_scalar",
-                |mut caller: Caller<'_, ()>,
+                |mut caller: Caller<'_, HostState>,
                  vec_ptr: i32, scalar_ptr: i32, out_ptr: i32, len: i32| {
                     if let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) {
                         let data = memory.data_mut(&mut caller);
@@ -832,7 +879,7 @@ impl WasmBackend {
 
     /// Non-macOS stub — conjuredsp host imports are not available.
     #[cfg(not(target_os = "macos"))]
-    fn add_conjuredsp_imports(_linker: &mut Linker<()>) -> Result<(), String> {
+    fn add_conjuredsp_imports(_linker: &mut Linker<HostState>) -> Result<(), String> {
         Ok(())
     }
 }
@@ -1054,50 +1101,13 @@ impl WasmBackend {
         self.nam_path.as_deref()
     }
 
-    /// Inject NAM model binary data into the WASM module's linear memory.
-    /// The host reads a .nam file, serializes it to the binary protocol, and
-    /// calls this to write the data and initialize the model.
+    /// Parse NAM model binary data and store natively for host-side inference.
+    /// The WASM module calls `__conjuredsp_nam_process` which routes to this model.
     pub fn inject_nam_model(&mut self, binary_data: &[u8]) -> Result<(), String> {
-        let get_ptr_fn = self.get_nam_data_ptr_fn.as_ref()
-            .ok_or("Module does not export get_nam_data_ptr")?;
-        let init_fn = self.init_nam_fn.as_ref()
-            .ok_or("Module does not export init_nam")?;
-
-        // Get the buffer address in WASM memory
-        let _ = self.store.set_fuel(COMPILED_FUEL);
-        let buf_ptr = get_ptr_fn.call(&mut self.store, ())
-            .map_err(|e| format!("get_nam_data_ptr failed: {}", e))? as usize;
-
-        // Validate against the NAM_DATA_BUF size (4MB) to prevent overflow
-        const NAM_DATA_BUF_SIZE: usize = 4 * 1024 * 1024;
-        if binary_data.len() > NAM_DATA_BUF_SIZE {
-            return Err(format!(
-                "NAM model ({} bytes) exceeds maximum buffer size ({} bytes). Model is too large.",
-                binary_data.len(), NAM_DATA_BUF_SIZE
-            ));
-        }
-
-        // Write binary data into WASM memory
-        let mem_data = self.memory.data_mut(&mut self.store);
-        let end = buf_ptr + binary_data.len();
-        if end > mem_data.len() {
-            return Err(format!(
-                "NAM data ({} bytes) exceeds WASM memory ({} bytes at offset {})",
-                binary_data.len(), mem_data.len(), buf_ptr
-            ));
-        }
-        mem_data[buf_ptr..end].copy_from_slice(binary_data);
-
-        // Call init_nam to parse and initialize the model
-        let _ = self.store.set_fuel(NAM_FUEL);
-        let result = init_fn.call(&mut self.store, binary_data.len() as i32)
-            .map_err(|e| format!("init_nam failed: {}", e))?;
-
-        if result == 1 {
-            Ok(())
-        } else {
-            Err("init_nam returned failure (invalid model data?)".to_string())
-        }
+        let model = conjuredsp::NamModel::from_binary(binary_data)
+            .ok_or_else(|| "Failed to parse NAM model from binary data".to_string())?;
+        self.store.data_mut().nam_model = Some(model);
+        Ok(())
     }
 }
 
@@ -1816,58 +1826,13 @@ mod tests {
         assert_eq!(backend.memory_bytes(), 65536 * 3, "should grow by another page");
     }
 
-    /// WAT module with NAM exports for injection testing.
-    const NAM_STUB_WAT: &str = r#"
-        (module
-          (memory (export "memory") 100)
-          (global $buf_ptr (mut i32) (i32.const 1024))
-          (func (export "process")
-            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
-          )
-          (func (export "get_nam_data_ptr") (result i32)
-            (global.get $buf_ptr)
-          )
-          (func (export "init_nam") (param $len i32) (result i32)
-            (i32.const 1)
-          )
-          (func (export "get_nam_active") (result i32)
-            (i32.const 0)
-          )
-        )
-    "#;
-
     #[test]
-    fn test_nam_inject_rejects_oversized_data() {
-        let wasm = wat_to_wasm(NAM_STUB_WAT);
+    fn test_nam_inject_rejects_too_small() {
+        let wasm = wat_to_wasm(BUFFER_GETTERS_WAT);
         let mut backend = WasmBackend::load(&wasm).unwrap();
 
-        // 4MB + 1 byte should be rejected
-        let oversized = vec![0u8; 4 * 1024 * 1024 + 1];
-        let result = backend.inject_nam_model(&oversized);
-        assert!(result.is_err(), "Should reject data exceeding 4MB buffer");
-        let err = result.unwrap_err();
-        assert!(err.contains("exceeds maximum buffer size"), "Error should mention buffer size: {}", err);
-    }
-
-    #[test]
-    fn test_nam_inject_accepts_small_data() {
-        let wasm = wat_to_wasm(NAM_STUB_WAT);
-        let mut backend = WasmBackend::load(&wasm).unwrap();
-
-        // Small data should be accepted (init_nam stub always returns 1)
-        let small = vec![0u8; 1024];
-        let result = backend.inject_nam_model(&small);
-        assert!(result.is_ok(), "Should accept small data: {:?}", result.err());
-    }
-
-    #[test]
-    fn test_nam_inject_accepts_exactly_4mb() {
-        let wasm = wat_to_wasm(NAM_STUB_WAT);
-        let mut backend = WasmBackend::load(&wasm).unwrap();
-
-        // Exactly 4MB should be accepted
-        let exact = vec![0u8; 4 * 1024 * 1024];
-        let result = backend.inject_nam_model(&exact);
-        assert!(result.is_ok(), "Should accept exactly 4MB: {:?}", result.err());
+        let tiny = vec![0u8; 8]; // Less than minimum 16 bytes for binary protocol
+        let result = backend.inject_nam_model(&tiny);
+        assert!(result.is_err(), "Should reject too-small data");
     }
 }
