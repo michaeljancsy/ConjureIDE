@@ -38,12 +38,12 @@ struct ToneBrowserView: View {
 
     @State private var tab: Tab
 
-    init(client: Tone3000Client, modelStore: ToneModelStore, selectedLanguage: ScriptLanguage = .python, onDone: @escaping () -> Void, onInsertSnippet: @escaping (String) -> Void) {
+    init(client: Tone3000Client, modelStore: ToneModelStore, selectedLanguage: ScriptLanguage = .python, onDone: @escaping () -> Void, onInsertTone: @escaping (NAMToneInsertion) -> Void) {
         self.client = client
         self.modelStore = modelStore
         self.selectedLanguage = selectedLanguage
         self.onDone = onDone
-        self.onInsertSnippet = onInsertSnippet
+        self.onInsertTone = onInsertTone
         _tab = State(initialValue: modelStore.downloadedModels.isEmpty ? .search : .myTones)
     }
     @State private var searchText = ""
