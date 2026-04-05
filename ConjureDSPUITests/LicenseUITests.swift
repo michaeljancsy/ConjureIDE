@@ -16,8 +16,31 @@ import XCTest
 
 final class LicenseUITests: XCTestCase {
 
+    /// Shared across test methods so we only pay the app launch cost once.
+    private static var sharedApp: XCUIApplication!
+
+    override class func setUp() {
+        super.setUp()
+        sharedApp = XCUIApplication()
+        sharedApp.launch()
+    }
+
+    override class func tearDown() {
+        sharedApp?.terminate()
+        sharedApp = nil
+        super.tearDown()
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
+    }
+
+    override func tearDownWithError() throws {
+        // Each test opens the settings popover. Press Escape so the next test
+        // starts with it dismissed.
+        if let app = Self.sharedApp {
+            app.typeKey(.escape, modifierFlags: [])
+        }
     }
 
     /// Open the settings popover and return it, or skip if not accessible.
@@ -34,8 +57,7 @@ final class LicenseUITests: XCTestCase {
 
     @MainActor
     func testDemoModeShownByDefault() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = Self.sharedApp!
 
         try openSettingsPopover(app: app)
 
@@ -49,8 +71,7 @@ final class LicenseUITests: XCTestCase {
 
     @MainActor
     func testRestartDemoButton() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = Self.sharedApp!
 
         try openSettingsPopover(app: app)
 

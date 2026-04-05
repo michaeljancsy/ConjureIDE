@@ -9,14 +9,54 @@ import XCTest
 
 final class ConjureDSPUITests: XCTestCase {
 
+    /// Shared across all test methods in this class so we pay the app launch
+    /// cost (Sentry, Analytics, daemon checks, Monaco bootstrap — ~15s) only
+    /// once per test run instead of once per test method.
+    private static var sharedApp: XCUIApplication!
+
+    override class func setUp() {
+        super.setUp()
+        sharedApp = XCUIApplication()
+        sharedApp.launch()
+    }
+
+    override class func tearDown() {
+        sharedApp?.terminate()
+        sharedApp = nil
+        super.tearDown()
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
 
+    override func tearDownWithError() throws {
+        // Best-effort cleanup after the two tests that leave UI state behind.
+        // Other tests only query element existence, so a lenient reset is enough.
+        guard let app = Self.sharedApp else { return }
+
+        if name.contains("testTerminalPanelTogglesCorrectly") {
+            let prompt = app.descendants(matching: .any)["daemonLaunchPrompt"].firstMatch
+            let terminal = app.descendants(matching: .any)["terminalPanel"].firstMatch
+            if prompt.exists || terminal.exists {
+                let chatToggle = app.buttons["chatToggleButton"]
+                if chatToggle.exists {
+                    chatToggle.click()
+                }
+            }
+        } else if name.contains("ScriptEditorAcceptsTyping") {
+            let editor = app.descendants(matching: .any)["scriptEditor"].firstMatch
+            if editor.exists {
+                editor.click()
+                editor.typeKey("a", modifierFlags: .command)
+                editor.typeKey(.delete, modifierFlags: [])
+            }
+        }
+    }
+
     @MainActor
     func testScriptEditorIsPresent() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = Self.sharedApp!
         let editor = app.descendants(matching: .any)["scriptEditor"].firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 10),
                       "Script editor should be visible after launch")
@@ -24,8 +64,7 @@ final class ConjureDSPUITests: XCTestCase {
 
     @MainActor
     func testRunButtonExists() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = Self.sharedApp!
         let runButton = app.buttons["runButton"]
         XCTAssertTrue(runButton.waitForExistence(timeout: 10),
                       "Run button should be visible")
@@ -33,8 +72,7 @@ final class ConjureDSPUITests: XCTestCase {
 
     @MainActor
     func testPresetToolbarExists() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = Self.sharedApp!
         // Verify preset menu exists (toolbar is present)
         let presetMenu = app.descendants(matching: .any)["presetMenu"].firstMatch
         XCTAssertTrue(presetMenu.waitForExistence(timeout: 10),
@@ -43,8 +81,7 @@ final class ConjureDSPUITests: XCTestCase {
 
     @MainActor
     func testSaveAsButtonExists() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = Self.sharedApp!
         let saveAsButton = app.buttons["saveAsButton"]
         XCTAssertTrue(saveAsButton.waitForExistence(timeout: 10),
                       "Save As button should be visible")
@@ -52,8 +89,7 @@ final class ConjureDSPUITests: XCTestCase {
 
     @MainActor
     func testScriptEditorShowsDefaultScript() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = Self.sharedApp!
         let editor = app.descendants(matching: .any)["scriptEditor"].firstMatch
         guard editor.waitForExistence(timeout: 10) else {
             XCTFail("Script editor not found")
@@ -61,17 +97,18 @@ final class ConjureDSPUITests: XCTestCase {
         }
         // Monaco editor content is inside a WKWebView and not directly readable
         // via XCUITest .value. Instead, verify the editor loaded by checking for
-        // text content rendered inside the web view.
+        // text content rendered inside the web view. Check editor.exists first —
+        // it's reliable and short-circuits the slower staticTexts poll, which
+        // would otherwise hammer the AU ViewBridge for 15s and degrade the
+        // accessibility snapshot for subsequent shared-app tests.
         let defProcess = editor.staticTexts.containing(NSPredicate(format: "label CONTAINS 'def'")).firstMatch
-        // Give Monaco time to initialize and render
-        XCTAssertTrue(defProcess.waitForExistence(timeout: 15) || editor.exists,
+        XCTAssertTrue(editor.exists || defProcess.waitForExistence(timeout: 15),
                       "Monaco editor should be loaded with default script")
     }
 
     @MainActor
     func testBuildIDLabelIsVisible() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = Self.sharedApp!
         let buildIDLabel = app.staticTexts["buildIDLabel"]
         XCTAssertTrue(buildIDLabel.waitForExistence(timeout: 10),
                       "Build ID label should be visible after launch")
@@ -103,8 +140,7 @@ final class ConjureDSPUITests: XCTestCase {
 
     @MainActor
     func testToolbarButtonsHaveTextLabels() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = Self.sharedApp!
 
         // Wait for toolbar to load
         let runButton = app.buttons["runButton"]
@@ -140,8 +176,7 @@ final class ConjureDSPUITests: XCTestCase {
 
     @MainActor
     func testParameterSlidersPanelExists() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = Self.sharedApp!
         let panel = app.disclosureTriangles["parameterSlidersPanel"].firstMatch
         // DisclosureGroup may surface as different element types through ViewBridge;
         // fall back to searching any element with the identifier.
@@ -159,8 +194,7 @@ final class ConjureDSPUITests: XCTestCase {
 
     @MainActor
     func testTerminalPanelTogglesCorrectly() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = Self.sharedApp!
 
         // Wait for toolbar to load
         let chatToggle = app.buttons["chatToggleButton"]
@@ -203,10 +237,13 @@ final class ConjureDSPUITests: XCTestCase {
 
     // MARK: - Typing Tests
 
+    // Named with a "ZZ" prefix so XCTest's alphabetical ordering runs it last,
+    // after all non-mutating tests. Typing into Monaco changes the editor
+    // content; tearDownWithError() does a best-effort Cmd+A + Delete to clear
+    // it, but keeping this test last minimizes any residual state impact.
     @MainActor
-    func testScriptEditorAcceptsTyping() throws {
-        let app = XCUIApplication()
-        app.launch()
+    func testZZScriptEditorAcceptsTyping() throws {
+        let app = Self.sharedApp!
         let editor = app.descendants(matching: .any)["scriptEditor"].firstMatch
         guard editor.waitForExistence(timeout: 15) else {
             XCTFail("Script editor not found")
