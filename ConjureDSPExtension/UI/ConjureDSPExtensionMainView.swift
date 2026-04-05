@@ -72,7 +72,6 @@ struct ConjureDSPExtensionMainView: View {
     @State private var spectrogramFrequencyScale: FrequencyScale = .log
     @State private var spectrogramFFTSizeIndex: Int = 2 // default: 2048
     @State private var spectrogramShowNoteNames: Bool = false
-    @State private var snippetToInsert: String?
     @StateObject private var daemonChecker = DaemonStatusChecker()
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("editorTheme") private var selectedTheme: String = "auto"
@@ -173,8 +172,12 @@ struct ConjureDSPExtensionMainView: View {
                 onBypassToggle: { setBypass(bypassed) },
                 showingSaveAs: $showingSaveAs,
                 saveAsName: $saveAsName,
-                onInsertSnippet: { snippet in
-                    snippetToInsert = snippet
+                onInsertTone: { insertion in
+                    scriptSource = insertNAMTone(
+                        into: scriptSource,
+                        insertion: insertion,
+                        language: selectedLanguage
+                    )
                 }
             )
 
@@ -193,7 +196,7 @@ struct ConjureDSPExtensionMainView: View {
                     language: selectedLanguage,
                     isEditable: true,
                     markers: editorMarkers,
-                    snippetToInsert: $snippetToInsert
+                    snippetToInsert: .constant(nil)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .border(Color.secondary.opacity(0.3), width: 1)
@@ -644,4 +647,118 @@ private struct StatusBarView: View {
         .padding(.horizontal)
         .padding(.vertical, 4)
     }
+}
+
+// MARK: - NAM tone smart insertion
+
+/// Splice a NAM tone into an existing script following language conventions:
+/// imports go to the top of the file, and the `model = load_model(...)` /
+/// `conjuredsp::nam!(...)` instantiation is placed directly above the
+/// `process` function with a preceding comment carrying the tone title and URL.
+///
+/// The original `source` is returned unchanged in the `language` branch that
+/// doesn't match, and instantiation falls back to end-of-file when no
+/// `process` function is found (keeps the operation non-destructive).
+func insertNAMTone(into source: String, insertion: NAMToneInsertion, language: ScriptLanguage) -> String {
+    switch language {
+    case .python:
+        return insertPythonNAMTone(into: source, insertion: insertion)
+    case .rust:
+        return insertRustNAMTone(into: source, insertion: insertion)
+    }
+}
+
+private func insertPythonNAMTone(into source: String, insertion: NAMToneInsertion) -> String {
+    let importLine = "from conjuredsp.nam import load_model"
+    let path = "tone3000://\(insertion.toneId)/\(insertion.modelId)"
+    var lines = source.components(separatedBy: "\n")
+
+    // 1. Add the import at the top if not already present. Place it after the
+    //    last contiguous import/from line at the head of the file (skipping
+    //    leading comments and blank lines).
+    let hasImport = lines.contains { $0.trimmingCharacters(in: .whitespaces) == importLine }
+    if !hasImport {
+        var lastImportIdx = -1
+        for (i, line) in lines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("import ") || t.hasPrefix("from ") {
+                lastImportIdx = i
+            } else if !t.isEmpty && !t.hasPrefix("#") && lastImportIdx >= 0 {
+                break
+            }
+        }
+        if lastImportIdx >= 0 {
+            lines.insert(importLine, at: lastImportIdx + 1)
+        } else {
+            lines.insert(importLine, at: 0)
+        }
+    }
+
+    // 2. Build the instantiation block: title + optional URL comment + call.
+    var block: [String] = ["# \(insertion.title)"]
+    if let url = insertion.url, !url.isEmpty {
+        block.append("# \(url)")
+    }
+    block.append("model = load_model(\"\(path)\")")
+
+    // 3. Insert the block directly above `def process(`, preserving one blank
+    //    line of separation on each side.
+    let processIdx = lines.firstIndex { $0.hasPrefix("def process(") }
+    spliceBlock(block, intoLines: &lines, above: processIdx)
+    return lines.joined(separator: "\n")
+}
+
+private func insertRustNAMTone(into source: String, insertion: NAMToneInsertion) -> String {
+    let path = "tone3000://\(insertion.toneId)/\(insertion.modelId)"
+    var lines = source.components(separatedBy: "\n")
+
+    var block: [String] = ["// \(insertion.title)"]
+    if let url = insertion.url, !url.isEmpty {
+        block.append("// \(url)")
+    }
+    block.append("conjuredsp::nam!(\"\(path)\");")
+
+    // Locate `fn process(` (with or without `pub extern "C"`). Walk back over
+    // any attribute lines (`#[no_mangle]`, etc.) so the comment sits above the
+    // attributes, not between them and the fn.
+    var processIdx: Int? = nil
+    for (i, line) in lines.enumerated() {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("pub extern \"C\" fn process(")
+            || t.hasPrefix("pub fn process(")
+            || t.hasPrefix("fn process(")
+            || t.contains(" fn process(") {
+            processIdx = i
+            break
+        }
+    }
+    if var idx = processIdx {
+        while idx > 0 && lines[idx - 1].trimmingCharacters(in: .whitespaces).hasPrefix("#[") {
+            idx -= 1
+        }
+        spliceBlock(block, intoLines: &lines, above: idx)
+    } else {
+        spliceBlock(block, intoLines: &lines, above: nil)
+    }
+    return lines.joined(separator: "\n")
+}
+
+/// Splice `block` into `lines` directly above `idx`, ensuring one blank line
+/// above and below. If `idx` is nil, append to the end of the file instead.
+private func spliceBlock(_ block: [String], intoLines lines: inout [String], above idx: Int?) {
+    guard let idx else {
+        if let last = lines.last, !last.isEmpty {
+            lines.append("")
+        }
+        lines.append(contentsOf: block)
+        return
+    }
+    var toInsert = block
+    // Blank line between block and the following line.
+    toInsert.append("")
+    // Blank line between preceding content and our block (if needed).
+    if idx > 0 && !lines[idx - 1].trimmingCharacters(in: .whitespaces).isEmpty {
+        toInsert.insert("", at: 0)
+    }
+    lines.insert(contentsOf: toInsert, at: idx)
 }

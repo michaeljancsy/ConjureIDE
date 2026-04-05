@@ -11,12 +11,22 @@ import os.log
 
 private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "ToneBrowser")
 
+/// A NAM tone selected for insertion into the script editor.
+/// Carries enough context for the receiver to place imports and the
+/// model instantiation in language-appropriate locations.
+struct NAMToneInsertion {
+    let toneId: String
+    let modelId: String
+    let title: String
+    let url: String?
+}
+
 struct ToneBrowserView: View {
     let client: Tone3000Client
     let modelStore: ToneModelStore
     var selectedLanguage: ScriptLanguage = .python
     let onDone: () -> Void
-    let onInsertSnippet: (String) -> Void
+    let onInsertTone: (NAMToneInsertion) -> Void
 
     @Environment(\.openURL) private var openURL
 
@@ -324,7 +334,12 @@ struct ToneBrowserView: View {
                     .controlSize(.small)
             } else if isDownloaded {
                 Button("Use") {
-                    insertSnippet(toneId: tone.id.stringValue, modelId: model.id.stringValue)
+                    onInsertTone(NAMToneInsertion(
+                        toneId: tone.id.stringValue,
+                        modelId: model.id.stringValue,
+                        title: tone.title,
+                        url: tone.url
+                    ))
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -364,7 +379,12 @@ struct ToneBrowserView: View {
             }
             Spacer()
             Button("Use") {
-                insertSnippet(toneId: model.toneId, modelId: model.modelId)
+                onInsertTone(NAMToneInsertion(
+                    toneId: model.toneId,
+                    modelId: model.modelId,
+                    title: model.toneName,
+                    url: model.toneUrl
+                ))
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
@@ -383,17 +403,6 @@ struct ToneBrowserView: View {
 
     // MARK: - Actions
 
-    private func insertSnippet(toneId: String, modelId: String) {
-        let path = "tone3000://\(toneId)/\(modelId)"
-        let snippet: String
-        if selectedLanguage == .rust {
-            snippet = "conjuredsp::nam!(\"\(path)\");\n"
-        } else {
-            snippet = "from conjuredsp.nam import load_model\nmodel = load_model(\"\(path)\")\n"
-        }
-        onInsertSnippet(snippet)
-    }
-
     private func downloadModel(tone: Tone, model: ToneModel) async {
         guard let urlStr = model.modelUrl, let url = URL(string: urlStr) else {
             error = "No download URL for this model"
@@ -411,6 +420,7 @@ struct ToneBrowserView: View {
             try await modelStore.download(
                 toneId: tone.id.stringValue,
                 toneName: tone.title,
+                toneUrl: tone.url,
                 gear: tone.gear ?? "",
                 author: tone.user?.username ?? "",
                 tags: tone.tags?.map(\.name) ?? [],
