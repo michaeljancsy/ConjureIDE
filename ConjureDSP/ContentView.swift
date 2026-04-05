@@ -7,10 +7,12 @@
 
 import AudioToolbox
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     let hostModel: AudioUnitHostModel
     @ObservedObject var exportHandler: PendingExportHandler
+    @State private var showFilePicker = false
     #if DEBUG
     @State private var isSheetPresented = false
     #endif
@@ -54,14 +56,31 @@ struct ContentView: View {
 
             if hostModel.viewModel.showAudioControls {
                 HStack(spacing: 8) {
-                    Text("Audio Playback")
+                    Button("Choose File\u{2026}") {
+                        showFilePicker = true
+                    }
+                    Text(hostModel.currentAudioFileName)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
                     Button {
                         hostModel.isPlaying ? hostModel.stopPlaying() : hostModel.startPlaying()
                     } label: {
                         Text(hostModel.isPlaying ? "Stop" : "Play")
                     }
                 }
+                .padding(.horizontal, 8)
                 .padding(.vertical, 4)
+                .fileImporter(
+                    isPresented: $showFilePicker,
+                    allowedContentTypes: [.audio],
+                    allowsMultipleSelection: false
+                ) { result in
+                    if case .success(let urls) = result, let url = urls.first {
+                        hostModel.selectAudioFile(url)
+                    }
+                }
             }
             if hostModel.viewModel.showMIDIContols {
                 Text("MIDI Input: Enabled")

@@ -127,6 +127,33 @@ public class SimplePlayEngine {
         }
     }
     
+    /// Changes the audio file at runtime. Stops and restarts playback as needed,
+    /// and rewires through the AU if one is connected.
+    public func setAudioFile(_ fileURL: URL) throws {
+        let wasPlaying = isPlaying
+        if wasPlaying {
+            stopPlaying()
+        }
+
+        let newFile = try AVAudioFile(forReading: fileURL)
+        self.file = newFile
+
+        if let avAudioUnit = self.avAudioUnit, avAudioUnit.wantsAudioInput {
+            // Rewire: player → AU → mixer with new format
+            engine.disconnectNodeInput(avAudioUnit)
+            engine.disconnectNodeInput(engine.mainMixerNode)
+            engine.connect(player, to: avAudioUnit, format: newFile.processingFormat)
+            engine.connect(avAudioUnit, to: engine.mainMixerNode, format: newFile.processingFormat)
+        } else {
+            // No AU or AU doesn't want audio input: player → mixer
+            engine.connect(player, to: engine.mainMixerNode, format: newFile.processingFormat)
+        }
+
+        if wasPlaying {
+            startPlaying()
+        }
+    }
+
     private func setSessionActive(_ active: Bool) {
 #if os(iOS) || os(visionOS)
         do {
