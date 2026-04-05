@@ -76,13 +76,13 @@ final class PackageInstallManager {
     var onPackagesChanged: (() -> Void)?
 
     /// Python runtime URL in the App Group container (provisioned by ConjureDSPTerminal).
-    private var pythonRuntimeURL: URL? {
+    private var pythonRuntimeURL: URL {
         ConjureDSPExtensionAudioUnit.pythonRuntimeURL
     }
 
     /// Site-packages directory inside the shared Python runtime.
-    private var sitePackagesURL: URL? {
-        pythonRuntimeURL?.appendingPathComponent("lib/python3.14t/site-packages")
+    private var sitePackagesURL: URL {
+        pythonRuntimeURL.appendingPathComponent("lib/python3.14t/site-packages")
     }
 
     // MARK: - Init
@@ -95,23 +95,14 @@ final class PackageInstallManager {
 
     /// Request package installation via the companion app.
     func requestInstall(packages: [String]) {
-        guard let runtimeURL = pythonRuntimeURL else {
-            lastError = "Python runtime not available"
-            return
-        }
+        let runtimeURL = pythonRuntimeURL
         let pythonBin = runtimeURL.appendingPathComponent("bin/python3").path
         guard FileManager.default.fileExists(atPath: pythonBin) else {
             lastError = "Python runtime not installed. Launch ConjureDSP Terminal to set it up."
             return
         }
-        guard let containerURL = appGroupContainerURL() else {
-            lastError = "App Group container not available"
-            return
-        }
-        guard let sitePackages = sitePackagesURL else {
-            lastError = "Site-packages path not available"
-            return
-        }
+        let containerURL = appGroupContainerURL()
+        let sitePackages = sitePackagesURL
 
         let targetPath = sitePackages.path
         let requestId = UUID().uuidString
@@ -157,14 +148,8 @@ final class PackageInstallManager {
             lastError = "\(packageName) is a built-in package and cannot be removed"
             return
         }
-        guard let containerURL = appGroupContainerURL() else {
-            lastError = "App Group container not available"
-            return
-        }
-        guard let sitePackages = sitePackagesURL else {
-            lastError = "Site-packages path not available"
-            return
-        }
+        let containerURL = appGroupContainerURL()
+        let sitePackages = sitePackagesURL
 
         let targetPath = sitePackages.path
         let requestId = UUID().uuidString
@@ -225,7 +210,7 @@ final class PackageInstallManager {
             return
         }
 
-        guard let containerURL = appGroupContainerURL() else { return }
+        let containerURL = appGroupContainerURL()
         let resultURL = containerURL.appendingPathComponent(Self.installResultFile)
 
         guard FileManager.default.fileExists(atPath: resultURL.path),
@@ -279,10 +264,7 @@ final class PackageInstallManager {
     /// Scan site-packages directory to discover all installed packages.
     /// Bundled packages (numpy, scipy, etc.) are included but marked as `isBundled`.
     func refreshInstalledPackages() {
-        guard let sitePackages = sitePackagesURL else {
-            installedPackages = []
-            return
-        }
+        let sitePackages = sitePackagesURL
         let fm = FileManager.default
 
         guard fm.fileExists(atPath: sitePackages.path) else {
@@ -325,7 +307,7 @@ final class PackageInstallManager {
 
     // MARK: - Helpers
 
-    private func appGroupContainerURL() -> URL? {
+    private func appGroupContainerURL() -> URL {
         AppGroupContainer.url
     }
 }

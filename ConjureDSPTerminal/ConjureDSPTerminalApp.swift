@@ -50,7 +50,7 @@ class TerminalAppServer {
     /// URL of the shared Python runtime in the App Group container.
     /// This is the single authoritative Python installation used by the AU extension,
     /// package manager, and exported AUs.
-    static let pythonRuntimeURL: URL? = AppGroupContainer.url?.appendingPathComponent("PythonRuntime")
+    static let pythonRuntimeURL: URL = AppGroupContainer.url.appendingPathComponent("PythonRuntime")
 
     func start() {
         log.info("ConjureDSP Terminal starting")
@@ -64,20 +64,19 @@ class TerminalAppServer {
             Self.provisionRustToolchainIfNeeded()
 
             Task { @MainActor in
-                if let containerURL = AppGroupContainer.url {
-                    self.packageInstaller = PackageInstaller(appGroupURL: containerURL)
-                    if self.packageInstaller != nil {
-                        log.info("Package installer ready")
-                    } else {
-                        log.error("Package installer failed to initialize — uv not available")
-                    }
+                let containerURL = AppGroupContainer.url
+                self.packageInstaller = PackageInstaller(appGroupURL: containerURL)
+                if self.packageInstaller != nil {
+                    log.info("Package installer ready")
+                } else {
+                    log.error("Package installer failed to initialize — uv not available")
+                }
 
-                    self.crateInstaller = CrateInstaller(appGroupURL: containerURL)
-                    if self.crateInstaller != nil {
-                        log.info("Crate installer ready")
-                    } else {
-                        log.warning("Crate installer not available — cargo not found in rustc-dist")
-                    }
+                self.crateInstaller = CrateInstaller(appGroupURL: containerURL)
+                if self.crateInstaller != nil {
+                    log.info("Crate installer ready")
+                } else {
+                    log.warning("Crate installer not available — cargo not found in rustc-dist")
                 }
             }
         }
@@ -89,10 +88,7 @@ class TerminalAppServer {
     /// extension and package manager can use it. No-op if already installed (except
     /// for the conjuredsp package, which is always updated to pick up new modules).
     nonisolated static func installPythonRuntimeIfNeeded() {
-        guard let runtimeURL = pythonRuntimeURL else {
-            log.error("App Group container not available — cannot install Python runtime")
-            return
-        }
+        let runtimeURL = pythonRuntimeURL
 
         guard let bundledPythonDist = Bundle.main.resourceURL?.appendingPathComponent("python-dist"),
               FileManager.default.fileExists(atPath: bundledPythonDist.path) else {
@@ -198,10 +194,7 @@ class TerminalAppServer {
     /// to the App Group container so CrateInstaller can compile crates in the sandbox.
     /// Re-provisions if the rustc binary is missing (e.g. after an app update).
     nonisolated static func provisionRustToolchainIfNeeded() {
-        guard let containerURL = AppGroupContainer.url else {
-            log.error("App Group container not available — cannot provision Rust toolchain")
-            return
-        }
+        let containerURL = AppGroupContainer.url
 
         let dstRustcDist = containerURL.appendingPathComponent("rustc-dist")
         let dstCargo = dstRustcDist.appendingPathComponent("bin/cargo")
@@ -234,10 +227,7 @@ class TerminalAppServer {
     /// Copies the bundled `uv` binary to the App Group container so PackageInstaller
     /// can find it reliably regardless of PATH or Bundle.main state. No-op if already present.
     nonisolated static func provisionUVIfNeeded() {
-        guard let containerURL = AppGroupContainer.url else {
-            log.error("App Group container not available — cannot provision uv")
-            return
-        }
+        let containerURL = AppGroupContainer.url
 
         let dstUV = containerURL.appendingPathComponent("uv")
         if FileManager.default.fileExists(atPath: dstUV.path) {
@@ -431,13 +421,12 @@ class TerminalAppServer {
 
     // MARK: - App Group helpers
 
-    private func appGroupURL() -> URL? {
+    private func appGroupURL() -> URL {
         AppGroupContainer.url
     }
 
     private func readMCPPort() -> UInt16? {
-        guard let url = appGroupURL() else { return nil }
-        let portFile = url.appendingPathComponent("mcp-server-port")
+        let portFile = appGroupURL().appendingPathComponent("mcp-server-port")
         guard let s = try? String(contentsOf: portFile, encoding: .utf8),
               let port = UInt16(s.trimmingCharacters(in: .whitespacesAndNewlines)),
               port > 0 else { return nil }
@@ -445,20 +434,17 @@ class TerminalAppServer {
     }
 
     private func shutdownSignalExists() -> Bool {
-        guard let url = appGroupURL() else { return false }
-        let file = url.appendingPathComponent("terminal-shutdown")
+        let file = appGroupURL().appendingPathComponent("terminal-shutdown")
         return FileManager.default.fileExists(atPath: file.path)
     }
 
     private func writeWebSocketPort(_ port: UInt16) {
-        guard let url = appGroupURL() else { return }
-        let portFile = url.appendingPathComponent("terminal-server-port")
+        let portFile = appGroupURL().appendingPathComponent("terminal-server-port")
         try? "\(port)".write(to: portFile, atomically: true, encoding: .utf8)
     }
 
     private func deleteAppGroupFile(_ name: String) {
-        guard let url = appGroupURL() else { return }
-        let file = url.appendingPathComponent(name)
+        let file = appGroupURL().appendingPathComponent(name)
         try? FileManager.default.removeItem(at: file)
     }
 }

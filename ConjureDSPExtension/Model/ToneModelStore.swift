@@ -14,7 +14,6 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "T
 @Observable
 @MainActor
 final class ToneModelStore {
-    private static let appGroupID = "group.com.MichaelJancsy.ConjureDSP"
     private static let tonesDir = "tones"
 
     // MARK: - Observable State
@@ -83,9 +82,7 @@ final class ToneModelStore {
         modelURL: URL,
         accessToken: String
     ) async throws {
-        guard let tonesURL = tonesDirectoryURL() else {
-            throw ToneStoreError.noAppGroup
-        }
+        let tonesURL = tonesDirectoryURL()
 
         isDownloading = true
         downloadProgress = 0
@@ -137,7 +134,7 @@ final class ToneModelStore {
 
     /// Returns the filesystem URL for a downloaded .nam file, or nil if not downloaded.
     func modelURL(toneId: String, modelId: String) -> URL? {
-        guard let tonesURL = tonesDirectoryURL() else { return nil }
+        let tonesURL = tonesDirectoryURL()
         let url = tonesURL
             .appendingPathComponent(toneId)
             .appendingPathComponent("\(modelId).nam")
@@ -145,14 +142,14 @@ final class ToneModelStore {
     }
 
     /// Returns the tones directory path (for CONJUREDSP_TONES_DIR).
-    var tonesDirectoryPath: String? {
-        tonesDirectoryURL()?.path
+    var tonesDirectoryPath: String {
+        tonesDirectoryURL().path
     }
 
     // MARK: - Delete
 
     func delete(toneId: String, modelId: String) {
-        guard let tonesURL = tonesDirectoryURL() else { return }
+        let tonesURL = tonesDirectoryURL()
 
         let namFile = tonesURL
             .appendingPathComponent(toneId)
@@ -182,10 +179,7 @@ final class ToneModelStore {
     // MARK: - Refresh
 
     func refreshFromDisk() {
-        guard let tonesURL = tonesDirectoryURL() else {
-            downloadedModels = []
-            return
-        }
+        let tonesURL = tonesDirectoryURL()
 
         var models: [DownloadedModel] = []
 
@@ -236,9 +230,8 @@ final class ToneModelStore {
 
     // MARK: - Helpers
 
-    private func tonesDirectoryURL() -> URL? {
-        FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupID)?
+    private func tonesDirectoryURL() -> URL {
+        AppGroupContainer.url
             .appendingPathComponent(Self.tonesDir)
     }
 
@@ -262,13 +255,10 @@ final class ToneModelStore {
     // MARK: - Errors
 
     enum ToneStoreError: LocalizedError {
-        case noAppGroup
         case downloadFailed(String)
 
         var errorDescription: String? {
             switch self {
-            case .noAppGroup:
-                return "App Group container not available"
             case .downloadFailed(let reason):
                 return "Download failed: \(reason)"
             }

@@ -287,11 +287,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     // MARK: - Package listing
 
     private func mcpListPackages() -> (String, Bool) {
-        guard let containerURL = AppGroupContainer.url else {
-            return (jsonStr(["error": "App Group container not available"]), true)
-        }
-
-        let sitePackages = containerURL
+        let sitePackages = AppGroupContainer.url
             .appendingPathComponent("PythonRuntime/lib/python3.14t/site-packages")
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: sitePackages, includingPropertiesForKeys: [.isDirectoryKey]
@@ -409,10 +405,8 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         }
 
         // Count downloaded NAM tones by scanning the App Group tones directory
-        if let tonesURL = FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP")?
-            .appendingPathComponent("tones"),
-           let toneDirs = try? FileManager.default.contentsOfDirectory(at: tonesURL, includingPropertiesForKeys: [.isDirectoryKey]) {
+        let tonesURL = AppGroupContainer.url.appendingPathComponent("tones")
+        if let toneDirs = try? FileManager.default.contentsOfDirectory(at: tonesURL, includingPropertiesForKeys: [.isDirectoryKey]) {
             let namCount = toneDirs.filter { dir in
                 (try? dir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
             }.count

@@ -57,9 +57,9 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var paramMetadataCancellable: AnyCancellable?
     private var renderResourcesCancellable: AnyCancellable?
 
-    /// App Group container URL — uses the cached resolution from AppGroupContainer
-    /// to avoid extra TCC prompts on macOS 26 Tahoe.
-    private var appGroupContainerURL: URL? {
+    /// App Group container URL — uses direct path construction to avoid
+    /// TCC "access data from other apps" prompts on macOS 26.
+    private var appGroupContainerURL: URL {
         AppGroupContainer.url
     }
 
@@ -456,11 +456,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             }
 
             // Stage unsigned export in App Group — host app finalizes (signs, registers, reveals)
-            guard let outputDir = appGroupURL else {
-                return .error("Export failed. App Group container not available — check entitlements.")
-            }
-
-            let exportDir = outputDir.appendingPathComponent("PendingExports")
+            let exportDir = appGroupURL.appendingPathComponent("PendingExports")
             try? FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
 
             do {

@@ -71,9 +71,8 @@ final class RustCompiler: ScriptCompiler {
         // Link user-installed crates from crate package manager
         let userExterns = CrateInstallManager.externArgs()
         if !userExterns.isEmpty {
-            if let libDir = CrateInstallManager.cratesLibURL()?.path {
-                args = ["-L", "dependency=\(libDir)"] + args
-            }
+            let libDir = CrateInstallManager.cratesLibURL().path
+            args = ["-L", "dependency=\(libDir)"] + args
             for (name, path) in userExterns where name != "conjuredsp" {
                 args = ["--extern", "\(name)=\(path)"] + args
             }

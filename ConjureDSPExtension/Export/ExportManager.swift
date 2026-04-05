@@ -49,7 +49,7 @@ final class ExportManager {
     static let appGroupIdentifier = AppGroupContainer.id
 
     /// Returns the App Group container URL for staging exports.
-    static func appGroupContainerURL() -> URL? {
+    static func appGroupContainerURL() -> URL {
         AppGroupContainer.url
     }
 
@@ -234,12 +234,9 @@ final class ExportManager {
             // Resolve against App Group tones directory
             let relative = String(path.dropFirst("tone3000://".count))
             let relativeWithExt = relative.hasSuffix(".nam") ? relative : relative + ".nam"
-            if let tonesDir = Self.appGroupContainerURL()?.appendingPathComponent("tones") {
-                let fileURL = tonesDir.appendingPathComponent(relativeWithExt)
-                resolvedURL = FileManager.default.fileExists(atPath: fileURL.path) ? fileURL : nil
-            } else {
-                resolvedURL = nil
-            }
+            let tonesDir = Self.appGroupContainerURL().appendingPathComponent("tones")
+            let fileURL = tonesDir.appendingPathComponent(relativeWithExt)
+            resolvedURL = FileManager.default.fileExists(atPath: fileURL.path) ? fileURL : nil
         } else {
             let expanded = NSString(string: path).expandingTildeInPath
             resolvedURL = FileManager.default.fileExists(atPath: expanded) ? URL(fileURLWithPath: expanded) : nil

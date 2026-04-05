@@ -105,10 +105,7 @@ final class CrateInstallManager {
             lastError = "Please wait for the current operation to finish"
             return
         }
-        guard let containerURL = appGroupContainerURL() else {
-            lastError = "App Group container not available"
-            return
-        }
+        let containerURL = appGroupContainerURL()
 
         // Check if the Rust toolchain is provisioned (cargo must exist)
         let cargoPath = containerURL.appendingPathComponent("rustc-dist/bin/cargo").path
@@ -157,10 +154,7 @@ final class CrateInstallManager {
             lastError = "\(crateName) is a built-in crate and cannot be removed"
             return
         }
-        guard let containerURL = appGroupContainerURL() else {
-            lastError = "App Group container not available"
-            return
-        }
+        let containerURL = appGroupContainerURL()
 
         let cargoPath = containerURL.appendingPathComponent("rustc-dist/bin/cargo").path
         if !FileManager.default.fileExists(atPath: cargoPath) {
@@ -227,7 +221,8 @@ final class CrateInstallManager {
 
         // Update status with cargo progress and elapsed time (installs only —
         // uninstalls show "Removing <name>..." without cargo noise)
-        if let start = pollStartTime, !pendingIsUninstall, let containerURL = appGroupContainerURL() {
+        if let start = pollStartTime, !pendingIsUninstall {
+            let containerURL = appGroupContainerURL()
             let elapsed = Int(Date().timeIntervalSince(start))
             let progressURL = containerURL.appendingPathComponent(Self.buildProgressFile)
             let progress = (try? String(contentsOf: progressURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -239,7 +234,7 @@ final class CrateInstallManager {
             }
         }
 
-        guard let containerURL = appGroupContainerURL() else { return }
+        let containerURL = appGroupContainerURL()
         let resultURL = containerURL.appendingPathComponent(Self.installResultFile)
 
         guard FileManager.default.fileExists(atPath: resultURL.path),
@@ -313,7 +308,7 @@ final class CrateInstallManager {
 
     /// Read the crate manifest from the App Group container.
     nonisolated static func readManifest() -> CrateManifest? {
-        guard let url = containerURL()?.appendingPathComponent(manifestFile) else { return nil }
+        let url = containerURL().appendingPathComponent(manifestFile)
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(CrateManifest.self, from: data)
     }
@@ -326,8 +321,8 @@ final class CrateInstallManager {
     /// Returns `--extern` argument pairs for all installed crate rlibs.
     /// Each pair is (crate_name, full_rlib_path).
     nonisolated static func externArgs() -> [(name: String, path: String)] {
-        guard let manifest = readManifest(),
-              let libDir = cratesLibURL()?.path else { return [] }
+        guard let manifest = readManifest() else { return [] }
+        let libDir = cratesLibURL().path
 
         return manifest.crates.compactMap { (name, entry) in
             let path = "\(libDir)/\(entry.rlib)"
@@ -337,17 +332,17 @@ final class CrateInstallManager {
     }
 
     /// Returns the directory containing installed rlibs, for rustc `-L` flag.
-    nonisolated static func cratesLibURL() -> URL? {
-        containerURL()?.appendingPathComponent(rlibDir)
+    nonisolated static func cratesLibURL() -> URL {
+        containerURL().appendingPathComponent(rlibDir)
     }
 
     // MARK: - Helpers
 
-    private func appGroupContainerURL() -> URL? {
+    private func appGroupContainerURL() -> URL {
         Self.containerURL()
     }
 
-    nonisolated private static func containerURL() -> URL? {
+    nonisolated private static func containerURL() -> URL {
         AppGroupContainer.url
     }
 }

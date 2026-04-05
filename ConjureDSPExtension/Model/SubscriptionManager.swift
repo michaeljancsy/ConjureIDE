@@ -49,7 +49,7 @@ class SubscriptionManager: ObservableObject {
     static let appGroupIdentifier = AppGroupContainer.id
 
     /// Pre-resolved App Group container URL (resolved once at startup).
-    private let appGroupContainerURL: URL?
+    private let appGroupContainerURL: URL
 
     /// Token filename within the App Group container.
     private static let tokenFilename = "subscription_token"
@@ -92,8 +92,8 @@ class SubscriptionManager: ObservableObject {
 
     // MARK: - Init
 
-    init(appGroupContainerURL: URL? = nil) {
-        self.appGroupContainerURL = appGroupContainerURL ?? AppGroupContainer.url
+    init(appGroupContainerURL: URL = AppGroupContainer.url) {
+        self.appGroupContainerURL = appGroupContainerURL
     }
 
     /// Load cached token from App Group and verify with kernel.
@@ -219,12 +219,7 @@ class SubscriptionManager: ObservableObject {
     // MARK: - Token Persistence (App Group)
 
     private func loadToken() -> String? {
-        guard let containerURL = appGroupContainerURL else {
-            log.warning("App Group container not available")
-            return nil
-        }
-
-        let tokenURL = containerURL.appendingPathComponent(Self.tokenFilename)
+        let tokenURL = appGroupContainerURL.appendingPathComponent(Self.tokenFilename)
         guard let data = FileManager.default.contents(atPath: tokenURL.path),
               let token = String(data: data, encoding: .utf8) else {
             return nil
@@ -233,12 +228,7 @@ class SubscriptionManager: ObservableObject {
     }
 
     private func saveToken(_ token: String) throws {
-        guard let containerURL = appGroupContainerURL else {
-            throw NSError(domain: "SubscriptionManager", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "App Group container not available"])
-        }
-
-        let tokenURL = containerURL.appendingPathComponent(Self.tokenFilename)
+        let tokenURL = appGroupContainerURL.appendingPathComponent(Self.tokenFilename)
         try token.write(to: tokenURL, atomically: true, encoding: .utf8)
     }
 

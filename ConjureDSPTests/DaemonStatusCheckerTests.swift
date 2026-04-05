@@ -215,16 +215,12 @@ struct DaemonStatusCheckerTests {
     func stalePortFile() async throws {
         // Write a port file pointing to a port where nothing is listening.
         // Without portFileDirectoryOverride, the real connectivity check runs.
-        // We use the actual App Group container here.
-        let container = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
-        )
-        // Skip if App Group not available (e.g., CI without entitlements)
-        try #require(container != nil, "App Group container not available")
+        // We use the actual App Group container here (via direct path, no TCC prompt).
+        let container = AppGroupContainer.url
 
-        let portFile = container!.appendingPathComponent("terminal-server-port")
+        let portFile = container.appendingPathComponent("terminal-server-port")
         // Back up existing file if present
-        let backup = container!.appendingPathComponent("terminal-server-port.backup")
+        let backup = container.appendingPathComponent("terminal-server-port.backup")
         let hadExistingFile = FileManager.default.fileExists(atPath: portFile.path)
         if hadExistingFile {
             try? FileManager.default.moveItem(at: portFile, to: backup)
@@ -248,10 +244,7 @@ struct DaemonStatusCheckerTests {
     @Test("Returns true when port file exists and server is listening")
     @MainActor
     func liveServer() async throws {
-        let container = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.MichaelJancsy.ConjureDSP"
-        )
-        try #require(container != nil, "App Group container not available")
+        let container = AppGroupContainer.url
 
         // Start a real TCP listener on an ephemeral port using POSIX sockets
         let serverSock = Darwin.socket(AF_INET, SOCK_STREAM, 0)
@@ -283,8 +276,8 @@ struct DaemonStatusCheckerTests {
         let listenerPort = UInt16(bigEndian: boundAddr.sin_port)
         try #require(listenerPort > 0)
 
-        let portFile = container!.appendingPathComponent("terminal-server-port")
-        let backup = container!.appendingPathComponent("terminal-server-port.backup")
+        let portFile = container.appendingPathComponent("terminal-server-port")
+        let backup = container.appendingPathComponent("terminal-server-port.backup")
         let hadExistingFile = FileManager.default.fileExists(atPath: portFile.path)
         if hadExistingFile {
             try? FileManager.default.moveItem(at: portFile, to: backup)
