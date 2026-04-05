@@ -1341,7 +1341,12 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = ConjureDSP;
-				INFOPLIST_KEY_SUFeedURL = "https://example.com/appcast.xml";
+				INFOPLIST_KEY_SUAllowsAutomaticUpdates = NO;
+				INFOPLIST_KEY_SUAutomaticallyUpdate = NO;
+				INFOPLIST_KEY_SUEnableAutomaticChecks = YES;
+				INFOPLIST_KEY_SUFeedURL = "https://updates.conjuredsp.com/appcast.xml";
+				INFOPLIST_KEY_SUPublicEDKey = "BOHosTZ8efUSgirWQyZkPFqwMi1c/blu89D+yyRe3MM=";
+				INFOPLIST_KEY_SUScheduledCheckInterval = 86400;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
