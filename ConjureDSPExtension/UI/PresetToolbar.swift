@@ -72,8 +72,10 @@ struct PresetToolbar: View {
 
     @Binding var showingSaveAs: Bool
     @Binding var saveAsName: String
-    /// Callback to insert a code snippet into the Monaco editor at the cursor.
-    var onInsertSnippet: ((String) -> Void)?
+    /// Callback invoked when a NAM tone is selected in the tone browser.
+    /// The receiver is expected to splice imports and the model instantiation
+    /// into the active script at language-appropriate locations.
+    var onInsertTone: ((NAMToneInsertion) -> Void)?
 
     @State private var showDeleteConfirm = false
     @State private var showingRename = false
@@ -514,9 +516,9 @@ struct PresetToolbar: View {
                     modelStore: toneModelStore,
                     selectedLanguage: selectedLanguage,
                     onDone: { showingTones = false },
-                    onInsertSnippet: { snippet in
+                    onInsertTone: { insertion in
                         showingTones = false
-                        onInsertSnippet?(snippet)
+                        onInsertTone?(insertion)
                     }
                 )
             }
