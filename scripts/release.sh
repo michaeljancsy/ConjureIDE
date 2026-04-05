@@ -102,14 +102,14 @@ if [ -n "$SPARKLE_BIN" ]; then
     # directly from this page to roll back.
     VERSIONS_HTML="$APPCAST_DIR/versions.html"
     /usr/bin/python3 - "$APPCAST_DIR/appcast.xml" "$VERSIONS_HTML" "$UPDATES_BASE_URL" <<'PY'
-import sys, re, html, xml.etree.ElementTree as ET
+import sys, html, datetime, xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
 appcast_path, out_path, base_url = sys.argv[1], sys.argv[2], sys.argv[3]
-ns = {"sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle"}
 tree = ET.parse(appcast_path)
 items = []
 for item in tree.getroot().iter("item"):
     title = (item.findtext("title") or "").strip()
-    pub_date = (item.findtext("pubDate") or "").strip()
+    pub_date_raw = (item.findtext("pubDate") or "").strip()
     enclosure = item.find("enclosure")
     if enclosure is None:
         continue
@@ -117,14 +117,21 @@ for item in tree.getroot().iter("item"):
     if not url.startswith("http"):
         url = base_url.rstrip("/") + "/" + url.lstrip("/")
     version = enclosure.get("{http://www.andymatuschak.org/xml-namespaces/sparkle}shortVersionString") or title
-    items.append((version, pub_date, url))
-# Sort newest first, best-effort semver-ish comparison
-def ver_key(v):
-    return [int(p) if p.isdigit() else p for p in re.split(r"[.\-]", v[0])]
-try:
-    items.sort(key=ver_key, reverse=True)
-except Exception:
-    items.reverse()
+    # Parse RFC 822 pubDate for sorting; fall back to epoch so unparseable
+    # entries sort last rather than crashing.
+    try:
+        sort_dt = parsedate_to_datetime(pub_date_raw) if pub_date_raw else None
+    except (TypeError, ValueError):
+        sort_dt = None
+    if sort_dt is None:
+        sort_dt = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
+    elif sort_dt.tzinfo is None:
+        sort_dt = sort_dt.replace(tzinfo=datetime.timezone.utc)
+    items.append((sort_dt, version, pub_date_raw, url))
+# Sort newest first by publication date. Robust against pre-release version
+# strings like "1.0-beta" that would break a naive version-string sort.
+items.sort(key=lambda row: row[0], reverse=True)
+items = [(v, d, u) for _, v, d, u in items]
 rows = "\n".join(
     f'<li><a href="{html.escape(u)}">ConjureDSP {html.escape(v)}</a>'
     f'<span class="date">{html.escape(d)}</span></li>'
