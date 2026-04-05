@@ -2,6 +2,35 @@
 
 Incomplete test items from open PRs. Check off as you verify each item.
 
+## PR #164 — [Require NAM redistribution certification on preset export](https://github.com/michaeljancsy/conjuredsp-application/pull/164)
+
+- [ ] Manual: load `preset_nam.py`, click Export, verify certification section appears and Export button is disabled until a choice is made
+- [ ] Manual: load a non-NAM preset (e.g. `preset_lowpass.py`), click Export, verify certification section is hidden and Export works as before
+- [ ] Manual: load `preset_nam_rust.rs`, run it, click Export, verify certification section appears
+- [ ] Manual: cancel the popover after selecting an option, re-open it, verify the selection does not carry over
+
+## PR #163 — [NAM tone browser: splice imports and instantiation following conventions](https://github.com/michaeljancsy/conjuredsp-application/pull/163)
+
+- [ ] Same in Rust mode — comment + `conjuredsp::nam!(...)` above `fn process`, above `#[no_mangle]` if present
+- [ ] Click **Use** on a freshly-downloaded tone — same behavior; URL persists across app restart
+- [ ] Click **Use** on a pre-existing downloaded tone (metadata.json without `toneUrl`) — only title comment appears, no crash
+
+## PR #156 — [Build numpy/scipy against Accelerate instead of OpenBLAS](https://github.com/michaeljancsy/conjuredsp-application/pull/156)
+
+- [ ] Delete `rust/python-dist/` and re-run `cd rust && ./setup-python.sh`
+- [ ] `rust/python-dist/bin/python3 -c "import numpy; numpy.show_config()"` — confirm Accelerate/vecLib, not openblas
+- [ ] `rust/python-dist/bin/python3 -c "import numpy as np; a = np.random.randn(100,100); print(np.linalg.eigh(a)[0][:3])"` — functional check
+- [ ] Run unit tests to verify no regressions
+
+## PR #154 — [Plan: Replace NAM condition mix loop with matmul_acc](https://github.com/michaeljancsy/conjuredsp-application/pull/154)
+
+- [ ] Plan only — no code changes to test
+
+## PR #152 — [Add numpy/scipy Accelerate linkage plan](https://github.com/michaeljancsy/conjuredsp-application/pull/152)
+
+- [ ] Delete `rust/python-dist/` and re-run `rust/setup-python.sh`
+- [ ] Run `rust/python-dist/bin/python3 -c "import numpy; numpy.show_config()"` and confirm Accelerate/vecLib appears, not openblas
+
 ## PR #132 — [Consolidate App Group container URL resolution to reduce TCC prompts](https://github.com/michaeljancsy/conjuredsp-application/pull/132)
 
 - [ ] Launch ConjureDSP host app — count permission prompts (should be reduced from multiple to 0-1)
