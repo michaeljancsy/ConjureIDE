@@ -67,6 +67,7 @@ struct PresetToolbar: View {
     var onNew: (ScriptLanguage) -> Void
     var onExport: (String) -> Void
     var isExporting: Bool = false
+    var containsNamTone: Bool = false
     @Binding var bypassed: Bool
     var onBypassToggle: () -> Void
 
@@ -375,6 +376,7 @@ struct PresetToolbar: View {
                     exportName: $exportName,
                     language: selectedLanguage,
                     isLicensed: subscriptionManager.isLicensed,
+                    containsNamTone: containsNamTone,
                     onExport: { name in
                         showingExport = false
                         onExport(name)

@@ -169,6 +169,10 @@ struct ConjureDSPExtensionMainView: View {
                     }
                 },
                 isExporting: isExporting,
+                containsNamTone: ExportManager.containsNamReference(
+                    source: scriptSource,
+                    language: selectedLanguage
+                ),
                 bypassed: $bypassed,
                 onBypassToggle: { setBypass(bypassed) },
                 showingSaveAs: $showingSaveAs,

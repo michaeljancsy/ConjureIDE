@@ -1740,3 +1740,71 @@ struct ExportEdgeCaseTests {
     }
 }
 
+// MARK: - NAM Reference Detection Tests
+
+struct ExportNamReferenceTests {
+
+    @Test func pythonTone3000Reference() {
+        let source = """
+        from conjuredsp.nam import load_model
+        model = load_model("tone3000://60092/351559")
+        def process(inputs, outputs, frame_count, sample_rate, params):
+            pass
+        """
+        #expect(ExportManager.containsNamReference(source: source, language: .python))
+    }
+
+    @Test func pythonLocalFileReference() {
+        let source = #"model = load_model("/Users/foo/models/my_amp.nam")"#
+        #expect(ExportManager.containsNamReference(source: source, language: .python))
+    }
+
+    @Test func pythonTildeFileReference() {
+        let source = #"m = load_model("~/Music/tones/lead.nam")"#
+        #expect(ExportManager.containsNamReference(source: source, language: .python))
+    }
+
+    @Test func rustTone3000Reference() {
+        let source = """
+        use conjuredsp::*;
+        conjuredsp::nam!("tone3000://60092/351559");
+        """
+        #expect(ExportManager.containsNamReference(source: source, language: .rust))
+    }
+
+    @Test func rustLocalFileReference() {
+        let source = #"nam!("/Users/foo/bar.nam");"#
+        #expect(ExportManager.containsNamReference(source: source, language: .rust))
+    }
+
+    @Test func pythonWithoutNamReference() {
+        let source = """
+        def process(inputs, outputs, frame_count, sample_rate, params):
+            outputs[:] = inputs * params["gain"]
+        """
+        #expect(!ExportManager.containsNamReference(source: source, language: .python))
+    }
+
+    @Test func rustWithoutNamReference() {
+        let source = """
+        use conjuredsp::*;
+        setup!();
+        params! { GAIN = db() }
+        fn process() {}
+        """
+        #expect(!ExportManager.containsNamReference(source: source, language: .rust))
+    }
+
+    @Test func pythonMacroPatternIgnoredForPython() {
+        // Rust nam!(...) macro should not match the Python detector.
+        let source = #"# nam!("tone3000://1/2")"#
+        #expect(!ExportManager.containsNamReference(source: source, language: .python))
+    }
+
+    @Test func rustLoadModelIgnoredForRust() {
+        // Python load_model() call should not match the Rust detector.
+        let source = #"// load_model("foo.nam")"#
+        #expect(!ExportManager.containsNamReference(source: source, language: .rust))
+    }
+}
+

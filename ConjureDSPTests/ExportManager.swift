@@ -65,6 +65,18 @@ final class ExportManager {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
     }
 
+    /// Returns `true` if the script source references a NAM tone file that would
+    /// be bundled into an exported AU. Used by the export UI to decide whether
+    /// to require a redistribution certification from the user.
+    static func containsNamReference(source: String, language: ScriptLanguage) -> Bool {
+        switch language {
+        case .python:
+            return source.range(of: #"load_model\("([^"]+)"\)"#, options: .regularExpression) != nil
+        case .rust:
+            return source.range(of: #"nam!\("([^"]+)"\)"#, options: .regularExpression) != nil
+        }
+    }
+
     func exportPreset(
         name: String,
         source: String,
