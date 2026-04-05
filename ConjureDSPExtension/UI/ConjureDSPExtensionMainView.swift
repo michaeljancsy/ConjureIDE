@@ -193,6 +193,69 @@ struct ConjureDSPExtensionMainView: View {
 
             ZStack {
             HStack(spacing: 0) {
+            // Terminal panel — rendered lazily on first open, then kept alive
+            // to avoid WKWebView teardown choppiness.
+            if terminalHasBeenOpened {
+                Group {
+                    VStack(spacing: 0) {
+                        // Tab switcher header
+                        HStack(spacing: 0) {
+                            chatTabButton(label: "Claude Code", isSelected: !showAIPromptTab) {
+                                showAIPromptTab = false
+                            }
+                            chatTabButton(label: "AI Prompt", isSelected: showAIPromptTab) {
+                                showAIPromptTab = true
+                            }
+                        }
+                        .frame(height: 28)
+                        .clipped()
+                        .background(colorScheme == .dark
+                            ? Color(white: 0.10)
+                            : Color(nsColor: .windowBackgroundColor))
+
+                        Divider()
+
+                        if showAIPromptTab {
+                            AIPromptHelperView(
+                                currentScript: scriptSource,
+                                currentLanguage: selectedLanguage,
+                                colorScheme: colorScheme
+                            )
+                        } else if daemonChecker.isDaemonAvailable {
+                            TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
+                                .accessibilityIdentifier("terminalPanel")
+                        } else {
+                            DaemonLaunchPromptView(colorScheme: colorScheme)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .background(colorScheme == .dark
+                        ? Color(white: 0.12)
+                        : Color(nsColor: .controlBackgroundColor))
+                }
+                .frame(width: showChat ? chatWidth : 0)
+                .clipped()
+
+                // Resizable divider between terminal and editor
+                Rectangle()
+                    .fill(Color.secondary.opacity(showChat ? 0.2 : 0))
+                    .frame(width: showChat ? 4 : 0)
+                    .contentShape(Rectangle().inset(by: -4))
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                chatWidth = max(200, min(450, chatWidth + value.translation.width))
+                            }
+                    )
+                    .onHover { hovering in
+                        if hovering && showChat {
+                            NSCursor.resizeLeftRight.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+            }
+
             VStack(spacing: 0) {
                 MonacoEditorView(
                     text: $scriptSource,
@@ -256,80 +319,8 @@ struct ConjureDSPExtensionMainView: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
             } // HStack
+            .animation(.easeOut(duration: 0.15), value: showChat)
             .animation(.easeOut(duration: 0.15), value: showSpectrogram)
-
-            // Terminal drawer — animates frame width so the WKWebView is never
-            // destroyed mid-animation (avoids choppiness from WebView teardown).
-            // Rendered lazily on first open, then kept alive.
-            if terminalHasBeenOpened {
-                HStack(spacing: 0) {
-                    Group {
-                        VStack(spacing: 0) {
-                            // Tab switcher header
-                            HStack(spacing: 0) {
-                                chatTabButton(label: "Claude Code", isSelected: !showAIPromptTab) {
-                                    showAIPromptTab = false
-                                }
-                                chatTabButton(label: "AI Prompt", isSelected: showAIPromptTab) {
-                                    showAIPromptTab = true
-                                }
-                            }
-                            .frame(height: 28)
-                            .clipped() // prevent button backgrounds bleeding below the 28pt frame
-                            .background(colorScheme == .dark
-                                ? Color(white: 0.10)
-                                : Color(nsColor: .windowBackgroundColor))
-
-                            Divider()
-
-                            if showAIPromptTab {
-                                AIPromptHelperView(
-                                    currentScript: scriptSource,
-                                    currentLanguage: selectedLanguage,
-                                    colorScheme: colorScheme
-                                )
-                            } else if daemonChecker.isDaemonAvailable {
-                                TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
-                                    .accessibilityIdentifier("terminalPanel")
-                            } else {
-                                DaemonLaunchPromptView(colorScheme: colorScheme)
-                            }
-                        }
-                        // Background on the VStack (not individual children) guarantees the
-                        // full chatWidth × full height area is opaque — child views like
-                        // DaemonLaunchPromptView and AIPromptHelperView may not stretch to
-                        // fill the entire width, leaving transparent gaps where Monaco bleeds.
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .background(colorScheme == .dark
-                            ? Color(white: 0.12)
-                            : Color(nsColor: .controlBackgroundColor))
-                    }
-                    .frame(width: showChat ? chatWidth : 0)
-                    .clipped()
-
-                    // Drag handle (only interactive when open)
-                    Rectangle()
-                        .fill(Color.secondary.opacity(showChat ? 0.2 : 0))
-                        .frame(width: showChat ? 4 : 0)
-                        .contentShape(Rectangle().inset(by: -4))
-                        .gesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    chatWidth = max(200, min(450, chatWidth + value.translation.width))
-                                }
-                        )
-                        .onHover { hovering in
-                            if hovering && showChat {
-                                NSCursor.resizeLeftRight.push()
-                            } else {
-                                NSCursor.pop()
-                            }
-                        }
-
-                    Spacer(minLength: 0)
-                }
-                .animation(.easeOut(duration: 0.15), value: showChat)
-            }
 
             // Demo expired overlay
             if !subscriptionManager.isLicensed && subscriptionManager.demoSecondsRemaining <= 0 {
