@@ -22,6 +22,13 @@
 		DB7A021004CD992B38DC57E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C5C4014EECF6736C801F11F1 /* Assets.xcassets */; };
 		EE76E29920556A4CA0FE0677 /* ConjureDSPExportAUTemplateApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA37F9DDE8F4685805FE21A2 /* ConjureDSPExportAUTemplateApp.swift */; };
 		F8147023DF5F5A1DCFEED0A0 /* ExportParameterState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F670DED792DF6234B24ECBF3 /* ExportParameterState.swift */; };
+		7A6926C2EF1F4EFAA7853237 /* ExportDebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F76A44BD766243BBAFA31D81 /* ExportDebugLog.swift */; };
+		567DCFB7839643608244D220 /* RenderStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54CD658BF7CC45538000342A /* RenderStats.swift */; };
+		6DFEA98FE514405FB2BB9A3F /* ExportDebugLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3852CC6A8D5148D99C3232ED /* ExportDebugLogTests.swift */; };
+		10B021B8EA1B4805B9869114 /* RenderStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4ADDECA339D43D88A6E92A6 /* RenderStatsTests.swift */; };
+		8D3DC97F788343D4A3DBECF8 /* ExportDebugLog.swift in Sources (tests) */ = {isa = PBXBuildFile; fileRef = F76A44BD766243BBAFA31D81 /* ExportDebugLog.swift */; };
+		18B85700FE424BB7A509D19F /* RenderStats.swift in Sources (tests) */ = {isa = PBXBuildFile; fileRef = 54CD658BF7CC45538000342A /* RenderStats.swift */; };
+		C11D2B8DABDA42E8A29E9F3A /* DebugPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7353B5B42B1545348F82A91E /* DebugPaneView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -75,6 +82,12 @@
 		F670DED792DF6234B24ECBF3 /* ExportParameterState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportParameterState.swift; sourceTree = "<group>"; };
 		FA37F9DDE8F4685805FE21A2 /* ConjureDSPExportAUTemplateApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConjureDSPExportAUTemplateApp.swift; sourceTree = "<group>"; };
 		FC07F89451DB3644FB06CC88 /* ExportAUTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUTests.swift; sourceTree = "<group>"; };
+		56D6AD52554E4653B19E6158 /* ExportRenderStatsAtomics.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ExportRenderStatsAtomics.h; sourceTree = "<group>"; };
+		F76A44BD766243BBAFA31D81 /* ExportDebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportDebugLog.swift; sourceTree = "<group>"; };
+		54CD658BF7CC45538000342A /* RenderStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderStats.swift; sourceTree = "<group>"; };
+		3852CC6A8D5148D99C3232ED /* ExportDebugLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportDebugLogTests.swift; sourceTree = "<group>"; };
+		E4ADDECA339D43D88A6E92A6 /* RenderStatsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderStatsTests.swift; sourceTree = "<group>"; };
+		7353B5B42B1545348F82A91E /* DebugPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugPaneView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -115,6 +128,7 @@
 				A8A47F30AB5BF457FF5172D3 /* ExportAUViewController.swift */,
 				F670DED792DF6234B24ECBF3 /* ExportParameterState.swift */,
 				4E49F55FDC52279BA4C1413D /* PythonRuntimeErrorView.swift */,
+				7353B5B42B1545348F82A91E /* DebugPaneView.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -123,6 +137,9 @@
 			isa = PBXGroup;
 			children = (
 				7C548D4D797761AE5CDAE6E1 /* ExportAUBridgingHeader.h */,
+				56D6AD52554E4653B19E6158 /* ExportRenderStatsAtomics.h */,
+				F76A44BD766243BBAFA31D81 /* ExportDebugLog.swift */,
+				54CD658BF7CC45538000342A /* RenderStats.swift */,
 			);
 			path = Common;
 			sourceTree = "<group>";
@@ -171,6 +188,8 @@
 			isa = PBXGroup;
 			children = (
 				FC07F89451DB3644FB06CC88 /* ExportAUTests.swift */,
+				3852CC6A8D5148D99C3232ED /* ExportDebugLogTests.swift */,
+				E4ADDECA339D43D88A6E92A6 /* RenderStatsTests.swift */,
 			);
 			path = ConjureDSPExportAUTemplateTests;
 			sourceTree = "<group>";
@@ -352,6 +371,9 @@
 				F8147023DF5F5A1DCFEED0A0 /* ExportParameterState.swift in Sources */,
 				A29373D99BEA97B250FB4780 /* PythonRuntimeErrorView.swift in Sources */,
 				0C13E7E0026ACB052453ABB3 /* RuntimeConfig.swift in Sources */,
+				7A6926C2EF1F4EFAA7853237 /* ExportDebugLog.swift in Sources */,
+				567DCFB7839643608244D220 /* RenderStats.swift in Sources */,
+				C11D2B8DABDA42E8A29E9F3A /* DebugPaneView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -360,6 +382,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				8D4FF6CC2046A46FFDB9E200 /* ExportAUTests.swift in Sources */,
+				6DFEA98FE514405FB2BB9A3F /* ExportDebugLogTests.swift in Sources */,
+				10B021B8EA1B4805B9869114 /* RenderStatsTests.swift in Sources */,
+				8D3DC97F788343D4A3DBECF8 /* ExportDebugLog.swift in Sources (tests) */,
+				18B85700FE424BB7A509D19F /* RenderStats.swift in Sources (tests) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
