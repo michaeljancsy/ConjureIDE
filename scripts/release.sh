@@ -12,15 +12,25 @@
 #          --team-id "A4R63LAVLS" \
 #          --password "xxxx-xxxx-xxxx-xxxx"
 #   3. Rust toolchain + bundled Python runtime (rust/setup-python.sh)
-#   4. Sparkle EdDSA keypair: on first run, generate_appcast will prompt you
-#      to create one. Store the private key in Keychain (Sparkle does this
-#      automatically) and add the public key to SUPublicEDKey in Info.plist.
+#   4. Sparkle EdDSA keypair: run the `generate_keys` tool once (bundled
+#      alongside generate_appcast in the Sparkle SPM artifacts — find it with
+#      `find ~/Library/Developer/Xcode/DerivedData -name generate_keys -type f`).
+#      It stores the private key in the login Keychain and prints the public
+#      key. Paste the public key into INFOPLIST_KEY_SUPublicEDKey in the
+#      Release build settings of ConjureDSP.xcodeproj. This is already done
+#      for the main dev machine; only needed when setting up a new signer.
+#   5. Cloudflare R2 bucket `conjuredsp-updates` with custom domain
+#      updates.conjuredsp.com. Wrangler CLI authenticated (same auth as the
+#      subscriptions Worker in server/). Uploads are skipped with a warning
+#      if wrangler is not installed.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT_DIR="$PROJECT_DIR/build/release"
+R2_BUCKET="conjuredsp-updates"
+UPDATES_BASE_URL="https://updates.conjuredsp.com"
 
 echo "========================================"
 echo "  ConjureDSP Release Pipeline"
@@ -28,7 +38,7 @@ echo "========================================"
 echo ""
 
 # Step 1: Build and export
-echo "[1/4] Building Release archive..."
+echo "[1/6] Building Release archive..."
 "$SCRIPT_DIR/build-release.sh" "$OUTPUT_DIR"
 
 APP_PATH="$OUTPUT_DIR/ConjureDSP.app"
@@ -36,34 +46,149 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_P
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
 
 echo ""
-echo "[2/4] Notarizing app..."
+echo "[2/6] Notarizing app..."
 "$SCRIPT_DIR/notarize.sh" "$APP_PATH"
 
 echo ""
-echo "[3/4] Creating DMG..."
+echo "[3/6] Creating DMG..."
 DMG_PATH="$OUTPUT_DIR/ConjureDSP-${VERSION}.dmg"
 "$SCRIPT_DIR/create-dmg.sh" "$APP_PATH" "$DMG_PATH"
 
 echo ""
-echo "[4/4] Notarizing DMG..."
+echo "[4/6] Notarizing DMG..."
 "$SCRIPT_DIR/notarize.sh" "$DMG_PATH"
 
 echo ""
-echo "[5/5] Generating Sparkle appcast..."
+echo "[5/6] Generating Sparkle appcast..."
+# APPCAST_DIR is preserved across release runs: it accumulates every historic
+# DMG so generate_appcast can emit a feed containing all versions (enables
+# rollback via versions.html below). On a fresh machine we pull any missing
+# DMGs down from R2 before regenerating.
 APPCAST_DIR="$OUTPUT_DIR/appcast"
 mkdir -p "$APPCAST_DIR"
 cp "$DMG_PATH" "$APPCAST_DIR/"
+
+if command -v wrangler >/dev/null 2>&1; then
+    echo "  Syncing historic DMGs from R2..."
+    R2_KEYS=$(wrangler r2 object list "$R2_BUCKET" --remote --json 2>/dev/null \
+              | /usr/bin/python3 -c "import json,sys
+try:
+    data = json.load(sys.stdin)
+    objs = data.get('result', data) if isinstance(data, dict) else data
+    for o in objs:
+        k = o.get('key', '')
+        if k.endswith('.dmg'):
+            print(k)
+except Exception:
+    pass" 2>/dev/null || true)
+    for KEY in $R2_KEYS; do
+        if [ ! -f "$APPCAST_DIR/$KEY" ]; then
+            echo "    Fetching $KEY..."
+            wrangler r2 object get "$R2_BUCKET/$KEY" --file "$APPCAST_DIR/$KEY" --remote || true
+        fi
+    done
+fi
+
 # generate_appcast scans the directory for archives, extracts version info
-# from embedded app bundles, signs with EdDSA, and produces appcast.xml.
-# On first run it will create an EdDSA keypair and store it in Keychain.
+# from embedded app bundles, signs with the EdDSA private key stored in the
+# login Keychain (put there by `generate_keys`), and produces appcast.xml.
 SPARKLE_BIN=$(find "$PROJECT_DIR/.build" ~/Library/Developer/Xcode/DerivedData -name "generate_appcast" -type f 2>/dev/null | head -1)
 if [ -n "$SPARKLE_BIN" ]; then
     "$SPARKLE_BIN" "$APPCAST_DIR"
     echo "  Appcast: $APPCAST_DIR/appcast.xml"
+
+    # Generate versions.html from the appcast — linked from the app's
+    # "Previous Versions…" menu item. Users can download any prior DMG
+    # directly from this page to roll back.
+    VERSIONS_HTML="$APPCAST_DIR/versions.html"
+    /usr/bin/python3 - "$APPCAST_DIR/appcast.xml" "$VERSIONS_HTML" "$UPDATES_BASE_URL" <<'PY'
+import sys, re, html, xml.etree.ElementTree as ET
+appcast_path, out_path, base_url = sys.argv[1], sys.argv[2], sys.argv[3]
+ns = {"sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle"}
+tree = ET.parse(appcast_path)
+items = []
+for item in tree.getroot().iter("item"):
+    title = (item.findtext("title") or "").strip()
+    pub_date = (item.findtext("pubDate") or "").strip()
+    enclosure = item.find("enclosure")
+    if enclosure is None:
+        continue
+    url = enclosure.get("url", "")
+    if not url.startswith("http"):
+        url = base_url.rstrip("/") + "/" + url.lstrip("/")
+    version = enclosure.get("{http://www.andymatuschak.org/xml-namespaces/sparkle}shortVersionString") or title
+    items.append((version, pub_date, url))
+# Sort newest first, best-effort semver-ish comparison
+def ver_key(v):
+    return [int(p) if p.isdigit() else p for p in re.split(r"[.\-]", v[0])]
+try:
+    items.sort(key=ver_key, reverse=True)
+except Exception:
+    items.reverse()
+rows = "\n".join(
+    f'<li><a href="{html.escape(u)}">ConjureDSP {html.escape(v)}</a>'
+    f'<span class="date">{html.escape(d)}</span></li>'
+    for v, d, u in items
+)
+doc = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>ConjureDSP — Previous Versions</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{{font:15px -apple-system,BlinkMacSystemFont,sans-serif;max-width:620px;margin:3em auto;padding:0 1em;color:#222}}
+h1{{font-size:1.4em}} p{{color:#555}}
+ul{{list-style:none;padding:0}}
+li{{padding:.6em 0;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:baseline;gap:1em}}
+a{{color:#0a64d8;text-decoration:none;font-weight:500}} a:hover{{text-decoration:underline}}
+.date{{color:#888;font-size:.9em}}
+</style></head><body>
+<h1>ConjureDSP — Previous Versions</h1>
+<p>Download any previous version below. To install, open the DMG and drag
+ConjureDSP to your Applications folder, replacing the current copy. Your
+presets, license, and settings are preserved.</p>
+<ul>
+{rows}
+</ul>
+</body></html>
+"""
+open(out_path, "w").write(doc)
+PY
+    echo "  versions.html: $VERSIONS_HTML"
 else
     echo "  WARNING: generate_appcast not found. Build the project first or run:"
     echo "    xcrun --find generate_appcast"
     echo "  Then re-run this script, or manually generate the appcast."
+fi
+
+echo ""
+echo "[6/6] Uploading to R2..."
+if command -v wrangler >/dev/null 2>&1 && [ -f "$APPCAST_DIR/appcast.xml" ]; then
+    DMG_NAME="ConjureDSP-${VERSION}.dmg"
+    echo "  Uploading $DMG_NAME..."
+    wrangler r2 object put "${R2_BUCKET}/${DMG_NAME}" \
+        --file "$APPCAST_DIR/${DMG_NAME}" \
+        --content-type "application/x-apple-diskimage" \
+        --remote
+    echo "  Uploading appcast.xml..."
+    wrangler r2 object put "${R2_BUCKET}/appcast.xml" \
+        --file "$APPCAST_DIR/appcast.xml" \
+        --content-type "application/xml" \
+        --remote
+    if [ -f "$APPCAST_DIR/versions.html" ]; then
+        echo "  Uploading versions.html..."
+        wrangler r2 object put "${R2_BUCKET}/versions.html" \
+            --file "$APPCAST_DIR/versions.html" \
+            --content-type "text/html; charset=utf-8" \
+            --remote
+    fi
+    echo "  Uploaded to ${UPDATES_BASE_URL}/"
+else
+    echo "  WARNING: skipping upload. Install wrangler (npm i -g wrangler) and"
+    echo "  authenticate, or manually upload these files to the R2 bucket"
+    echo "  ${R2_BUCKET} (served at ${UPDATES_BASE_URL}/):"
+    echo "    - $APPCAST_DIR/ConjureDSP-${VERSION}.dmg"
+    echo "    - $APPCAST_DIR/appcast.xml"
+    [ -f "$APPCAST_DIR/versions.html" ] && echo "    - $APPCAST_DIR/versions.html"
 fi
 
 echo ""

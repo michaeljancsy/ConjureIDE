@@ -5,6 +5,7 @@
 //  Created by Michael Jancsy on 2/25/26.
 //
 
+import AppKit
 import Combine
 import Sparkle
 import SwiftUI
@@ -37,6 +38,11 @@ struct ConjureDSPApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updater: updaterController.updater)
+                Button("Previous Versions…") {
+                    if let url = URL(string: "https://updates.conjuredsp.com/versions.html") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
             }
         }
     }
