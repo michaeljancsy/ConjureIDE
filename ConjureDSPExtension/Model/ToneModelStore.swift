@@ -31,6 +31,7 @@ final class ToneModelStore {
         let toneId: String
         let modelId: String
         let toneName: String
+        let toneUrl: String?
         let modelName: String
         let modelSize: String    // e.g. "standard", "lite"
         let gear: String
@@ -47,6 +48,7 @@ final class ToneModelStore {
     struct ToneMetadata: Codable {
         let toneId: String
         let toneName: String
+        let toneUrl: String?
         let gear: String
         let author: String
         let tags: [String]?
@@ -73,6 +75,7 @@ final class ToneModelStore {
     func download(
         toneId: String,
         toneName: String,
+        toneUrl: String?,
         gear: String,
         author: String,
         tags: [String] = [],
@@ -116,7 +119,7 @@ final class ToneModelStore {
 
         // Update metadata
         var metadata = loadToneMetadata(toneId: toneId, tonesURL: tonesURL) ?? ToneMetadata(
-            toneId: toneId, toneName: toneName, gear: gear, author: author, tags: tags, makes: makes, models: []
+            toneId: toneId, toneName: toneName, toneUrl: toneUrl, gear: gear, author: author, tags: tags, makes: makes, models: []
         )
         var models = metadata.models.filter { $0.modelId != modelId }
         models.append(ModelMetadata(
@@ -124,7 +127,7 @@ final class ToneModelStore {
             modelSize: modelSize, downloadDate: Date()
         ))
         metadata = ToneMetadata(
-            toneId: toneId, toneName: toneName, gear: gear, author: author, tags: tags, makes: makes, models: models
+            toneId: toneId, toneName: toneName, toneUrl: toneUrl ?? metadata.toneUrl, gear: gear, author: author, tags: tags, makes: makes, models: models
         )
         saveToneMetadata(metadata, tonesURL: tonesURL)
 
@@ -162,7 +165,7 @@ final class ToneModelStore {
         // Update metadata
         if var metadata = loadToneMetadata(toneId: toneId, tonesURL: tonesURL) {
             metadata = ToneMetadata(
-                toneId: metadata.toneId, toneName: metadata.toneName,
+                toneId: metadata.toneId, toneName: metadata.toneName, toneUrl: metadata.toneUrl,
                 gear: metadata.gear, author: metadata.author,
                 tags: metadata.tags, makes: metadata.makes,
                 models: metadata.models.filter { $0.modelId != modelId }
@@ -219,6 +222,7 @@ final class ToneModelStore {
                     toneId: toneId,
                     modelId: modelId,
                     toneName: metadata?.toneName ?? toneId,
+                    toneUrl: metadata?.toneUrl,
                     modelName: modelMeta?.modelName ?? modelId,
                     modelSize: modelMeta?.modelSize ?? "unknown",
                     gear: metadata?.gear ?? "",

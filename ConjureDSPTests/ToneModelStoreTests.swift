@@ -6,6 +6,7 @@ import Testing
 private struct ToneMetadata: Codable {
     let toneId: String
     let toneName: String
+    let toneUrl: String?
     let gear: String
     let author: String
     let tags: [String]?
@@ -30,6 +31,7 @@ struct ToneModelStoreTests {
         let original = ToneMetadata(
             toneId: "34",
             toneName: "Marshall JCM800",
+            toneUrl: "https://tone3000.com/tones/34",
             gear: "amp",
             author: "testuser",
             tags: ["rock", "metal", "nam"],
@@ -89,6 +91,7 @@ struct ToneModelStoreTests {
         let original = ToneMetadata(
             toneId: "99",
             toneName: "No Tags Tone",
+            toneUrl: nil,
             gear: "pedal",
             author: "someone",
             tags: [],
@@ -109,6 +112,7 @@ struct ToneModelStoreTests {
         let original = ToneMetadata(
             toneId: "44209",
             toneName: "Mesa Boogie",
+            toneUrl: "https://tone3000.com/tones/44209",
             gear: "full-rig",
             author: "rigbuilder",
             tags: ["metal"],

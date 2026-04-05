@@ -309,7 +309,12 @@ struct ToneBrowserView: View {
                     .controlSize(.small)
             } else if isDownloaded {
                 Button("Use") {
-                    insertSnippet(toneId: tone.id.stringValue, modelId: model.id.stringValue)
+                    insertSnippet(
+                        toneId: tone.id.stringValue,
+                        modelId: model.id.stringValue,
+                        title: tone.title,
+                        url: tone.url
+                    )
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -349,7 +354,12 @@ struct ToneBrowserView: View {
             }
             Spacer()
             Button("Use") {
-                insertSnippet(toneId: model.toneId, modelId: model.modelId)
+                insertSnippet(
+                    toneId: model.toneId,
+                    modelId: model.modelId,
+                    title: model.toneName,
+                    url: model.toneUrl
+                )
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
@@ -368,15 +378,20 @@ struct ToneBrowserView: View {
 
     // MARK: - Actions
 
-    private func insertSnippet(toneId: String, modelId: String) {
+    private func insertSnippet(toneId: String, modelId: String, title: String, url: String?) {
         let path = "tone3000://\(toneId)/\(modelId)"
-        let snippet: String
-        if selectedLanguage == .rust {
-            snippet = "conjuredsp::nam!(\"\(path)\");\n"
-        } else {
-            snippet = "from conjuredsp.nam import load_model\nmodel = load_model(\"\(path)\")\n"
+        let commentPrefix = selectedLanguage == .rust ? "//" : "#"
+        var header = "\(commentPrefix) \(title)\n"
+        if let url, !url.isEmpty {
+            header += "\(commentPrefix) \(url)\n"
         }
-        onInsertSnippet(snippet)
+        let body: String
+        if selectedLanguage == .rust {
+            body = "conjuredsp::nam!(\"\(path)\");\n"
+        } else {
+            body = "from conjuredsp.nam import load_model\nmodel = load_model(\"\(path)\")\n"
+        }
+        onInsertSnippet(header + body)
     }
 
     private func downloadModel(tone: Tone, model: ToneModel) async {
@@ -396,6 +411,7 @@ struct ToneBrowserView: View {
             try await modelStore.download(
                 toneId: tone.id.stringValue,
                 toneName: tone.title,
+                toneUrl: tone.url,
                 gear: tone.gear ?? "",
                 author: tone.user?.username ?? "",
                 tags: tone.tags?.map(\.name) ?? [],
