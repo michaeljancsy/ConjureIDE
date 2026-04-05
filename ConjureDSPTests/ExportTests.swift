@@ -1508,11 +1508,11 @@ struct ExportDSPIntegrationTests {
             try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
         }
 
-        // 1. Read Python NAM preset and replace placeholder with a real absolute path
+        // 1. Read Python NAM preset and replace the default tone3000 URL with a real absolute path
         let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/lstm_tiny.nam")
         let resourcesURL = try Self.extensionResourcesURL
         var source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam.py"), encoding: .utf8)
-        source = source.replacingOccurrences(of: "tone3000://TONE_ID/MODEL_ID", with: namURL.path)
+        source = source.replacingOccurrences(of: "tone3000://60092/351559", with: namURL.path)
         #expect(source.contains(namURL.path), "Source should contain absolute NAM path after substitution")
 
         // 2. Export
@@ -1570,11 +1570,11 @@ struct ExportDSPIntegrationTests {
             try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
         }
 
-        // 1. Read Rust NAM preset and replace placeholder with a real absolute path
+        // 1. Read Rust NAM preset and replace the default tone3000 URL with a real absolute path
         let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/lstm_tiny.nam")
         let resourcesURL = try Self.extensionResourcesURL
         var source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam_rust.rs"), encoding: .utf8)
-        source = source.replacingOccurrences(of: "tone3000://TONE_ID/MODEL_ID", with: namURL.path)
+        source = source.replacingOccurrences(of: "tone3000://60092/351559", with: namURL.path)
         #expect(source.contains(namURL.path), "Source should contain absolute NAM path after substitution")
 
         // 2. Compile to WASM
