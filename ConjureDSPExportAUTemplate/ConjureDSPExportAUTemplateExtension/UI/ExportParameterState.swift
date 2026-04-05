@@ -16,17 +16,35 @@ import SwiftUI
 final class ExportParameterState: ObservableObject {
     @Published var values: [Float]
     @Published var runtimeError: String?
+    /// Latest render-stats snapshot, refreshed by the 1 Hz poll timer in
+    /// ExportAUViewController.
+    @Published var statsSnapshot: RenderStats.Snapshot = .empty
     let paramCount: Int
     /// Rich parameter metadata for slider ranges and value formatting.
     let paramMetadata: [ExportParamMetadata]?
+    /// Debug log owned by the AU. Passed through to the debug pane.
+    let debugLog: ExportDebugLog
+    /// Render stats owned by the AU. Polled at 1 Hz for stats snapshots.
+    let renderStats: RenderStats
+    /// Static plugin identity snapshot. Passed through to the debug pane.
+    let pluginInfo: PluginInfo
 
     private var parameterTree: AUParameterTree?
     private var observerToken: AUParameterObserverToken?
 
-    init(paramCount: Int = 8, paramMetadata: [ExportParamMetadata]? = nil) {
+    init(
+        paramCount: Int = 8,
+        paramMetadata: [ExportParamMetadata]? = nil,
+        debugLog: ExportDebugLog,
+        renderStats: RenderStats,
+        pluginInfo: PluginInfo
+    ) {
         self.paramCount = paramCount
         self.paramMetadata = paramMetadata
         self.values = Array(repeating: 0.0, count: paramCount)
+        self.debugLog = debugLog
+        self.renderStats = renderStats
+        self.pluginInfo = pluginInfo
     }
 
     func attach(to parameterTree: AUParameterTree) {
