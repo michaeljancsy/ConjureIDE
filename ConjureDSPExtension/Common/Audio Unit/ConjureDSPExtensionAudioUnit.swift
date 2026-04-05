@@ -24,11 +24,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	// MARK: - Shared Python Runtime
 
 	/// App Group container URL for cross-app data sharing.
-	private static let appGroupContainerURL: URL? = AppGroupContainer.url
+	private static let appGroupContainerURL: URL = AppGroupContainer.url
 
 	/// Shared Python runtime provisioned by ConjureDSPTerminal into the App Group container.
 	/// Used as PYTHONHOME — contains stdlib, numpy, scipy, and user-installed packages.
-	static let pythonRuntimeURL: URL? = appGroupContainerURL?.appendingPathComponent("PythonRuntime")
+	static let pythonRuntimeURL: URL = appGroupContainerURL.appendingPathComponent("PythonRuntime")
 
 	// MARK: - Parameter Tree (up to 16 parameters, with optional rich metadata)
 
@@ -322,13 +322,12 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		// Python home: shared runtime in App Group container (provisioned by ConjureDSPTerminal),
 		// with fallback to bundled python-dist for backward compatibility.
 		let pythonHome: String? = {
-			if let runtimeURL = Self.pythonRuntimeURL {
-				let stdlibPath = runtimeURL.appendingPathComponent("lib/python3.14t").path
-				if FileManager.default.fileExists(atPath: stdlibPath) {
-					return runtimeURL.path
-				}
-				pluginLog.warning("Shared Python runtime not found at \(runtimeURL.path, privacy: .public)")
+			let runtimeURL = Self.pythonRuntimeURL
+			let stdlibPath = runtimeURL.appendingPathComponent("lib/python3.14t").path
+			if FileManager.default.fileExists(atPath: stdlibPath) {
+				return runtimeURL.path
 			}
+			pluginLog.warning("Shared Python runtime not found at \(runtimeURL.path, privacy: .public)")
 			// Fallback: bundled python-dist (transitional)
 			return bundle.path(forResource: "python-dist", ofType: nil)
 		}()
@@ -345,9 +344,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 
 		// Set tones directory so conjuredsp.nam can resolve tone3000:// paths
-		if let tonesDir = Self.appGroupContainerURL?.appendingPathComponent("tones").path {
-			dsp_kernel_set_tones_dir(kernel, tonesDir)
-		}
+		dsp_kernel_set_tones_dir(kernel, Self.appGroupContainerURL.appendingPathComponent("tones").path)
 
 		pluginLog.info("Loading Python script. pythonHome=\(pythonHome, privacy: .public) scriptPath=\(scriptPath, privacy: .public)")
 		let success = dsp_kernel_load_script(kernel, pythonHome, scriptPath)
@@ -634,7 +631,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			}
 			let toneId = parts[0]
 			let modelId = parts[1]
-			namFileURL = Self.appGroupContainerURL?
+			namFileURL = Self.appGroupContainerURL
 				.appendingPathComponent("tones")
 				.appendingPathComponent(toneId)
 				.appendingPathComponent("\(modelId).nam")

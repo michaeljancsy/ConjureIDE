@@ -1,13 +1,8 @@
 import Darwin
 import Foundation
 
-/// Single point of truth for the App Group container URL.
-///
-/// Uses direct path construction to avoid calling
-/// `containerURL(forSecurityApplicationGroupIdentifier:)`, which triggers
-/// a TCC "access data from other apps" prompt on macOS 26 when the
-/// process is not sandboxed. Uses `getpwuid` for the real home directory
-/// (safe in containerized or sandboxed contexts).
+/// Test copy of AppGroupContainer — uses getpwuid to get the real home
+/// directory (same as the extension's production implementation).
 enum AppGroupContainer {
     static let id = "group.com.MichaelJancsy.ConjureDSP"
     static let url: URL = {

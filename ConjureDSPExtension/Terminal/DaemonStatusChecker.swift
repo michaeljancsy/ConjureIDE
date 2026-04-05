@@ -17,7 +17,6 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExte
 final class DaemonStatusChecker: ObservableObject {
     @Published private(set) var isDaemonAvailable: Bool = false
 
-    private let appGroupID = "group.com.MichaelJancsy.ConjureDSP"
     private let pollInterval: TimeInterval
     private var timer: Timer?
 
@@ -54,15 +53,12 @@ final class DaemonStatusChecker: ObservableObject {
     }
 
     func checkPortFile() -> Bool {
-        let container: URL?
+        let container: URL
         if let override = portFileDirectoryOverride {
             container = override
         } else {
-            container = FileManager.default.containerURL(
-                forSecurityApplicationGroupIdentifier: appGroupID
-            )
+            container = AppGroupContainer.url
         }
-        guard let container else { return false }
 
         let portFile = container.appendingPathComponent("terminal-server-port")
         guard let contents = try? String(contentsOf: portFile, encoding: .utf8),

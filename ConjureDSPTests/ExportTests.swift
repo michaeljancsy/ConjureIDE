@@ -550,12 +550,11 @@ struct ExportManagerTests {
 @MainActor
 struct PendingExportHandlerTests {
 
-    @Test func appGroupContainerURLReturnsNilWithoutEntitlement() {
-        // Without actual App Group entitlement, containerURL returns nil
+    @Test func appGroupContainerURLReturnsDeterministicPath() {
+        // Direct path construction always returns a valid URL (no TCC prompt)
         let url = ExportManager.appGroupContainerURL()
-        // This test documents behavior — in CI without entitlements, it's nil
-        // In a signed app with entitlements, it would return a valid URL
-        _ = url // Suppress unused warning
+        #expect(url.lastPathComponent == "group.com.MichaelJancsy.ConjureDSP")
+        #expect(url.pathComponents.contains("Group Containers"))
     }
 
     @Test func exportManagerSanitizesSpecialCharacters() {

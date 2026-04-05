@@ -305,9 +305,7 @@ final class PTYManager {
             diag += "  \(path): exists=\(exists), executable=\(executable)\n"
         }
         // Write diagnostics to App Group container (readable from both processes)
-        if let url = AppGroupContainer.url {
-            try? diag.write(to: url.appendingPathComponent("pty-diag.txt"), atomically: true, encoding: .utf8)
-        }
+        try? diag.write(to: AppGroupContainer.url.appendingPathComponent("pty-diag.txt"), atomically: true, encoding: .utf8)
 
         for path in candidates {
             // Check the path directly, and also resolve symlinks — the sandbox may
