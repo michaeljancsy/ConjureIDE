@@ -23,10 +23,12 @@ struct ImportURLPopover: View {
             HStack {
                 TextField("https://\u{2026}", text: $urlString)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("importURLField")
                     .onSubmit { fetchPreview() }
 
                 Button("Fetch") { fetchPreview() }
                     .disabled(urlString.isEmpty || isLoading)
+                    .accessibilityIdentifier("importFetchButton")
             }
 
             if let error {
@@ -48,6 +50,7 @@ struct ImportURLPopover: View {
                     HStack(spacing: 8) {
                         TextField("Preset name", text: $detectedName)
                             .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("importPresetNameField")
                             .frame(width: 180)
                         Text(detectedLanguage == .rust ? "Rust" : "Python")
                             .font(.caption)
@@ -75,6 +78,7 @@ struct ImportURLPopover: View {
                 Spacer()
                 Button("Cancel") { onCancel() }
                     .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("importCancelButton")
                 if previewSource != nil {
                     Button("Import") { importPreset() }
                         .disabled(detectedName.isEmpty)

@@ -39,6 +39,7 @@ struct CommunityBrowserView: View {
                 Spacer()
                 Button("Done") { onDismiss() }
                     .buttonStyle(.borderless)
+                    .accessibilityIdentifier("communityBrowserDoneButton")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -51,6 +52,7 @@ struct CommunityBrowserView: View {
                     .foregroundColor(.secondary)
                 TextField("Search presets\u{2026}", text: $searchText)
                     .textFieldStyle(.plain)
+                    .accessibilityIdentifier("communityBrowserSearchField")
                 if !searchText.isEmpty {
                     Button(action: { searchText = "" }) {
                         Image(systemName: "xmark.circle.fill")

@@ -495,9 +495,9 @@ struct ConjureDSPExtensionMainView: View {
         }
     }
 
-    @ViewBuilder
     private func chatTabButton(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let identifier = label == "Claude Code" ? "claudeCodeTabButton" : "aiPromptTabButton"
+        return Button(action: action) {
             Text(label)
                 .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
                 .foregroundColor(isSelected ? .primary : .secondary)
@@ -511,6 +511,7 @@ struct ConjureDSPExtensionMainView: View {
                 )
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
     }
 }
 

@@ -36,6 +36,7 @@ struct AIPromptHelperView: View {
                         TextEditor(text: $userDescription)
                             .font(.system(size: 12))
                             .frame(minHeight: 80)
+                            .accessibilityIdentifier("aiPromptDescriptionField")
                             .scrollContentBackground(.hidden)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
@@ -105,6 +106,7 @@ struct AIPromptHelperView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("aiPromptCopyButton")
                 .disabled(userDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .animation(.easeInOut(duration: 0.15), value: copyConfirmed)
 

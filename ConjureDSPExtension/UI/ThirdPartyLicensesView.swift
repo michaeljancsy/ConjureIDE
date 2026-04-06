@@ -41,6 +41,7 @@ struct ThirdPartyLicensesView: View {
                 showingLicenses = true
             }
             .buttonStyle(.link)
+            .accessibilityIdentifier("openLicensesButton")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .sheet(isPresented: $showingLicenses) {
