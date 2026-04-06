@@ -21,27 +21,38 @@ final class PendingExportHandler: ObservableObject {
         return appSupport.appendingPathComponent("ConjureDSP/Exports")
     }
 
-    private var pendingExportsDirectory: URL {
-        AppGroupContainer.url.appendingPathComponent("PendingExports")
+    /// All directories where pending exports might be staged.
+    ///
+    /// The AU extension's view controller runs in Apple's ViewBridge XPC (sandboxed),
+    /// so it writes to Group Containers. The host app uses Application Support.
+    /// Check both to handle exports from any context.
+    private var pendingExportsDirectories: [URL] {
+        var dirs = [AppGroupContainer.url.appendingPathComponent("PendingExports")]
+        // Group Containers path via direct construction (avoids containerURL API which triggers TCC)
+        let groupContainers = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Group Containers")
+            .appendingPathComponent(AppGroupContainer.id)
+            .appendingPathComponent("PendingExports")
+        if groupContainers != dirs[0] {
+            dirs.append(groupContainers)
+        }
+        return dirs
     }
 
     func checkForPendingExports() {
-        let pendingDir = pendingExportsDirectory
-
         let fm = FileManager.default
-        guard fm.fileExists(atPath: pendingDir.path) else {
-            return
+        var appBundles: [URL] = []
+
+        for pendingDir in pendingExportsDirectories {
+            guard fm.fileExists(atPath: pendingDir.path),
+                  let contents = try? fm.contentsOfDirectory(
+                      at: pendingDir,
+                      includingPropertiesForKeys: nil,
+                      options: [.skipsHiddenFiles]
+                  ) else { continue }
+            appBundles.append(contentsOf: contents.filter { $0.pathExtension == "app" })
         }
 
-        guard let contents = try? fm.contentsOfDirectory(
-            at: pendingDir,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else {
-            return
-        }
-
-        let appBundles = contents.filter { $0.pathExtension == "app" }
         guard !appBundles.isEmpty else { return }
 
         log.info("Found \(appBundles.count) pending export(s)")
