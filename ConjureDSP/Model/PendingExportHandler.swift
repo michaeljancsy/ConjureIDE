@@ -21,41 +21,61 @@ final class PendingExportHandler: ObservableObject {
         return appSupport.appendingPathComponent("ConjureDSP/Exports")
     }
 
-    /// All directories where pending exports might be staged.
-    ///
-    /// The AU extension's view controller runs in Apple's ViewBridge XPC (sandboxed),
-    /// so it writes to Group Containers. The host app uses Application Support.
-    /// Check both to handle exports from any context.
+    /// Directory where non-sandboxed contexts (host app) stage exports.
+    /// Only checks Application Support — no TCC prompt.
     private var pendingExportsDirectories: [URL] {
-        var dirs = [AppGroupContainer.url.appendingPathComponent("PendingExports")]
-        // Group Containers path via direct construction (avoids containerURL API which triggers TCC)
-        let groupContainers = FileManager.default.homeDirectoryForCurrentUser
+        [AppGroupContainer.url.appendingPathComponent("PendingExports")]
+    }
+
+    /// Check Group Containers for exports staged by the AU extension running
+    /// in a sandboxed context (DAW or ViewBridge XPC).
+    ///
+    /// This accesses `~/Library/Group Containers/` which triggers a macOS TCC
+    /// "access data from other apps" prompt for unsandboxed processes. Only call
+    /// when we know an export was staged (via DistributedNotification) or when
+    /// the user explicitly requests it.
+    func checkGroupContainersForExports() {
+        let groupDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Group Containers")
-            .appendingPathComponent(AppGroupContainer.id)
+            .appendingPathComponent(Self.appGroupIdentifier)
             .appendingPathComponent("PendingExports")
-        if groupContainers != dirs[0] {
-            dirs.append(groupContainers)
+        processExportsIn(groupDir)
+    }
+
+    private var distributedObserver: NSObjectProtocol?
+
+    /// Listen for DistributedNotification from the AU extension when it stages
+    /// an export in Group Containers. Uses Mach ports — no file I/O, no TCC.
+    func startListeningForDAWExports() {
+        guard distributedObserver == nil else { return }
+        distributedObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.MichaelJancsy.ConjureDSP.pendingExport"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.checkGroupContainersForExports()
         }
-        return dirs
     }
 
     func checkForPendingExports() {
-        let fm = FileManager.default
-        var appBundles: [URL] = []
-
         for pendingDir in pendingExportsDirectories {
-            guard fm.fileExists(atPath: pendingDir.path),
-                  let contents = try? fm.contentsOfDirectory(
-                      at: pendingDir,
-                      includingPropertiesForKeys: nil,
-                      options: [.skipsHiddenFiles]
-                  ) else { continue }
-            appBundles.append(contentsOf: contents.filter { $0.pathExtension == "app" })
+            processExportsIn(pendingDir)
         }
+    }
 
+    private func processExportsIn(_ directory: URL) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: directory.path),
+              let contents = try? fm.contentsOfDirectory(
+                  at: directory,
+                  includingPropertiesForKeys: nil,
+                  options: [.skipsHiddenFiles]
+              ) else { return }
+
+        let appBundles = contents.filter { $0.pathExtension == "app" }
         guard !appBundles.isEmpty else { return }
 
-        log.info("Found \(appBundles.count) pending export(s)")
+        log.info("Found \(appBundles.count) pending export(s) in \(directory.path, privacy: .public)")
 
         for appURL in appBundles {
             installExport(at: appURL)

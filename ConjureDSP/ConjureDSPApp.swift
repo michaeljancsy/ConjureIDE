@@ -29,6 +29,7 @@ struct ConjureDSPApp: App {
                     Analytics.track(.appOpen)
                     Analytics.flush()
                     exportHandler.checkForPendingExports()
+                    exportHandler.startListeningForDAWExports()
                 }
                 .onOpenURL { url in
                     handleURL(url)
@@ -42,6 +43,11 @@ struct ConjureDSPApp: App {
                     if let url = URL(string: "https://updates.conjuredsp.com/versions.html") {
                         NSWorkspace.shared.open(url)
                     }
+                }
+            }
+            CommandGroup(after: .newItem) {
+                Button("Check for DAW Exports…") {
+                    exportHandler.checkGroupContainersForExports()
                 }
             }
         }

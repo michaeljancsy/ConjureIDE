@@ -13,6 +13,12 @@ import SwiftUI
 
 private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSPExtension", category: "AudioUnitViewController")
 
+extension Notification.Name {
+    /// Posted via DistributedNotificationCenter when the extension stages a
+    /// pending AU export, so the host app can pick it up from Group Containers.
+    static let conjureDSPPendingExport = Notification.Name("com.MichaelJancsy.ConjureDSP.pendingExport")
+}
+
 // MARK: - SafeHostingView
 
 /// NSHostingView subclass that guards against the macOS 14+ ViewBridge bug
@@ -474,6 +480,15 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                     latencySamples: au._latencySamples
                 )
                 log.info("Staged preset '\(name, privacy: .public)' to App Group at \(appURL.path, privacy: .public)")
+
+                // Notify the host app so it can pick up the export without
+                // polling Group Containers (which triggers TCC prompts).
+                DistributedNotificationCenter.default().postNotificationName(
+                    .conjureDSPPendingExport,
+                    object: nil,
+                    deliverImmediately: true
+                )
+
                 Analytics.track(.export, properties: [
                     "name": name,
                     "language": language.rawValue,
