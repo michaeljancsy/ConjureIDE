@@ -356,12 +356,16 @@ class TerminalAppServer {
         self.wsServer = ws
         self.pty = p
 
-        // Start WebSocket server — write port file only after listener confirms ready
-        let wsPort: UInt16 = 19836
+        // Start WebSocket server on a dynamic port — OS assigns a free port,
+        // avoiding EADDRINUSE if the previous process hasn't released 19836 yet.
         ws.onReady = { [weak self] confirmedPort in
             self?.writeWebSocketPort(confirmedPort)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.status = "Ready (MCP: \(self.currentMCPPort), WS: \(confirmedPort))"
+            }
         }
-        ws.start(port: wsPort)
+        ws.start(port: 0)
 
         // Configure PTY
         p.mcpServerPort = mcpPort
@@ -417,8 +421,8 @@ class TerminalAppServer {
 
         currentMCPPort = mcpPort
         isRunning = true
-        status = "Ready (MCP: \(mcpPort), WS: \(wsPort))"
-        log.info("Session started — MCP: \(mcpPort), WS: \(wsPort)")
+        status = "Ready (MCP: \(mcpPort))"
+        log.info("Session started — MCP: \(mcpPort)")
     }
 
     private func resetSession() {
