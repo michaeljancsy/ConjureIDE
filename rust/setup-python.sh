@@ -42,7 +42,7 @@ echo "Installing numpy and scipy..."
 "${PYTHON_DIR}/bin/python3" -m pip install numpy scipy
 
 echo "Installing conjuredsp package..."
-SITE_PACKAGES="$(${PYTHON_DIR}/bin/python3 -c 'import site; print(site.getsitepackages()[0])')"
+SITE_PACKAGES="$("${PYTHON_DIR}/bin/python3" -c 'import site; print(site.getsitepackages()[0])')"
 rm -rf "${SITE_PACKAGES}/conjuredsp"
 cp -r "${SCRIPT_DIR}/conjuredsp" "${SITE_PACKAGES}/conjuredsp"
 
