@@ -512,6 +512,7 @@ struct ConjureDSPExtensionMainView: View {
                 )
         }
         .buttonStyle(.plain)
+        .contentShape(Rectangle())
         .accessibilityIdentifier(identifier)
     }
 }
