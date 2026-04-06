@@ -13,17 +13,22 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
     private var parameterState: ExportParameterState?
     private var errorPollTimer: Timer?
 
+    /// Base window size. Used when the debug pane is hidden.
+    private static let collapsedSize = NSSize(width: 400, height: 300)
+    /// Expanded size when the debug pane is visible (adds ~340pt for the pane).
+    private static let expandedSize = NSSize(width: 400, height: 640)
+
     public override var preferredMinimumSize: NSSize {
         NSSize(width: 300, height: 200)
     }
 
     public override var preferredMaximumSize: NSSize {
-        NSSize(width: 800, height: 600)
+        NSSize(width: 800, height: 700)
     }
 
     public override func loadView() {
-        self.view = NSView(frame: NSRect(origin: .zero, size: NSSize(width: 400, height: 300)))
-        self.preferredContentSize = NSSize(width: 400, height: 300)
+        self.view = NSView(frame: NSRect(origin: .zero, size: Self.collapsedSize))
+        self.preferredContentSize = Self.collapsedSize
     }
 
     nonisolated public func createAudioUnit(
@@ -56,7 +61,10 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
 
         let ps = ExportParameterState(
             paramCount: config?.effectiveParamCount ?? 8,
-            paramMetadata: config?.paramMetadata
+            paramMetadata: config?.paramMetadata,
+            debugLog: au.debugLog,
+            renderStats: au.renderStats,
+            pluginInfo: au.pluginInfo
         )
         self.parameterState = ps
         if let tree = au.parameterTree {
@@ -67,7 +75,10 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
             parameterState: ps,
             config: config,
             pythonRuntimeMissing: au.pythonRuntimeMissing,
-            loadError: au.loadError
+            loadError: au.loadError,
+            onDebugPaneToggle: { [weak self] visible in
+                self?.setDebugPaneVisible(visible)
+            }
         )
         let hv = NSHostingView(rootView: content)
         hv.sizingOptions = []
@@ -81,21 +92,34 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
         ])
         hostingView = hv
 
-        // Only poll for runtime errors if the preset loaded successfully.
-        // If load failed, loadError is already shown and the preset never runs.
-        if au.loadError == nil && !au.pythonRuntimeMissing {
-            startErrorPolling(au: au, parameterState: ps)
-        }
+        // Always poll the 1 Hz timer — it refreshes the stats snapshot for the
+        // debug pane even when the preset loaded cleanly. Runtime error polling
+        // is gated internally (only reports a value if the kernel has an error).
+        startPollTimer(au: au, parameterState: ps)
     }
 
-    private func startErrorPolling(au: ExportAUAudioUnit, parameterState: ExportParameterState) {
+    private func startPollTimer(au: ExportAUAudioUnit, parameterState: ExportParameterState) {
+        // One 1 Hz timer does double duty: refresh runtime-error string AND
+        // snapshot render stats for the debug pane. Both need to run whether
+        // or not the preset loaded cleanly (stats show load failures too).
         errorPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak parameterState, weak au] _ in
             guard let ps = parameterState, let au = au else { return }
             let error = au.currentKernelError()
+            let snapshot = au.renderStats.snapshot()
             DispatchQueue.main.async {
                 ps.runtimeError = error
+                ps.statsSnapshot = snapshot
             }
         }
+    }
+
+    private func setDebugPaneVisible(_ visible: Bool) {
+        let target = visible ? Self.expandedSize : Self.collapsedSize
+        self.preferredContentSize = target
+        // Some hosts honor frame rather than preferred size — set both.
+        var frame = self.view.frame
+        frame.size = target
+        self.view.frame = frame
     }
 
     deinit {

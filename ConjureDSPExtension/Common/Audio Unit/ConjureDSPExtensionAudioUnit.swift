@@ -309,8 +309,43 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		buildParameterTree()
 
+		// Sync bundled conjuredsp package to App Group before loading scripts,
+		// so the runtime always has the version matching this build.
+		syncConjureDSPPackage()
+
 		// Load the bundled Python DSP script
 		loadPythonScript()
+	}
+
+	/// Copy the bundled conjuredsp package into the App Group's site-packages,
+	/// ensuring the runtime always has the version matching this build.
+	/// No-op if the App Group runtime hasn't been provisioned yet (the AU will
+	/// fall back to its bundled python-dist) or if there's no bundled python-dist.
+	private func syncConjureDSPPackage() {
+		let bundle = Bundle(for: type(of: self))
+		guard let bundledPythonDist = bundle.path(forResource: "python-dist", ofType: nil) else {
+			return
+		}
+		let src = URL(fileURLWithPath: bundledPythonDist)
+			.appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
+		let dst = Self.pythonRuntimeURL
+			.appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
+
+		let fm = FileManager.default
+		guard fm.fileExists(atPath: Self.pythonRuntimeURL.appendingPathComponent("lib/python3.14t").path) else {
+			return
+		}
+		guard fm.fileExists(atPath: src.path) else { return }
+
+		do {
+			if fm.fileExists(atPath: dst.path) {
+				try fm.removeItem(at: dst)
+			}
+			try fm.copyItem(at: src, to: dst)
+			pluginLog.info("Synced conjuredsp package to App Group")
+		} catch {
+			pluginLog.warning("Failed to sync conjuredsp: \(error.localizedDescription, privacy: .public)")
+		}
 	}
 
 	/// Default preset loaded on AU init (before any fullState restore).

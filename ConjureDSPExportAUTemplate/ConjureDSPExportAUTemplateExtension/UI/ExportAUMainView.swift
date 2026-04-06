@@ -10,16 +10,47 @@ struct ExportAUMainView: View {
     let config: RuntimeConfig?
     let pythonRuntimeMissing: Bool
     var loadError: String? = nil
+    /// Called when the debug pane visibility changes, so the view controller
+    /// can resize the AU window via `preferredContentSize`.
+    var onDebugPaneToggle: ((Bool) -> Void)? = nil
     @State private var errorCopied = false
+    @State private var showDebugPane = false
 
     var body: some View {
         if pythonRuntimeMissing {
             PythonRuntimeErrorView(presetName: config?.presetName)
         } else {
             VStack(spacing: 12) {
-                Text(config?.presetName ?? "ConjureDSP Export")
-                    .font(.headline)
-                    .padding(.top, 12)
+                ZStack {
+                    Text(config?.presetName ?? "ConjureDSP Export")
+                        .font(.headline)
+                    HStack {
+                        Spacer()
+                        Menu {
+                            Button(showDebugPane ? "Hide Debug Log" : "Show Debug Log") {
+                                showDebugPane.toggle()
+                            }
+                            Divider()
+                            Button("Copy Log") {
+                                let text = parameterState.debugLog.formattedForCopy()
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(text, forType: .string)
+                            }
+                            Button("Clear Log") {
+                                parameterState.debugLog.clear()
+                            }
+                        } label: {
+                            Image(systemName: "gearshape")
+                                .font(.body)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 12)
+                }
+                .padding(.top, 12)
 
                 if let error = loadError ?? parameterState.runtimeError {
                     let isLoadError = loadError != nil
@@ -70,10 +101,21 @@ struct ExportAUMainView: View {
                     .padding(.horizontal)
                 }
 
+                if showDebugPane {
+                    DebugPaneView(
+                        debugLog: parameterState.debugLog,
+                        stats: parameterState.statsSnapshot,
+                        info: parameterState.pluginInfo
+                    )
+                }
+
                 Text("Made with ConjureDSP")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 8)
+            }
+            .onChange(of: showDebugPane) { _, newValue in
+                onDebugPaneToggle?(newValue)
             }
         }
     }

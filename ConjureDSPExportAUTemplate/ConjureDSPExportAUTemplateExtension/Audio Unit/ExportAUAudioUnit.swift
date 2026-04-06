@@ -7,6 +7,7 @@
 //
 
 import AVFoundation
+import Darwin.Mach
 import os.log
 
 private let pluginLog = Logger(subsystem: "com.ConjureDSP-user.ExportTemplate", category: "DSP")
@@ -23,6 +24,22 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
     // Non-nil when the preset failed to load; audio passes through unchanged
     private(set) var loadError: String?
+
+    // MARK: - Debug logging & render stats
+    //
+    // These are owned by the AU (not the view) so they persist across view
+    // re-creation by the DAW. The debug pane in ExportAUMainView binds to
+    // `debugLog` and polls `renderStats.snapshot()` at 1 Hz.
+
+    /// In-memory event log. Main-thread only; see ExportDebugLog.
+    let debugLog = ExportDebugLog()
+
+    /// Audio-thread-safe render statistics.
+    let renderStats = RenderStats()
+
+    /// Static plugin identity snapshot built at the end of init. Read by
+    /// the debug pane and not mutated after init.
+    private(set) var pluginInfo: PluginInfo = .empty
 
     // Audio busses
     private var _inputBus: AUAudioUnitBus!
@@ -56,10 +73,13 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         let bundle = Bundle(for: type(of: self))
         config = RuntimeConfig.load(from: bundle)
 
+        trace(.info, "config", "AU init — bundle=\(bundle.bundlePath)")
+
         if let config = config {
-            pluginLog.info("RuntimeConfig loaded: language=\(config.language, privacy: .public), preset=\(config.presetName, privacy: .public)")
+            trace(.info, "config",
+                  "runtime-config loaded: language=\(config.language) preset=\(config.presetName) params=\(config.effectiveParamCount) latency=\(config.latencySamples ?? 0)")
         } else {
-            pluginLog.warning("RuntimeConfig not found in bundle — defaulting to rust/wasm")
+            trace(.warning, "config", "runtime-config.json not found in bundle — defaulting to rust/wasm")
         }
 
         buildParameterTree()
@@ -69,6 +89,70 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
         // Load preset from bundle (language determined by runtime-config.json)
         loadPresetFromBundle()
+
+        // Build the static plugin-info snapshot for the debug pane.
+        buildPluginInfo(bundle: bundle)
+    }
+
+    // MARK: - trace helper
+
+    /// Main-thread-only logging that fans out to both os.log (via pluginLog,
+    /// preserving `privacy: .public` semantics) and the in-memory debug log
+    /// (rendered plain-string copy for the debug pane).
+    private func trace(_ level: ExportDebugLog.Level, _ category: String, _ message: String) {
+        switch level {
+        case .debug:
+            pluginLog.debug("[\(category, privacy: .public)] \(message, privacy: .public)")
+        case .info:
+            pluginLog.info("[\(category, privacy: .public)] \(message, privacy: .public)")
+        case .warning:
+            pluginLog.warning("[\(category, privacy: .public)] \(message, privacy: .public)")
+        case .error:
+            pluginLog.error("[\(category, privacy: .public)] \(message, privacy: .public)")
+        }
+        if Thread.isMainThread {
+            debugLog.append(level: level, category: category, message: message)
+        } else {
+            // Hop to main — preserves ordering because DispatchQueue.main is a
+            // serial queue. All current callers are already on main, so this
+            // branch is effectively dead code but keeps the contract safe.
+            DispatchQueue.main.async { [debugLog] in
+                debugLog.append(level: level, category: category, message: message)
+            }
+        }
+    }
+
+    // MARK: - Plugin info snapshot
+
+    private func buildPluginInfo(bundle: Bundle) {
+        let desc = self.componentDescription
+        let subtype = fourCharString(desc.componentSubType)
+        let manufacturer = fourCharString(desc.componentManufacturer)
+        self.pluginInfo = PluginInfo(
+            presetName: config?.presetName ?? "ConjureDSP Export",
+            language: config?.language ?? "rust",
+            subtype: subtype,
+            manufacturer: manufacturer,
+            bundlePath: bundle.bundlePath,
+            runtimeConfigFound: config != nil,
+            paramCount: config?.effectiveParamCount ?? 8,
+            latencySamples: config?.latencySamples ?? 0,
+            pythonHome: resolvedPythonHome,
+            namModelFile: config?.namModelFile
+        )
+    }
+
+    /// Cache of the Python home resolved during init, if any, for PluginInfo.
+    private var resolvedPythonHome: String?
+
+    private func fourCharString(_ code: OSType) -> String {
+        let bytes: [UInt8] = [
+            UInt8((code >> 24) & 0xFF),
+            UInt8((code >> 16) & 0xFF),
+            UInt8((code >> 8) & 0xFF),
+            UInt8(code & 0xFF)
+        ]
+        return String(bytes: bytes, encoding: .ascii) ?? "????"
     }
 
     // MARK: - Parameter Tree
@@ -77,8 +161,11 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         // Use rich metadata if available, otherwise fall back to generic 0–1 params
         if let metadata = config?.paramMetadata, !metadata.isEmpty {
             buildRichParameterTree(metadata: metadata)
+            trace(.info, "params", "built rich parameter tree (\(min(metadata.count, 16)) params)")
         } else {
             buildGenericParameterTree()
+            let count = config?.effectiveParamCount ?? 8
+            trace(.info, "params", "built generic parameter tree (\(count) params, 0–1 range)")
         }
     }
 
@@ -243,9 +330,12 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     private func loadWasmPreset(from bundle: Bundle) {
         guard let wasmURL = bundle.url(forResource: "preset", withExtension: "wasm"),
               let wasmData = try? Data(contentsOf: wasmURL) else {
-            pluginLog.error("preset.wasm not found in bundle")
+            trace(.error, "preset.wasm", "preset.wasm not found in bundle")
+            loadError = "preset.wasm not found in bundle"
             return
         }
+
+        trace(.info, "preset.wasm", "loading WASM preset (\(wasmData.count) bytes) from \(wasmURL.lastPathComponent)")
 
         let success = wasmData.withUnsafeBytes { rawBuffer -> Bool in
             guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
@@ -255,44 +345,52 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         }
 
         if success {
-            pluginLog.info("WASM preset loaded successfully")
+            trace(.info, "preset.wasm", "WASM preset loaded successfully")
             // Inject embedded NAM model if present
             injectEmbeddedNamModel(from: bundle)
             warmStart()
         } else {
-            logKernelError("Failed to load WASM preset")
-            loadError = kernelErrorString() ?? "Failed to load preset"
+            let err = kernelErrorString() ?? "Failed to load preset"
+            trace(.error, "preset.wasm", "dsp_kernel_load_wasm failed: \(err)")
+            loadError = err
         }
     }
 
     private func loadPythonPreset(from bundle: Bundle) {
         guard let presetPath = bundle.path(forResource: "preset", ofType: "py") else {
-            pluginLog.error("preset.py not found in bundle")
+            trace(.error, "preset.python", "preset.py not found in bundle")
+            loadError = "preset.py not found in bundle"
             return
         }
 
+        let presetSize = (try? FileManager.default.attributesOfItem(atPath: presetPath)[.size] as? NSNumber)?.intValue ?? -1
+        trace(.info, "preset.python", "loading Python preset from \(presetPath) (\(presetSize) bytes)")
+
         guard let pythonHome = findPythonHome(bundle: bundle) else {
-            pluginLog.error("Python runtime not found — preset will not process audio")
+            trace(.error, "python.home", "Python runtime not found — preset will not process audio")
             pythonRuntimeMissing = true
             return
         }
+        resolvedPythonHome = pythonHome
 
         // Set tones directory to bundle Resources so embedded model.nam is found
         // by conjuredsp.nam's path resolution (tone3000:// or relative "model.nam")
         if config?.namModelFile != nil,
            let resourcesPath = bundle.resourcePath {
             dsp_kernel_set_tones_dir(kernel, resourcesPath)
+            trace(.info, "nam", "set tones dir to bundle resources for Python NAM lookup: \(resourcesPath)")
         }
 
-        pluginLog.info("Loading Python preset. pythonHome=\(pythonHome, privacy: .public)")
+        trace(.info, "preset.python", "calling dsp_kernel_load_script (pythonHome=\(pythonHome))")
         let success = dsp_kernel_load_script(kernel, pythonHome, presetPath)
 
         if success {
-            pluginLog.info("Python preset loaded successfully")
+            trace(.info, "preset.python", "Python preset loaded successfully")
             warmStart()
         } else {
-            logKernelError("Failed to load Python preset")
-            loadError = kernelErrorString() ?? "Failed to load preset"
+            let err = kernelErrorString() ?? "Failed to load preset"
+            trace(.error, "preset.python", "dsp_kernel_load_script failed: \(err)")
+            loadError = err
         }
     }
 
@@ -305,18 +403,22 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         let namBaseName = (namFileName as NSString).deletingPathExtension
         let namExt = (namFileName as NSString).pathExtension
 
+        trace(.info, "nam", "looking for embedded NAM model: \(namFileName)")
+
         guard let namURL = bundle.url(forResource: namBaseName, withExtension: namExt.isEmpty ? "nam" : namExt),
               let namData = try? Data(contentsOf: namURL) else {
-            pluginLog.warning("Embedded NAM model '\(namFileName, privacy: .public)' not found in bundle")
+            trace(.warning, "nam", "embedded NAM model '\(namFileName)' not found in bundle")
             return
         }
+
+        trace(.info, "nam", "loaded NAM model file (\(namData.count) bytes)")
 
         // Parse .nam JSON and serialize to binary protocol for WASM injection
         guard let namJson = try? JSONSerialization.jsonObject(with: namData) as? [String: Any],
               let architecture = namJson["architecture"] as? String,
               let configObj = namJson["config"],
               let weightsArray = namJson["weights"] as? [Double] else {
-            pluginLog.error("Failed to parse embedded .nam file")
+            trace(.error, "nam", "failed to parse embedded .nam file")
             return
         }
 
@@ -325,7 +427,7 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
         // Serialize config JSON
         guard let configData = try? JSONSerialization.data(withJSONObject: configObj) else {
-            pluginLog.error("Failed to serialize NAM config")
+            trace(.error, "nam", "failed to serialize NAM config JSON")
             return
         }
 
@@ -353,9 +455,9 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         }
 
         if success {
-            pluginLog.info("Injected embedded NAM model (\(binary.count) bytes)")
+            trace(.info, "nam", "injected embedded NAM model (\(binary.count) bytes, arch=\(architecture), sr=\(sampleRate))")
         } else {
-            pluginLog.error("Failed to inject embedded NAM model")
+            trace(.error, "nam", "failed to inject embedded NAM model (dsp_kernel_inject_nam returned false)")
         }
     }
 
@@ -365,12 +467,12 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     /// environment variable.
     private func findPythonHome(bundle: Bundle) -> String? {
         // 1. Own bundle (standalone/full export)
-        pluginLog.info("findPythonHome: checking bundle at \(bundle.bundlePath, privacy: .public)")
+        trace(.info, "python.home", "checking bundle at \(bundle.bundlePath)")
         if let bundled = bundle.path(forResource: "python-dist", ofType: nil) {
-            pluginLog.info("findPythonHome: found Python runtime in bundle")
+            trace(.info, "python.home", "found Python runtime in bundle: \(bundled)")
             return bundled
         }
-        pluginLog.info("findPythonHome: no bundled python-dist found")
+        trace(.info, "python.home", "no bundled python-dist found")
 
         // 2. App Group container (provisioned by ConjureDSPTerminal)
         // Use the raw filesystem path — the sandbox exception in the entitlements grants
@@ -380,23 +482,23 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         // Py_FatalError() and abort the process when it can't open its stdlib.
         if let realHome = Self.realHomeDirectory() {
             let appGroup = realHome + "/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/PythonRuntime"
-            pluginLog.info("findPythonHome: checking App Group container at \(appGroup, privacy: .public)")
+            trace(.info, "python.home", "checking App Group container at \(appGroup)")
             if FileManager.default.isReadableFile(atPath: appGroup + "/lib/python3.14t/os.py") {
-                pluginLog.info("findPythonHome: found Python runtime in App Group container")
+                trace(.info, "python.home", "found Python runtime in App Group container")
                 return appGroup
             }
-            pluginLog.info("findPythonHome: App Group container missing or not readable")
+            trace(.info, "python.home", "App Group container missing or not readable")
         } else {
-            pluginLog.warning("findPythonHome: could not resolve real home directory")
+            trace(.warning, "python.home", "could not resolve real home directory")
         }
 
         // 3. Environment variable override (power users)
         if let envPath = ProcessInfo.processInfo.environment["CONJUREDSP_PYTHON_HOME"],
            FileManager.default.fileExists(atPath: envPath) {
-            pluginLog.info("findPythonHome: found Python runtime via CONJUREDSP_PYTHON_HOME")
+            trace(.info, "python.home", "found Python runtime via CONJUREDSP_PYTHON_HOME=\(envPath)")
             return envPath
         }
-        pluginLog.info("findPythonHome: no CONJUREDSP_PYTHON_HOME set or path does not exist")
+        trace(.info, "python.home", "no CONJUREDSP_PYTHON_HOME set or path does not exist")
 
         return nil
     }
@@ -416,7 +518,7 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     private func warmStart() {
         let warmupTime = dsp_kernel_benchmark_process(kernel)
         if warmupTime >= 0 {
-            pluginLog.info("Warm-up complete: \(warmupTime * 1000, privacy: .public)ms")
+            trace(.info, "warmup", "warm-up complete: \(String(format: "%.3f", warmupTime * 1000))ms")
         }
     }
 
@@ -432,9 +534,9 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
     private func logKernelError(_ prefix: String) {
         if let errMsg = kernelErrorString() {
-            pluginLog.error("\(prefix, privacy: .public): \(errMsg, privacy: .public)")
+            trace(.error, "render.error", "\(prefix): \(errMsg)")
         } else {
-            pluginLog.error("\(prefix, privacy: .public)")
+            trace(.error, "render.error", prefix)
         }
     }
 
@@ -494,19 +596,23 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         originalAudioBufferList = inputPCMBuffer?.audioBufferList
         mutableAudioBufferList = inputPCMBuffer?.mutableAudioBufferList
 
-        dsp_kernel_initialize(kernel, Int32(inputChannelCount), Int32(outputChannelCount), _outputBus.format.sampleRate)
-        pluginLog.info("allocateRenderResources: channels=\(inputChannelCount, privacy: .public), sampleRate=\(self._outputBus.format.sampleRate, privacy: .public)")
+        let sr = _outputBus.format.sampleRate
+        dsp_kernel_initialize(kernel, Int32(inputChannelCount), Int32(outputChannelCount), sr)
+        renderStats.sampleRate = sr
+        let latencySamples = config?.latencySamples ?? dsp_kernel_latency_samples(kernel)
+        trace(.info, "allocate",
+              "channels=\(inputChannelCount) sampleRate=\(sr) maxFrames=\(_maxFrames) latency=\(latencySamples) samples")
 
         try super.allocateRenderResources()
 
         // Check for kernel errors shortly after rendering begins
-        let kernelRef = self.kernel!
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            if let errPtr = dsp_kernel_last_error(kernelRef) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self else { return }
+            if let errPtr = dsp_kernel_last_error(self.kernel) {
                 let msg = String(cString: errPtr)
-                pluginLog.error("Post-render kernel error: \(msg, privacy: .public)")
+                self.trace(.error, "render.error", "post-render kernel error: \(msg)")
             } else {
-                pluginLog.info("Post-render check: no kernel errors")
+                self.trace(.info, "render.error", "post-render check: no kernel errors")
             }
         }
     }
@@ -517,6 +623,7 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         originalAudioBufferList = nil
         mutableAudioBufferList = nil
         super.deallocateRenderResources()
+        trace(.info, "deallocate", "render resources released")
     }
 
     // MARK: - Rendering
@@ -524,22 +631,44 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     public override var internalRenderBlock: AUInternalRenderBlock {
         let kernel = self.kernel!
         let unmanagedSelf = Unmanaged.passUnretained(self)
+        let unmanagedStats = Unmanaged.passUnretained(self.renderStats)
 
         return { actionFlags, timestamp, frameCount, outputBusNumber,
                  outputData, realtimeEventListHead, pullInputBlock in
 
             let au = unmanagedSelf.takeUnretainedValue()
+            let stats = unmanagedStats.takeUnretainedValue()
+            let blockStartTime = mach_absolute_time()
+
             guard let originalABL = au.originalAudioBufferList,
                   let mutableABL = au.mutableAudioBufferList else {
+                stats.recordRender(
+                    startMachTime: blockStartTime,
+                    endMachTime: mach_absolute_time(),
+                    frames: UInt64(frameCount),
+                    dropout: true
+                )
                 return kAudioUnitErr_Uninitialized
             }
             let maxFrames = au._maxFrames
 
             guard frameCount <= dsp_kernel_get_max_frames(kernel) else {
+                stats.recordRender(
+                    startMachTime: blockStartTime,
+                    endMachTime: mach_absolute_time(),
+                    frames: UInt64(frameCount),
+                    dropout: true
+                )
                 return kAudioUnitErr_TooManyFramesToProcess
             }
 
             guard let pullInputBlock = pullInputBlock else {
+                stats.recordRender(
+                    startMachTime: blockStartTime,
+                    endMachTime: mach_absolute_time(),
+                    frames: UInt64(frameCount),
+                    dropout: true
+                )
                 return kAudioUnitErr_NoConnection
             }
 
@@ -556,7 +685,15 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
             var pullFlags = AudioUnitRenderActionFlags(rawValue: 0)
             let err = pullInputBlock(&pullFlags, timestamp, frameCount, 0, mutableABL)
-            guard err == noErr else { return err }
+            guard err == noErr else {
+                stats.recordRender(
+                    startMachTime: blockStartTime,
+                    endMachTime: mach_absolute_time(),
+                    frames: UInt64(frameCount),
+                    dropout: true
+                )
+                return err
+            }
 
             let inABL = UnsafeMutableAudioBufferListPointer(mutableABL)
             let outABL = UnsafeMutableAudioBufferListPointer(outputData)
@@ -608,6 +745,12 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
                     Self.callKernelProcess(kernel: kernel, inABL: inABL, outABL: outABL,
                                            channelCount: channelCount, frameOffset: frameOffset,
                                            frameCount: framesRemaining)
+                    stats.recordRender(
+                        startMachTime: blockStartTime,
+                        endMachTime: mach_absolute_time(),
+                        frames: UInt64(frameCount),
+                        dropout: false
+                    )
                     return noErr
                 }
 
@@ -626,6 +769,12 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
                 nextEvent = Self.performAllSimultaneousEvents(kernel: kernel, now: now, event: nextEvent!)
             }
 
+            stats.recordRender(
+                startMachTime: blockStartTime,
+                endMachTime: mach_absolute_time(),
+                frames: UInt64(frameCount),
+                dropout: false
+            )
             return noErr
         }
     }
