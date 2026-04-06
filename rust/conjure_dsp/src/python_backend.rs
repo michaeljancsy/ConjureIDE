@@ -166,9 +166,17 @@ impl PythonBackend {
             }
             Err(e) => {
                 let py_err_msg = Python::with_gil(|py| {
+                    // Format traceback to include line numbers for the error parser
+                    let tb_str = e.traceback(py)
+                        .and_then(|tb| tb.format().ok())
+                        .unwrap_or_default();
                     let msg = e.value(py).to_string();
                     e.print(py);
-                    msg
+                    if tb_str.is_empty() {
+                        msg
+                    } else {
+                        format!("{}{}", tb_str, msg)
+                    }
                 });
                 let err_msg = format!(
                     "{}\n\npython_home: {}\nscript_path: {}",
@@ -487,9 +495,15 @@ impl PythonBackend {
         match result {
             Ok(()) => true,
             Err(e) => {
-                let err_msg = format!("Python process error: {}", e);
+                let err_msg = Python::with_gil(|py| {
+                    let tb_str = e.traceback(py)
+                        .and_then(|tb| tb.format().ok())
+                        .unwrap_or_default();
+                    let msg = format!("Python process error: {}", e.value(py));
+                    e.print(py);
+                    if tb_str.is_empty() { msg } else { format!("{}{}", tb_str, msg) }
+                });
                 self.last_error = Some(err_msg);
-                Python::with_gil(|py| e.print(py));
                 false
             }
         }
