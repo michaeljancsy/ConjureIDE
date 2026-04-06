@@ -1,6 +1,6 @@
 # SVF Algorithm Options
 
-Reference notes on state variable filter algorithms we've considered for the `preset_svf` factory presets (Python and Rust). The current implementation uses the **Chamberlin SVF** with a non-finite-state guard (see plan `agile-fluttering-toast`). This doc captures the alternatives we deferred so we can revisit them later.
+Reference notes on state variable filter algorithms considered for the `preset_svf` factory presets (Python and Rust). The current implementation uses the **TPT SVF** (option 2). This doc captures the alternatives for reference.
 
 ## 1. Chamberlin SVF (current)
 
@@ -57,6 +57,6 @@ Functionally equivalent to TPT SVF for the LP/BP/HP/notch outputs we use. Choosi
 
 Keep Chamberlin but clamp `cutoff` inside `process()` to `sr / 6` (or a Q-dependent bound). Simplest possible fix, but silently ignores slider values above the clamp, which is confusing UX. Listed here only for completeness.
 
-## Recommendation (for future revisit)
+## Current choice
 
-Switch both `preset_svf.py` and `preset_svf_rust.rs` to **TPT SVF** (option 2). It's the small-code modern standard, makes the preset a better teaching example, and removes the stability guard currently needed by the Chamberlin version. Clamp `cutoff` to `0.49 * sr` before computing `g = tan(...)` to handle the Nyquist edge.
+Both `preset_svf.py` and `preset_svf_rust.rs` use **TPT SVF** (option 2) with cutoff clamped to `0.49 * sr` before computing `g = tan(...)` to handle the Nyquist edge.
