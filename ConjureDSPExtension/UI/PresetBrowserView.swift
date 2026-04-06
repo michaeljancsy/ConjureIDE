@@ -82,6 +82,7 @@ struct PresetBrowserView: View {
                 Spacer()
                 Button("Done") { onDismiss() }
                     .buttonStyle(.borderless)
+                    .accessibilityIdentifier("presetBrowserDoneButton")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -94,6 +95,7 @@ struct PresetBrowserView: View {
                     .foregroundColor(.secondary)
                 TextField("Search presets\u{2026}", text: $searchText)
                     .textFieldStyle(.plain)
+                    .accessibilityIdentifier("presetBrowserSearchField")
                 if !searchText.isEmpty {
                     Button(action: { searchText = "" }) {
                         Image(systemName: "xmark.circle.fill")
@@ -143,6 +145,7 @@ struct PresetBrowserView: View {
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityIdentifier("browseCommunityButton")
 
                 Button(action: {
                     onDismiss()
@@ -154,6 +157,7 @@ struct PresetBrowserView: View {
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityIdentifier("importURLButton")
 
                 Spacer()
             }

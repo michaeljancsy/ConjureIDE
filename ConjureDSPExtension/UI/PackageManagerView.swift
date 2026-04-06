@@ -67,6 +67,7 @@ struct PackageManagerView: View {
                 Spacer()
                 Button("Done") { onDone() }
                     .buttonStyle(.borderless)
+                    .accessibilityIdentifier("packageManagerDoneButton")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -98,6 +99,7 @@ struct PackageManagerView: View {
                 TextField(activeLanguage == .python ? "Search PyPI..." : "Search crates.io...",
                           text: $searchText)
                     .textFieldStyle(.plain)
+                    .accessibilityIdentifier("packageManagerSearchField")
                     .onSubmit { performSearch() }
                 if !searchText.isEmpty {
                     Button(action: {
@@ -158,11 +160,13 @@ struct PackageManagerView: View {
                         text: $packageSpec
                     )
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("packageManagerSpecField")
                     .onSubmit { installPackage() }
                     Button("Install") { installPackage() }
                         .disabled(packageSpec.trimmingCharacters(in: .whitespaces).isEmpty || isInstalling)
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
+                        .accessibilityIdentifier("packageManagerInstallButton")
                 }
 
                 if isInstalling {

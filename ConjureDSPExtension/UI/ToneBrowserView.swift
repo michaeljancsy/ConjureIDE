@@ -71,6 +71,7 @@ struct ToneBrowserView: View {
                 }
                 Button("Done") { onDone() }
                     .buttonStyle(.borderless)
+                    .accessibilityIdentifier("toneBrowserDoneButton")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -91,6 +92,7 @@ struct ToneBrowserView: View {
                         showingAuth = true
                     }
                     .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("toneConnectButton")
                     Spacer()
                 }
             } else {
@@ -111,6 +113,7 @@ struct ToneBrowserView: View {
                             .foregroundStyle(.secondary)
                         TextField("Search tones...", text: $searchText)
                             .textFieldStyle(.plain)
+                            .accessibilityIdentifier("toneBrowserSearchField")
                             .onChange(of: searchText) { _, newValue in
                                 debounceSearch(query: newValue)
                             }

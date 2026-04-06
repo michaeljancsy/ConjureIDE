@@ -78,9 +78,11 @@ struct GitHubSettingsView: View {
                 if showToken {
                     TextField("ghp_\u{2026}", text: $tokenInput)
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("githubTokenField")
                 } else {
                     SecureField("ghp_\u{2026}", text: $tokenInput)
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("githubTokenField")
                 }
                 Button(action: { showToken.toggle() }) {
                     Image(systemName: showToken ? "eye.slash" : "eye")
@@ -105,6 +107,7 @@ struct GitHubSettingsView: View {
                     let trimmed = tokenInput.trimmingCharacters(in: .whitespaces)
                     gitHubService.setToken(trimmed.isEmpty ? nil : trimmed)
                 }
+                .accessibilityIdentifier("saveTokenButton")
             }
         }
     }
@@ -178,12 +181,14 @@ struct GitHubSettingsView: View {
                         showCreateFlow = false
                     }
                     .disabled(!gitHubService.hasToken)
+                    .accessibilityIdentifier("connectExistingRepoButton")
 
                     Button("Create New Repo") {
                         showCreateFlow = true
                         showConnectFlow = false
                     }
                     .disabled(!gitHubService.hasToken)
+                    .accessibilityIdentifier("createNewRepoButton")
                 }
 
                 if !gitHubService.hasToken {
