@@ -1,30 +1,36 @@
-import Darwin
 import Foundation
 
-/// Single point of truth for the App Group container URL.
+/// Single point of truth for the shared container URL.
 ///
-/// Uses direct path construction to avoid calling
-/// `containerURL(forSecurityApplicationGroupIdentifier:)`, which triggers
-/// a TCC "access data from other apps" prompt on macOS 26 when the
-/// host process is not sandboxed (most DAWs, and our own host app).
-///
-/// NOTE: The AU extension runs in a containerized XPC process where
-/// `homeDirectoryForCurrentUser` returns the container home (e.g.
-/// `~/Library/Containers/<bundleId>/Data/`), NOT the real user home.
-/// We use `getpwuid(getuid())` to get the real home from the system
-/// passwd database, which always returns `/Users/<username>/`.
+/// Routes based on sandbox status to avoid macOS 26 TCC "access data from
+/// other apps" prompts:
+/// - **Sandboxed** (extension in a DAW): Group Containers — the App Group
+///   entitlement grants automatic access, no TCC prompt.
+/// - **Unsandboxed** (host app, development): Application Support — standard
+///   app storage, never TCC-prompted.
 enum AppGroupContainer {
     static let id = "group.com.MichaelJancsy.ConjureDSP"
+
+    /// Whether the current process is running inside an App Sandbox.
+    static var isSandboxed: Bool {
+        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
+    }
+
     static let url: URL = {
-        let home: String
-        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-            home = String(cString: dir)
-        } else {
-            // Fallback (should never happen)
-            home = FileManager.default.homeDirectoryForCurrentUser.path
+        if isSandboxed {
+            // In a DAW — use Group Containers (sandbox + entitlement = no TCC prompt)
+            if let url = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: id
+            ) {
+                return url
+            }
         }
-        return URL(fileURLWithPath: home)
-            .appendingPathComponent("Library/Group Containers")
-            .appendingPathComponent(id)
+        // Unsandboxed (host app) — use Application Support (no TCC prompt)
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first!
+        let url = appSupport.appendingPathComponent("ConjureDSP")
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }()
 }

@@ -60,11 +60,10 @@ final class ExportManager {
     /// App Group identifier shared between host app and AU extension.
     static let appGroupIdentifier = "group.com.MichaelJancsy.ConjureDSP"
 
-    /// Returns the App Group container URL for staging exports.
+    /// Returns the shared container URL for staging exports.
+    /// Uses Application Support when unsandboxed (tests), Group Containers when sandboxed (DAW).
     static func appGroupContainerURL() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Group Containers")
-            .appendingPathComponent(appGroupIdentifier)
+        AppGroupContainer.url
     }
 
     /// Returns `true` if the script source references a NAM tone file that would

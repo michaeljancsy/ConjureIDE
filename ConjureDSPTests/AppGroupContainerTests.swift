@@ -1,44 +1,30 @@
 import Foundation
 import Testing
 
-/// Tests that the direct-path AppGroupContainer resolves correctly and
-/// matches the system API, verifying the TCC-prompt-free migration.
+/// Tests that AppGroupContainer resolves correctly based on sandbox status.
+/// Tests run unsandboxed → Application Support path.
 @Suite struct AppGroupContainerTests {
 
     // MARK: - Path resolution
 
-    @Test("Direct path matches containerURL API")
-    func directPathMatchesAPI() throws {
-        // The system API that we're avoiding (triggers TCC prompt on macOS 26)
-        let apiURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: AppGroupContainer.id
-        )
-        // Skip if App Group not available (CI without entitlements)
-        try #require(apiURL != nil, "App Group container not available via API")
-
-        // Our direct path construction (the replacement)
-        let directURL = AppGroupContainer.url
-
-        // Standardize both to strip any trailing slashes or symlinks
-        #expect(
-            directURL.standardizedFileURL == apiURL!.standardizedFileURL,
-            "Direct path \(directURL.path) must match API path \(apiURL!.path)"
-        )
+    @Test("Unsandboxed process uses Application Support")
+    func unsandboxedUsesApplicationSupport() {
+        let url = AppGroupContainer.url
+        #expect(url.pathComponents.contains("Application Support"))
+        #expect(url.lastPathComponent == "ConjureDSP")
     }
 
-    @Test("Direct path is deterministic across calls")
-    func directPathIsDeterministic() {
+    @Test("Path is deterministic across calls")
+    func pathIsDeterministic() {
         let url1 = AppGroupContainer.url
         let url2 = AppGroupContainer.url
         #expect(url1 == url2)
     }
 
-    @Test("Path contains expected components")
-    func pathContainsExpectedComponents() {
-        let url = AppGroupContainer.url
-        #expect(url.pathComponents.contains("Library"))
-        #expect(url.pathComponents.contains("Group Containers"))
-        #expect(url.lastPathComponent == "group.com.MichaelJancsy.ConjureDSP")
+    @Test("Sandbox detection works in test environment")
+    func sandboxDetection() {
+        // Tests run unsandboxed
+        #expect(!AppGroupContainer.isSandboxed)
     }
 
     @Test("App Group id is correct")

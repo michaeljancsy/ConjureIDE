@@ -92,9 +92,7 @@ class SubscriptionManager: ObservableObject {
 
     // MARK: - Init
 
-    init(appGroupContainerURL: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Group Containers")
-            .appendingPathComponent(appGroupIdentifier)) {
+    init(appGroupContainerURL: URL = AppGroupContainer.url) {
         self.appGroupContainerURL = appGroupContainerURL
     }
 

@@ -1,19 +1,27 @@
-import Darwin
 import Foundation
 
-/// Test copy of AppGroupContainer — uses getpwuid to get the real home
-/// directory (same as the extension's production implementation).
+/// Test copy of AppGroupContainer — mirrors the production implementation.
+/// Tests run unsandboxed, so this uses Application Support (no TCC prompt).
 enum AppGroupContainer {
     static let id = "group.com.MichaelJancsy.ConjureDSP"
+
+    static var isSandboxed: Bool {
+        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
+    }
+
     static let url: URL = {
-        let home: String
-        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-            home = String(cString: dir)
-        } else {
-            home = FileManager.default.homeDirectoryForCurrentUser.path
+        if isSandboxed {
+            if let url = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: id
+            ) {
+                return url
+            }
         }
-        return URL(fileURLWithPath: home)
-            .appendingPathComponent("Library/Group Containers")
-            .appendingPathComponent(id)
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first!
+        let url = appSupport.appendingPathComponent("ConjureDSP")
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }()
 }
