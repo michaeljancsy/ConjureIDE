@@ -10,18 +10,18 @@ PARAMS = {
 # Mode: "low", "high", "band", "notch"
 MODE = "low"
 
-# Persistent state per channel: [low, band]
+# Persistent state per channel: [ic1eq, ic2eq]
 _state = [[0.0, 0.0], [0.0, 0.0]]
 
 
 def process(inputs, outputs, frame_count, sample_rate, params):
     """
-    Resonant State Variable Filter — multi-mode SVF (LP/HP/BP/Notch).
+    Resonant State Variable Filter — multi-mode TPT SVF (LP/HP/BP/Notch).
 
-    Implements a digital state variable filter with selectable output mode.
-    The filter computes low-pass, high-pass, and band-pass simultaneously,
-    and the MODE constant selects which output is used. Resonance controls
-    the sharpness of the peak at the cutoff frequency.
+    Topology-preserving transform SVF (Zavalishin). Unconditionally stable
+    across the full 20–20000 Hz range at any Q. The filter computes
+    low-pass, high-pass, and band-pass simultaneously, and the MODE
+    constant selects which output is used.
 
     Params:
         cutoff:    Cutoff frequency (20–20000 Hz)
@@ -29,21 +29,30 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     """
     global _state
 
-    cutoff_hz = params["cutoff"]
+    cutoff_hz = min(params["cutoff"], sample_rate * 0.49)
     resonance = params["resonance"]
 
-    f = 2.0 * math.sin(math.pi * cutoff_hz / sample_rate)
-    q = 1.0 / resonance
+    g = math.tan(math.pi * cutoff_hz / sample_rate)
+    k = 1.0 / resonance
+    a1 = 1.0 / (1.0 + g * (g + k))
+    a2 = g * a1
+    a3 = g * a2
 
     for ch in range(len(inputs)):
-        low = _state[ch][0] if ch < len(_state) else 0.0
-        band = _state[ch][1] if ch < len(_state) else 0.0
+        ic1eq = _state[ch][0] if ch < len(_state) else 0.0
+        ic2eq = _state[ch][1] if ch < len(_state) else 0.0
 
         for i in range(frame_count):
             x = inputs[ch][i]
-            low += f * band
-            high = x - low - q * band
-            band += f * high
+            v3 = x - ic2eq
+            v1 = a1 * ic1eq + a2 * v3
+            v2 = ic2eq + a2 * ic1eq + a3 * v3
+            ic1eq = 2.0 * v1 - ic1eq
+            ic2eq = 2.0 * v2 - ic2eq
+
+            low = v2
+            band = v1
+            high = x - k * v1 - v2
 
             if MODE == "low":
                 outputs[ch][i] = low
@@ -55,8 +64,5 @@ def process(inputs, outputs, frame_count, sample_rate, params):
                 outputs[ch][i] = low + high
 
         if ch < len(_state):
-            if not (math.isfinite(low) and math.isfinite(band)):
-                low = 0.0
-                band = 0.0
-            _state[ch][0] = low
-            _state[ch][1] = band
+            _state[ch][0] = ic1eq
+            _state[ch][1] = ic2eq

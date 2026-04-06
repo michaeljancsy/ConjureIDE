@@ -1,8 +1,8 @@
-// Resonant State Variable Filter — multi-mode SVF (LP/HP/BP/Notch).
+// Resonant State Variable Filter — multi-mode TPT SVF (LP/HP/BP/Notch).
 //
-// Implements a digital state variable filter with low-pass output.
-// The filter computes low-pass, high-pass, and band-pass simultaneously.
-// Resonance controls the sharpness of the peak at the cutoff frequency.
+// Topology-preserving transform SVF (Zavalishin). Unconditionally stable
+// across the full 20–20000 Hz range at any Q. The filter computes
+// low-pass, high-pass, and band-pass simultaneously.
 // Change MODE constant to select output: 0=LP, 1=HP, 2=BP, 3=Notch.
 //
 // Params:
@@ -19,10 +19,10 @@ params! {
 
 const MODE: usize = 0; // 0=LP, 1=HP, 2=BP, 3=Notch
 
-// Persistent state per channel: [low, band]
-// Use f64 to match Python's float64 precision in the coupled feedback loop.
-static mut STATE_LOW: [f64; MAX_CH] = [0.0; MAX_CH];
-static mut STATE_BAND: [f64; MAX_CH] = [0.0; MAX_CH];
+// Persistent state per channel: [ic1eq, ic2eq]
+// Use f64 to match Python's float64 precision.
+static mut IC1EQ: [f64; MAX_CH] = [0.0; MAX_CH];
+static mut IC2EQ: [f64; MAX_CH] = [0.0; MAX_CH];
 
 #[no_mangle]
 pub extern "C" fn process(
@@ -36,21 +36,30 @@ pub extern "C" fn process(
     let sr = ctx.sample_rate() as f64;
 
     unsafe {
-        let cutoff_hz = ctx.param(CUTOFF) as f64;
+        let cutoff_hz = (ctx.param(CUTOFF) as f64).min(sr * 0.49);
         let resonance = ctx.param(RESONANCE) as f64;
 
-        let f = 2.0 * (core::f64::consts::PI * cutoff_hz / sr).sin();
-        let q = 1.0 / resonance;
+        let g = (core::f64::consts::PI * cutoff_hz / sr).tan();
+        let k = 1.0 / resonance;
+        let a1 = 1.0 / (1.0 + g * (g + k));
+        let a2 = g * a1;
+        let a3 = g * a2;
 
         for c in 0..ctx.channels() {
-            let mut low = STATE_LOW[c];
-            let mut band = STATE_BAND[c];
+            let mut ic1eq = IC1EQ[c];
+            let mut ic2eq = IC2EQ[c];
 
             for i in 0..ctx.frames() {
                 let x = ctx.input(c, i) as f64;
-                low += f * band;
-                let high = x - low - q * band;
-                band += f * high;
+                let v3 = x - ic2eq;
+                let v1 = a1 * ic1eq + a2 * v3;
+                let v2 = ic2eq + a2 * ic1eq + a3 * v3;
+                ic1eq = 2.0 * v1 - ic1eq;
+                ic2eq = 2.0 * v2 - ic2eq;
+
+                let low = v2;
+                let band = v1;
+                let high = x - k * v1 - v2;
 
                 ctx.set_output(c, i, match MODE {
                     0 => low as f32,
@@ -60,12 +69,8 @@ pub extern "C" fn process(
                 });
             }
 
-            if !low.is_finite() || !band.is_finite() {
-                low = 0.0;
-                band = 0.0;
-            }
-            STATE_LOW[c] = low;
-            STATE_BAND[c] = band;
+            IC1EQ[c] = ic1eq;
+            IC2EQ[c] = ic2eq;
         }
     }
 }
