@@ -551,10 +551,10 @@ struct ExportManagerTests {
 struct PendingExportHandlerTests {
 
     @Test func appGroupContainerURLReturnsDeterministicPath() {
-        // Direct path construction always returns a valid URL (no TCC prompt)
         let url = ExportManager.appGroupContainerURL()
-        #expect(url.lastPathComponent == "group.com.MichaelJancsy.ConjureDSP")
-        #expect(url.pathComponents.contains("Group Containers"))
+        // Unsandboxed tests use Application Support
+        #expect(url.lastPathComponent == "ConjureDSP")
+        #expect(url.pathComponents.contains("Application Support"))
     }
 
     @Test func exportManagerSanitizesSpecialCharacters() {

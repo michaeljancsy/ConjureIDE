@@ -56,12 +56,16 @@ class TerminalAppServer {
         log.info("ConjureDSP Terminal starting")
         status = "Waiting for ConjureDSP plugin..."
 
-        // Provision shared runtimes to the App Group container, then init installers.
+        // Provision shared runtimes, then mirror to Group Containers for DAW compatibility.
         // uv/rustc-dist must be provisioned before installer init so they can find binaries.
         DispatchQueue.global(qos: .utility).async { [self] in
             Self.installPythonRuntimeIfNeeded()
             Self.provisionUVIfNeeded()
             Self.provisionRustToolchainIfNeeded()
+
+            // Mirror to Group Containers so DAW-hosted (sandboxed) extensions can find runtimes.
+            // This triggers a TCC prompt on macOS 26 but is necessary for DAW compatibility.
+            Self.mirrorRuntimesToGroupContainers()
 
             Task { @MainActor in
                 let containerURL = AppGroupContainer.url
@@ -84,7 +88,7 @@ class TerminalAppServer {
         startWatching()
     }
 
-    /// Copies the bundled Python distribution to the App Group container so the AU
+    /// Copies the bundled Python distribution to the shared container so the AU
     /// extension and package manager can use it. No-op if already installed (except
     /// for the conjuredsp package, which is always updated to pick up new modules).
     nonisolated static func installPythonRuntimeIfNeeded() {
@@ -144,14 +148,13 @@ class TerminalAppServer {
         updateConjureDSPPackage(bundledPythonDist: bundledPythonDist, runtimeURL: runtimeURL)
     }
 
-    /// Re-copies the bundled conjuredsp package into the App Group site-packages.
+    /// Re-copies the bundled conjuredsp package into the shared site-packages.
     /// This runs every launch to ensure new modules (e.g., nam.py) are picked up
     /// even when the full Python runtime install is skipped.
+    /// Also mirrors to Group Containers for DAW compatibility.
     nonisolated private static func updateConjureDSPPackage(bundledPythonDist: URL, runtimeURL: URL) {
         let fm = FileManager.default
         let srcConjuredsp = bundledPythonDist
-            .appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
-        let dstConjuredsp = runtimeURL
             .appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
 
         guard fm.fileExists(atPath: srcConjuredsp.path) else {
@@ -159,14 +162,29 @@ class TerminalAppServer {
             return
         }
 
+        // Update in primary location (Application Support)
+        let dstConjuredsp = runtimeURL
+            .appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
         do {
             if fm.fileExists(atPath: dstConjuredsp.path) {
                 try fm.removeItem(at: dstConjuredsp)
             }
             try fm.copyItem(at: srcConjuredsp, to: dstConjuredsp)
-            log.info("Updated conjuredsp package in App Group site-packages")
+            log.info("Updated conjuredsp package in site-packages")
         } catch {
             log.error("Failed to update conjuredsp package: \(error.localizedDescription, privacy: .public)")
+        }
+
+        // Mirror to Group Containers for DAW-hosted extensions
+        let gcDst = AppGroupContainer.groupContainersURL
+            .appendingPathComponent("PythonRuntime/lib/python3.14t/site-packages/conjuredsp")
+        if fm.fileExists(atPath: gcDst.deletingLastPathComponent().path) {
+            do {
+                if fm.fileExists(atPath: gcDst.path) { try fm.removeItem(at: gcDst) }
+                try fm.copyItem(at: srcConjuredsp, to: gcDst)
+            } catch {
+                log.warning("Failed to mirror conjuredsp to Group Containers: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
@@ -419,33 +437,103 @@ class TerminalAppServer {
         log.info("Session reset")
     }
 
-    // MARK: - App Group helpers
+    // MARK: - Container helpers
 
-    private func appGroupURL() -> URL {
+    private func containerURL() -> URL {
         AppGroupContainer.url
     }
 
+    /// Read MCP port — check Application Support (primary), then Group Containers (DAW fallback).
     private func readMCPPort() -> UInt16? {
-        let portFile = appGroupURL().appendingPathComponent("mcp-server-port")
-        guard let s = try? String(contentsOf: portFile, encoding: .utf8),
-              let port = UInt16(s.trimmingCharacters(in: .whitespacesAndNewlines)),
-              port > 0 else { return nil }
-        return port
+        // Primary: Application Support (no TCC prompt)
+        let portFile = containerURL().appendingPathComponent("mcp-server-port")
+        if let s = try? String(contentsOf: portFile, encoding: .utf8),
+           let port = UInt16(s.trimmingCharacters(in: .whitespacesAndNewlines)),
+           port > 0 {
+            return port
+        }
+        // Fallback: Group Containers (for DAW-hosted extension)
+        let gcPortFile = AppGroupContainer.groupContainersURL.appendingPathComponent("mcp-server-port")
+        if let s = try? String(contentsOf: gcPortFile, encoding: .utf8),
+           let port = UInt16(s.trimmingCharacters(in: .whitespacesAndNewlines)),
+           port > 0 {
+            return port
+        }
+        return nil
     }
 
+    /// Check shutdown signal in both locations.
     private func shutdownSignalExists() -> Bool {
-        let file = appGroupURL().appendingPathComponent("terminal-shutdown")
-        return FileManager.default.fileExists(atPath: file.path)
+        let primary = containerURL().appendingPathComponent("terminal-shutdown")
+        if FileManager.default.fileExists(atPath: primary.path) { return true }
+        let gc = AppGroupContainer.groupContainersURL.appendingPathComponent("terminal-shutdown")
+        return FileManager.default.fileExists(atPath: gc.path)
     }
 
+    /// Write WebSocket port to both locations so both host app and DAW extension can find it.
     private func writeWebSocketPort(_ port: UInt16) {
-        let portFile = appGroupURL().appendingPathComponent("terminal-server-port")
-        try? "\(port)".write(to: portFile, atomically: true, encoding: .utf8)
+        let content = "\(port)"
+        // Primary: Application Support
+        let primaryFile = containerURL().appendingPathComponent("terminal-server-port")
+        try? content.write(to: primaryFile, atomically: true, encoding: .utf8)
+        // Write-through: Group Containers (for DAW-hosted extension)
+        let gcFile = AppGroupContainer.groupContainersURL.appendingPathComponent("terminal-server-port")
+        try? content.write(to: gcFile, atomically: true, encoding: .utf8)
     }
 
     private func deleteAppGroupFile(_ name: String) {
-        let file = appGroupURL().appendingPathComponent(name)
-        try? FileManager.default.removeItem(at: file)
+        // Delete from both locations
+        let primary = containerURL().appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: primary)
+        let gc = AppGroupContainer.groupContainersURL.appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: gc)
+    }
+
+    // MARK: - Group Containers write-through
+
+    /// Mirror provisioned runtimes from Application Support to Group Containers
+    /// so DAW-hosted (sandboxed) extensions can find them. This triggers a TCC
+    /// prompt on macOS 26 but is necessary for DAW compatibility.
+    nonisolated static func mirrorRuntimesToGroupContainers() {
+        let fm = FileManager.default
+        let src = AppGroupContainer.url
+        let dst = AppGroupContainer.groupContainersURL
+
+        try? fm.createDirectory(at: dst, withIntermediateDirectories: true)
+
+        // Mirror PythonRuntime
+        let srcPython = src.appendingPathComponent("PythonRuntime")
+        let dstPython = dst.appendingPathComponent("PythonRuntime")
+        if fm.fileExists(atPath: srcPython.path), !fm.fileExists(atPath: dstPython.appendingPathComponent("lib/python3.14t").path) {
+            do {
+                if fm.fileExists(atPath: dstPython.path) { try fm.removeItem(at: dstPython) }
+                try fm.copyItem(at: srcPython, to: dstPython)
+                log.info("Mirrored PythonRuntime to Group Containers")
+            } catch {
+                log.error("Failed to mirror PythonRuntime: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        // Mirror rustc-dist
+        let srcRustc = src.appendingPathComponent("rustc-dist")
+        let dstRustc = dst.appendingPathComponent("rustc-dist")
+        if fm.fileExists(atPath: srcRustc.path), !fm.fileExists(atPath: dstRustc.appendingPathComponent("bin/cargo").path) {
+            do {
+                if fm.fileExists(atPath: dstRustc.path) { try fm.removeItem(at: dstRustc) }
+                try fm.copyItem(at: srcRustc, to: dstRustc)
+                log.info("Mirrored rustc-dist to Group Containers")
+            } catch {
+                log.error("Failed to mirror rustc-dist: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        // Mirror uv binary
+        let srcUV = src.appendingPathComponent("uv")
+        let dstUV = dst.appendingPathComponent("uv")
+        if fm.fileExists(atPath: srcUV.path), !fm.fileExists(atPath: dstUV.path) {
+            try? fm.copyItem(at: srcUV, to: dstUV)
+            log.info("Mirrored uv to Group Containers")
+        }
     }
 }
 
