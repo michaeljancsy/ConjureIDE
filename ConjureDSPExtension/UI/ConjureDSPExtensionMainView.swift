@@ -523,9 +523,9 @@ struct ConjureDSPExtensionMainView: View {
                             : Color(nsColor: .controlBackgroundColor))
                         : Color.clear
                 )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .contentShape(Rectangle())
         .accessibilityIdentifier(identifier)
     }
 }
