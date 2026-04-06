@@ -10,9 +10,9 @@ struct ExportAUMainView: View {
     let config: RuntimeConfig?
     let pythonRuntimeMissing: Bool
     var loadError: String? = nil
-    /// Called when the debug pane visibility changes, so the view controller
-    /// can resize the AU window via `preferredContentSize`.
-    var onDebugPaneToggle: ((Bool) -> Void)? = nil
+    /// Called when layout-relevant state changes (debug pane, error visibility)
+    /// so the view controller can resize the AU window via `preferredContentSize`.
+    var onLayoutChange: ((_ showDebug: Bool, _ hasError: Bool) -> Void)? = nil
     @State private var errorCopied = false
     @State private var showDebugPane = false
 
@@ -52,72 +52,97 @@ struct ExportAUMainView: View {
                 }
                 .padding(.top, 12)
 
-                if let error = loadError ?? parameterState.runtimeError {
-                    let isLoadError = loadError != nil
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.yellow)
-                            Text(isLoadError ? "Audio bypassed — preset failed to load" : "Audio bypassed — runtime error")
-                                .font(.caption).bold()
-                            Spacer()
-                            Button {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(error, forType: .string)
-                                errorCopied = true
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                    errorCopied = false
-                                }
-                            } label: {
-                                Label(errorCopied ? "Copied" : "Copy", systemImage: errorCopied ? "checkmark" : "doc.on.doc")
-                                    .font(.caption2)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                        }
-                        Text(error)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                    .padding(8)
-                    .background(.yellow.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .padding(.horizontal)
-                }
-
                 Divider()
 
-                ScrollView {
-                    VStack(spacing: 4) {
-                        ForEach(0..<parameterState.paramCount, id: \.self) { index in
-                            ExportParamSliderRow(
-                                label: config?.paramLabel(at: index) ?? "Param \(index + 1)",
-                                value: parameterState.binding(for: index),
-                                metadata: parameterState.metadata(for: index)
-                            )
-                        }
+                VStack(spacing: 4) {
+                    ForEach(0..<parameterState.paramCount, id: \.self) { index in
+                        ExportParamSliderRow(
+                            label: config?.paramLabel(at: index) ?? "Param \(index + 1)",
+                            value: parameterState.binding(for: index),
+                            metadata: parameterState.metadata(for: index)
+                        )
                     }
-                    .padding(.horizontal)
                 }
+                .padding(.horizontal)
 
+                // Below the fixed parameter area: show either the debug pane
+                // (which includes errors in its log) or the error banner.
                 if showDebugPane {
+                    Divider()
                     DebugPaneView(
                         debugLog: parameterState.debugLog,
                         stats: parameterState.statsSnapshot,
                         info: parameterState.pluginInfo
                     )
+                } else if let error = loadError ?? parameterState.runtimeError {
+                    Divider()
+                    errorBanner(error: error, isLoadError: loadError != nil)
                 }
+
+                Spacer(minLength: 0)
 
                 Text("Made with ConjureDSP")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 8)
             }
-            .onChange(of: showDebugPane) { _, newValue in
-                onDebugPaneToggle?(newValue)
+            .onChange(of: showDebugPane) { _, _ in
+                notifyLayoutChange()
+            }
+            .onChange(of: parameterState.runtimeError) { _, _ in
+                notifyLayoutChange()
+            }
+            .onAppear {
+                notifyLayoutChange()
             }
         }
+    }
+}
+
+extension ExportAUMainView {
+    private var hasError: Bool {
+        loadError != nil || parameterState.runtimeError != nil
+    }
+
+    private func notifyLayoutChange() {
+        onLayoutChange?(showDebugPane, hasError && !showDebugPane)
+    }
+
+    @ViewBuilder
+    func errorBanner(error: String, isLoadError: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+                Text(isLoadError ? "Audio bypassed — preset failed to load" : "Audio bypassed — runtime error")
+                    .font(.caption).bold()
+                Spacer()
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(error, forType: .string)
+                    errorCopied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        errorCopied = false
+                    }
+                } label: {
+                    Label(errorCopied ? "Copied" : "Copy", systemImage: errorCopied ? "checkmark" : "doc.on.doc")
+                        .font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+            ScrollView {
+                Text(error)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(8)
+        .background(.yellow.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal)
     }
 }
 

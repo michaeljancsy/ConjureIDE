@@ -83,7 +83,7 @@ struct DebugPaneView: View {
                 }
                 .padding(8)
             }
-            .frame(height: 300)
+            .frame(minHeight: 100, maxHeight: .infinity)
             .background(Color.black.opacity(0.05))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .padding(.horizontal, 8)

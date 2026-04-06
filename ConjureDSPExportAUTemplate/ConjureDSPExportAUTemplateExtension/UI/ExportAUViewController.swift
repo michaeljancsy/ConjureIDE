@@ -12,23 +12,48 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
     private var hostingView: NSHostingView<ExportAUMainView>?
     private var parameterState: ExportParameterState?
     private var errorPollTimer: Timer?
+    private var paramCount: Int = 8
 
-    /// Base window size. Used when the debug pane is hidden.
-    private static let collapsedSize = NSSize(width: 400, height: 300)
-    /// Expanded size when the debug pane is visible (adds ~340pt for the pane).
-    private static let expandedSize = NSSize(width: 400, height: 640)
+    private static let viewWidth: CGFloat = 500
 
     public override var preferredMinimumSize: NSSize {
-        NSSize(width: 300, height: 200)
+        NSSize(width: 300, height: 150)
     }
 
     public override var preferredMaximumSize: NSSize {
-        NSSize(width: 800, height: 700)
+        NSSize(width: 800, height: 900)
+    }
+
+    /// Compute the ideal window height based on content.
+    private func computeSize(showDebug: Bool, showError: Bool) -> NSSize {
+        // Header (title + gear): ~45pt
+        // Divider: 1pt
+        // Each param row: ~28pt
+        // Footer (Made with ConjureDSP): ~30pt
+        var height: CGFloat = 45 + 1 + CGFloat(paramCount) * 28 + 30
+        // Padding/spacing between sections
+        height += 24
+
+        if showError {
+            // Error banner: header line + scrollable text area + padding
+            height += 160
+        }
+
+        if showDebug {
+            // Debug pane: header + scrollable content
+            height += 350
+        }
+
+        // Enforce minimum
+        height = max(height, 150)
+
+        return NSSize(width: Self.viewWidth, height: height)
     }
 
     public override func loadView() {
-        self.view = NSView(frame: NSRect(origin: .zero, size: Self.collapsedSize))
-        self.preferredContentSize = Self.collapsedSize
+        let initial = computeSize(showDebug: false, showError: false)
+        self.view = NSView(frame: NSRect(origin: .zero, size: initial))
+        self.preferredContentSize = initial
     }
 
     nonisolated public func createAudioUnit(
@@ -71,13 +96,14 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
             ps.attach(to: tree)
         }
 
+        self.paramCount = config?.effectiveParamCount ?? 8
         let content = ExportAUMainView(
             parameterState: ps,
             config: config,
             pythonRuntimeMissing: au.pythonRuntimeMissing,
             loadError: au.loadError,
-            onDebugPaneToggle: { [weak self] visible in
-                self?.setDebugPaneVisible(visible)
+            onLayoutChange: { [weak self] showDebug, showError in
+                self?.updateSize(showDebug: showDebug, showError: showError)
             }
         )
         let hv = NSHostingView(rootView: content)
@@ -107,14 +133,18 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
             let error = au.currentKernelError()
             let snapshot = au.renderStats.snapshot()
             DispatchQueue.main.async {
+                // Log new runtime errors to the debug log
+                if let err = error, err != ps.runtimeError {
+                    ps.debugLog.append(level: .error, category: "render.error", message: err)
+                }
                 ps.runtimeError = error
                 ps.statsSnapshot = snapshot
             }
         }
     }
 
-    private func setDebugPaneVisible(_ visible: Bool) {
-        let target = visible ? Self.expandedSize : Self.collapsedSize
+    private func updateSize(showDebug: Bool, showError: Bool) {
+        let target = computeSize(showDebug: showDebug, showError: showError)
         self.preferredContentSize = target
         // Some hosts honor frame rather than preferred size — set both.
         var frame = self.view.frame
