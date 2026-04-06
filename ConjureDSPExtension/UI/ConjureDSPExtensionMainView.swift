@@ -215,17 +215,30 @@ struct ConjureDSPExtensionMainView: View {
 
                         Divider()
 
-                        if showAIPromptTab {
+                        // Keep all pane content alive to avoid WKWebView teardown on tab switch.
+                        // Use opacity/allowsHitTesting/accessibilityHidden to show/hide without destroying the views.
+                        ZStack {
                             AIPromptHelperView(
                                 currentScript: scriptSource,
                                 currentLanguage: selectedLanguage,
                                 colorScheme: colorScheme
                             )
-                        } else if daemonChecker.isDaemonAvailable {
-                            TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
-                                .accessibilityIdentifier("terminalPanel")
-                        } else {
-                            DaemonLaunchPromptView(colorScheme: colorScheme)
+                            .opacity(showAIPromptTab ? 1 : 0)
+                            .allowsHitTesting(showAIPromptTab)
+                            .accessibilityHidden(!showAIPromptTab)
+
+                            if daemonChecker.isDaemonAvailable {
+                                TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
+                                    .accessibilityIdentifier("terminalPanel")
+                                    .opacity(showAIPromptTab ? 0 : 1)
+                                    .allowsHitTesting(!showAIPromptTab)
+                                    .accessibilityHidden(showAIPromptTab)
+                            } else {
+                                DaemonLaunchPromptView(colorScheme: colorScheme)
+                                    .opacity(showAIPromptTab ? 0 : 1)
+                                    .allowsHitTesting(!showAIPromptTab)
+                                    .accessibilityHidden(showAIPromptTab)
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

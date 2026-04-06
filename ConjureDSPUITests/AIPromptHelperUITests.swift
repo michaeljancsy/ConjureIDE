@@ -58,6 +58,47 @@ final class AIPromptHelperUITests: XCTestCase {
 
     // MARK: - Terminal Tab Switcher
 
+    /// Regression test: switching to AI Prompt and back must not destroy the terminal/daemon view.
+    /// Previously, the if/else structure removed the WKWebView from the hierarchy on tab switch,
+    /// causing it to re-initialize blank on return. The ZStack keep-alive fix prevents this.
+    @MainActor
+    func testClaudeCodeTabPersistsAfterTabSwitch() throws {
+        let app = Self.sharedApp!
+
+        try openTerminalPanel(app: app)
+
+        // Confirm the Claude Code pane content is visible
+        let prompt = app.descendants(matching: .any)["daemonLaunchPrompt"].firstMatch
+        let terminal = app.descendants(matching: .any)["terminalPanel"].firstMatch
+        let initiallyVisible = prompt.waitForExistence(timeout: 3) || terminal.waitForExistence(timeout: 1)
+        try XCTSkipUnless(initiallyVisible,
+                          "Neither terminal nor daemon prompt visible — cannot test tab switch persistence")
+        let showingTerminal = terminal.exists
+
+        // Switch to AI Prompt tab
+        let aiPromptTab = anyElement(in: app, id: "aiPromptTabButton")
+        try XCTSkipUnless(aiPromptTab.waitForExistence(timeout: 5),
+                          "AI Prompt tab button not accessible through AU ViewBridge")
+        aiPromptTab.click()
+        usleep(300_000)
+
+        // Switch back to Claude Code tab
+        let claudeCodeTab = anyElement(in: app, id: "claudeCodeTabButton")
+        XCTAssertTrue(claudeCodeTab.waitForExistence(timeout: 3),
+                      "Claude Code tab button should exist")
+        claudeCodeTab.click()
+        usleep(300_000)
+
+        // The same view that was visible before the tab switch must still be visible
+        if showingTerminal {
+            XCTAssertTrue(terminal.waitForExistence(timeout: 3),
+                          "Terminal panel should still be visible after switching tabs and back")
+        } else {
+            XCTAssertTrue(prompt.waitForExistence(timeout: 3),
+                          "Daemon launch prompt should still be visible after switching tabs and back")
+        }
+    }
+
     @MainActor
     func testTerminalTabSwitcherExists() throws {
         let app = Self.sharedApp!
