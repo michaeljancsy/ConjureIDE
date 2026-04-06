@@ -7,8 +7,8 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "P
 /// Manages discovery, loading, saving, and deletion of DSP script presets.
 ///
 /// Factory presets are read from the extension bundle (read-only).
-/// User presets are stored as .py/.rs files in ~/Library/Application Support/ConjureDSP/Presets/.
-/// Repo presets are cached locally in ~/Library/Application Support/ConjureDSP/RepoPresets/ and synced to GitHub.
+/// User presets are stored as .py/.rs files in the App Group container under Presets/.
+/// Repo presets are cached locally under RepoPresets/ and synced to GitHub.
 @MainActor
 class PresetManager: ObservableObject {
     @Published private(set) var presets: [Preset] = []
@@ -35,11 +35,9 @@ class PresetManager: ObservableObject {
     init(extensionBundle: Bundle) {
         self.extensionBundle = extensionBundle
 
-        let appSupport = fileManager
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let bearBoneDir = appSupport.appendingPathComponent("ConjureDSP", isDirectory: true)
-        self.userPresetsURL = bearBoneDir.appendingPathComponent("Presets", isDirectory: true)
-        self.repoPresetsURL = bearBoneDir.appendingPathComponent("RepoPresets", isDirectory: true)
+        let baseDir = AppGroupContainer.url
+        self.userPresetsURL = baseDir.appendingPathComponent("Presets", isDirectory: true)
+        self.repoPresetsURL = baseDir.appendingPathComponent("RepoPresets", isDirectory: true)
 
         ensureDirectory(userPresetsURL)
         ensureDirectory(repoPresetsURL)

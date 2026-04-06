@@ -6,12 +6,8 @@ final class WasmCache {
     let cacheDir: URL
 
     init() {
-        let appSupport =
-            FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         cacheDir =
-            appSupport
-            .appendingPathComponent("ConjureDSP", isDirectory: true)
+            AppGroupContainer.url
             .appendingPathComponent("WasmCache", isDirectory: true)
 
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)

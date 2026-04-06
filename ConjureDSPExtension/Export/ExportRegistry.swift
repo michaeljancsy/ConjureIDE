@@ -5,7 +5,7 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "E
 
 /// Tracks exported AU plugins in a local JSON registry.
 ///
-/// Registry file: `~/Library/Application Support/ConjureDSP/export-registry.json`
+/// Registry file: `export-registry.json` in the App Group container.
 final class ExportRegistry {
     struct Entry: Codable, Equatable {
         let name: String
@@ -19,10 +19,7 @@ final class ExportRegistry {
     let registryURL: URL
 
     init() {
-        let appSupport = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        registryURL = appSupport
-            .appendingPathComponent("ConjureDSP", isDirectory: true)
+        registryURL = AppGroupContainer.url
             .appendingPathComponent("export-registry.json")
         load()
     }
