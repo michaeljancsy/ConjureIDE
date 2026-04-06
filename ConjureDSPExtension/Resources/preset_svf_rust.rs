@@ -60,6 +60,10 @@ pub extern "C" fn process(
                 });
             }
 
+            if !low.is_finite() || !band.is_finite() {
+                low = 0.0;
+                band = 0.0;
+            }
             STATE_LOW[c] = low;
             STATE_BAND[c] = band;
         }

@@ -55,5 +55,8 @@ def process(inputs, outputs, frame_count, sample_rate, params):
                 outputs[ch][i] = low + high
 
         if ch < len(_state):
+            if not (math.isfinite(low) and math.isfinite(band)):
+                low = 0.0
+                band = 0.0
             _state[ch][0] = low
             _state[ch][1] = band
