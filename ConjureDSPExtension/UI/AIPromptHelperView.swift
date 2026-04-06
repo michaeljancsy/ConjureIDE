@@ -62,7 +62,7 @@ struct AIPromptHelperView: View {
                     // Options
                     VStack(alignment: .leading, spacing: 8) {
                         Toggle(isOn: $includeScript) {
-                            Text("Include current script")
+                            Text("Include current script as context in prompt")
                                 .font(.caption)
                         }
                         .toggleStyle(.checkbox)
@@ -70,7 +70,7 @@ struct AIPromptHelperView: View {
 
                         // Language picker — locked to current script's language when including it
                         HStack(spacing: 6) {
-                            Text("Language:")
+                            Text("Target language:")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
 
