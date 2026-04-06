@@ -434,6 +434,9 @@ class TerminalAppServer {
         wsServer?.stop()
         wsServer = nil
 
+        // Clean up the terminal port file so the extension doesn't see a stale port
+        deleteAppGroupFile("terminal-server-port")
+
         currentMCPPort = 0
         healthCheckFailCount = 0
         isRunning = false

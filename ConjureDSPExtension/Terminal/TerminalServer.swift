@@ -17,6 +17,7 @@ final class TerminalServer {
 
     let mcpServer: MCPServer
     private let appGroupContainerURL: URL?
+    private var heartbeatTask: Task<Void, Never>?
 
     init(appGroupContainerURL: URL?) {
         self.appGroupContainerURL = appGroupContainerURL
@@ -38,6 +39,7 @@ final class TerminalServer {
                 if let port = mcpServer.port, port > 0 {
                     writeMCPPortToAppGroup()
                     log.info("MCP server ready on port \(port)")
+                    self.startHeartbeat()
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(250))
@@ -53,12 +55,27 @@ final class TerminalServer {
         deleteAppGroupFile("mcp-server-port")
         writeAppGroupFile("terminal-shutdown", content: "\(ProcessInfo.processInfo.processIdentifier)")
 
-        // MCP server stop must happen on main actor
-        Task { @MainActor [mcpServer] in
+        // MCP server stop and heartbeat cancel must happen on main actor
+        Task { @MainActor [mcpServer, weak self] in
+            self?.heartbeatTask?.cancel()
+            self?.heartbeatTask = nil
             mcpServer.stop()
         }
 
         log.info("Terminal server stopped — shutdown signal written")
+    }
+
+    /// Periodically re-write the MCP port file so the daemon can rediscover
+    /// the extension if the file gets deleted (e.g., after health check failures).
+    private func startHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled, let self, let port = self.mcpServer.port else { break }
+                self.writeMCPPortToAppGroup()
+            }
+        }
     }
 
     // MARK: - App Group helpers
