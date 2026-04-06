@@ -40,6 +40,7 @@ struct MonacoEditorView: NSViewRepresentable {
             webView.loadFileURL(monacoURL, allowingReadAccessTo: monacoDir)
         } else {
             log.error("Monaco resources not found in bundle \(bundle.bundlePath, privacy: .public)")
+            SentryHelper.capture("Monaco resources not found", level: .error, category: "ui.monaco", extra: ["bundlePath": bundle.bundlePath])
         }
 
         return webView
@@ -240,6 +241,7 @@ struct MonacoEditorView: NSViewRepresentable {
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             log.error("WKWebView content process terminated")
+            SentryHelper.capture("Monaco WKWebView content process terminated", level: .warning, category: "ui.monaco")
             retryInitIfNeeded(webView)
         }
 
@@ -247,6 +249,7 @@ struct MonacoEditorView: NSViewRepresentable {
             isEditorReady = false
             guard initRetryCount < Self.maxInitRetries else {
                 log.error("Monaco init failed after \(Self.maxInitRetries) retries, giving up")
+                SentryHelper.capture("Monaco init failed after max retries", level: .error, category: "ui.monaco")
                 return
             }
             initRetryCount += 1

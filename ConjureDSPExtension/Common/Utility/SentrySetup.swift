@@ -7,12 +7,18 @@ enum SentrySetup {
         SentrySDK.start { options in
             options.dsn = sentryDSN
             options.enableUncaughtNSExceptionReporting = true
+            options.enableAutoSessionTracking = true
+            options.attachStacktrace = true
+            options.maxBreadcrumbs = 50
             #if DEBUG
             options.environment = "debug"
             options.debug = true
             #else
             options.environment = "release"
             #endif
+            if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+                options.releaseName = "com.MichaelJancsy.ConjureDSP@\(version)"
+            }
         }
     }
 }

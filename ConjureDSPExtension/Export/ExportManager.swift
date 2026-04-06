@@ -434,11 +434,13 @@ final class ExportManager {
 
         guard fm.fileExists(atPath: presetFile.path) else {
             log.warning("Export validation: preset file missing at \(presetFile.lastPathComponent, privacy: .public)")
+            SentryHelper.capture("Export validation: preset file missing", level: .warning, category: "export", extra: ["language": language == .rust ? "rust" : "python"])
             return
         }
 
         guard let presetData = try? Data(contentsOf: presetFile), !presetData.isEmpty else {
             log.warning("Export validation: preset file is empty")
+            SentryHelper.capture("Export validation: preset file is empty", level: .warning, category: "export", extra: ["language": language == .rust ? "rust" : "python"])
             return
         }
 
@@ -448,6 +450,7 @@ final class ExportManager {
             let header = [UInt8](presetData.prefix(4))
             if header != wasmMagic {
                 log.warning("Export validation: WASM file missing magic bytes")
+                SentryHelper.capture("Export validation: WASM missing magic bytes", level: .warning, category: "export")
             }
         }
 
@@ -455,6 +458,7 @@ final class ExportManager {
         if language == .python {
             if let source = String(data: presetData, encoding: .utf8), !source.contains("def process") {
                 log.warning("Export validation: Python file missing 'def process'")
+                SentryHelper.capture("Export validation: Python missing def process", level: .warning, category: "export")
             }
         }
 
@@ -463,9 +467,11 @@ final class ExportManager {
         if let configData = try? Data(contentsOf: configURL) {
             if (try? JSONSerialization.jsonObject(with: configData)) == nil {
                 log.warning("Export validation: runtime-config.json is not valid JSON")
+                SentryHelper.capture("Export validation: invalid runtime-config.json", level: .warning, category: "export")
             }
         } else {
             log.warning("Export validation: runtime-config.json missing")
+            SentryHelper.capture("Export validation: runtime-config.json missing", level: .warning, category: "export")
         }
     }
 

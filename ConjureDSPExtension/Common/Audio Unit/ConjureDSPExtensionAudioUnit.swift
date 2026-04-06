@@ -385,6 +385,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		let success = dsp_kernel_load_script(kernel, pythonHome, scriptPath)
 		if success {
 			pluginLog.info("Python DSP script loaded successfully")
+			SentryHelper.breadcrumb("Script loaded", category: "dsp", data: ["language": "python"])
 
 			// Read source so the UI can display it
 			if let source = try? String(contentsOfFile: scriptPath, encoding: .utf8) {
@@ -412,8 +413,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			if let errPtr = dsp_kernel_last_error(kernel) {
 				let errMsg = String(cString: errPtr)
 				pluginLog.error("Failed to load Python DSP script: \(errMsg, privacy: .public)")
+				SentryHelper.capture("Failed to load Python DSP script", level: .error, category: "dsp.python", extra: ["error": errMsg])
 			} else {
 				pluginLog.error("Failed to load Python DSP script (no error details), using Rust fallback DSP")
+				SentryHelper.capture("Failed to load Python DSP script (no error details)", level: .error, category: "dsp.python")
 			}
 		}
 	}
@@ -600,6 +603,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				errorMsg = String(cString: errPtr)
 			}
 			pluginLog.error("Failed to reload Python DSP script: \(errorMsg, privacy: .public)")
+			SentryHelper.capture("Failed to reload Python DSP script", level: .error, category: "dsp.python", extra: ["error": errorMsg])
 			return (false, errorMsg, nil, nil)
 		}
 	}
@@ -615,6 +619,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		if success {
 			pluginLog.info("WASM module loaded successfully")
+			SentryHelper.breadcrumb("Script loaded", category: "dsp", data: ["language": "rust", "wasmSize": bytes.count])
 			readParamNames()
 
 			// Inject NAM model if the WASM module declares one
@@ -641,6 +646,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				errorMsg = String(cString: errPtr)
 			}
 			pluginLog.error("Failed to load WASM: \(errorMsg, privacy: .public)")
+			SentryHelper.capture("Failed to load WASM module", level: .error, category: "dsp.wasm", extra: ["error": errorMsg])
 			return (false, errorMsg, nil, nil)
 		}
 	}
@@ -662,6 +668,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			guard parts.count == 2 else {
 				let msg = "Invalid tone3000:// path format: \(namPath). Expected tone3000://toneId/modelId"
 				pluginLog.error("\(msg, privacy: .public)")
+				SentryHelper.capture("Invalid tone3000:// path format", level: .error, category: "dsp.nam", extra: ["path": namPath])
 				return msg
 			}
 			let toneId = parts[0]
@@ -680,6 +687,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			  let namData = try? Data(contentsOf: fileURL) else {
 			let msg = "NAM tone not found: \(namPath). Use list_tones to see downloaded tones, or download this tone from the Tones browser."
 			pluginLog.error("\(msg, privacy: .public)")
+			SentryHelper.capture("NAM tone file not found", level: .error, category: "dsp.nam", extra: ["path": namPath])
 			return msg
 		}
 
@@ -690,6 +698,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			  let weightsArray = namJson["weights"] as? [Double] else {
 			let msg = "Failed to parse .nam file at \(namPath)"
 			pluginLog.error("\(msg, privacy: .public)")
+			SentryHelper.capture("Failed to parse .nam file", level: .error, category: "dsp.nam", extra: ["path": namPath])
 			return msg
 		}
 
@@ -699,6 +708,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		guard let configData = try? JSONSerialization.data(withJSONObject: configObj) else {
 			let msg = "Failed to serialize NAM config for \(namPath)"
 			pluginLog.error("\(msg, privacy: .public)")
+			SentryHelper.capture("Failed to serialize NAM config", level: .error, category: "dsp.nam", extra: ["path": namPath])
 			return msg
 		}
 
@@ -731,6 +741,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		} else {
 			let msg = "Failed to inject NAM model data for \(namPath)"
 			pluginLog.error("\(msg, privacy: .public)")
+			SentryHelper.capture("Failed to inject NAM model data", level: .error, category: "dsp.nam", extra: ["path": namPath, "architecture": architecture, "binarySize": binary.count])
 			return msg
 		}
 	}
@@ -1074,6 +1085,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		try super.allocateRenderResources()
 		renderConfigurationChanged.send((maxFrames: _maxFrames, sampleRate: _outputBus.format.sampleRate))
+		SentryHelper.breadcrumb("allocateRenderResources", category: "au.lifecycle", data: [
+			"sampleRate": _outputBus.format.sampleRate,
+			"maxFrames": _maxFrames,
+			"channels": inputChannelCount,
+		])
 	}
 
 	public override func deallocateRenderResources() {
@@ -1082,6 +1098,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		originalAudioBufferList = nil
 		mutableAudioBufferList = nil
 		super.deallocateRenderResources()
+		SentryHelper.breadcrumb("deallocateRenderResources", category: "au.lifecycle")
 	}
 
 	// MARK: - Rendering
