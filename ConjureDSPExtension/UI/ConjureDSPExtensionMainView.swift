@@ -200,7 +200,7 @@ struct ConjureDSPExtensionMainView: View {
                     VStack(spacing: 0) {
                         // Tab switcher header
                         HStack(spacing: 0) {
-                            chatTabButton(label: "Claude Code", isSelected: !showAIPromptTab) {
+                            chatTabButton(label: "Terminal", isSelected: !showAIPromptTab) {
                                 showAIPromptTab = false
                             }
                             chatTabButton(label: "AI Prompt", isSelected: showAIPromptTab) {
@@ -497,7 +497,7 @@ struct ConjureDSPExtensionMainView: View {
     }
 
     private func chatTabButton(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        let identifier = label == "Claude Code" ? "claudeCodeTabButton" : "aiPromptTabButton"
+        let identifier = label == "Terminal" ? "claudeCodeTabButton" : "aiPromptTabButton"
         return Button(action: action) {
             Text(label)
                 .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
