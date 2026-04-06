@@ -21,10 +21,7 @@ class CommunityPresetStore: ObservableObject {
     private let cacheTTL: TimeInterval = 3600 // 1 hour
 
     private var cacheDirectory: URL {
-        let appSupport = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport
-            .appendingPathComponent("ConjureDSP", isDirectory: true)
+        return AppGroupContainer.url
             .appendingPathComponent("community-cache", isDirectory: true)
     }
 
