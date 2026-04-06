@@ -235,6 +235,7 @@ struct ConjureDSPExtensionMainView: View {
                 }
                 .frame(width: showChat ? chatWidth : 0)
                 .clipped()
+                .accessibilityHidden(!showChat)
 
                 // Resizable divider between terminal and editor
                 Rectangle()
