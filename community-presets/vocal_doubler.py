@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param, mix
 from conjuredsp.buffers import DelayLine
 
@@ -10,6 +9,13 @@ PARAMS = {
     "spread":  param(0, 1, default=0.7),
     "mix":     mix(default=0.4),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 MAX_DELAY = 4096
 _delays = None
@@ -53,7 +59,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         # Slow, irregular modulation (simulates human timing variation)
         mod = math.sin(two_pi * _phase * 0.7) * mod_depth
         mod += math.sin(two_pi * _phase * 1.3) * mod_depth * 0.5
-        mod += (random.random() - 0.5) * detune * 0.5
+        mod += (_rng() - 0.5) * detune * 0.5
 
         delay_samples = max(1.0, base_delay + mod)
 

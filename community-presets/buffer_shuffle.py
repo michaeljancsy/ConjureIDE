@@ -1,5 +1,4 @@
 import numpy as np
-import random
 from conjuredsp.params import param, choice, mix
 
 PARAMS = {
@@ -8,6 +7,13 @@ PARAMS = {
     "reverse": param(0, 1, default=0.3),
     "mix":     mix(default=0.7),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 DIVISIONS = [0.25, 0.5, 1.0]
 
@@ -76,10 +82,10 @@ def process(inputs, outputs, frame_count, sample_rate, params, transport):
         if _write_pos % chunk == 0 and _write_pos > 0:
             chunk_start = ((_write_pos - chunk) % max_buf)
 
-            if random.random() < shuffle_prob:
+            if _rng() < shuffle_prob:
                 # Pick a random previous chunk to play instead
                 num_chunks = min(8, _write_pos // chunk)
-                src_chunk = random.randint(0, max(0, num_chunks - 1))
+                src_chunk = 0 + int(_rng() * (max(0, num_chunks - 1) - 0 + 1))
                 src_start = (chunk_start - src_chunk * chunk + max_buf) % max_buf
 
                 for ch in range(n_ch):
@@ -87,7 +93,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, transport):
                         _shuffled[ch][(chunk_start + j) % max_buf] = _buffer[ch][(src_start + j) % max_buf]
 
                 # Maybe reverse
-                if random.random() < reverse_prob:
+                if _rng() < reverse_prob:
                     for ch in range(n_ch):
                         temp = [_shuffled[ch][(chunk_start + j) % max_buf] for j in range(chunk)]
                         temp.reverse()

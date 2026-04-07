@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param, mix
 from conjuredsp.buffers import DelayLine
 from conjuredsp.filters import Biquad, BiquadCoeffs
@@ -11,6 +10,13 @@ PARAMS = {
     "drip":    param(0, 1, default=0.4),
     "mix":     mix(default=0.3),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 _delays = None
 _ap = None
@@ -75,7 +81,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
                 _drip_env *= 0.9995
 
             drip_amount = max(0.0, _drip_env - 0.1) * drip * 5.0
-            drip_noise = (random.random() - 0.5) * drip_amount * 0.3
+            drip_noise = (_rng() - 0.5) * drip_amount * 0.3
 
             # Comb filter network (spring resonances)
             wet = 0.0

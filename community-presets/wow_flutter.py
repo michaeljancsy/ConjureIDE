@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param
 from conjuredsp.buffers import DelayLine
 
@@ -9,6 +8,13 @@ PARAMS = {
     "flutter": param(0, 1, default=0.4),
     "noise":   param(0, 1, default=0.1),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 MAX_DELAY = 2048
 _delays = None
@@ -56,7 +62,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     for i in range(frame_count):
         wow_mod = math.sin(two_pi * _wow_phase) * wow_depth
         flutter_mod = math.sin(two_pi * _flutter_phase) * flutter_depth
-        noise_mod = (random.random() * 2.0 - 1.0) * noise * 1.0
+        noise_mod = (_rng() * 2.0 - 1.0) * noise * 1.0
 
         delay = base_delay + wow_mod + flutter_mod + noise_mod
         delay = max(1.0, delay)

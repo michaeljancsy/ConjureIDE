@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param
 from conjuredsp.filters import Biquad, BiquadCoeffs
 
@@ -10,6 +9,13 @@ PARAMS = {
     "warp":     param(0, 1, default=0.2),
     "age":      param(0, 1, default=0.5),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 _lp = None
 _hp = None
@@ -60,11 +66,11 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         # Crackle: random pops
         pop = 0.0
         if crackle > 0:
-            if random.random() < crackle * 0.002:
-                pop = (random.random() - 0.3) * crackle * 0.5
+            if _rng() < crackle * 0.002:
+                pop = (_rng() - 0.3) * crackle * 0.5
 
         # Surface hiss
-        noise = (random.random() - 0.5) * hiss * 2.0
+        noise = (_rng() - 0.5) * hiss * 2.0
 
         # Warp / wow
         wow_mod = math.sin(two_pi * _warp_phase) * warp * 0.002

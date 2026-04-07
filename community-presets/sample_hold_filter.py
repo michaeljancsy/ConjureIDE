@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param, freq
 from conjuredsp.filters import Biquad, BiquadCoeffs
 
@@ -10,6 +9,13 @@ PARAMS = {
     "max_freq":  freq(min=2000, max=16000, default=8000),
     "resonance": param(0.5, 15, unit="Q", default=5),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 _filters = None
 _phase = 0.0
@@ -55,7 +61,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
             # Log-uniform random frequency
             log_min = math.log(min_f)
             log_max = math.log(max_f)
-            _current_freq = math.exp(random.uniform(log_min, log_max))
+            _current_freq = math.exp(log_min + _rng() * (log_max - log_min))
 
         coeffs = BiquadCoeffs.bandpass(_current_freq, q, sample_rate)
         for ch in range(n_ch):

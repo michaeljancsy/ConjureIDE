@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param, mix
 
 PARAMS = {
@@ -9,6 +8,13 @@ PARAMS = {
     "scatter":    param(0, 1, default=0.5),
     "mix":        mix(default=0.5),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 _buffer = None
 _write_pos = 0
@@ -57,10 +63,10 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     spawn_count = max(1, frame_count // grain_interval)
 
     for _ in range(spawn_count):
-        if random.random() < density * frame_count / sample_rate:
+        if _rng() < density * frame_count / sample_rate:
             # Random offset based on scatter
             max_offset = int(scatter * MAX_BUF * 0.5)
-            offset = random.randint(0, max(1, max_offset))
+            offset = 0 + int(_rng() * (max(1, max_offset) - 0 + 1))
             start = (_write_pos - grain_samples - offset + MAX_BUF) % MAX_BUF
             _grains.append({"start": start, "pos": 0, "len": grain_samples})
 

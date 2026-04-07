@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param, mix
 from conjuredsp.filters import Biquad, BiquadCoeffs
 
@@ -10,6 +9,13 @@ PARAMS = {
     "gate":     param(0, 0.2, default=0.05),
     "mix":      mix(default=0.8),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 _lp = None
 _hp = None
@@ -79,7 +85,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
                 x = held
 
                 # Random noise
-                x += (random.random() - 0.5) * destroy * 0.05
+                x += (_rng() - 0.5) * destroy * 0.05
 
             # Shape
             x = _hp[ch].process_sample(x)

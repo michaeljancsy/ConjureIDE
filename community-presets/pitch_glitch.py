@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param, mix
 from conjuredsp.buffers import DelayLine
 
@@ -10,6 +9,13 @@ PARAMS = {
     "chance": param(0, 1, default=0.5),
     "mix":    mix(default=0.5),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 MAX_DELAY = 8192
 _delays = None
@@ -55,9 +61,9 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
         # On each clock tick, maybe glitch
         if _phase < old_phase:
-            if random.random() < chance:
+            if _rng() < chance:
                 # Random pitch shift in semitones
-                st = random.uniform(-pitch_range, pitch_range)
+                st = -pitch_range + _rng() * (2.0 * pitch_range)
                 _current_pitch = 2.0 ** (st / 12.0)
             else:
                 _current_pitch = 1.0

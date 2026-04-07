@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param, mix
 from conjuredsp.filters import Biquad, BiquadCoeffs
 
@@ -10,6 +9,13 @@ PARAMS = {
     "damping":  param(0, 1, default=0.4),
     "mix":      mix(default=0.3),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 _hp = None
 _lp = None
@@ -54,15 +60,15 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
     for i in range(frame_count):
         # Generate rain noise: white noise with random "drops"
-        base_noise = (random.random() - 0.5) * density * 0.3
+        base_noise = (_rng() - 0.5) * density * 0.3
 
         # Add occasional larger drops
-        if random.random() < density * 0.01:
-            base_noise += (random.random() - 0.5) * size * 0.5
+        if _rng() < density * 0.01:
+            base_noise += (_rng() - 0.5) * size * 0.5
 
         for ch in range(n_ch):
             # Slightly different noise per channel for stereo
-            noise = base_noise + (random.random() - 0.5) * density * 0.05
+            noise = base_noise + (_rng() - 0.5) * density * 0.05
 
             # Shape the rain noise
             noise = _hp[ch].process_sample(noise)

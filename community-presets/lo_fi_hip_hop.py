@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param
 from conjuredsp.filters import Biquad, BiquadCoeffs
 from conjuredsp.buffers import DelayLine
@@ -11,6 +10,13 @@ PARAMS = {
     "wobble":  param(0, 1, default=0.3),
     "bit_depth": param(8, 16, unit="bits", default=12),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 _lp = None
 _hp = None
@@ -84,8 +90,8 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
             # Vinyl crackle
             if vinyl > 0:
-                if random.random() < vinyl * 0.001:
-                    x += (random.random() - 0.3) * vinyl * 0.3
-                x += (random.random() - 0.5) * vinyl * 0.003
+                if _rng() < vinyl * 0.001:
+                    x += (_rng() - 0.3) * vinyl * 0.3
+                x += (_rng() - 0.5) * vinyl * 0.003
 
             outputs[ch][i] = x

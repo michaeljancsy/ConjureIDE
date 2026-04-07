@@ -9,6 +9,13 @@ PARAMS = {
     "mix":     mix(default=1.0),
 }
 
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
+
 _hp = None
 _lp = None
 _mid = None
@@ -64,7 +71,6 @@ def process(inputs, outputs, frame_count, sample_rate, params):
             y = math.tanh(y * 2.0) * 0.6
 
             # Line noise
-            import random
-            y += (random.random() - 0.5) * noise_level
+            y += (_rng() - 0.5) * noise_level
 
             outputs[ch][i] = inputs[ch][i] * (1.0 - wet_mix) + y * wet_mix

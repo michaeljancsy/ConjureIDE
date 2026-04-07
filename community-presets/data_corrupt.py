@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param, mix
 
 PARAMS = {
@@ -9,6 +8,13 @@ PARAMS = {
     "noise":   param(0, 0.5, default=0.1),
     "mix":     mix(default=0.7),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 _prev_sample = [0.0, 0.0]
 _skip_counter = [0, 0]
@@ -46,11 +52,11 @@ def process(inputs, outputs, frame_count, sample_rate, params):
             y = x
 
             # Skip: drop sample, hold previous value
-            if random.random() < skip_prob:
+            if _rng() < skip_prob:
                 y = prev
             # Repeat: get stuck on current value
-            elif random.random() < repeat_prob:
-                _skip_counter[ch] = random.randint(2, 20)
+            elif _rng() < repeat_prob:
+                _skip_counter[ch] = 2 + int(_rng() * (20 - 2 + 1))
 
             if _skip_counter[ch] > 0:
                 y = prev
@@ -59,8 +65,8 @@ def process(inputs, outputs, frame_count, sample_rate, params):
                 prev = y
 
             # Data error noise
-            if random.random() < noise * 0.1:
-                y += (random.random() - 0.5) * noise * 2.0
+            if _rng() < noise * 0.1:
+                y += (_rng() - 0.5) * noise * 2.0
 
             outputs[ch][i] = inputs[ch][i] * (1.0 - wet_mix) + y * wet_mix
 

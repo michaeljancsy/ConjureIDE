@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param, time_ms, mix
 from conjuredsp.buffers import DelayLine
 
@@ -10,6 +9,13 @@ PARAMS = {
     "degrade":  param(0, 1, default=0.6),
     "mix":      mix(default=0.5),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 MAX_DELAY = 64000
 _delays = None
@@ -64,7 +70,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
             delayed = _held[ch]
 
             # Add tiny noise
-            delayed += (random.random() - 0.5) * degrade * 0.01
+            delayed += (_rng() - 0.5) * degrade * 0.01
 
             _delays[ch].write(inputs[ch][i] + delayed * feedback)
 

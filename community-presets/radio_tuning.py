@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param, mix
 from conjuredsp.filters import Biquad, BiquadCoeffs
 
@@ -10,6 +9,13 @@ PARAMS = {
     "tone":      param(0, 1, default=0.3),
     "mix":       mix(default=1.0),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 _bp = None
 _lp = None
@@ -64,6 +70,6 @@ def process(inputs, outputs, frame_count, sample_rate, params):
             y = math.tanh(y * 3.0) * 0.5
 
             # Static noise
-            y += (random.random() - 0.5) * static * 0.1
+            y += (_rng() - 0.5) * static * 0.1
 
             outputs[ch][i] = inputs[ch][i] * (1.0 - wet_mix) + y * wet_mix

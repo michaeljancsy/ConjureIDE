@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param
 from conjuredsp.filters import Biquad, BiquadCoeffs
 
@@ -9,6 +8,13 @@ PARAMS = {
     "intensity": param(0, 1, default=0.6),
     "resonance": param(0.5, 8, unit="Q", default=2),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 _filters = None
 _wind_phase = 0.0
@@ -53,7 +59,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
     for i in range(frame_count):
         # Random walk with smoothing
-        _noise_state = _noise_state * smooth + (random.random() - 0.5) * (1.0 - smooth) * 2.0
+        _noise_state = _noise_state * smooth + (_rng() - 0.5) * (1.0 - smooth) * 2.0
         _noise_state = max(-1.0, min(1.0, _noise_state))
 
         # Map noise to frequency

@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param, mix
 
 PARAMS = {
@@ -9,6 +8,13 @@ PARAMS = {
     "sample_rate": param(1, 32, unit="x", default=4),
     "mix":       mix(default=0.7),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 _held = [0.0, 0.0]
 
@@ -47,8 +53,8 @@ def process(inputs, outputs, frame_count, sample_rate, params):
                 x_int = x_int ^ xor_val
 
             # Random bit flips
-            if corrupt > 0.6 and random.random() < corrupt * 0.1:
-                bit = 1 << random.randint(0, 15)
+            if corrupt > 0.6 and _rng() < corrupt * 0.1:
+                bit = 1 << (0 + int(_rng() * (15 - 0 + 1)))
                 x_int = x_int ^ bit
 
             # Convert back to float

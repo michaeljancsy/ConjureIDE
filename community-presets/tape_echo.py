@@ -1,6 +1,5 @@
 import numpy as np
 import math
-import random
 from conjuredsp.params import param, mix, time_ms
 from conjuredsp.buffers import DelayLine
 from conjuredsp.filters import Biquad, BiquadCoeffs
@@ -12,6 +11,13 @@ PARAMS = {
     "age":      param(0, 1, default=0.5),
     "mix":      mix(default=0.5),
 }
+
+_rng_state = 12345
+
+def _rng():
+    global _rng_state
+    _rng_state = (_rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+    return _rng_state / 4294967296.0
 
 MAX_DELAY = 96000
 _delays = None
@@ -67,7 +73,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     for i in range(frame_count):
         # Wow modulation
         wow_mod = math.sin(two_pi * _wow_phase) * wow_depth
-        wow_mod += (random.random() - 0.5) * wow * 1.0  # noise
+        wow_mod += (_rng() - 0.5) * wow * 1.0  # noise
 
         delay_samples = delay_ms * 0.001 * sample_rate + wow_mod
         delay_samples = max(1.0, min(delay_samples, MAX_DELAY - 1))
