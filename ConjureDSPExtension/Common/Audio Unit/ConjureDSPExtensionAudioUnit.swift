@@ -986,14 +986,14 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		let result = await compileAndRun(source: source)
 
 		if result.success {
-			// Sync DAW-facing currentPreset for factory presets
+			// Sync DAW-facing currentPreset with KVO so the host updates its UI
 			if let factoryNumber = preset.factoryPresetNumber {
 				let auPreset = AUAudioUnitPreset()
 				auPreset.number = factoryNumber
 				auPreset.name = preset.name
-				_currentPreset = auPreset
+				setCurrentPresetWithKVO(auPreset)
 			} else {
-				_currentPreset = nil
+				setCurrentPresetWithKVO(nil)
 			}
 			pluginLog.info("Selected preset: \(preset.name, privacy: .public)")
 		}
@@ -1014,10 +1014,20 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	private var _currentPreset: AUAudioUnitPreset?
 
+	/// Update the DAW-facing currentPreset with proper KVO notification.
+	/// Does NOT trigger script loading — use when the script is already loaded.
+	private func setCurrentPresetWithKVO(_ preset: AUAudioUnitPreset?) {
+		willChangeValue(forKey: "currentPreset")
+		_currentPreset = preset
+		didChangeValue(forKey: "currentPreset")
+	}
+
 	public override var currentPreset: AUAudioUnitPreset? {
 		get { return _currentPreset }
 		set {
+			willChangeValue(forKey: "currentPreset")
 			_currentPreset = newValue
+			didChangeValue(forKey: "currentPreset")
 			guard let preset = newValue, preset.number >= 0 else { return }
 
 			guard let entry = FactoryPresetRegistry.entries.first(where: { $0.number == preset.number }) else { return }
