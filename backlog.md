@@ -7,6 +7,9 @@
 
 ## To Do
 
+### Creative Presets
+- HeroScrollColumns presets: 8 Python + 8 Rust/WASM presets matching the website hero prompts (haunted cathedral, dying star, broken fax, sun cassette, alien radio, underwater spy, glass shatter, ghost choir), plus parity tests for each pair. Plan at `~/.claude/plans/composed-stirring-porcupine.md`.
+
 ### v1 Release
 - NAM exports work
 - export pipeline flags/gates exporting NAM tones without explicit authorization from the creator of the tone
