@@ -26,6 +26,9 @@
 
 set -euo pipefail
 
+# Ensure Homebrew binaries are on PATH (needed for wrangler/node)
+export PATH="/opt/homebrew/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT_DIR="$PROJECT_DIR/build/release"

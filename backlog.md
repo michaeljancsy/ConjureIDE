@@ -13,7 +13,7 @@
 ### v1 Release
 - NAM exports work
 - export pipeline flags/gates exporting NAM tones without explicit authorization from the creator of the tone
-- Run `scripts/release.sh` end-to-end, store notarization creds in Keychain, verify DMG on clean machine. Full plan at `docs/distribution-plan.md`.
+- Verify DMG on clean machine (release pipeline now works end-to-end)
 - Landing page (static site with Buy + Download)
 - Single-source download URL config: one config file in the repo defining the canonical download link, referenced everywhere (landing page, in-app links, etc.) so it only needs updating in one place
 - see if the permissions loop happens with host app opened at same time as AU-loaded-in-DAW
@@ -31,6 +31,7 @@
 
 ## Done
 
+- Release pipeline end-to-end: fixed Xcode 17 archive/export issues (ONLY_ACTIVE_ARCH, manual signing, -exportArchive bypass), added Developer ID signing for all bundled binaries (Sparkle, python-dist, rustc-dist), bundle size reduction (stripped tests/cache/pip/sanitizers/cargo: 917MB→761MB, DMG 273MB), DMG sizing fix, Sparkle appcast generation, R2 upload. Notarization creds stored in Keychain. (2026-04-07)
 - Host-side NAM inference for Rust/WASM presets: fixed two WaveNet buffer bugs (ping-pong addressing, cross-array head accumulation order), moved NAM inference from WASM sandbox to native host via `__conjuredsp_nam_process` import, added native Accelerate to accel module, fixed debug-mode optimization (15x speedup), zero-copy host import, WasmCache invalidation on rlib change (2026-04-03)
 - AI prompt helper quality pass: tested 8 iterations across tremolo/compressor/chorus/flanger/filter-sweep/reverb/distortion, fixed conventions (imports, tick_n, 1.0 init, inputs indexing, lazy SR init), LFO tick() docs (frames-outer code examples), f64 cast requirement for Rust BiquadCoeffs (2026-04-02)
 - tone3000 NAM support: Python `conjuredsp.nam.load_model()`, Rust `nam!()` macro, tone browser UI with OAuth, download/store .nam files, export embedding (2026-03-31)

@@ -34,9 +34,11 @@ echo "=== Creating DMG: $DMG_NAME ==="
 cp -R "$APP_PATH" "$STAGING_DIR/"
 ln -s /Applications "$STAGING_DIR/Applications"
 
-# Calculate size (app size + 20MB headroom)
+# Calculate size (app size + 10% headroom for HFS+ overhead, minimum 50MB)
 SIZE_KB=$(du -sk "$STAGING_DIR" | awk '{print $1}')
-SIZE_KB=$((SIZE_KB + 20480))
+HEADROOM=$((SIZE_KB / 10))
+[ "$HEADROOM" -lt 51200 ] && HEADROOM=51200
+SIZE_KB=$((SIZE_KB + HEADROOM))
 
 # Create temporary read-write DMG
 hdiutil create \
