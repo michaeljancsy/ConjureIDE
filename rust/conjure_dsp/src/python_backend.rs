@@ -7,11 +7,17 @@ use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 /// Global counter for generating unique Python module names per backend instance.
 /// Each PythonBackend gets its own module in sys.modules, preventing collisions
 /// when multiple AU instances load different scripts in the same DAW process.
 static INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Ensures PYTHONHOME and PYTHONDONTWRITEBYTECODE are set exactly once,
+/// avoiding the POSIX setenv() thread-safety issue when multiple AU instances
+/// initialize concurrently (e.g., DAW track duplication).
+static PYTHON_ENV_INIT: OnceLock<()> = OnceLock::new();
 
 /// Python DSP backend using pyo3 and numpy.
 ///
@@ -87,12 +93,15 @@ impl PythonBackend {
             python_home, script_path
         );
 
-        // Set PYTHONHOME so the embedded interpreter finds its stdlib + numpy
-        std::env::set_var("PYTHONHOME", python_home);
-
-        // Prevent Python from writing .pyc bytecode cache files into the sealed
-        // AU bundle's Resources/python-dist/, which corrupts the code signature.
-        std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
+        // Set PYTHONHOME and PYTHONDONTWRITEBYTECODE exactly once. POSIX setenv()
+        // is not thread-safe, and concurrent AU instance creation (e.g., DAW track
+        // duplication) can corrupt the environment table. These values are always
+        // the same across instances, so set-once is correct.
+        let python_home_owned = python_home.to_string();
+        PYTHON_ENV_INIT.get_or_init(|| {
+            std::env::set_var("PYTHONHOME", &python_home_owned);
+            std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
+        });
 
         let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, usize, u32, String), PyErr> =
             Python::with_gil(|py| {

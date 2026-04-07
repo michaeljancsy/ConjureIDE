@@ -317,34 +317,46 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		loadPythonScript()
 	}
 
+	/// Serializes `syncConjureDSPPackage()` across AU instances to prevent
+	/// concurrent file operations when multiple instances init simultaneously
+	/// (e.g., DAW track duplication).
+	private static let syncQueue = DispatchQueue(label: "com.conjuredsp.sync-package")
+	private static var hasSyncedPackage = false
+
 	/// Copy the bundled conjuredsp package into the App Group's site-packages,
 	/// ensuring the runtime always has the version matching this build.
 	/// No-op if the App Group runtime hasn't been provisioned yet (the AU will
 	/// fall back to its bundled python-dist) or if there's no bundled python-dist.
+	/// Thread-safe: serialized via syncQueue and skipped after first successful sync.
 	private func syncConjureDSPPackage() {
-		let bundle = Bundle(for: type(of: self))
-		guard let bundledPythonDist = bundle.path(forResource: "python-dist", ofType: nil) else {
-			return
-		}
-		let src = URL(fileURLWithPath: bundledPythonDist)
-			.appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
-		let dst = Self.pythonRuntimeURL
-			.appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
+		Self.syncQueue.sync {
+			guard !Self.hasSyncedPackage else { return }
 
-		let fm = FileManager.default
-		guard fm.fileExists(atPath: Self.pythonRuntimeURL.appendingPathComponent("lib/python3.14t").path) else {
-			return
-		}
-		guard fm.fileExists(atPath: src.path) else { return }
-
-		do {
-			if fm.fileExists(atPath: dst.path) {
-				try fm.removeItem(at: dst)
+			let bundle = Bundle(for: type(of: self))
+			guard let bundledPythonDist = bundle.path(forResource: "python-dist", ofType: nil) else {
+				return
 			}
-			try fm.copyItem(at: src, to: dst)
-			pluginLog.info("Synced conjuredsp package to App Group")
-		} catch {
-			pluginLog.warning("Failed to sync conjuredsp: \(error.localizedDescription, privacy: .public)")
+			let src = URL(fileURLWithPath: bundledPythonDist)
+				.appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
+			let dst = Self.pythonRuntimeURL
+				.appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
+
+			let fm = FileManager.default
+			guard fm.fileExists(atPath: Self.pythonRuntimeURL.appendingPathComponent("lib/python3.14t").path) else {
+				return
+			}
+			guard fm.fileExists(atPath: src.path) else { return }
+
+			do {
+				if fm.fileExists(atPath: dst.path) {
+					try fm.removeItem(at: dst)
+				}
+				try fm.copyItem(at: src, to: dst)
+				pluginLog.info("Synced conjuredsp package to App Group")
+				Self.hasSyncedPackage = true
+			} catch {
+				pluginLog.warning("Failed to sync conjuredsp: \(error.localizedDescription, privacy: .public)")
+			}
 		}
 	}
 
