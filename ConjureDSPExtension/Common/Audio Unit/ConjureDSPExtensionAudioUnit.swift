@@ -153,15 +153,118 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		self.parameterTree = tree
 	}
 
-	/// Apply metadata defaults to the kernel after a script load.
-	/// Does NOT rebuild the parameter tree — the stable generic tree persists.
-	private func applyParamDefaults(metadata: [ParamMetadata]) {
+	/// Rebuild the parameter tree with rich metadata (real names, ranges, units).
+	/// Always creates all 16 parameters — metadata params get real names/ranges,
+	/// the rest stay as generic placeholders. The implementor callbacks still
+	/// reference currentParamMetadata dynamically (set before calling this),
+	/// so normalization/denormalization is always correct regardless of whether
+	/// the host picks up the tree rebuild.
+	///
+	/// Hosts that observe parameterTree KVO (Logic Pro, AUM) will see updated
+	/// names and ranges. Hosts that don't (Ableton) keep showing the names from
+	/// instantiation but still get correct values via the dynamic callbacks.
+	private func rebuildParameterTree(metadata: [ParamMetadata]) {
 		let count = min(metadata.count, Self.paramCount)
+		var params: [AUParameter] = []
+
+		for i in 0..<Self.paramCount {
+			if i < count {
+				let meta = metadata[i]
+				let auUnit: AudioUnitParameterUnit
+				let valueStrings: [String]?
+				if meta.isToggle {
+					auUnit = .boolean
+					valueStrings = nil
+				} else if meta.isChoice, let opts = meta.options {
+					auUnit = .indexed
+					valueStrings = opts
+				} else {
+					auUnit = .generic
+					valueStrings = nil
+				}
+				let param = AUParameterTree.createParameter(
+					withIdentifier: "param\(i)",
+					name: meta.name,
+					address: AUParameterAddress(i),
+					min: meta.min,
+					max: meta.max,
+					unit: auUnit,
+					unitName: nil,
+					flags: [.flag_IsReadable, .flag_IsWritable],
+					valueStrings: valueStrings,
+					dependentParameters: nil
+				)
+				param.value = meta.default
+				params.append(param)
+			} else {
+				let param = AUParameterTree.createParameter(
+					withIdentifier: "param\(i)",
+					name: "Param \(i)",
+					address: AUParameterAddress(i),
+					min: 0.0,
+					max: 1.0,
+					unit: .generic,
+					unitName: nil,
+					flags: [.flag_IsReadable, .flag_IsWritable],
+					valueStrings: nil,
+					dependentParameters: nil
+				)
+				param.value = 0.0
+				params.append(param)
+			}
+		}
+
+		let tree = AUParameterTree.createTree(withChildren: params)
+		let kernelRef = self.kernel!
+
+		// Dynamic callbacks — same as buildParameterTree, reference currentParamMetadata
+		tree.implementorValueObserver = { [unowned self] param, value in
+			let idx = Int(param.address)
+			if let meta = self.currentParamMetadata, idx < meta.count {
+				let normalized = meta[idx].normalize(value)
+				dsp_kernel_set_parameter(kernelRef, param.address, normalized)
+			} else {
+				dsp_kernel_set_parameter(kernelRef, param.address, value)
+			}
+		}
+		tree.implementorValueProvider = { [unowned self] param in
+			let normalized = dsp_kernel_get_parameter(kernelRef, param.address)
+			let idx = Int(param.address)
+			if let meta = self.currentParamMetadata, idx < meta.count {
+				return meta[idx].denormalize(normalized)
+			}
+			return normalized
+		}
+		tree.implementorStringFromValueCallback = { [unowned self] param, valuePtr in
+			let value = valuePtr?.pointee ?? param.value
+			let idx = Int(param.address)
+			if let meta = self.currentParamMetadata, idx < meta.count {
+				let m = meta[idx]
+				if m.isToggle {
+					return value >= 0.5 ? "On" : "Off"
+				}
+				if m.isChoice, let opts = m.options {
+					let choiceIdx = Int(value.rounded())
+					if choiceIdx >= 0, choiceIdx < opts.count {
+						return opts[choiceIdx]
+					}
+				}
+				return Self.formatParamValue(value, unit: m.unit)
+			}
+			return String(format: "%.3f", value)
+		}
+
+		willChangeValue(forKey: "parameterTree")
+		self.parameterTree = tree
+		didChangeValue(forKey: "parameterTree")
+
+		// Set kernel defaults (normalized, respects curve type)
 		for (i, meta) in metadata.prefix(count).enumerated() {
 			let normalized = meta.normalize(meta.default)
 			dsp_kernel_set_parameter(kernel, UInt64(i), normalized)
 		}
-		// Signal hosts to re-read parameter values
+
+		// Signal hosts to re-read all parameter values
 		willChangeValue(forKey: "allParameterValues")
 		didChangeValue(forKey: "allParameterValues")
 	}
@@ -470,17 +573,22 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				currentParamNames = names
 				paramNamesDidChange.send(names)
 
-				// Apply defaults to kernel (tree stays stable, callbacks read metadata dynamically)
-				applyParamDefaults(metadata: metadata)
+				// Rebuild tree with real names/ranges for hosts that observe KVO (Logic)
+				rebuildParameterTree(metadata: metadata)
 				return
 			}
 		}
 
-		// No rich metadata — clear it. The implementor callbacks on the stable
-		// tree check currentParamMetadata dynamically, so they'll fall back to
-		// raw 0–1 passthrough automatically.
+		// No rich metadata — if previous script had rich metadata, rebuild
+		// the generic tree so names/ranges reset for KVO-observant hosts.
+		let hadRichMetadata = currentParamMetadata != nil
 		currentParamMetadata = nil
 		paramMetadataDidChange.send(nil)
+		if hadRichMetadata {
+			buildParameterTree()
+			willChangeValue(forKey: "allParameterValues")
+			didChangeValue(forKey: "allParameterValues")
+		}
 
 		guard let ptr = dsp_kernel_param_names_json(kernel) else {
 			currentParamNames = nil
