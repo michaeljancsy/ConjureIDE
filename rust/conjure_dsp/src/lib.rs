@@ -9,6 +9,11 @@ mod wasm_backend;
 use kernel::DSPKernel;
 use std::ffi::CStr;
 use std::os::raw::c_char;
+use std::sync::OnceLock;
+
+/// Ensures CONJUREDSP_TONES_DIR is set exactly once, avoiding the POSIX
+/// setenv() thread-safety issue when multiple AU instances init concurrently.
+static TONES_DIR_INIT: OnceLock<()> = OnceLock::new();
 
 /// Opaque handle to the DSP kernel. Swift sees this as `OpaquePointer`.
 pub type DSPKernelRef = *mut DSPKernel;
@@ -198,7 +203,10 @@ pub unsafe extern "C" fn dsp_kernel_set_tones_dir(
 ) {
     if !path.is_null() {
         if let Ok(s) = CStr::from_ptr(path).to_str() {
-            std::env::set_var("CONJUREDSP_TONES_DIR", s);
+            let owned = s.to_string();
+            TONES_DIR_INIT.get_or_init(|| {
+                std::env::set_var("CONJUREDSP_TONES_DIR", &owned);
+            });
         }
     }
 }
