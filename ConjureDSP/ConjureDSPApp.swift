@@ -13,7 +13,6 @@ import SwiftUI
 @main
 struct ConjureDSPApp: App {
     private let hostModel = AudioUnitHostModel()
-    @StateObject private var exportHandler = PendingExportHandler()
     private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     @StateObject private var checkoutManager = PaddleCheckoutManager()
 
@@ -23,13 +22,11 @@ struct ConjureDSPApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(hostModel: hostModel, exportHandler: exportHandler)
+            ContentView(hostModel: hostModel)
                 .onAppear {
                     Analytics.initialize()
                     Analytics.track(.appOpen)
                     Analytics.flush()
-                    exportHandler.checkForPendingExports()
-                    exportHandler.startListeningForDAWExports()
                 }
                 .onOpenURL { url in
                     handleURL(url)
@@ -43,11 +40,6 @@ struct ConjureDSPApp: App {
                     if let url = URL(string: "https://updates.conjuredsp.com/versions.html") {
                         NSWorkspace.shared.open(url)
                     }
-                }
-            }
-            CommandGroup(after: .newItem) {
-                Button("Check for DAW Exports…") {
-                    exportHandler.checkGroupContainersForExports()
                 }
             }
         }

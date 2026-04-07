@@ -11,7 +11,6 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     let hostModel: AudioUnitHostModel
-    @ObservedObject var exportHandler: PendingExportHandler
     @State private var showFilePicker = false
     #if DEBUG
     @State private var isSheetPresented = false
@@ -87,25 +86,9 @@ struct ContentView: View {
                     .padding(.vertical, 4)
             }
         }
-        .alert("Export Installed", isPresented: .init(
-            get: { exportHandler.installedExportName != nil },
-            set: { if !$0 { exportHandler.installedExportName = nil } }
-        )) {
-            Button("OK") { exportHandler.installedExportName = nil }
-        } message: {
-            Text("Installed \"\(exportHandler.installedExportName ?? "")\". Launch the app once to register, then find it in your DAW.")
-        }
-        .alert("Export Error", isPresented: .init(
-            get: { exportHandler.installError != nil },
-            set: { if !$0 { exportHandler.installError = nil } }
-        )) {
-            Button("OK") { exportHandler.installError = nil }
-        } message: {
-            Text(exportHandler.installError ?? "")
-        }
     }
 }
 
 #Preview {
-    ContentView(hostModel: AudioUnitHostModel(), exportHandler: PendingExportHandler())
+    ContentView(hostModel: AudioUnitHostModel())
 }

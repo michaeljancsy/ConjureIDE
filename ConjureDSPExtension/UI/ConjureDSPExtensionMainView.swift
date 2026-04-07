@@ -68,6 +68,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
     @State private var showExportAlert: Bool = false
+    @State private var showDaemonRequiredAlert: Bool = false
     @State private var spectrogramWidth: CGFloat = 250
     @State private var spectrogramFrequencyScale: FrequencyScale = .log
     @State private var spectrogramFFTSizeIndex: Int = 2 // default: 2048
@@ -151,6 +152,10 @@ struct ConjureDSPExtensionMainView: View {
                     }
                 },
                 onExport: { name in
+                    guard daemonChecker.isDaemonAvailable else {
+                        showDaemonRequiredAlert = true
+                        return
+                    }
                     Task {
                         isExporting = true
                         let result = await onExport(name)
@@ -400,12 +405,14 @@ struct ConjureDSPExtensionMainView: View {
         } message: {
             Text(exportAlertMessage ?? "")
         }
+        .sheet(isPresented: $showDaemonRequiredAlert) {
+            DaemonRequiredAlertView(colorScheme: colorScheme) {
+                showDaemonRequiredAlert = false
+            }
+        }
         .onChange(of: showChat) { _, newValue in
             if newValue {
                 terminalHasBeenOpened = true
-                daemonChecker.startChecking()
-            } else {
-                daemonChecker.stopChecking()
             }
         }
         .onChange(of: showSpectrogram) { _, newValue in
@@ -419,6 +426,25 @@ struct ConjureDSPExtensionMainView: View {
                 lastBenchmark = bench
             }
             bypassed = isBypassed()
+            daemonChecker.startChecking()
+
+            // Listen for export finalization results from the daemon
+            DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name("com.MichaelJancsy.ConjureDSP.exportFinalized"),
+                object: nil,
+                queue: .main
+            ) { notification in
+                guard let userInfo = notification.userInfo,
+                      let name = userInfo["name"] as? String,
+                      let success = userInfo["success"] as? String else { return }
+                if success == "true" {
+                    exportAlertMessage = "Installed \"\(name)\". Launch the app once to register, then find it in your DAW."
+                } else {
+                    let error = userInfo["error"] as? String ?? "Unknown error"
+                    exportAlertMessage = "Failed to install \"\(name)\": \(error)"
+                }
+                showExportAlert = true
+            }
         }
         .onReceive(scriptSourcePublisher ?? Empty().eraseToAnyPublisher()) { change in
             scriptSource = change.source

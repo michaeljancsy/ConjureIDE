@@ -496,7 +496,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                     "success": true,
                 ])
                 Analytics.flush()
-                return .success("Exported \"\(name)\"! Open ConjureDSP to install.")
+                return .success("Exported \"\(name)\"! Installing...")
             } catch {
                 log.error("Export failed: \(error.localizedDescription, privacy: .public)")
                 Analytics.track(.export, properties: [

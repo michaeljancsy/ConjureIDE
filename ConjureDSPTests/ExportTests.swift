@@ -545,10 +545,10 @@ struct ExportManagerTests {
     }
 }
 
-// MARK: - PendingExportHandler Tests
+// MARK: - Export Utility Tests
 
 @MainActor
-struct PendingExportHandlerTests {
+struct ExportUtilityTests {
 
     @Test func appGroupContainerURLReturnsDeterministicPath() {
         let url = ExportManager.appGroupContainerURL()
