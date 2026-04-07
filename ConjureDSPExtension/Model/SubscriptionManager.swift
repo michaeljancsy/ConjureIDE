@@ -122,6 +122,9 @@ class SubscriptionManager: ObservableObject {
 
         // Extract email from token for display
         email = parseEmailFromToken(token)
+
+        // Set Sentry user context for all future events
+        SentryHelper.configureUser(subscriptionStatus: status.displayName, email: email)
     }
 
     // MARK: - Token Verification
@@ -129,6 +132,7 @@ class SubscriptionManager: ObservableObject {
     private func verifyAndUpdateStatus(token: String) {
         guard let rawStatus = verifyTokenWithKernel?(token) else {
             log.warning("No kernel verify closure set")
+            SentryHelper.capture("Kernel verify closure not set", level: .warning, category: "subscription")
             status = .noSubscription
             startDemoTimer()
             return
@@ -189,6 +193,7 @@ class SubscriptionManager: ObservableObject {
             }
         } catch {
             log.warning("Server refresh failed: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "subscription", extra: ["status": status.displayName])
             // Keep using cached token — grace period handles offline
         }
     }

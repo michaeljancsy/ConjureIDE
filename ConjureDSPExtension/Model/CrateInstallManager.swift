@@ -211,6 +211,7 @@ final class CrateInstallManager {
         installStatusMessage = nil
         lastError = "Operation timed out. Is ConjureDSP Terminal running?"
         log.error("Crate install/uninstall timed out after \(Self.pollTimeoutSeconds)s")
+        SentryHelper.capture("Crate install timed out", level: .warning, category: "crates")
     }
 
     func checkForResult() {

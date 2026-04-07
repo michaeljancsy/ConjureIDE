@@ -65,6 +65,7 @@ final class MCPServer {
             listener.start(queue: .main)
         } catch {
             log.error("Failed to create MCP listener: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "mcp")
         }
     }
 
@@ -93,6 +94,7 @@ final class MCPServer {
             }
         case .failed(let error):
             log.error("MCP listener failed: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "mcp")
             listener?.cancel()
             // Retry after a delay
             Task {

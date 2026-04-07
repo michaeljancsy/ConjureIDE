@@ -20,6 +20,7 @@ final class RustCompiler: ScriptCompiler {
     func compile(source: String) async throws -> Data {
         guard let rustc = findRustc() else {
             log.error("compile: findRustc returned nil")
+            SentryHelper.capture("Rust compiler not found", level: .error, category: "compilation")
             throw CompilationError.compilerNotFound(
                 "Rust compiler not found. The bundled compiler may be missing — "
                     + "run scripts/setup-rustc.sh and rebuild.")
@@ -90,6 +91,7 @@ final class RustCompiler: ScriptCompiler {
         } catch {
             let nsErr = error as NSError
             log.error("compile: Process.run() failed: domain=\(nsErr.domain, privacy: .public) code=\(nsErr.code) \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "compilation", extra: ["rustcPath": rustc.path, "bundled": useBundledSysroot])
             throw CompilationError.sandboxRestriction(
                 "Failed to run Rust compiler: \(error.localizedDescription)"
             )
@@ -199,6 +201,7 @@ final class RustCompiler: ScriptCompiler {
         }
 
         log.error("findRustc: no rustc found (home=\(home, privacy: .public))")
+        SentryHelper.capture("No rustc found in any search path", level: .error, category: "compilation")
         return nil
     }
 }

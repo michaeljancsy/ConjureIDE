@@ -70,6 +70,7 @@ final class ExportRegistry {
             entries = try decoder.decode([Entry].self, from: data)
         } catch {
             log.error("Failed to load export registry: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "export.registry")
             entries = []
         }
     }
@@ -85,6 +86,7 @@ final class ExportRegistry {
             try data.write(to: registryURL, options: .atomic)
         } catch {
             log.error("Failed to save export registry: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "export.registry")
         }
     }
 }

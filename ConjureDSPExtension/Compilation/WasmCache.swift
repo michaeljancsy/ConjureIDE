@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 
 /// Caches compiled WASM binaries by SHA256 hash of source code.
 final class WasmCache {
@@ -24,7 +25,13 @@ final class WasmCache {
     /// Pass `depsHash` for Rust scripts to incorporate installed crate versions into the key.
     func cache(wasm: Data, for source: String, depsHash: String? = nil) {
         let file = cacheDir.appendingPathComponent("\(hash(source, depsHash: depsHash)).wasm")
-        try? wasm.write(to: file)
+        do {
+            try wasm.write(to: file)
+        } catch {
+            Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "WasmCache")
+                .error("Failed to write WASM cache: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "wasm.cache", extra: ["path": file.path, "size": wasm.count])
+        }
     }
 
     private func hash(_ string: String, depsHash: String? = nil) -> String {

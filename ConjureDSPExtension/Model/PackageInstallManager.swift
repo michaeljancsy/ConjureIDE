@@ -132,6 +132,7 @@ final class PackageInstallManager {
         } catch {
             lastError = "Failed to write install request: \(error.localizedDescription)"
             log.error("Failed to write install request: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "packages", extra: ["packages": packages.joined(separator: ", ")])
         }
     }
 
@@ -201,6 +202,7 @@ final class PackageInstallManager {
         installStatusMessage = nil
         lastError = "Operation timed out. Is ConjureDSP app running?"
         log.error("Package install/uninstall timed out after \(Self.pollTimeoutSeconds)s — companion app not responding")
+        SentryHelper.capture("Package install timed out", level: .warning, category: "packages")
     }
 
     func checkForResult() {

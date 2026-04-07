@@ -157,6 +157,18 @@ class PersonalRepoSync: ObservableObject {
 
         if !result.errors.isEmpty {
             self.error = "\(result.errors.count) sync error(s)"
+            SentryHelper.capture(
+                "GitHub sync completed with errors",
+                level: .warning,
+                category: "github.sync",
+                extra: [
+                    "errorCount": result.errors.count,
+                    "errors": Array(result.errors.prefix(3)).joined(separator: "; "),
+                    "pulled": result.pulled,
+                    "pushed": result.pushed,
+                    "conflicts": result.conflicts,
+                ]
+            )
         }
 
         return result

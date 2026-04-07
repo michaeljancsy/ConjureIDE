@@ -11,13 +11,13 @@ enum SentrySetup {
             options.attachStacktrace = true
             options.maxBreadcrumbs = 50
             #if DEBUG
-            options.environment = "debug"
+            options.environment = "debug-terminal"
             options.debug = true
             #else
-            options.environment = "release"
+            options.environment = "release-terminal"
             #endif
             if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-                options.releaseName = "com.MichaelJancsy.ConjureDSP@\(version)"
+                options.releaseName = "com.MichaelJancsy.ConjureDSP.Terminal@\(version)"
             }
         }
     }

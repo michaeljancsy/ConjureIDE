@@ -114,6 +114,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     public override func viewDidLoad() {
         super.viewDidLoad()
         log.info("viewDidLoad called, audioUnit=\(self.audioUnit == nil ? "nil" : "set", privacy: .public)")
+        SentryHelper.breadcrumb("AU viewDidLoad", category: "au.lifecycle")
     }
 
     public override func viewDidLayout() {

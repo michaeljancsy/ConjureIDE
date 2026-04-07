@@ -45,6 +45,7 @@ final class TerminalServer {
                 try? await Task.sleep(for: .milliseconds(250))
             }
             log.error("MCP server did not start within 10 seconds")
+            SentryHelper.capture("MCP server did not start within 10 seconds", level: .error, category: "mcp")
         }
     }
 

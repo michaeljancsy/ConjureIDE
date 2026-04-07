@@ -16,6 +16,10 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "T
 struct ConjureDSPTerminalApp: App {
     @State private var server = TerminalAppServer()
 
+    init() {
+        SentrySetup.start()
+    }
+
     var body: some Scene {
         WindowGroup {
             TerminalStatusView(server: server)
@@ -97,6 +101,7 @@ class TerminalAppServer {
         guard let bundledPythonDist = Bundle.main.resourceURL?.appendingPathComponent("python-dist"),
               FileManager.default.fileExists(atPath: bundledPythonDist.path) else {
             log.error("Bundled python-dist not found in Terminal app bundle")
+            SentryHelper.capture("Bundled python-dist not found", level: .error, category: "terminal.python")
             return
         }
 
@@ -141,6 +146,7 @@ class TerminalAppServer {
                 migrateUserPackages(to: dstStdlib.appendingPathComponent("site-packages"))
             } catch {
                 log.error("Failed to install shared Python runtime: \(error.localizedDescription, privacy: .public)")
+                SentryHelper.captureError(error, category: "terminal.python")
             }
         }
 
@@ -173,6 +179,7 @@ class TerminalAppServer {
             log.info("Updated conjuredsp package in site-packages")
         } catch {
             log.error("Failed to update conjuredsp package: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "terminal.python")
         }
 
         // Mirror to Group Containers for DAW-hosted extensions
@@ -239,6 +246,7 @@ class TerminalAppServer {
             log.info("Rust toolchain provisioned to App Group at \(dstRustcDist.path, privacy: .public)")
         } catch {
             log.error("Failed to provision Rust toolchain: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "terminal.rust")
         }
     }
 
@@ -264,6 +272,7 @@ class TerminalAppServer {
             log.info("uv provisioned to App Group at \(dstUV.path, privacy: .public)")
         } catch {
             log.error("Failed to provision uv to App Group: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "terminal.uv")
         }
     }
 
@@ -518,6 +527,7 @@ class TerminalAppServer {
                 log.info("Mirrored PythonRuntime to Group Containers")
             } catch {
                 log.error("Failed to mirror PythonRuntime: \(error.localizedDescription, privacy: .public)")
+                SentryHelper.captureError(error, category: "terminal.mirror")
             }
         }
 
@@ -531,6 +541,7 @@ class TerminalAppServer {
                 log.info("Mirrored rustc-dist to Group Containers")
             } catch {
                 log.error("Failed to mirror rustc-dist: \(error.localizedDescription, privacy: .public)")
+                SentryHelper.captureError(error, category: "terminal.mirror")
             }
         }
 

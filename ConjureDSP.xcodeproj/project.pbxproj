@@ -11,6 +11,7 @@
 		2510F93C2F5211FC0046A41D /* backlog.md in Resources */ = {isa = PBXBuildFile; fileRef = 2510F9382F5211FC0046A41D /* backlog.md */; };
 		2510F93D2F5211FC0046A41D /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 2510F93A2F5211FC0046A41D /* README.md */; };
 		2579117F2F5013850036AAB6 /* ConjureDSPExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2579117E2F5013850036AAB6 /* ConjureDSPExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		25A5C7BB2F84538F003DE914 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 25A5C7BA2F84538F003DE914 /* Sentry */; };
 		25BC19422F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		25BC19432F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		25BC19442F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
@@ -229,6 +230,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				25A5C7BB2F84538F003DE914 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -268,6 +270,7 @@
 				257911412F5013840036AAB6 /* Products */,
 				25BC19412F563DB20009EA0D /* Assets.xcassets */,
 				25F5C9B42F737A0E0022143A /* Recovered References */,
+				25A5C7B92F84538F003DE914 /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -284,6 +287,13 @@
 				25E931132F773DC300D36258 /* ConjureDSPTerminalUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		25A5C7B92F84538F003DE914 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		25F5C9B42F737A0E0022143A /* Recovered References */ = {
@@ -459,6 +469,7 @@
 			);
 			name = ConjureDSPTerminal;
 			packageProductDependencies = (
+				25A5C7BA2F84538F003DE914 /* Sentry */,
 			);
 			productName = ConjureDSPTerminal;
 			productReference = 25E930FB2F773DC200D36258 /* ConjureDSPTerminal.app */;
@@ -1219,6 +1230,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -1263,7 +1275,6 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				ARCHS = arm64;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -1823,6 +1834,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		25A5C7BA2F84538F003DE914 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA5E00052F5013850036AAB6 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
 		AA11000200000001MIXPANEL /* Mixpanel */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = AA11000500000001MIXPANEL /* XCRemoteSwiftPackageReference "mixpanel-swift" */;
