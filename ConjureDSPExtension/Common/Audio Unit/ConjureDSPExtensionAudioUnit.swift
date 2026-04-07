@@ -122,6 +122,8 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		willChangeValue(forKey: "parameterTree")
 		self.parameterTree = tree
 		didChangeValue(forKey: "parameterTree")
+		willChangeValue(forKey: "allParameterValues")
+		didChangeValue(forKey: "allParameterValues")
 	}
 
 	/// Rebuild the parameter tree with rich metadata (real ranges, units, defaults).
@@ -131,34 +133,55 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		var params: [AUParameter] = []
 		let metadataRef = metadata
 
-		for i in 0..<count {
-			let meta = metadataRef[i]
-			let auUnit: AudioUnitParameterUnit
-			let valueStrings: [String]?
-			if meta.isToggle {
-				auUnit = .boolean
-				valueStrings = nil
-			} else if meta.isChoice, let opts = meta.options {
-				auUnit = .indexed
-				valueStrings = opts
+		// Always create all 16 parameters to keep the tree structure stable.
+		// DAW hosts (Ableton, Logic) cache the parameter count at scan time and
+		// don't handle structural changes well. Parameters beyond the metadata
+		// count stay as generic placeholders (hidden in the plugin UI).
+		for i in 0..<Self.paramCount {
+			if i < count {
+				let meta = metadataRef[i]
+				let auUnit: AudioUnitParameterUnit
+				let valueStrings: [String]?
+				if meta.isToggle {
+					auUnit = .boolean
+					valueStrings = nil
+				} else if meta.isChoice, let opts = meta.options {
+					auUnit = .indexed
+					valueStrings = opts
+				} else {
+					auUnit = .generic
+					valueStrings = nil
+				}
+				let param = AUParameterTree.createParameter(
+					withIdentifier: "param\(i)",
+					name: meta.name,
+					address: AUParameterAddress(i),
+					min: meta.min,
+					max: meta.max,
+					unit: auUnit,
+					unitName: nil,
+					flags: [.flag_IsReadable, .flag_IsWritable],
+					valueStrings: valueStrings,
+					dependentParameters: nil
+				)
+				param.value = meta.default
+				params.append(param)
 			} else {
-				auUnit = .generic
-				valueStrings = nil
+				let param = AUParameterTree.createParameter(
+					withIdentifier: "param\(i)",
+					name: "Param \(i)",
+					address: AUParameterAddress(i),
+					min: 0.0,
+					max: 1.0,
+					unit: .generic,
+					unitName: nil,
+					flags: [.flag_IsReadable, .flag_IsWritable],
+					valueStrings: nil,
+					dependentParameters: nil
+				)
+				param.value = 0.0
+				params.append(param)
 			}
-			let param = AUParameterTree.createParameter(
-				withIdentifier: "param\(i)",
-				name: meta.name,
-				address: AUParameterAddress(i),
-				min: meta.min,
-				max: meta.max,
-				unit: auUnit,
-				unitName: nil,
-				flags: [.flag_IsReadable, .flag_IsWritable],
-				valueStrings: valueStrings,
-				dependentParameters: nil
-			)
-			param.value = meta.default
-			params.append(param)
 		}
 
 		let tree = AUParameterTree.createTree(withChildren: params)
@@ -208,6 +231,8 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		willChangeValue(forKey: "parameterTree")
 		self.parameterTree = tree
 		didChangeValue(forKey: "parameterTree")
+		willChangeValue(forKey: "allParameterValues")
+		didChangeValue(forKey: "allParameterValues")
 
 		// Set kernel defaults (normalized, respects curve type)
 		for (i, meta) in metadataRef.prefix(count).enumerated() {
@@ -526,9 +551,14 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			}
 		}
 
-		// No rich metadata — clear it and fall back to names-only.
+		// No rich metadata — if previous script had rich metadata, rebuild
+		// the generic parameter tree so ranges/names reset properly.
+		let hadRichMetadata = currentParamMetadata != nil
 		currentParamMetadata = nil
 		paramMetadataDidChange.send(nil)
+		if hadRichMetadata {
+			buildParameterTree()
+		}
 
 		guard let ptr = dsp_kernel_param_names_json(kernel) else {
 			currentParamNames = nil
