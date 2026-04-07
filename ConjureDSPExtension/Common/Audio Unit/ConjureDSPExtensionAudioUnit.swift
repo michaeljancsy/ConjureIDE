@@ -119,7 +119,9 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			let value = valuePtr?.pointee ?? param.value
 			return String(format: "%.3f", value)
 		}
+		willChangeValue(forKey: "parameterTree")
 		self.parameterTree = tree
+		didChangeValue(forKey: "parameterTree")
 	}
 
 	/// Rebuild the parameter tree with rich metadata (real ranges, units, defaults).
@@ -203,7 +205,9 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			return String(format: "%.3f", value)
 		}
 
+		willChangeValue(forKey: "parameterTree")
 		self.parameterTree = tree
+		didChangeValue(forKey: "parameterTree")
 
 		// Set kernel defaults (normalized, respects curve type)
 		for (i, meta) in metadataRef.prefix(count).enumerated() {
