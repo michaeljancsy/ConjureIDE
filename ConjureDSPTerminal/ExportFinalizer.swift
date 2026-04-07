@@ -1,69 +1,45 @@
+//
+//  ExportFinalizer.swift
+//  ConjureDSPTerminal
+//
+//  Watches for unsigned AU export bundles in the App Group container's
+//  PendingExports/ directory and finalizes them: code sign, remove
+//  quarantine, register with LaunchServices, and reveal in Finder.
+//
+
 import AppKit
-import Combine
 import Foundation
 import os.log
 
-private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "PendingExportHandler")
+private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.Terminal", category: "ExportFinalizer")
 
-/// Handles pending AU exports staged in the App Group container by the AU extension.
-///
-/// On launch, checks for `.app` bundles in the App Group's `PendingExports/` directory.
-/// For each: moves to `~/Library/Application Support/ConjureDSP/Exports/`, code signs,
-/// launches (to register AU with macOS), reveals in Finder, and cleans up.
-final class PendingExportHandler: ObservableObject {
-    static let appGroupIdentifier = AppGroupContainer.id
-
-    @Published var installedExportName: String?
-    @Published var installError: String?
+final class ExportFinalizer {
+    let appGroupURL: URL
+    let groupContainersURL: URL
 
     private var exportsDirectory: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return appSupport.appendingPathComponent("ConjureDSP/Exports")
     }
 
-    /// Directory where non-sandboxed contexts (host app) stage exports.
-    /// Only checks Application Support — no TCC prompt.
-    private var pendingExportsDirectories: [URL] {
-        [AppGroupContainer.url.appendingPathComponent("PendingExports")]
+    init(appGroupURL: URL, groupContainersURL: URL) {
+        self.appGroupURL = appGroupURL
+        self.groupContainersURL = groupContainersURL
     }
 
-    /// Check Group Containers for exports staged by the AU extension running
-    /// in a sandboxed context (DAW or ViewBridge XPC).
-    ///
-    /// This accesses `~/Library/Group Containers/` which triggers a macOS TCC
-    /// "access data from other apps" prompt for unsandboxed processes. Only call
-    /// when we know an export was staged (via DistributedNotification) or when
-    /// the user explicitly requests it.
-    func checkGroupContainersForExports() {
-        let groupDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Group Containers")
-            .appendingPathComponent(Self.appGroupIdentifier)
-            .appendingPathComponent("PendingExports")
-        processExportsIn(groupDir)
-    }
+    /// Called from the file-watch loop. Checks both App Group locations for pending exports.
+    func checkForPendingExports() async {
+        let directories = [
+            appGroupURL.appendingPathComponent("PendingExports"),
+            groupContainersURL.appendingPathComponent("PendingExports"),
+        ]
 
-    private var distributedObserver: NSObjectProtocol?
-
-    /// Listen for DistributedNotification from the AU extension when it stages
-    /// an export in Group Containers. Uses Mach ports — no file I/O, no TCC.
-    func startListeningForDAWExports() {
-        guard distributedObserver == nil else { return }
-        distributedObserver = DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("com.MichaelJancsy.ConjureDSP.pendingExport"),
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.checkGroupContainersForExports()
+        for dir in directories {
+            await processExportsIn(dir)
         }
     }
 
-    func checkForPendingExports() {
-        for pendingDir in pendingExportsDirectories {
-            processExportsIn(pendingDir)
-        }
-    }
-
-    private func processExportsIn(_ directory: URL) {
+    private func processExportsIn(_ directory: URL) async {
         let fm = FileManager.default
         guard fm.fileExists(atPath: directory.path),
               let contents = try? fm.contentsOfDirectory(
@@ -78,16 +54,15 @@ final class PendingExportHandler: ObservableObject {
         log.info("Found \(appBundles.count) pending export(s) in \(directory.path, privacy: .public)")
 
         for appURL in appBundles {
-            installExport(at: appURL)
+            await installExport(at: appURL)
         }
     }
 
-    private func installExport(at sourceURL: URL) {
+    private func installExport(at sourceURL: URL) async {
         let fm = FileManager.default
         let name = sourceURL.deletingPathExtension().lastPathComponent
 
         do {
-            // Ensure exports directory exists
             try fm.createDirectory(at: exportsDirectory, withIntermediateDirectories: true)
 
             let destURL = exportsDirectory.appendingPathComponent(sourceURL.lastPathComponent)
@@ -101,16 +76,15 @@ final class PendingExportHandler: ObservableObject {
             try fm.moveItem(at: sourceURL, to: destURL)
             log.info("Moved export to \(destURL.path, privacy: .public)")
 
-            // Code sign (deepest first)
-            let appexGlob = try fm.contentsOfDirectory(
+            // Code sign (deepest first: frameworks → appex → app)
+            let appexes = try fm.contentsOfDirectory(
                 at: destURL.appendingPathComponent("Contents/PlugIns"),
                 includingPropertiesForKeys: nil
             ).filter { $0.pathExtension == "appex" }
 
-            for appex in appexGlob {
+            for appex in appexes {
                 let frameworks = appex.appendingPathComponent("Contents/Frameworks")
                 if fm.fileExists(atPath: frameworks.path) {
-                    // Sign each item inside Frameworks individually (dylibs, .so files)
                     let frameworkItems = try fm.contentsOfDirectory(
                         at: frameworks, includingPropertiesForKeys: nil
                     )
@@ -131,23 +105,23 @@ final class PendingExportHandler: ObservableObject {
             log.info("Registered \(name, privacy: .public) with LaunchServices")
 
             // Reveal in Finder
-            NSWorkspace.shared.activateFileViewerSelecting([destURL])
+            await MainActor.run {
+                NSWorkspace.shared.activateFileViewerSelecting([destURL])
+            }
 
-            installedExportName = name
-            installError = nil
+            // Notify extension of success
+            postResult(name: name, success: true, error: nil)
         } catch {
             log.error("Failed to install export '\(name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
-            installError = "Failed to install \"\(name)\": \(error.localizedDescription)"
+            postResult(name: name, success: false, error: error.localizedDescription)
         }
     }
+
+    // MARK: - Code signing
 
     private func codeSign(_ url: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-        // --preserve-metadata=entitlements: keeps the sandbox entitlements from the
-        // Xcode-built template. Without this, ad-hoc signing strips entitlements and
-        // PluginKit refuses to register the extension (requires app-sandbox = true).
-        // No --deep: caller signs in correct order (frameworks → appex → app).
         process.arguments = ["-s", "-", "--force", "--timestamp=none",
                              "--preserve-metadata=entitlements", url.path]
 
@@ -160,7 +134,7 @@ final class PendingExportHandler: ObservableObject {
         if process.terminationStatus != 0 {
             let stderr = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             throw NSError(
-                domain: "PendingExportHandler",
+                domain: "ExportFinalizer",
                 code: Int(process.terminationStatus),
                 userInfo: [NSLocalizedDescriptionKey: "Code signing failed: \(stderr)"]
             )
@@ -181,5 +155,24 @@ final class PendingExportHandler: ObservableObject {
         process.arguments = ["-f", "-R", "-trusted", url.path]
         try? process.run()
         process.waitUntilExit()
+    }
+
+    // MARK: - Notification
+
+    private func postResult(name: String, success: Bool, error: String?) {
+        var userInfo: [String: String] = [
+            "name": name,
+            "success": success ? "true" : "false",
+        ]
+        if let error {
+            userInfo["error"] = error
+        }
+
+        DistributedNotificationCenter.default().postNotificationName(
+            Notification.Name("com.MichaelJancsy.ConjureDSP.exportFinalized"),
+            object: nil,
+            userInfo: userInfo,
+            deliverImmediately: true
+        )
     }
 }

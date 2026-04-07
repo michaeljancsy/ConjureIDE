@@ -50,6 +50,8 @@ class TerminalAppServer {
     private let healthCheckThreshold = 3  // consecutive failures before reset
     private var packageInstaller: PackageInstaller?
     private var crateInstaller: CrateInstaller?
+    private var exportFinalizer: ExportFinalizer?
+    private var exportNotificationObserver: NSObjectProtocol?
 
     /// URL of the shared Python runtime in the App Group container.
     /// This is the single authoritative Python installation used by the AU extension,
@@ -85,6 +87,25 @@ class TerminalAppServer {
                     log.info("Crate installer ready")
                 } else {
                     log.warning("Crate installer not available — cargo not found in rustc-dist")
+                }
+
+                self.exportFinalizer = ExportFinalizer(
+                    appGroupURL: containerURL,
+                    groupContainersURL: AppGroupContainer.groupContainersURL
+                )
+                log.info("Export finalizer ready")
+
+                // Listen for DistributedNotification as a fast-path trigger
+                // (avoids waiting for next poll cycle)
+                self.exportNotificationObserver = DistributedNotificationCenter.default().addObserver(
+                    forName: Notification.Name("com.MichaelJancsy.ConjureDSP.pendingExport"),
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    guard let self, let finalizer = self.exportFinalizer else { return }
+                    Task { @MainActor in
+                        await finalizer.checkForPendingExports()
+                    }
                 }
             }
         }
@@ -315,6 +336,11 @@ class TerminalAppServer {
                 }
                 if let crateInst = self.crateInstaller {
                     await crateInst.checkForRequests()
+                }
+
+                // 3b. Check for pending AU exports
+                if let finalizer = self.exportFinalizer {
+                    await finalizer.checkForPendingExports()
                 }
 
                 // 4. Health check (every ~3 seconds when running)
