@@ -57,6 +57,7 @@ struct Tone3000AuthView: View {
                     }
                 }
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay {
                 if isLoading {
                     ProgressView()

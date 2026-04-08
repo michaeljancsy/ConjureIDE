@@ -440,6 +440,7 @@ struct ToneBrowserView: View {
             onCancel: { [weak panel] in panel?.close() }
         )
         panel.contentViewController = NSHostingController(rootView: authView)
+        panel.setContentSize(NSSize(width: 420, height: 520))
         panel.center()
         panel.makeKeyAndOrderFront(nil)
         authPanel = panel

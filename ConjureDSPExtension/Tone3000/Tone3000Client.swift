@@ -32,15 +32,13 @@ final class Tone3000Client {
     // MARK: - Observable State
 
     private(set) var username: String?
-
-    var isAuthenticated: Bool {
-        KeychainHelper.load(key: Self.accessTokenKey) != nil
-    }
+    private(set) var isAuthenticated: Bool
 
     // MARK: - Initialization
 
     init() {
         username = KeychainHelper.load(key: Self.usernameKey)
+        isAuthenticated = KeychainHelper.load(key: Self.accessTokenKey) != nil
     }
 
     // MARK: - Auth
@@ -71,6 +69,7 @@ final class Tone3000Client {
         let expiry = Date().addingTimeInterval(TimeInterval(authResponse.expiresIn))
         try KeychainHelper.save(key: Self.tokenExpiryKey, value: "\(expiry.timeIntervalSince1970)")
 
+        isAuthenticated = true
         log.info("tone3000 auth succeeded")
 
         // Fetch username
@@ -118,6 +117,7 @@ final class Tone3000Client {
         KeychainHelper.delete(key: Self.refreshTokenKey)
         KeychainHelper.delete(key: Self.tokenExpiryKey)
         KeychainHelper.delete(key: Self.usernameKey)
+        isAuthenticated = false
         username = nil
         log.info("tone3000 signed out")
     }
