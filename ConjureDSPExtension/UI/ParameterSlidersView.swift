@@ -9,15 +9,9 @@ import SwiftUI
 
 private let panelAnimation = Animation.easeOut(duration: 0.15)
 
-private struct ContainerWidthKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
 struct ParameterSlidersView: View {
     @ObservedObject var parameterState: ParameterState
     @State private var isExpanded: Bool = true
-    @State private var containerWidth: CGFloat = 0
 
     /// Indices of parameters to display, from the declared param names.
     private var visibleIndices: [Int] {
@@ -59,25 +53,24 @@ struct ParameterSlidersView: View {
                 .buttonStyle(.plain)
 
                 if isExpanded {
-                    VStack(spacing: 4) {
-                        ForEach(visibleIndices, id: \.self) { index in
-                            ParameterSliderRow(
-                                label: label(for: index),
-                                value: parameterState.binding(for: index),
-                                metadata: metadata(for: index)
-                            )
+                    GeometryReader { geo in
+                        VStack(spacing: 4) {
+                            ForEach(visibleIndices, id: \.self) { index in
+                                ParameterSliderRow(
+                                    label: label(for: index),
+                                    value: parameterState.binding(for: index),
+                                    metadata: metadata(for: index)
+                                )
+                            }
                         }
+                        .padding(.horizontal, geo.size.width / 8)
+                        .padding(.vertical, 4)
                     }
-                    .padding(.horizontal, containerWidth > 0 ? containerWidth / 8 : 16)
-                    .padding(.vertical, 4)
+                    .fixedSize(horizontal: false, vertical: true)
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
             .clipped()
-            .background(GeometryReader { geo in
-                Color.clear.preference(key: ContainerWidthKey.self, value: geo.size.width)
-            })
-            .onPreferenceChange(ContainerWidthKey.self) { containerWidth = $0 }
             .accessibilityIdentifier("parameterSlidersPanel")
         }
     }
