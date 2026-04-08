@@ -3,6 +3,21 @@ import { handleActivate } from "./activate";
 import { handleVerify } from "./verify";
 import { handleWebhook } from "./webhook";
 
+async function handleDownload(): Promise<Response> {
+  const appcastRes = await fetch("https://updates.conjuredsp.com/appcast.xml");
+  if (!appcastRes.ok) {
+    return new Response("Update feed unavailable", { status: 502 });
+  }
+  const xml = await appcastRes.text();
+  const match = xml.match(/<enclosure[^>]+url="([^"]+\.dmg)"/);
+  if (!match) {
+    return new Response("No release found", { status: 503 });
+  }
+  const dmgUrl = match[1];
+  const redirectUrl = `https://conjuredsp.com/downloaded?file=${encodeURIComponent(dmgUrl)}`;
+  return Response.redirect(redirectUrl, 302);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -42,6 +57,14 @@ export default {
           response = new Response("Method not allowed", { status: 405 });
         } else {
           response = await handleWebhook(request, env);
+        }
+        break;
+
+      case "/download":
+        if (request.method !== "GET") {
+          response = new Response("Method not allowed", { status: 405 });
+        } else {
+          response = await handleDownload();
         }
         break;
 
