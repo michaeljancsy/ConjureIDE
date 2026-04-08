@@ -57,13 +57,13 @@ struct Tone3000AuthView: View {
                     }
                 }
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay {
                 if isLoading {
                     ProgressView()
                 }
             }
         }
-        .frame(width: 420, height: 520)
     }
 }
 
@@ -76,6 +76,7 @@ private struct Tone3000WebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.load(URLRequest(url: url))

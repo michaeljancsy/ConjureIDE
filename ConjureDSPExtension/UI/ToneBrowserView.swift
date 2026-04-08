@@ -6,6 +6,7 @@
 //  Displayed as a popover from the toolbar Tones button.
 //
 
+import AppKit
 import SwiftUI
 import os.log
 
@@ -54,20 +55,42 @@ struct ToneBrowserView: View {
     @State private var expandedToneId: String?
     @State private var toneModels: [String: [ToneModel]] = [:]
     @State private var downloadingModelId: String?
-    @State private var showingAuth = false
+    @State private var authPanel: NSPanel?
     @State private var error: String?
 
     var body: some View {
+        mainContent
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
         VStack(spacing: 0) {
             // Header
             HStack {
                 Text("Tones")
                     .font(.headline)
+                Button {
+                    openURL(URL(string: "https://tone3000.com")!)
+                } label: {
+                    HStack(spacing: 2) {
+                        Text("tone3000.com")
+                        Image(systemName: "arrow.up.right")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
                 Spacer()
                 if client.isAuthenticated, let username = client.username {
                     Text(username)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Button("Log out") {
+                        client.signOut()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 Button("Done") { onDone() }
                     .buttonStyle(.borderless)
@@ -89,7 +112,7 @@ struct ToneBrowserView: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
                     Button("Connect tone3000") {
-                        showingAuth = true
+                        openAuthPanel()
                     }
                     .buttonStyle(.borderedProminent)
                     .accessibilityIdentifier("toneConnectButton")
@@ -187,17 +210,6 @@ struct ToneBrowserView: View {
             }
         }
         .frame(width: 380, height: 460)
-        .sheet(isPresented: $showingAuth) {
-            Tone3000AuthView(
-                client: client,
-                onSuccess: {
-                    showingAuth = false
-                },
-                onCancel: {
-                    showingAuth = false
-                }
-            )
-        }
         .task {
             guard client.isAuthenticated else { return }
             switch tab {
@@ -402,6 +414,36 @@ struct ToneBrowserView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
+    }
+
+    // MARK: - Auth Panel
+
+    private func openAuthPanel() {
+        // If a panel is already open, just bring it forward
+        if let existing = authPanel, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 520),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Sign in to tone3000"
+        panel.isReleasedWhenClosed = false
+
+        let authView = Tone3000AuthView(
+            client: client,
+            onSuccess: { [weak panel] in panel?.close() },
+            onCancel: { [weak panel] in panel?.close() }
+        )
+        panel.contentViewController = NSHostingController(rootView: authView)
+        panel.setContentSize(NSSize(width: 420, height: 520))
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        authPanel = panel
     }
 
     // MARK: - Actions
