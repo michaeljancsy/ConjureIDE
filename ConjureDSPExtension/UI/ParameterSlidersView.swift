@@ -53,20 +53,17 @@ struct ParameterSlidersView: View {
                 .buttonStyle(.plain)
 
                 if isExpanded {
-                    GeometryReader { geo in
-                        VStack(spacing: 4) {
-                            ForEach(visibleIndices, id: \.self) { index in
-                                ParameterSliderRow(
-                                    label: label(for: index),
-                                    value: parameterState.binding(for: index),
-                                    metadata: metadata(for: index)
-                                )
-                            }
+                    VStack(spacing: 4) {
+                        ForEach(visibleIndices, id: \.self) { index in
+                            ParameterSliderRow(
+                                label: label(for: index),
+                                value: parameterState.binding(for: index),
+                                metadata: metadata(for: index)
+                            )
                         }
-                        .padding(.horizontal, geo.size.width / 8)
-                        .padding(.vertical, 4)
                     }
-                    .fixedSize(horizontal: false, vertical: true)
+                    .containerRelativeFrame(.horizontal) { width, _ in width * 0.75 }
+                    .padding(.vertical, 4)
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
