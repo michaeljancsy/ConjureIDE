@@ -177,12 +177,11 @@ final class CrateInstaller {
         }
 
         // Merge new crates with existing user-requested crates.
-        // Normalize names: Cargo treats hyphens and underscores as equivalent,
-        // but we use underscores consistently (matching rlib filenames).
+        // Use hyphens as the canonical form (matching crates.io and Cargo.toml).
         var allCrates = readExistingUserCrates()
         for crate in newCrates {
-            let normalized = crate.name.replacingOccurrences(of: "-", with: "_")
-            allCrates[normalized] = crate.version
+            let canonical = crate.name.replacingOccurrences(of: "_", with: "-")
+            allCrates[canonical] = crate.version
         }
 
         try await rebuildAllCrates(allCrates)
@@ -193,9 +192,9 @@ final class CrateInstaller {
     private func uninstallCrates(_ crateNames: [String]) async throws {
         var allCrates = readExistingUserCrates()
         for name in crateNames {
-            // Normalize to underscores to match manifest keys
-            let normalized = name.replacingOccurrences(of: "-", with: "_")
-            allCrates.removeValue(forKey: normalized)
+            // Normalize to hyphens to match manifest keys
+            let canonical = name.replacingOccurrences(of: "_", with: "-")
+            allCrates.removeValue(forKey: canonical)
         }
 
         if allCrates.isEmpty {
@@ -228,7 +227,8 @@ final class CrateInstaller {
         // Write empty lib.rs (cargo needs a source file)
         try "".write(to: tempDir.appendingPathComponent("src/lib.rs"), atomically: true, encoding: .utf8)
 
-        // Write Cargo.toml with all user-requested crates
+        // Write Cargo.toml with all user-requested crates.
+        // Keys use hyphens (the canonical crates.io / Cargo.toml form).
         var depsSection = ""
         for (name, version) in userCrates.sorted(by: { $0.key < $1.key }) {
             depsSection += "\(name) = \"\(version)\"\n"
@@ -353,13 +353,13 @@ final class CrateInstaller {
             let destFile = rlibURL.appendingPathComponent(filename)
             try fm.copyItem(at: file, to: destFile)
 
-            // Determine version from Cargo.lock
-            // Crate names in Cargo.lock use hyphens, rlib filenames use underscores
-            let normalizedName = crateName.replacingOccurrences(of: "_", with: "-")
-            let version = resolvedVersions[normalizedName] ?? resolvedVersions[crateName] ?? "unknown"
-            let isUserRequested = userCrates.keys.contains(normalizedName) || userCrates.keys.contains(crateName)
+            // Convert rlib underscore name to hyphenated canonical form.
+            // Cargo.lock and crates.io use hyphens; rlib filenames use underscores.
+            let canonicalName = crateName.replacingOccurrences(of: "_", with: "-")
+            let version = resolvedVersions[canonicalName] ?? resolvedVersions[crateName] ?? "unknown"
+            let isUserRequested = userCrates.keys.contains(canonicalName)
 
-            manifestCrates[crateName] = CrateManifest.CrateEntry(
+            manifestCrates[canonicalName] = CrateManifest.CrateEntry(
                 version: version,
                 rlib: filename,
                 userRequested: isUserRequested

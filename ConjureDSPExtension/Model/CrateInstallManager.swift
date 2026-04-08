@@ -149,7 +149,7 @@ final class CrateInstallManager {
             lastError = "Please wait for the current operation to finish"
             return
         }
-        let normalized = crateName.lowercased().replacingOccurrences(of: "-", with: "_")
+        let normalized = crateName.lowercased().replacingOccurrences(of: "_", with: "-")
         guard !Self.bundledCrates.contains(normalized) else {
             lastError = "\(crateName) is a built-in crate and cannot be removed"
             return
@@ -328,7 +328,8 @@ final class CrateInstallManager {
     }
 
     /// Returns `--extern` argument pairs for all installed crate rlibs.
-    /// Each pair is (crate_name, full_rlib_path).
+    /// Each pair is (crate_name, full_rlib_path). Names use underscores
+    /// (Rust identifier form) since they're passed to rustc `--extern`.
     nonisolated static func externArgs() -> [(name: String, path: String)] {
         guard let manifest = readManifest() else { return [] }
         let libDir = cratesLibURL().path
@@ -336,7 +337,9 @@ final class CrateInstallManager {
         return manifest.crates.compactMap { (name, entry) in
             let path = "\(libDir)/\(entry.rlib)"
             guard FileManager.default.fileExists(atPath: path) else { return nil }
-            return (name: name, path: path)
+            // Manifest keys use hyphens (crates.io canonical); rustc --extern needs underscores
+            let rustName = name.replacingOccurrences(of: "-", with: "_")
+            return (name: rustName, path: path)
         }
     }
 
