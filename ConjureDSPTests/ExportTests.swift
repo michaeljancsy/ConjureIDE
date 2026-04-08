@@ -1512,7 +1512,7 @@ struct ExportDSPIntegrationTests {
         let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/lstm_tiny.nam")
         let resourcesURL = try Self.extensionResourcesURL
         var source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam.py"), encoding: .utf8)
-        source = source.replacingOccurrences(of: "tone3000://60092/351559", with: namURL.path)
+        source = source.replacingOccurrences(of: "tone3000://19/56", with: namURL.path)
         #expect(source.contains(namURL.path), "Source should contain absolute NAM path after substitution")
 
         // 2. Export
@@ -1574,7 +1574,7 @@ struct ExportDSPIntegrationTests {
         let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/lstm_tiny.nam")
         let resourcesURL = try Self.extensionResourcesURL
         var source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam_rust.rs"), encoding: .utf8)
-        source = source.replacingOccurrences(of: "tone3000://60092/351559", with: namURL.path)
+        source = source.replacingOccurrences(of: "tone3000://19/56", with: namURL.path)
         #expect(source.contains(namURL.path), "Source should contain absolute NAM path after substitution")
 
         // 2. Compile to WASM

@@ -705,7 +705,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		guard let fileURL = namFileURL,
 			  let namData = try? Data(contentsOf: fileURL) else {
-			let msg = "NAM tone not found: \(namPath). Use list_tones to see downloaded tones, or download this tone from the Tones browser."
+			let msg = Self.namNotDownloadedMessage
 			pluginLog.error("\(msg, privacy: .public)")
 			SentryHelper.capture("NAM tone file not found", level: .error, category: "dsp.nam", extra: ["path": namPath])
 			return msg
@@ -768,7 +768,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	/// Compile source code (detecting language) and load into the DSP kernel.
 	/// For Python: direct load (sync). For Rust: compile to WASM, cache, then load.
-	public func compileAndRun(source: String) async -> (success: Bool, error: String?, processTimeMs: Double?, budgetMs: Double?) {
+	/// Marker substring emitted by conjuredsp.nam when a NAM tone file is missing.
+	private static let namNotDownloadedMarker = "NAM model not found"
+
+	public func compileAndRun(source: String) async -> (success: Bool, error: String?, warning: String?, processTimeMs: Double?, budgetMs: Double?) {
 		let language = ScriptLanguage.detect(from: source)
 
 		switch language {
@@ -776,7 +779,20 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			let result = reloadScript(source: source)
 			currentScriptLanguage = .python
 			currentWasmBytes = nil
-			return result
+
+			// When a Python script fails because a NAM tone hasn't been
+			// downloaded yet, report it as a warning (passthrough) rather
+			// than a hard error so the status bar shows an amber hint
+			// instead of a red error. Load a passthrough script into the
+			// kernel so the old preset doesn't keep running.
+			if !result.success,
+			   let err = result.error,
+			   err.contains(Self.namNotDownloadedMarker) {
+				loadPassthroughScript()
+				return (true, nil, Self.namNotDownloadedMessage, nil, nil)
+			}
+
+			return (result.success, result.error, nil, result.processTimeMs, result.budgetMs)
 
 		case .rust:
 			// Parse param names from source (only used if no rich metadata)
@@ -797,7 +813,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						paramNamesDidChange.send(names)
 					}
 				}
-				return result
+				return Self.wasmResultWithWarning(result)
 			}
 
 			// Compile
@@ -816,11 +832,41 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						paramNamesDidChange.send(names)
 					}
 				}
-				return result
+				return Self.wasmResultWithWarning(result)
 			} catch {
-				return (false, error.localizedDescription, nil, nil)
+				return (false, error.localizedDescription, nil, nil, nil)
 			}
 		}
+	}
+
+	private static let namNotDownloadedMessage = "This preset uses a NAM tone that hasn't been downloaded yet. Open the Tones panel from the toolbar to search and download it."
+
+	/// Replace the current kernel backend with a minimal passthrough script
+	/// so the previously loaded preset doesn't keep running.
+	private func loadPassthroughScript() {
+		guard let pythonHome = self.pythonHome else { return }
+		let passthrough = """
+		def process(inputs, outputs, frame_count, sample_rate, params):
+		    for ch in range(len(inputs)):
+		        outputs[ch][:frame_count] = inputs[ch][:frame_count]
+		"""
+		let tempDir = FileManager.default.temporaryDirectory
+		let tempFile = tempDir.appendingPathComponent("passthrough_\(UUID().uuidString).py")
+		guard let _ = try? passthrough.write(to: tempFile, atomically: true, encoding: .utf8) else { return }
+		defer { try? FileManager.default.removeItem(at: tempFile) }
+		dsp_kernel_load_script(kernel, pythonHome, tempFile.path)
+	}
+
+	/// Convert a WASM load result to a compile result, promoting NAM-not-downloaded errors to warnings.
+	private static func wasmResultWithWarning(
+		_ result: (success: Bool, error: String?, processTimeMs: Double?, budgetMs: Double?)
+	) -> (success: Bool, error: String?, warning: String?, processTimeMs: Double?, budgetMs: Double?) {
+		if !result.success,
+		   let err = result.error,
+		   err == namNotDownloadedMessage {
+			return (true, nil, namNotDownloadedMessage, nil, nil)
+		}
+		return (result.success, result.error, nil, result.processTimeMs, result.budgetMs)
 	}
 
 	// MARK: - Subscription
@@ -1018,7 +1064,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			pluginLog.info("Selected preset: \(preset.name, privacy: .public)")
 		}
 
-		return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+		return ScriptSaveResult(success: result.success, error: result.error, warning: result.warning, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
 	}
 
 	// MARK: - Factory Presets
