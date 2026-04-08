@@ -353,11 +353,22 @@ final class CrateInstallManager {
     /// Prepends a user-friendly explanation to cargo errors when the failure is a
     /// recognizable class (e.g. build script failures during cross-compilation).
     private static func userFriendlyError(_ raw: String) -> String {
-        // Build script failures: the crate has native/system dependencies that
-        // can't cross-compile to WebAssembly (e.g. pyo3, openssl-sys, cmake).
+        // pyo3 cross-compilation: crate uses Python bindings that can't target WASM
+        if raw.contains("PYO3_CROSS_PYTHON_VERSION") || raw.contains("PYO3_CROSS_LIB_DIR") {
+            return "This crate depends on pyo3 (Python bindings), which can't compile to WebAssembly. "
+                + "Only pure Rust crates can be installed — for Python interop, use a Python package instead.\n\n"
+                + raw
+        }
+        // General build script failures: native/system dependencies
         if raw.contains("failed to run custom build command for") {
             return "This crate has a build script that failed during WebAssembly cross-compilation. "
-                + "It likely depends on system libraries or native bindings not available in WASM.\n\n"
+                + "It likely depends on system libraries or native bindings not available in WASM. "
+                + "Only pure Rust crates (no C/system dependencies) can be installed.\n\n"
+                + raw
+        }
+        // Package not found (typo or wrong name)
+        if raw.contains("no matching package found") {
+            return "Crate not found on crates.io. Check the spelling — crate names use hyphens (e.g. \"my-crate\", not \"my_crate\").\n\n"
                 + raw
         }
         return raw
