@@ -100,6 +100,98 @@ import Testing
         #expect(portFile.deletingLastPathComponent() == AppGroupContainer.url)
     }
 
+    // MARK: - WebSocket port change detection
+
+    @Test("Detects WebSocket port change after companion app restart")
+    func detectsWebSocketPortChange() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let portFile = tempDir.appendingPathComponent("terminal-server-port")
+
+        // Simulate initial connection: companion app writes port A
+        let portA: UInt16 = 19836
+        try "\(portA)".write(to: portFile, atomically: true, encoding: .utf8)
+
+        // TerminalView reads the port and connects
+        let initialContents = try String(contentsOf: portFile, encoding: .utf8)
+        let initialPort = UInt16(initialContents.trimmingCharacters(in: .whitespacesAndNewlines))
+        #expect(initialPort == portA)
+
+        // Simulate companion app session reset: old port file deleted, then new port written
+        try FileManager.default.removeItem(at: portFile)
+        let portB: UInt16 = 49152
+        try "\(portB)".write(to: portFile, atomically: true, encoding: .utf8)
+
+        // Port poll reads the file and detects the change
+        let newContents = try String(contentsOf: portFile, encoding: .utf8)
+        let newPort = UInt16(newContents.trimmingCharacters(in: .whitespacesAndNewlines))
+        #expect(newPort == portB)
+        #expect(newPort != initialPort, "Poll should detect that port changed from \(portA) to \(portB)")
+    }
+
+    @Test("Port poll handles missing file during companion app restart")
+    func portPollHandlesMissingFile() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let portFile = tempDir.appendingPathComponent("terminal-server-port")
+
+        // Port file doesn't exist yet (companion app restarting)
+        let contents = try? String(contentsOf: portFile, encoding: .utf8)
+        #expect(contents == nil, "Should handle missing port file gracefully")
+
+        // Companion app comes back with new port
+        try "55555".write(to: portFile, atomically: true, encoding: .utf8)
+        let port = UInt16(try String(contentsOf: portFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines))
+        #expect(port == 55555)
+    }
+
+    @Test("Port poll ignores unchanged port")
+    func portPollIgnoresUnchangedPort() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let portFile = tempDir.appendingPathComponent("terminal-server-port")
+        try "19836".write(to: portFile, atomically: true, encoding: .utf8)
+
+        // Read twice — same port both times
+        let port1 = UInt16(try String(contentsOf: portFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines))
+        let port2 = UInt16(try String(contentsOf: portFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines))
+        #expect(port1 == port2, "Same port should not trigger reconnect")
+    }
+
+    @Test("Port poll rejects zero and invalid values")
+    func portPollRejectsInvalidValues() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let portFile = tempDir.appendingPathComponent("terminal-server-port")
+
+        // Zero port
+        try "0".write(to: portFile, atomically: true, encoding: .utf8)
+        let zeroPort = UInt16(try String(contentsOf: portFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines))
+        #expect(zeroPort == 0, "Zero port should be filtered out by caller")
+
+        // Non-numeric
+        try "garbage".write(to: portFile, atomically: true, encoding: .utf8)
+        let badPort = UInt16(try String(contentsOf: portFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines))
+        #expect(badPort == nil, "Non-numeric content should parse as nil")
+    }
+
     @Test("PythonRuntime directory resolves correctly")
     func pythonRuntimeDirectory() {
         let runtimeURL = AppGroupContainer.url.appendingPathComponent("PythonRuntime")

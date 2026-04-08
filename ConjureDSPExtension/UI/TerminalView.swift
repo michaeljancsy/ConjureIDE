@@ -71,12 +71,16 @@ struct TerminalView: NSViewRepresentable {
         var lastTheme: String?
         var pendingTheme: ColorScheme?
         let appGroupContainerURL: URL?
+        private var lastConnectedPort: UInt16?
+        private var portPollTask: Task<Void, Never>?
 
         init(appGroupContainerURL: URL?) {
             self.appGroupContainerURL = appGroupContainerURL
         }
 
         func disconnect() {
+            portPollTask?.cancel()
+            portPollTask = nil
             webView?.evaluateJavaScript("terminalBridge.disconnect()") { _, _ in }
         }
 
@@ -102,6 +106,8 @@ struct TerminalView: NSViewRepresentable {
                 connectToWebSocket()
 
             case "connected":
+                portPollTask?.cancel()
+                portPollTask = nil
                 webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
 
             case "error":
@@ -111,6 +117,7 @@ struct TerminalView: NSViewRepresentable {
             case "disconnected":
                 let code = data["code"] as? Int ?? 0
                 log.info("Terminal disconnected (code: \(code))")
+                startPortPolling()
 
             case "resize":
                 break
@@ -131,8 +138,34 @@ struct TerminalView: NSViewRepresentable {
                 log.warning("WebSocket port file not found or unreadable at \(portFile.path, privacy: .public)")
                 showFallbackMessage(); return
             }
+            lastConnectedPort = port
             log.info("Connecting to WebSocket on port \(port)")
             webView?.evaluateJavaScript("terminalBridge.connect(\(port))") { _, _ in }
+        }
+
+        /// Poll the App Group port file after a disconnect. If the companion app
+        /// restarted and is now listening on a different port, reconnect to it
+        /// instead of letting xterm.js endlessly retry the stale port.
+        private func startPortPolling() {
+            portPollTask?.cancel()
+            portPollTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(1))
+                    guard !Task.isCancelled, let self, let url = self.appGroupContainerURL else { return }
+
+                    let portFile = url.appendingPathComponent("terminal-server-port")
+                    guard let s = try? String(contentsOf: portFile, encoding: .utf8),
+                          let port = UInt16(s.trimmingCharacters(in: .whitespacesAndNewlines)),
+                          port > 0 else { continue }
+
+                    if port != self.lastConnectedPort {
+                        log.info("WebSocket port changed \(self.lastConnectedPort.map(String.init) ?? "nil") → \(port) — reconnecting")
+                        self.lastConnectedPort = port
+                        self.webView?.evaluateJavaScript("terminalBridge.connect(\(port))") { _, _ in }
+                        return
+                    }
+                }
+            }
         }
 
         private func showFallbackMessage() {
