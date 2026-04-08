@@ -359,6 +359,13 @@ final class CrateInstallManager {
                 + "Only pure Rust crates can be installed — for Python interop, use a Python package instead.\n\n"
                 + raw
         }
+        // Build script compilation failure: proc-macro or dependency resolution
+        // issue with the bundled toolchain (e.g. wasm-bindgen's build script)
+        if raw.contains("could not compile") && raw.contains("build script") {
+            return "A dependency's build script failed to compile with the bundled Rust toolchain. "
+                + "This crate may not be compatible with ConjureDSP's WebAssembly compilation.\n\n"
+                + raw
+        }
         // General build script failures: native/system dependencies
         if raw.contains("failed to run custom build command for") {
             return "This crate has a build script that failed during WebAssembly cross-compilation. "
