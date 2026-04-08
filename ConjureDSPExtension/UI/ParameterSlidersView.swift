@@ -124,12 +124,10 @@ struct ParameterSliderRow: View {
                 .labelsHidden()
                 .accessibilityIdentifier("\(label)Picker")
             } else if let meta = metadata {
-                DSPSlider(value: $value, range: meta.min...meta.max)
-                    .onTapGesture(count: 2) { value = meta.`default` }
+                DSPSlider(value: $value, range: meta.min...meta.max, onDoubleTap: { value = meta.`default` })
                     .accessibilityIdentifier("\(label)Slider")
             } else {
-                DSPSlider(value: $value, range: 0...1)
-                    .onTapGesture(count: 2) { value = 0.5 }
+                DSPSlider(value: $value, range: 0...1, onDoubleTap: { value = 0.5 })
                     .accessibilityIdentifier("\(label)Slider")
             }
 
@@ -237,6 +235,7 @@ struct ParameterSliderRow: View {
 private struct DSPSlider: View {
     @Binding var value: Float
     let range: ClosedRange<Float>
+    var onDoubleTap: (() -> Void)? = nil
 
     @State private var isDragging = false
 
@@ -289,6 +288,9 @@ private struct DSPSlider: View {
                         value = range.lowerBound + Float(newFraction) * (range.upperBound - range.lowerBound)
                     }
                     .onEnded { _ in isDragging = false }
+            )
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded { onDoubleTap?() }
             )
         }
         .frame(height: 20)
