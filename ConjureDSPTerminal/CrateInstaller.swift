@@ -129,6 +129,7 @@ final class CrateInstaller {
                 timestamp: Date().timeIntervalSince1970
             ))
             log.error("Crate install failed: \(error.localizedDescription, privacy: .public)")
+            cleanCargoCache()
         }
     }
 
@@ -500,6 +501,37 @@ final class CrateInstaller {
     static func isBuiltInCrate(_ name: String) -> Bool {
         let normalized = name.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "")
         return normalized == "conjuredsp"
+    }
+
+    // MARK: - Cargo cache cleanup
+
+    /// Removes downloaded crate sources and compressed archives from the cargo
+    /// registry cache when no user crates are installed. This prevents failed
+    /// installs from leaving behind hundreds of megabytes of unused data.
+    /// The registry index is kept since it's small and speeds up future installs.
+    private func cleanCargoCache() {
+        let installedCrates = readExistingUserCrates()
+        guard installedCrates.isEmpty else {
+            log.info("Skipping cargo cache cleanup — \(installedCrates.count) crate(s) installed")
+            return
+        }
+
+        let cargoHome = appGroupURL.appendingPathComponent("cargo-home")
+        let fm = FileManager.default
+
+        // registry/src/ contains extracted source code (~tens of MB per crate)
+        let registrySrc = cargoHome.appendingPathComponent("registry/src")
+        if fm.fileExists(atPath: registrySrc.path) {
+            try? fm.removeItem(at: registrySrc)
+            log.info("Cleaned cargo registry/src/")
+        }
+
+        // registry/cache/ contains compressed .crate archives
+        let registryCache = cargoHome.appendingPathComponent("registry/cache")
+        if fm.fileExists(atPath: registryCache.path) {
+            try? fm.removeItem(at: registryCache)
+            log.info("Cleaned cargo registry/cache/")
+        }
     }
 
     // MARK: - Result file
