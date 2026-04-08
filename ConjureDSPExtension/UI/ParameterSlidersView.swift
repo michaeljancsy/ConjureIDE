@@ -125,9 +125,11 @@ struct ParameterSliderRow: View {
                 .accessibilityIdentifier("\(label)Picker")
             } else if let meta = metadata {
                 DSPSlider(value: $value, range: meta.min...meta.max)
+                    .onTapGesture(count: 2) { value = meta.`default` }
                     .accessibilityIdentifier("\(label)Slider")
             } else {
                 DSPSlider(value: $value, range: 0...1)
+                    .onTapGesture(count: 2) { value = 0.5 }
                     .accessibilityIdentifier("\(label)Slider")
             }
 
