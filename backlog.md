@@ -23,6 +23,9 @@
 ### Bugs
 - Cmd+Shift+A triggers Ableton's project save as dialog instead of the extension's save as dialog
 
+### UX
+- Make the ConjureDSPTerminal (companion app) icon visible in the Dock so users can see when it's running
+
 ### Other
 - Export AU instantiation tests: add integration tests that instantiate exported AUs via `AVAudioUnitComponentManager` (the full DAW loading path) rather than just testing the Rust FFI directly. Would catch issues like Debug template stubs, `findPythonHome` sandbox failures, PluginKit registration, and parameter tree setup — bugs that the current `ExportDSPIntegrationTests` miss because they bypass the Swift AU class.
 - Self-contained Python exports: option to bundle a Python runtime directory inside the exported AU (in Resources/python-dist), making Python exports shareable across machines without requiring ConjureDSP to be installed. Tradeoff is ~100MB per exported AU.
