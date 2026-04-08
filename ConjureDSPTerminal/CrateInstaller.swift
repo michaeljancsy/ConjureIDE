@@ -177,12 +177,11 @@ final class CrateInstaller {
         }
 
         // Merge new crates with existing user-requested crates.
-        // Normalize names: Cargo treats hyphens and underscores as equivalent,
-        // but we use underscores consistently (matching rlib filenames).
+        // Use hyphens as the canonical form (matching crates.io and Cargo.toml).
         var allCrates = readExistingUserCrates()
         for crate in newCrates {
-            let normalized = crate.name.replacingOccurrences(of: "-", with: "_")
-            allCrates[normalized] = crate.version
+            let canonical = crate.name.replacingOccurrences(of: "_", with: "-")
+            allCrates[canonical] = crate.version
         }
 
         try await rebuildAllCrates(allCrates)
@@ -193,9 +192,9 @@ final class CrateInstaller {
     private func uninstallCrates(_ crateNames: [String]) async throws {
         var allCrates = readExistingUserCrates()
         for name in crateNames {
-            // Normalize to underscores to match manifest keys
-            let normalized = name.replacingOccurrences(of: "-", with: "_")
-            allCrates.removeValue(forKey: normalized)
+            // Normalize to hyphens to match manifest keys
+            let canonical = name.replacingOccurrences(of: "_", with: "-")
+            allCrates.removeValue(forKey: canonical)
         }
 
         if allCrates.isEmpty {
@@ -228,7 +227,8 @@ final class CrateInstaller {
         // Write empty lib.rs (cargo needs a source file)
         try "".write(to: tempDir.appendingPathComponent("src/lib.rs"), atomically: true, encoding: .utf8)
 
-        // Write Cargo.toml with all user-requested crates
+        // Write Cargo.toml with all user-requested crates.
+        // Keys use hyphens (the canonical crates.io / Cargo.toml form).
         var depsSection = ""
         for (name, version) in userCrates.sorted(by: { $0.key < $1.key }) {
             depsSection += "\(name) = \"\(version)\"\n"
@@ -254,17 +254,39 @@ final class CrateInstaller {
         let cargoHome = appGroupURL.appendingPathComponent("cargo-home").path
         try fm.createDirectory(atPath: cargoHome, withIntermediateDirectories: true)
 
+        // Use .cargo/config.toml to pass --sysroot only for wasm32-wasip1.
+        // This is critical: cargo also invokes rustc for host-target build scripts
+        // and proc-macros. Those MUST use the default sysroot (which includes host
+        // standard libraries). A rustc wrapper script that conditionally passes
+        // --sysroot interferes with cargo's --extern flag passing for build-script
+        // dependencies, causing "can't find crate" errors for proc-macros.
+        //
+        // Cargo config's [target.wasm32-wasip1] rustflags only apply to the cross
+        // target, leaving host compilations untouched.
+        let cargoConfigDir = tempDir.appendingPathComponent(".cargo")
+        try fm.createDirectory(at: cargoConfigDir, withIntermediateDirectories: true)
+        let cargoConfig = """
+        [target.wasm32-wasip1]
+        rustflags = ["--sysroot", "\(sysrootPath)"]
+        """
+        try cargoConfig.write(
+            to: cargoConfigDir.appendingPathComponent("config.toml"),
+            atomically: true, encoding: .utf8
+        )
+
         // Create a rustc wrapper script that sets DYLD_LIBRARY_PATH before exec.
         // macOS SIP strips DYLD_* env vars from child processes of signed binaries,
         // so cargo's spawned rustc won't inherit our DYLD_LIBRARY_PATH directly.
+        // The wrapper does NOT set --sysroot (handled by cargo config above).
         let rustcWrapper = tempDir.appendingPathComponent("rustc-wrapper.sh")
-        let wrapperScript = "#!/bin/bash\nexport DYLD_LIBRARY_PATH=\"\(sysrootPath)/lib\"\nexec \"\(rustcPath)\" --sysroot \"\(sysrootPath)\" \"$@\"\n"
+        let wrapperScript = """
+        #!/bin/bash
+        export DYLD_LIBRARY_PATH="\(sysrootPath)/lib"
+        exec "\(rustcPath)" "$@"
+
+        """
         try wrapperScript.write(to: rustcWrapper, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rustcWrapper.path)
-
-        // Bake --sysroot into the wrapper script instead of RUSTFLAGS,
-        // because RUSTFLAGS splits on whitespace and the sysroot path
-        // may contain spaces (e.g. "Group Containers").
         var env: [String: String] = [
             "CARGO_HOME": cargoHome,
             "RUSTC": rustcWrapper.path,
@@ -353,13 +375,13 @@ final class CrateInstaller {
             let destFile = rlibURL.appendingPathComponent(filename)
             try fm.copyItem(at: file, to: destFile)
 
-            // Determine version from Cargo.lock
-            // Crate names in Cargo.lock use hyphens, rlib filenames use underscores
-            let normalizedName = crateName.replacingOccurrences(of: "_", with: "-")
-            let version = resolvedVersions[normalizedName] ?? resolvedVersions[crateName] ?? "unknown"
-            let isUserRequested = userCrates.keys.contains(normalizedName) || userCrates.keys.contains(crateName)
+            // Convert rlib underscore name to hyphenated canonical form.
+            // Cargo.lock and crates.io use hyphens; rlib filenames use underscores.
+            let canonicalName = crateName.replacingOccurrences(of: "_", with: "-")
+            let version = resolvedVersions[canonicalName] ?? resolvedVersions[crateName] ?? "unknown"
+            let isUserRequested = userCrates.keys.contains(canonicalName)
 
-            manifestCrates[crateName] = CrateManifest.CrateEntry(
+            manifestCrates[canonicalName] = CrateManifest.CrateEntry(
                 version: version,
                 rlib: filename,
                 userRequested: isUserRequested
