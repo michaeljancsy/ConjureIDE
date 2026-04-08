@@ -20,6 +20,7 @@
 ### Post-Launch
 - Python package management follow-up: vendored exports (import analysis + export UI), community browser dependency badges
 - Support pyo3/numpy-dependent Rust crates in WASM: crates like `spectrograms` that depend on pyo3+numpy can't cross-compile to wasm32-wasip1 because pyo3's build script requires a Python interpreter. We already bundle Python 3.14 and numpy — investigate setting `PYO3_CROSS_PYTHON_VERSION` and `PYO3_CROSS_LIB_DIR` in the cargo environment so pyo3-based crates can compile. Would unlock the whole pyo3/numpy Rust ecosystem for user scripts.
+- Native Rust compilation mode ("use at your own risk"): opt-in alternative to WASM that compiles user scripts + crates natively to aarch64-apple-darwin as a dylib, loaded at runtime. Unlocks the full Rust crate ecosystem (pyo3, openssl, C bindings, etc.) but loses WASM fuel metering (no infinite loop protection). Could be a per-preset toggle or a global setting. Requires a separate native compilation path in RustCompiler, native crate builds in CrateInstaller, and a native backend alongside wasm_backend in the kernel.
 
 ### Bugs
 - Cmd+Shift+A triggers Ableton's project save as dialog instead of the extension's save as dialog
