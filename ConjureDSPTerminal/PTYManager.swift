@@ -197,9 +197,16 @@ final class PTYManager {
                 }
             } else {
                 ptyLog.warning("Claude Code CLI not found — showing install prompt")
-                // Alias points to bare `command claude` so it works once the user installs.
-                let fullCmd = buildClaudeFullCmd(path: "command claude")
-                let aliasCmd = "alias claude=\(shellQuote(fullCmd))"
+                // Build alias with `command claude` unquoted — shellQuote(path:) is for file
+                // paths only; applying it to "command claude" would produce a broken alias.
+                var aliasValue = "command claude --allowedTools 'mcp__conjuredsp__*'"
+                if let contextPath = contextFilePath {
+                    aliasValue += " --append-system-prompt-file \(shellQuote(contextPath))"
+                }
+                if let mcpPath = mcpConfigPath {
+                    aliasValue += " --mcp-config \(shellQuote(mcpPath))"
+                }
+                let aliasCmd = "alias claude=\(shellQuote(aliasValue))"
                 let cmd = modeSetup + "\n" + aliasCmd + "\n" + buildWelcomeCommand(mcpURL: mcpURL) + "\n"
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                     self?.write(cmd)
