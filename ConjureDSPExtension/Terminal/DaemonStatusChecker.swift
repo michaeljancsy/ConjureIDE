@@ -6,6 +6,7 @@
 //  to determine whether the ConjureDSP Terminal daemon is running.
 //
 
+import AppKit
 import Combine
 import Darwin
 import Foundation
@@ -19,6 +20,7 @@ final class DaemonStatusChecker: ObservableObject {
 
     private let pollInterval: TimeInterval
     private var timer: Timer?
+    private var hasAttemptedLaunch = false
 
     /// Override for testing — when non-nil, `checkPortFile()` reads from this
     /// directory instead of the App Group container.
@@ -33,6 +35,11 @@ final class DaemonStatusChecker: ObservableObject {
         isDaemonAvailable = checkPortFile()
         log.info("Daemon status check started, available: \(self.isDaemonAvailable)")
 
+        // If not available, try to auto-launch the terminal via URL scheme
+        if !isDaemonAvailable {
+            attemptAutoLaunch()
+        }
+
         // Poll at the configured interval
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
@@ -43,6 +50,35 @@ final class DaemonStatusChecker: ObservableObject {
                     log.info("Daemon availability changed: \(available)")
                     self.isDaemonAvailable = available
                 }
+            }
+        }
+    }
+
+    /// Attempt to launch the terminal app by its bundle path.
+    /// Uses `openApplication(at:)` to avoid Apple Events TCC prompts that
+    /// `NSWorkspace.shared.open(url:)` with a custom URL scheme triggers.
+    /// Only tries once per checker lifetime to avoid spamming.
+    func attemptAutoLaunch() {
+        guard !hasAttemptedLaunch, portFileDirectoryOverride == nil else { return }
+        hasAttemptedLaunch = true
+
+        // The terminal is embedded at ConjureDSP.app/Contents/Library/ConjureDSPTerminal.app.
+        // From the extension at ConjureDSP.app/Contents/PlugIns/ConjureDSPExtension.appex:
+        let terminalURL = Bundle.main.bundleURL            // .appex
+            .deletingLastPathComponent()                   // Contents/PlugIns/
+            .deletingLastPathComponent()                   // Contents/
+            .appendingPathComponent("Library/ConjureDSPTerminal.app")
+
+        guard FileManager.default.fileExists(atPath: terminalURL.path) else {
+            log.warning("Terminal app not found at \(terminalURL.path, privacy: .public)")
+            return
+        }
+
+        log.info("Attempting to auto-launch terminal at \(terminalURL.path, privacy: .public)")
+        let config = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.openApplication(at: terminalURL, configuration: config) { _, error in
+            if let error {
+                log.error("Failed to launch terminal: \(error.localizedDescription, privacy: .public)")
             }
         }
     }

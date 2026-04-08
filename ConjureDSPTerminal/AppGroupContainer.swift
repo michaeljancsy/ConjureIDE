@@ -1,38 +1,31 @@
-import Darwin
 import Foundation
 
 /// Single point of truth for the shared container URL.
 ///
-/// The terminal companion is NOT sandboxed, so accessing ~/Library/Group Containers/
-/// triggers macOS 26 TCC "access data from other apps" prompts. Primary storage
-/// uses ~/Library/Application Support/ConjureDSP/ (no TCC prompt).
+/// Uses `containerURL(forSecurityApplicationGroupIdentifier:)` to access the
+/// App Group container. This API signals the App Group entitlement to macOS,
+/// avoiding macOS 26 TCC "access data from other apps" prompts that occur
+/// when constructing the ~/Library/Group Containers/ path manually.
 ///
-/// `groupContainersURL` provides write-through access to Group Containers so
-/// DAW-hosted (sandboxed) extensions can find provisioned runtimes.
+/// Both the terminal and the sandboxed AU extension resolve to the same
+/// directory via this API, so all shared data (runtimes, port files, presets)
+/// is visible to both processes without mirroring.
 enum AppGroupContainer {
     static let id = "group.com.MichaelJancsy.ConjureDSP"
 
-    /// Primary location — Application Support (no TCC prompt).
     static let url: URL = {
+        if let url = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: id
+        ) {
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
+        // Fallback for processes without the App Group entitlement (shouldn't happen).
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first!
         let url = appSupport.appendingPathComponent("ConjureDSP")
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
-    }()
-
-    /// Group Containers URL for write-through to DAW-accessible location.
-    /// Accessing this WILL trigger a TCC prompt on macOS 26 from unsandboxed processes.
-    static let groupContainersURL: URL = {
-        let home: String
-        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-            home = String(cString: dir)
-        } else {
-            home = FileManager.default.homeDirectoryForCurrentUser.path
-        }
-        return URL(fileURLWithPath: home)
-            .appendingPathComponent("Library/Group Containers")
-            .appendingPathComponent(id)
     }()
 }

@@ -71,25 +71,11 @@ APPCAST_DIR="$OUTPUT_DIR/appcast"
 mkdir -p "$APPCAST_DIR"
 cp "$DMG_PATH" "$APPCAST_DIR/"
 
-if command -v wrangler >/dev/null 2>&1; then
+# Sync historic DMGs from R2 for multi-version appcast.
+# Best-effort — if rclone isn't configured, we just use what's on disk.
+if command -v rclone >/dev/null 2>&1; then
     echo "  Syncing historic DMGs from R2..."
-    R2_KEYS=$(wrangler r2 object list "$R2_BUCKET" --remote --json 2>/dev/null \
-              | /usr/bin/python3 -c "import json,sys
-try:
-    data = json.load(sys.stdin)
-    objs = data.get('result', data) if isinstance(data, dict) else data
-    for o in objs:
-        k = o.get('key', '')
-        if k.endswith('.dmg'):
-            print(k)
-except Exception:
-    pass" 2>/dev/null || true)
-    for KEY in $R2_KEYS; do
-        if [ ! -f "$APPCAST_DIR/$KEY" ]; then
-            echo "    Fetching $KEY..."
-            wrangler r2 object get "$R2_BUCKET/$KEY" --file "$APPCAST_DIR/$KEY" --remote || true
-        fi
-    done
+    rclone copy "r2:${R2_BUCKET}" "$APPCAST_DIR" --include "*.dmg" 2>/dev/null || true
 fi
 
 # generate_appcast scans the directory for archives, extracts version info
@@ -172,29 +158,24 @@ fi
 
 echo ""
 echo "[6/6] Uploading to R2..."
-if command -v wrangler >/dev/null 2>&1 && [ -f "$APPCAST_DIR/appcast.xml" ]; then
+R2_REMOTE="r2:${R2_BUCKET}"
+if command -v rclone >/dev/null 2>&1 && [ -f "$APPCAST_DIR/appcast.xml" ]; then
     DMG_NAME="ConjureDSP-${VERSION}.dmg"
     echo "  Uploading $DMG_NAME..."
-    wrangler r2 object put "${R2_BUCKET}/${DMG_NAME}" \
-        --file "$APPCAST_DIR/${DMG_NAME}" \
-        --content-type "application/x-apple-diskimage" \
-        --remote
+    rclone copyto "$APPCAST_DIR/${DMG_NAME}" "${R2_REMOTE}/${DMG_NAME}" \
+        --header-upload "Content-Type: application/x-apple-diskimage"
     echo "  Uploading appcast.xml..."
-    wrangler r2 object put "${R2_BUCKET}/appcast.xml" \
-        --file "$APPCAST_DIR/appcast.xml" \
-        --content-type "application/xml" \
-        --remote
+    rclone copyto "$APPCAST_DIR/appcast.xml" "${R2_REMOTE}/appcast.xml" \
+        --header-upload "Content-Type: application/xml"
     if [ -f "$APPCAST_DIR/versions.html" ]; then
         echo "  Uploading versions.html..."
-        wrangler r2 object put "${R2_BUCKET}/versions.html" \
-            --file "$APPCAST_DIR/versions.html" \
-            --content-type "text/html; charset=utf-8" \
-            --remote
+        rclone copyto "$APPCAST_DIR/versions.html" "${R2_REMOTE}/versions.html" \
+            --header-upload "Content-Type: text/html; charset=utf-8"
     fi
     echo "  Uploaded to ${UPDATES_BASE_URL}/"
 else
-    echo "  WARNING: skipping upload. Install wrangler (npm i -g wrangler) and"
-    echo "  authenticate, or manually upload these files to the R2 bucket"
+    echo "  WARNING: skipping upload. Install rclone and configure the 'r2' remote,"
+    echo "  or manually upload these files to the R2 bucket"
     echo "  ${R2_BUCKET} (served at ${UPDATES_BASE_URL}/):"
     echo "    - $APPCAST_DIR/ConjureDSP-${VERSION}.dmg"
     echo "    - $APPCAST_DIR/appcast.xml"

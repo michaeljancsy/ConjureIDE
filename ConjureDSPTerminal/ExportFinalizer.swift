@@ -15,28 +15,19 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.Terminal", cat
 
 final class ExportFinalizer {
     let appGroupURL: URL
-    let groupContainersURL: URL
 
     private var exportsDirectory: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return appSupport.appendingPathComponent("ConjureDSP/Exports")
     }
 
-    init(appGroupURL: URL, groupContainersURL: URL) {
+    init(appGroupURL: URL) {
         self.appGroupURL = appGroupURL
-        self.groupContainersURL = groupContainersURL
     }
 
-    /// Called from the file-watch loop. Checks both App Group locations for pending exports.
+    /// Called from the file-watch loop. Checks the App Group container for pending exports.
     func checkForPendingExports() async {
-        let directories = [
-            appGroupURL.appendingPathComponent("PendingExports"),
-            groupContainersURL.appendingPathComponent("PendingExports"),
-        ]
-
-        for dir in directories {
-            await processExportsIn(dir)
-        }
+        await processExportsIn(appGroupURL.appendingPathComponent("PendingExports"))
     }
 
     private func processExportsIn(_ directory: URL) async {

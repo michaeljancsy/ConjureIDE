@@ -51,21 +51,50 @@ echo "=== Stripping unnecessary files to reduce bundle size ==="
 
 APPEX_RES="$APP_PATH/Contents/PlugIns/ConjureDSPExtension.appex/Contents/Resources"
 
-# Remove Python test suites, __pycache__, and pip (~140MB)
+# Remove extension's python-dist entirely — the terminal provisions the runtime
+# to the App Group container; the extension reads from there at runtime.
+# (libpython3.14t.dylib stays in the extension's Frameworks/ for linking.)
 if [ -d "$APPEX_RES/python-dist" ]; then
-    rm -rf "$APPEX_RES/python-dist/lib/python3.14t/test"
-    find "$APPEX_RES/python-dist" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
-    find "$APPEX_RES/python-dist/lib/python3.14t/site-packages" -type d -name 'tests' -exec rm -rf {} + 2>/dev/null || true
-    rm -rf "$APPEX_RES/python-dist/lib/python3.14t/site-packages/pip"
-    rm -rf "$APPEX_RES/python-dist/lib/python3.14t/site-packages/pip-"*.dist-info
-    echo "Stripped Python test/cache/pip files"
+    rm -rf "$APPEX_RES/python-dist"
+    echo "Removed extension python-dist (provisioned by terminal)"
 fi
 
-# Remove sanitizer runtimes and cargo from rustc-dist (~39MB)
+# Strip terminal's python-dist: remove test suites, __pycache__, pip, and unused stdlib
+TERMINAL_PATH="$APP_PATH/Contents/Library/ConjureDSPTerminal.app"
+TERMINAL_RES="$TERMINAL_PATH/Contents/Resources"
+if [ -d "$TERMINAL_RES/python-dist" ]; then
+    PYDIST="$TERMINAL_RES/python-dist/lib/python3.14t"
+    # Test suites and caches
+    rm -rf "$PYDIST/test"
+    find "$TERMINAL_RES/python-dist" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+    find "$PYDIST/site-packages" -type d -name 'tests' -exec rm -rf {} + 2>/dev/null || true
+    # pip (not needed at runtime — uv handles package management)
+    rm -rf "$PYDIST/site-packages/pip" "$PYDIST/site-packages/pip-"*.dist-info
+    # Unused stdlib modules (not needed for DSP scripting)
+    rm -rf "$PYDIST/tkinter" "$PYDIST/idlelib" "$PYDIST/turtledemo" "$PYDIST/ensurepip" "$PYDIST/lib2to3" "$PYDIST/pydoc_data"
+    rm -f "$PYDIST/turtle.py" "$PYDIST/doctest.py"
+    rm -f "$PYDIST/lib-dynload/_tkinter"*.so "$PYDIST/lib-dynload/_ctypes_test"*.so
+    # Type stubs, Cython defs, C headers (not needed at runtime)
+    find "$PYDIST/site-packages" -name '*.pyi' -delete 2>/dev/null || true
+    find "$PYDIST/site-packages" -name '*.pxd' -delete 2>/dev/null || true
+    find "$PYDIST/site-packages" -name '*.h' -delete 2>/dev/null || true
+    # Test .so files in site-packages (e.g. _ctest, _cytest, _test_internal)
+    find "$PYDIST/site-packages" -name '*test*' -name '*.so' -delete 2>/dev/null || true
+    # numpy f2py (Fortran-to-Python compiler, not needed for DSP)
+    rm -rf "$PYDIST/site-packages/numpy/f2py"
+    echo "Stripped terminal python-dist"
+fi
+
+# Remove sanitizer runtimes from extension's rustc-dist (~10MB)
 if [ -d "$APPEX_RES/rustc-dist" ]; then
     rm -f "$APPEX_RES/rustc-dist/lib/rustlib/aarch64-apple-darwin/lib"/librustc-stable_rt.*.dylib
-    rm -f "$APPEX_RES/rustc-dist/bin/cargo"
-    echo "Stripped rustc sanitizer runtimes and cargo"
+    echo "Stripped extension rustc sanitizer runtimes"
+fi
+
+# Remove terminal's rustc-dist entirely — it finds the extension's copy at runtime
+if [ -d "$TERMINAL_RES/rustc-dist" ]; then
+    rm -rf "$TERMINAL_RES/rustc-dist"
+    echo "Removed terminal rustc-dist (uses extension's copy)"
 fi
 
 echo "=== Re-signing bundled components for notarization ==="
@@ -150,6 +179,27 @@ if [ -d "$RUSTC_DST" ]; then
     codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$RUSTC_DST/lib/rustlib/aarch64-apple-darwin/bin/rust-lld"
     codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$RUSTC_DST/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/wasm-ld"
     echo "Re-signed rustc-dist binaries"
+fi
+
+# Re-sign embedded ConjureDSPTerminal.app
+if [ -d "$TERMINAL_PATH" ]; then
+    # Sign Python .so/.dylib files in terminal
+    if [ -d "$TERMINAL_RES/python-dist" ]; then
+        find "$TERMINAL_RES/python-dist" \( -name '*.so' -o -name '*.dylib' \) -type f \
+            -exec codesign --force --sign "$SIGN_ID" --options runtime --timestamp {} \;
+        # Sign python3 binary
+        [ -f "$TERMINAL_RES/python-dist/bin/python3" ] && \
+            codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$TERMINAL_RES/python-dist/bin/python3"
+        echo "Re-signed terminal python-dist binaries"
+    fi
+    # Sign uv binary
+    [ -f "$TERMINAL_RES/uv" ] && \
+        codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$TERMINAL_RES/uv"
+    # Sign the terminal app bundle
+    codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
+        --entitlements "$PROJECT_DIR/ConjureDSPTerminal/ConjureDSPTerminal.entitlements" \
+        "$TERMINAL_PATH"
+    echo "Re-signed ConjureDSPTerminal"
 fi
 
 # Re-sign the extension and app after modifying their contents.
