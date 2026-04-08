@@ -100,6 +100,85 @@ import Testing
         #expect(portFile.deletingLastPathComponent() == AppGroupContainer.url)
     }
 
+    // MARK: - WebSocket port change detection (instance-based)
+
+    @Test("Detects wsPort change in instance JSON after companion app restart")
+    func detectsWsPortChange() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        let instancesDir = tempDir.appendingPathComponent("mcp-instances")
+        try FileManager.default.createDirectory(at: instancesDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let instanceFile = instancesDir.appendingPathComponent("test-instance.json")
+
+        // Companion app writes initial wsPort
+        var info = MCPInstanceInfo(mcpPort: 8000)
+        info.wsPort = 19836
+        try info.write(to: instanceFile)
+
+        let initial = MCPInstanceInfo.read(from: instanceFile)
+        #expect(initial?.wsPort == 19836)
+
+        // Companion app restarts — writes new wsPort
+        var updated = MCPInstanceInfo(mcpPort: 8001)
+        updated.wsPort = 49152
+        try updated.write(to: instanceFile)
+
+        let after = MCPInstanceInfo.read(from: instanceFile)
+        #expect(after?.wsPort == 49152)
+        #expect(after?.wsPort != initial?.wsPort, "Poll should detect wsPort changed")
+    }
+
+    @Test("Instance JSON with nil wsPort during companion app restart")
+    func instanceJsonNilWsPortDuringRestart() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        let instancesDir = tempDir.appendingPathComponent("mcp-instances")
+        try FileManager.default.createDirectory(at: instancesDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let instanceFile = instancesDir.appendingPathComponent("test-instance.json")
+
+        // AU writes instance file but companion app hasn't assigned wsPort yet
+        let info = MCPInstanceInfo(mcpPort: 8000)
+        try info.write(to: instanceFile)
+
+        let read = MCPInstanceInfo.read(from: instanceFile)
+        #expect(read?.wsPort == nil, "Should handle nil wsPort gracefully")
+    }
+
+    @Test("Instance JSON missing file handled gracefully")
+    func instanceJsonMissingFile() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        let instanceFile = tempDir
+            .appendingPathComponent("mcp-instances")
+            .appendingPathComponent("nonexistent.json")
+
+        #expect(MCPInstanceInfo.read(from: instanceFile) == nil)
+    }
+
+    @Test("Unchanged wsPort does not trigger reconnect")
+    func unchangedWsPort() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        let instancesDir = tempDir.appendingPathComponent("mcp-instances")
+        try FileManager.default.createDirectory(at: instancesDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let instanceFile = instancesDir.appendingPathComponent("test-instance.json")
+
+        var info = MCPInstanceInfo(mcpPort: 8000)
+        info.wsPort = 19836
+        try info.write(to: instanceFile)
+
+        // Read twice — same wsPort both times
+        let read1 = MCPInstanceInfo.read(from: instanceFile)
+        let read2 = MCPInstanceInfo.read(from: instanceFile)
+        #expect(read1?.wsPort == read2?.wsPort, "Same wsPort should not trigger reconnect")
+    }
+
     @Test("PythonRuntime directory resolves correctly")
     func pythonRuntimeDirectory() {
         let runtimeURL = AppGroupContainer.url.appendingPathComponent("PythonRuntime")

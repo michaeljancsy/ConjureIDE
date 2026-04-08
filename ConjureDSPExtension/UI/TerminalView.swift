@@ -68,6 +68,7 @@ struct TerminalView: NSViewRepresentable {
 
     // MARK: - Coordinator
 
+    @MainActor
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         weak var webView: WKWebView?
         var isTerminalReady = false
@@ -75,6 +76,8 @@ struct TerminalView: NSViewRepresentable {
         var pendingTheme: ColorScheme?
         let appGroupContainerURL: URL?
         let instanceID: String
+        private var lastConnectedPort: UInt16?
+        private var portPollTask: Task<Void, Never>?
 
         init(appGroupContainerURL: URL?, instanceID: String) {
             self.appGroupContainerURL = appGroupContainerURL
@@ -82,6 +85,8 @@ struct TerminalView: NSViewRepresentable {
         }
 
         func disconnect() {
+            portPollTask?.cancel()
+            portPollTask = nil
             webView?.evaluateJavaScript("terminalBridge.disconnect()") { _, _ in }
         }
 
@@ -107,6 +112,8 @@ struct TerminalView: NSViewRepresentable {
                 connectToWebSocket()
 
             case "connected":
+                portPollTask?.cancel()
+                portPollTask = nil
                 webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
 
             case "error":
@@ -116,6 +123,7 @@ struct TerminalView: NSViewRepresentable {
             case "disconnected":
                 let code = data["code"] as? Int ?? 0
                 log.info("Terminal disconnected (code: \(code))")
+                startPortPolling()
 
             case "resize":
                 break
@@ -138,6 +146,7 @@ struct TerminalView: NSViewRepresentable {
                 .appendingPathComponent("\(instanceID).json")
             if let info = MCPInstanceInfo.read(from: instanceFile),
                let wsPort = info.wsPort, wsPort > 0 {
+                lastConnectedPort = wsPort
                 log.info("Connecting to WebSocket on port \(wsPort) (instance \(self.instanceID, privacy: .public))")
                 webView?.evaluateJavaScript("terminalBridge.connect(\(wsPort))") { _, _ in }
                 return
@@ -151,6 +160,32 @@ struct TerminalView: NSViewRepresentable {
             } else {
                 log.warning("WebSocket port not available after 30 retries for instance \(self.instanceID, privacy: .public)")
                 showFallbackMessage()
+            }
+        }
+
+        /// Poll the instance JSON file after a disconnect. If the companion app
+        /// restarted and assigned a new wsPort, reconnect to it instead of
+        /// letting xterm.js endlessly retry the stale port.
+        private func startPortPolling() {
+            portPollTask?.cancel()
+            portPollTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(1))
+                    guard !Task.isCancelled, let self, let url = self.appGroupContainerURL else { return }
+
+                    let instanceFile = url
+                        .appendingPathComponent("mcp-instances")
+                        .appendingPathComponent("\(self.instanceID).json")
+                    guard let info = MCPInstanceInfo.read(from: instanceFile),
+                          let wsPort = info.wsPort, wsPort > 0 else { continue }
+
+                    if wsPort != self.lastConnectedPort {
+                        log.info("WebSocket port changed \(self.lastConnectedPort.map(String.init) ?? "nil") → \(wsPort) — reconnecting (instance \(self.instanceID, privacy: .public))")
+                        self.lastConnectedPort = wsPort
+                        self.webView?.evaluateJavaScript("terminalBridge.connect(\(wsPort))") { _, _ in }
+                        return
+                    }
+                }
             }
         }
 
