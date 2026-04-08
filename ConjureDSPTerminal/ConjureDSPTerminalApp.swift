@@ -2,9 +2,14 @@
 //  ConjureDSPTerminalApp.swift
 //  ConjureDSPTerminal
 //
-//  Minimal companion app that runs the Claude Code terminal outside the
-//  AU extension sandbox. The AU extension communicates with this app via
-//  the App Group container for port discovery and lifecycle signaling.
+//  Companion app that runs Claude Code terminal sessions outside the AU
+//  extension sandbox. Supports multiple simultaneous AU instances — each
+//  gets its own dedicated PTY + WebSocket pair.
+//
+//  Discovery uses a directory of JSON files in the App Group container:
+//    mcp-instances/{uuid}.json
+//  Each AU writes { mcpPort, pid, createdAt }. This app watches the
+//  directory, starts a session per instance, and writes wsPort back.
 //
 
 import SwiftUI
@@ -37,29 +42,42 @@ struct ConjureDSPTerminalApp: App {
     }
 }
 
+// MARK: - Instance Session
+
+/// One PTY + WebSocket pair for a single AU instance.
+@MainActor
+class InstanceSession {
+    let uuid: String
+    let mcpPort: UInt16
+    var wsServer: WebSocketServer?
+    var pty: PTYManager?
+    var wsPort: UInt16?
+    var healthCheckFailCount: Int = 0
+    var claudeState: String = "Idle"
+
+    init(uuid: String, mcpPort: UInt16) {
+        self.uuid = uuid
+        self.mcpPort = mcpPort
+    }
+}
+
 // MARK: - Server
 
 @MainActor
 @Observable
 class TerminalAppServer {
     private(set) var status: String = "Starting..."
-    private(set) var isRunning = false
-    private(set) var claudeState: String = "Idle"
+    private(set) var activeSessionCount: Int = 0
 
-    private var wsServer: WebSocketServer?
-    private var pty: PTYManager?
+    private var sessions: [String: InstanceSession] = [:]
     private var watchTask: Task<Void, Never>?
-    private var currentMCPPort: UInt16 = 0
-    private var healthCheckFailCount = 0
-    private let healthCheckThreshold = 3  // consecutive failures before reset
+    private let healthCheckThreshold = 3
     private var packageInstaller: PackageInstaller?
     private var crateInstaller: CrateInstaller?
     private var exportFinalizer: ExportFinalizer?
     private var exportNotificationObserver: NSObjectProtocol?
 
     /// URL of the shared Python runtime in the App Group container.
-    /// This is the single authoritative Python installation used by the AU extension,
-    /// package manager, and exported AUs.
     static let pythonRuntimeURL: URL = AppGroupContainer.url.appendingPathComponent("PythonRuntime")
 
     func start() {
@@ -67,7 +85,6 @@ class TerminalAppServer {
         status = "Waiting for ConjureDSP plugin..."
 
         // Provision shared runtimes to the App Group container.
-        // uv/rustc-dist must be provisioned before installer init so they can find binaries.
         DispatchQueue.global(qos: .utility).async { [self] in
             Self.installPythonRuntimeIfNeeded()
             Self.provisionUVIfNeeded()
@@ -94,8 +111,6 @@ class TerminalAppServer {
                 )
                 log.info("Export finalizer ready")
 
-                // Listen for DistributedNotification as a fast-path trigger
-                // (avoids waiting for next poll cycle)
                 self.exportNotificationObserver = DistributedNotificationCenter.default().addObserver(
                     forName: Notification.Name("com.MichaelJancsy.ConjureDSP.pendingExport"),
                     object: nil,
@@ -109,207 +124,15 @@ class TerminalAppServer {
             }
         }
 
+        // Clean up stale instance files from previous runs
+        cleanupStaleInstances()
+
         startWatching()
     }
 
-    /// Copies the bundled Python distribution to the shared container so the AU
-    /// extension and package manager can use it. No-op if already installed (except
-    /// for the conjuredsp package, which is always updated to pick up new modules).
-    nonisolated static func installPythonRuntimeIfNeeded() {
-        let runtimeURL = pythonRuntimeURL
+    // MARK: - Instance directory watching
 
-        guard let bundledPythonDist = Bundle.main.resourceURL?.appendingPathComponent("python-dist"),
-              FileManager.default.fileExists(atPath: bundledPythonDist.path) else {
-            log.error("Bundled python-dist not found in Terminal app bundle")
-            SentryHelper.capture("Bundled python-dist not found", level: .error, category: "terminal.python")
-            return
-        }
-
-        let stdlibPath = runtimeURL.appendingPathComponent("lib/python3.14t").path
-        if FileManager.default.fileExists(atPath: stdlibPath) {
-            log.info("Shared Python runtime already installed at \(runtimeURL.path, privacy: .public)")
-        } else {
-            do {
-                let fm = FileManager.default
-
-                // Copy bin/python3
-                let srcBin = bundledPythonDist.appendingPathComponent("bin/python3")
-                let dstBin = runtimeURL.appendingPathComponent("bin")
-                try fm.createDirectory(at: dstBin, withIntermediateDirectories: true)
-                let dstPython = dstBin.appendingPathComponent("python3")
-                if fm.fileExists(atPath: dstPython.path) {
-                    try fm.removeItem(at: dstPython)
-                }
-                try fm.copyItem(at: srcBin, to: dstPython)
-
-                // Copy lib/libpython3.14t.dylib
-                let srcDylib = bundledPythonDist.appendingPathComponent("lib/libpython3.14t.dylib")
-                let dstLib = runtimeURL.appendingPathComponent("lib")
-                try fm.createDirectory(at: dstLib, withIntermediateDirectories: true)
-                let dstDylib = dstLib.appendingPathComponent("libpython3.14t.dylib")
-                if fm.fileExists(atPath: dstDylib.path) {
-                    try fm.removeItem(at: dstDylib)
-                }
-                try fm.copyItem(at: srcDylib, to: dstDylib)
-
-                // Copy lib/python3.14t/ (stdlib + numpy + scipy)
-                let srcStdlib = bundledPythonDist.appendingPathComponent("lib/python3.14t")
-                let dstStdlib = dstLib.appendingPathComponent("python3.14t")
-                if fm.fileExists(atPath: dstStdlib.path) {
-                    try fm.removeItem(at: dstStdlib)
-                }
-                try fm.copyItem(at: srcStdlib, to: dstStdlib)
-
-                log.info("Shared Python runtime installed at \(runtimeURL.path, privacy: .public)")
-
-                // Migrate existing user-packages if present
-                migrateUserPackages(to: dstStdlib.appendingPathComponent("site-packages"))
-            } catch {
-                log.error("Failed to install shared Python runtime: \(error.localizedDescription, privacy: .public)")
-                SentryHelper.captureError(error, category: "terminal.python")
-            }
-        }
-
-        // Always re-copy the bundled conjuredsp package to pick up new modules (e.g., nam.py)
-        updateConjureDSPPackage(bundledPythonDist: bundledPythonDist, runtimeURL: runtimeURL)
-    }
-
-    /// Re-copies the bundled conjuredsp package into the shared site-packages.
-    /// This runs every launch to ensure new modules (e.g., nam.py) are picked up
-    /// even when the full Python runtime install is skipped.
-    /// Also mirrors to Group Containers for DAW compatibility.
-    nonisolated private static func updateConjureDSPPackage(bundledPythonDist: URL, runtimeURL: URL) {
-        let fm = FileManager.default
-        let srcConjuredsp = bundledPythonDist
-            .appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
-
-        guard fm.fileExists(atPath: srcConjuredsp.path) else {
-            log.warning("Bundled conjuredsp package not found at \(srcConjuredsp.path, privacy: .public)")
-            return
-        }
-
-        // Update in primary location (Application Support)
-        let dstConjuredsp = runtimeURL
-            .appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
-        do {
-            if fm.fileExists(atPath: dstConjuredsp.path) {
-                try fm.removeItem(at: dstConjuredsp)
-            }
-            try fm.copyItem(at: srcConjuredsp, to: dstConjuredsp)
-            log.info("Updated conjuredsp package in site-packages")
-        } catch {
-            log.error("Failed to update conjuredsp package: \(error.localizedDescription, privacy: .public)")
-            SentryHelper.captureError(error, category: "terminal.python")
-        }
-
-    }
-
-    /// One-time migration: move packages from the old user-packages directory into site-packages.
-    nonisolated private static func migrateUserPackages(to sitePackages: URL) {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let oldUserPackages = appSupport.appendingPathComponent("ConjureDSP/user-packages")
-        let fm = FileManager.default
-
-        guard fm.fileExists(atPath: oldUserPackages.path),
-              let contents = try? fm.contentsOfDirectory(at: oldUserPackages, includingPropertiesForKeys: nil),
-              !contents.isEmpty else { return }
-
-        log.info("Migrating user-packages to shared runtime site-packages")
-        for item in contents {
-            let dest = sitePackages.appendingPathComponent(item.lastPathComponent)
-            if !fm.fileExists(atPath: dest.path) {
-                try? fm.copyItem(at: item, to: dest)
-            }
-        }
-        log.info("Migration complete — old user-packages preserved at \(oldUserPackages.path, privacy: .public)")
-    }
-
-    /// Copies the bundled rustc-dist directory (rustc, cargo, wasm32-wasip1 std, conjuredsp rlib)
-    /// to the App Group container so CrateInstaller can compile crates in the sandbox.
-    /// Re-provisions if the rustc binary is missing (e.g. after an app update).
-    /// Locates rustc-dist from either the sibling AU extension (when embedded in the host
-    /// app bundle) or the terminal's own Resources (standalone development).
-    nonisolated static func findRustcDist() -> URL? {
-        // When embedded: ConjureDSP.app/Contents/Library/ConjureDSPTerminal.app
-        // Extension at: ConjureDSP.app/Contents/PlugIns/ConjureDSPExtension.appex
-        let extensionRustcDist = Bundle.main.bundleURL
-            .deletingLastPathComponent()  // Contents/Library/
-            .deletingLastPathComponent()  // Contents/
-            .appendingPathComponent("PlugIns/ConjureDSPExtension.appex/Contents/Resources/rustc-dist")
-        if FileManager.default.fileExists(atPath: extensionRustcDist.path) {
-            return extensionRustcDist
-        }
-        // Fallback: own bundle (standalone development)
-        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("rustc-dist"),
-           FileManager.default.fileExists(atPath: bundled.path) {
-            return bundled
-        }
-        return nil
-    }
-
-    nonisolated static func provisionRustToolchainIfNeeded() {
-        let containerURL = AppGroupContainer.url
-
-        let dstRustcDist = containerURL.appendingPathComponent("rustc-dist")
-        let dstCargo = dstRustcDist.appendingPathComponent("bin/cargo")
-
-        // Check if already provisioned (cargo binary exists)
-        if FileManager.default.fileExists(atPath: dstCargo.path) {
-            log.info("Rust toolchain already provisioned at \(dstRustcDist.path, privacy: .public)")
-            return
-        }
-
-        guard let rustcDistSource = findRustcDist() else {
-            log.warning("rustc-dist not found — crate management unavailable")
-            return
-        }
-
-        do {
-            let fm = FileManager.default
-            // Remove any partial previous provision
-            if fm.fileExists(atPath: dstRustcDist.path) {
-                try fm.removeItem(at: dstRustcDist)
-            }
-            try fm.copyItem(at: rustcDistSource, to: dstRustcDist)
-            log.info("Rust toolchain provisioned to App Group at \(dstRustcDist.path, privacy: .public)")
-        } catch {
-            log.error("Failed to provision Rust toolchain: \(error.localizedDescription, privacy: .public)")
-            SentryHelper.captureError(error, category: "terminal.rust")
-        }
-    }
-
-    /// Copies the bundled `uv` binary to the App Group container so PackageInstaller
-    /// can find it reliably regardless of PATH or Bundle.main state. No-op if already present.
-    nonisolated static func provisionUVIfNeeded() {
-        let containerURL = AppGroupContainer.url
-
-        let dstUV = containerURL.appendingPathComponent("uv")
-        if FileManager.default.fileExists(atPath: dstUV.path) {
-            log.info("uv already provisioned in App Group at \(dstUV.path, privacy: .public)")
-            return
-        }
-
-        guard let bundledUV = Bundle.main.resourceURL?.appendingPathComponent("uv"),
-              FileManager.default.fileExists(atPath: bundledUV.path) else {
-            log.warning("Bundled uv not found in Terminal app bundle — package management requires rebuild")
-            return
-        }
-
-        do {
-            try FileManager.default.copyItem(at: bundledUV, to: dstUV)
-            log.info("uv provisioned to App Group at \(dstUV.path, privacy: .public)")
-        } catch {
-            log.error("Failed to provision uv to App Group: \(error.localizedDescription, privacy: .public)")
-            SentryHelper.captureError(error, category: "terminal.uv")
-        }
-    }
-
-    // MARK: - App Group file watching
-
-    /// Continuously watch for lifecycle changes via three mechanisms:
-    /// 1. Shutdown signal — clean AU teardown (deinit wrote the file)
-    /// 2. Port change — AU restarted, new MCP server on a different port
-    /// 3. Health check — MCP server stopped responding (AU crashed or closed without signal)
+    /// Continuously scan mcp-instances/ for new, changed, or removed instance files.
     private func startWatching() {
         watchTask?.cancel()
         watchTask = Task { @MainActor [weak self] in
@@ -317,53 +140,22 @@ class TerminalAppServer {
             while !Task.isCancelled {
                 guard let self else { return }
 
-                // 1. Shutdown signal (fastest detection — file written by AU deinit)
-                if self.isRunning, self.shutdownSignalExists() {
-                    log.info("Shutdown signal detected — resetting")
-                    self.resetSession()
-                    self.deleteAppGroupFile("terminal-shutdown")
-                    self.status = "Waiting for ConjureDSP plugin..."
-                }
+                self.reconcileInstances()
 
-                // 2. Port change or new port
-                if let port = self.readMCPPort() {
-                    if !self.isRunning {
-                        log.info("MCP port detected: \(port) — starting session")
-                        self.startSession(mcpPort: port)
-                    } else if port != self.currentMCPPort {
-                        log.info("MCP port changed \(self.currentMCPPort) → \(port) — restarting session")
-                        self.resetSession()
-                        self.startSession(mcpPort: port)
-                    }
-                }
-
-                // 3. Check for package install/uninstall requests
+                // Package/crate install requests
                 if let installer = self.packageInstaller {
                     await installer.checkForRequests()
                 }
                 if let crateInst = self.crateInstaller {
                     await crateInst.checkForRequests()
                 }
-
-                // 3b. Check for pending AU exports
                 if let finalizer = self.exportFinalizer {
                     await finalizer.checkForPendingExports()
                 }
 
-                // 4. Health check (every ~3 seconds when running)
-                if self.isRunning, tickCount % 6 == 0 {
-                    let healthy = await self.checkMCPHealth()
-                    if healthy {
-                        self.healthCheckFailCount = 0
-                    } else {
-                        self.healthCheckFailCount += 1
-                        if self.healthCheckFailCount >= self.healthCheckThreshold {
-                            log.info("MCP server unreachable after \(self.healthCheckFailCount) checks — resetting")
-                            self.resetSession()
-                            self.deleteAppGroupFile("mcp-server-port")
-                            self.status = "Waiting for ConjureDSP plugin..."
-                        }
-                    }
+                // Health checks every ~3 seconds
+                if tickCount % 6 == 0 {
+                    await self.healthCheckAllSessions()
                 }
 
                 tickCount += 1
@@ -372,39 +164,75 @@ class TerminalAppServer {
         }
     }
 
-    /// Ping the MCP server's health endpoint.
-    private func checkMCPHealth() async -> Bool {
-        guard currentMCPPort > 0,
-              let url = URL(string: "http://localhost:\(currentMCPPort)/health") else { return false }
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return false }
-            // Verify it's actually our server
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let status = json["status"] as? String, status == "ok" {
-                return true
+    /// Compare current instance files against running sessions.
+    /// Start new sessions, tear down removed ones.
+    private func reconcileInstances() {
+        let instancesDir = instancesDirectoryURL()
+        let fm = FileManager.default
+
+        // Ensure directory exists
+        try? fm.createDirectory(at: instancesDir, withIntermediateDirectories: true)
+
+        // Read all current instance files
+        let files = (try? fm.contentsOfDirectory(at: instancesDir, includingPropertiesForKeys: nil)) ?? []
+        var currentUUIDs = Set<String>()
+
+        for file in files {
+            guard file.pathExtension == "json" else { continue }
+            let uuid = file.deletingPathExtension().lastPathComponent
+            currentUUIDs.insert(uuid)
+
+            guard let info = MCPInstanceInfo.read(from: file) else { continue }
+
+            if let session = sessions[uuid] {
+                // Session exists — check if MCP port changed
+                if session.mcpPort != info.mcpPort {
+                    log.info("MCP port changed for \(uuid, privacy: .public): \(session.mcpPort) → \(info.mcpPort) — restarting")
+                    teardownSession(uuid: uuid)
+                    startSession(uuid: uuid, mcpPort: info.mcpPort)
+                }
+            } else {
+                // New instance — start a session
+                log.info("New instance detected: \(uuid, privacy: .public) on MCP port \(info.mcpPort)")
+                startSession(uuid: uuid, mcpPort: info.mcpPort)
             }
-            return false
-        } catch {
-            return false
+        }
+
+        // Tear down sessions whose instance files are gone
+        for uuid in sessions.keys where !currentUUIDs.contains(uuid) {
+            log.info("Instance \(uuid, privacy: .public) deregistered — tearing down session")
+            teardownSession(uuid: uuid)
+        }
+
+        // Update status
+        activeSessionCount = sessions.count
+        if sessions.isEmpty {
+            status = "Waiting for ConjureDSP plugin..."
+        } else if sessions.count == 1 {
+            let s = sessions.values.first!
+            status = "Ready (MCP: \(s.mcpPort), WS: \(s.wsPort ?? 0))"
+        } else {
+            status = "\(sessions.count) sessions active"
         }
     }
 
     // MARK: - Session lifecycle
 
-    private func startSession(mcpPort: UInt16) {
+    private func startSession(uuid: String, mcpPort: UInt16) {
+        let session = InstanceSession(uuid: uuid, mcpPort: mcpPort)
+
         let ws = WebSocketServer()
         let p = PTYManager()
-        self.wsServer = ws
-        self.pty = p
+        session.wsServer = ws
+        session.pty = p
 
-        // Start WebSocket server on a dynamic port — OS assigns a free port,
-        // avoiding EADDRINUSE if the previous process hasn't released 19836 yet.
-        ws.onReady = { [weak self] confirmedPort in
-            self?.writeWebSocketPort(confirmedPort)
+        // Start WebSocket server on a dynamic port
+        ws.onReady = { [weak self, weak session] confirmedPort in
+            guard let self, let session else { return }
+            session.wsPort = confirmedPort
+            self.writeWSPort(confirmedPort, forInstance: uuid)
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.status = "Ready (MCP: \(self.currentMCPPort), WS: \(confirmedPort))"
+                self?.updateStatus()
             }
         }
         ws.start(port: 0)
@@ -426,22 +254,23 @@ class TerminalAppServer {
             }
         }
 
-        p.onStateChange = { [weak self] state in
+        p.onStateChange = { [weak self, weak session] state in
             Task { @MainActor in
-                guard let self else { return }
+                guard let session else { return }
                 switch state {
                 case .running:
-                    self.claudeState = "Running"
-                    self.wsServer?.broadcastText("\u{1b}[32m● Terminal ready\u{1b}[0m\r\n")
+                    session.claudeState = "Running"
+                    session.wsServer?.broadcastText("\u{1b}[32m● Terminal ready\u{1b}[0m\r\n")
                 case .exited(let code):
-                    self.claudeState = "Exited (code \(code))"
-                    self.wsServer?.broadcastText("\r\n\u{1b}[33m● Terminal session ended (code \(code)).\u{1b}[0m\r\n")
+                    session.claudeState = "Exited (code \(code))"
+                    session.wsServer?.broadcastText("\r\n\u{1b}[33m● Terminal session ended (code \(code)).\u{1b}[0m\r\n")
                 case .error(let msg):
-                    self.claudeState = "Error: \(msg)"
-                    self.wsServer?.broadcastText("\r\n\u{1b}[31m● Error: \(msg)\u{1b}[0m\r\n")
+                    session.claudeState = "Error: \(msg)"
+                    session.wsServer?.broadcastText("\r\n\u{1b}[31m● Error: \(msg)\u{1b}[0m\r\n")
                 case .idle:
-                    self.claudeState = "Idle"
+                    session.claudeState = "Idle"
                 }
+                self?.updateStatus()
             }
         }
 
@@ -452,8 +281,6 @@ class TerminalAppServer {
                 case .idle, .exited(_):
                     p.start()
                 case .running:
-                    // New client connected to an already-running PTY — send SIGWINCH
-                    // to redraw the screen for the fresh xterm.js
                     p.sendSIGWINCH()
                 case .error:
                     break
@@ -461,29 +288,92 @@ class TerminalAppServer {
             }
         }
 
-        currentMCPPort = mcpPort
-        isRunning = true
-        status = "Ready (MCP: \(mcpPort))"
-        log.info("Session started — MCP: \(mcpPort)")
+        sessions[uuid] = session
+        activeSessionCount = sessions.count
+        log.info("Session started for \(uuid, privacy: .public) — MCP: \(mcpPort)")
     }
 
-    private func resetSession() {
-        // Stop PTY (kills Claude Code)
-        pty?.stop()
-        pty = nil
+    private func teardownSession(uuid: String) {
+        guard let session = sessions.removeValue(forKey: uuid) else { return }
+        session.pty?.stop()
+        session.wsServer?.stop()
+        activeSessionCount = sessions.count
+        log.info("Session torn down for \(uuid, privacy: .public)")
+    }
 
-        // Stop WebSocket server
-        wsServer?.stop()
-        wsServer = nil
+    private func updateStatus() {
+        if sessions.isEmpty {
+            status = "Waiting for ConjureDSP plugin..."
+        } else if sessions.count == 1 {
+            let s = sessions.values.first!
+            status = "Ready (MCP: \(s.mcpPort), WS: \(s.wsPort ?? 0))"
+        } else {
+            status = "\(sessions.count) sessions active"
+        }
+    }
 
-        // Clean up the terminal port file so the extension doesn't see a stale port
-        deleteAppGroupFile("terminal-server-port")
+    // MARK: - Health checks
 
-        currentMCPPort = 0
-        healthCheckFailCount = 0
-        isRunning = false
-        claudeState = "Idle"
-        log.info("Session reset")
+    private func healthCheckAllSessions() async {
+        for (uuid, session) in sessions {
+            let healthy = await checkMCPHealth(port: session.mcpPort)
+            if healthy {
+                session.healthCheckFailCount = 0
+            } else {
+                session.healthCheckFailCount += 1
+                if session.healthCheckFailCount >= healthCheckThreshold {
+                    log.info("MCP server for \(uuid, privacy: .public) unreachable after \(session.healthCheckFailCount) checks — tearing down")
+                    teardownSession(uuid: uuid)
+                    // Remove the stale instance file too
+                    let file = instancesDirectoryURL().appendingPathComponent("\(uuid).json")
+                    try? FileManager.default.removeItem(at: file)
+                }
+            }
+        }
+    }
+
+    private func checkMCPHealth(port: UInt16) async -> Bool {
+        guard port > 0,
+              let url = URL(string: "http://localhost:\(port)/health") else { return false }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return false }
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let status = json["status"] as? String, status == "ok" {
+                return true
+            }
+            return false
+        } catch {
+            return false
+        }
+    }
+
+    // MARK: - Stale cleanup
+
+    /// Remove instance files from crashed AUs (pid no longer alive).
+    private func cleanupStaleInstances() {
+        let instancesDir = instancesDirectoryURL()
+        let fm = FileManager.default
+
+        guard let files = try? fm.contentsOfDirectory(at: instancesDir, includingPropertiesForKeys: nil) else { return }
+
+        for file in files {
+            guard file.pathExtension == "json" else { continue }
+            guard let info = MCPInstanceInfo.read(from: file) else {
+                try? fm.removeItem(at: file)
+                continue
+            }
+
+            // Check if the process is still alive
+            if let pid = info.pid, pid > 0 {
+                let alive = kill(pid, 0) == 0
+                if !alive {
+                    let uuid = file.deletingPathExtension().lastPathComponent
+                    log.info("Removing stale instance file for \(uuid, privacy: .public) (pid \(pid) dead)")
+                    try? fm.removeItem(at: file)
+                }
+            }
+        }
     }
 
     // MARK: - Container helpers
@@ -492,33 +382,187 @@ class TerminalAppServer {
         AppGroupContainer.url
     }
 
-    /// Read MCP port from the App Group container.
-    private func readMCPPort() -> UInt16? {
-        let portFile = containerURL().appendingPathComponent("mcp-server-port")
-        if let s = try? String(contentsOf: portFile, encoding: .utf8),
-           let port = UInt16(s.trimmingCharacters(in: .whitespacesAndNewlines)),
-           port > 0 {
-            return port
+    private func instancesDirectoryURL() -> URL {
+        containerURL().appendingPathComponent("mcp-instances")
+    }
+
+    /// Write the WebSocket port back to the instance's JSON file.
+    private func writeWSPort(_ wsPort: UInt16, forInstance uuid: String) {
+        let file = instancesDirectoryURL().appendingPathComponent("\(uuid).json")
+        guard var info = MCPInstanceInfo.read(from: file) else {
+            log.warning("Instance file gone for \(uuid, privacy: .public) when writing wsPort")
+            return
+        }
+        info.wsPort = wsPort
+        do {
+            try info.write(to: file)
+        } catch {
+            log.error("Failed to write wsPort for \(uuid, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Python/UV/Rust provisioning (unchanged)
+
+    nonisolated static func installPythonRuntimeIfNeeded() {
+        let runtimeURL = pythonRuntimeURL
+
+        guard let bundledPythonDist = Bundle.main.resourceURL?.appendingPathComponent("python-dist"),
+              FileManager.default.fileExists(atPath: bundledPythonDist.path) else {
+            log.error("Bundled python-dist not found in Terminal app bundle")
+            SentryHelper.capture("Bundled python-dist not found", level: .error, category: "terminal.python")
+            return
+        }
+
+        let stdlibPath = runtimeURL.appendingPathComponent("lib/python3.14t").path
+        if FileManager.default.fileExists(atPath: stdlibPath) {
+            log.info("Shared Python runtime already installed at \(runtimeURL.path, privacy: .public)")
+        } else {
+            do {
+                let fm = FileManager.default
+
+                let srcBin = bundledPythonDist.appendingPathComponent("bin/python3")
+                let dstBin = runtimeURL.appendingPathComponent("bin")
+                try fm.createDirectory(at: dstBin, withIntermediateDirectories: true)
+                let dstPython = dstBin.appendingPathComponent("python3")
+                if fm.fileExists(atPath: dstPython.path) {
+                    try fm.removeItem(at: dstPython)
+                }
+                try fm.copyItem(at: srcBin, to: dstPython)
+
+                let srcDylib = bundledPythonDist.appendingPathComponent("lib/libpython3.14t.dylib")
+                let dstLib = runtimeURL.appendingPathComponent("lib")
+                try fm.createDirectory(at: dstLib, withIntermediateDirectories: true)
+                let dstDylib = dstLib.appendingPathComponent("libpython3.14t.dylib")
+                if fm.fileExists(atPath: dstDylib.path) {
+                    try fm.removeItem(at: dstDylib)
+                }
+                try fm.copyItem(at: srcDylib, to: dstDylib)
+
+                let srcStdlib = bundledPythonDist.appendingPathComponent("lib/python3.14t")
+                let dstStdlib = dstLib.appendingPathComponent("python3.14t")
+                if fm.fileExists(atPath: dstStdlib.path) {
+                    try fm.removeItem(at: dstStdlib)
+                }
+                try fm.copyItem(at: srcStdlib, to: dstStdlib)
+
+                log.info("Shared Python runtime installed at \(runtimeURL.path, privacy: .public)")
+                migrateUserPackages(to: dstStdlib.appendingPathComponent("site-packages"))
+            } catch {
+                log.error("Failed to install shared Python runtime: \(error.localizedDescription, privacy: .public)")
+                SentryHelper.captureError(error, category: "terminal.python")
+            }
+        }
+
+        updateConjureDSPPackage(bundledPythonDist: bundledPythonDist, runtimeURL: runtimeURL)
+    }
+
+    nonisolated private static func updateConjureDSPPackage(bundledPythonDist: URL, runtimeURL: URL) {
+        let fm = FileManager.default
+        let srcConjuredsp = bundledPythonDist
+            .appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
+
+        guard fm.fileExists(atPath: srcConjuredsp.path) else {
+            log.warning("Bundled conjuredsp package not found at \(srcConjuredsp.path, privacy: .public)")
+            return
+        }
+
+        let dstConjuredsp = runtimeURL
+            .appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
+        do {
+            if fm.fileExists(atPath: dstConjuredsp.path) {
+                try fm.removeItem(at: dstConjuredsp)
+            }
+            try fm.copyItem(at: srcConjuredsp, to: dstConjuredsp)
+            log.info("Updated conjuredsp package in site-packages")
+        } catch {
+            log.error("Failed to update conjuredsp package: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "terminal.python")
+        }
+    }
+
+    nonisolated private static func migrateUserPackages(to sitePackages: URL) {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let oldUserPackages = appSupport.appendingPathComponent("ConjureDSP/user-packages")
+        let fm = FileManager.default
+
+        guard fm.fileExists(atPath: oldUserPackages.path),
+              let contents = try? fm.contentsOfDirectory(at: oldUserPackages, includingPropertiesForKeys: nil),
+              !contents.isEmpty else { return }
+
+        log.info("Migrating user-packages to shared runtime site-packages")
+        for item in contents {
+            let dest = sitePackages.appendingPathComponent(item.lastPathComponent)
+            if !fm.fileExists(atPath: dest.path) {
+                try? fm.copyItem(at: item, to: dest)
+            }
+        }
+        log.info("Migration complete — old user-packages preserved at \(oldUserPackages.path, privacy: .public)")
+    }
+
+    nonisolated static func findRustcDist() -> URL? {
+        let extensionRustcDist = Bundle.main.bundleURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("PlugIns/ConjureDSPExtension.appex/Contents/Resources/rustc-dist")
+        if FileManager.default.fileExists(atPath: extensionRustcDist.path) {
+            return extensionRustcDist
+        }
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("rustc-dist"),
+           FileManager.default.fileExists(atPath: bundled.path) {
+            return bundled
         }
         return nil
     }
 
-    /// Check shutdown signal in the App Group container.
-    private func shutdownSignalExists() -> Bool {
-        let file = containerURL().appendingPathComponent("terminal-shutdown")
-        return FileManager.default.fileExists(atPath: file.path)
+    nonisolated static func provisionRustToolchainIfNeeded() {
+        let containerURL = AppGroupContainer.url
+        let dstRustcDist = containerURL.appendingPathComponent("rustc-dist")
+        let dstCargo = dstRustcDist.appendingPathComponent("bin/cargo")
+
+        if FileManager.default.fileExists(atPath: dstCargo.path) {
+            log.info("Rust toolchain already provisioned at \(dstRustcDist.path, privacy: .public)")
+            return
+        }
+
+        guard let rustcDistSource = findRustcDist() else {
+            log.warning("rustc-dist not found — crate management unavailable")
+            return
+        }
+
+        do {
+            let fm = FileManager.default
+            if fm.fileExists(atPath: dstRustcDist.path) {
+                try fm.removeItem(at: dstRustcDist)
+            }
+            try fm.copyItem(at: rustcDistSource, to: dstRustcDist)
+            log.info("Rust toolchain provisioned to App Group at \(dstRustcDist.path, privacy: .public)")
+        } catch {
+            log.error("Failed to provision Rust toolchain: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "terminal.rust")
+        }
     }
 
-    /// Write WebSocket port to the App Group container.
-    private func writeWebSocketPort(_ port: UInt16) {
-        let content = "\(port)"
-        let file = containerURL().appendingPathComponent("terminal-server-port")
-        try? content.write(to: file, atomically: true, encoding: .utf8)
-    }
+    nonisolated static func provisionUVIfNeeded() {
+        let containerURL = AppGroupContainer.url
+        let dstUV = containerURL.appendingPathComponent("uv")
+        if FileManager.default.fileExists(atPath: dstUV.path) {
+            log.info("uv already provisioned in App Group at \(dstUV.path, privacy: .public)")
+            return
+        }
 
-    private func deleteAppGroupFile(_ name: String) {
-        let file = containerURL().appendingPathComponent(name)
-        try? FileManager.default.removeItem(at: file)
+        guard let bundledUV = Bundle.main.resourceURL?.appendingPathComponent("uv"),
+              FileManager.default.fileExists(atPath: bundledUV.path) else {
+            log.warning("Bundled uv not found in Terminal app bundle — package management requires rebuild")
+            return
+        }
+
+        do {
+            try FileManager.default.copyItem(at: bundledUV, to: dstUV)
+            log.info("uv provisioned to App Group at \(dstUV.path, privacy: .public)")
+        } catch {
+            log.error("Failed to provision uv to App Group: \(error.localizedDescription, privacy: .public)")
+            SentryHelper.captureError(error, category: "terminal.uv")
+        }
     }
 }
 
@@ -531,7 +575,7 @@ struct TerminalStatusView: View {
         VStack(spacing: 16) {
             Image(systemName: "terminal")
                 .font(.system(size: 36))
-                .foregroundStyle(server.isRunning ? .green : .secondary)
+                .foregroundStyle(server.activeSessionCount > 0 ? .green : .secondary)
 
             Text("ConjureDSP Terminal")
                 .font(.headline)
@@ -539,16 +583,6 @@ struct TerminalStatusView: View {
             Text(server.status)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-            if server.isRunning {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(server.claudeState == "Running" ? .green : .orange)
-                        .frame(width: 8, height: 8)
-                    Text("Terminal: \(server.claudeState)")
-                        .font(.caption)
-                }
-            }
         }
         .padding(24)
     }

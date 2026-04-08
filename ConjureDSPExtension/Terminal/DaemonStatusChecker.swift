@@ -2,8 +2,9 @@
 //  DaemonStatusChecker.swift
 //  ConjureDSPExtension
 //
-//  Polls the App Group container for the terminal-server-port file
-//  to determine whether the ConjureDSP Terminal daemon is running.
+//  Polls the App Group container for this instance's mcp-instances/{id}.json
+//  file to determine whether the ConjureDSP Terminal daemon has started a
+//  dedicated PTY+WebSocket pair for this AU instance.
 //
 
 import AppKit
@@ -22,20 +23,29 @@ final class DaemonStatusChecker: ObservableObject {
     private var timer: Timer?
     private var hasAttemptedLaunch = false
 
-    /// Override for testing — when non-nil, `checkPortFile()` reads from this
+    /// The AU instance ID — set via startChecking().
+    private var instanceID: String?
+
+    /// The App Group container URL — set via startChecking().
+    private var appGroupContainerURL: URL?
+
+    /// Override for testing — when non-nil, `checkInstanceFile()` reads from this
     /// directory instead of the App Group container.
-    var portFileDirectoryOverride: URL?
+    var instanceDirectoryOverride: URL?
 
     init(pollInterval: TimeInterval = 2.0) {
         self.pollInterval = pollInterval
     }
 
-    func startChecking() {
-        // Check immediately
-        isDaemonAvailable = checkPortFile()
-        log.info("Daemon status check started, available: \(self.isDaemonAvailable)")
+    func startChecking(instanceID: String, appGroupContainerURL: URL?) {
+        self.instanceID = instanceID
+        self.appGroupContainerURL = appGroupContainerURL
 
-        // If not available, try to auto-launch the terminal via URL scheme
+        // Check immediately
+        isDaemonAvailable = checkInstanceFile()
+        log.info("Daemon status check started for instance \(instanceID, privacy: .public), available: \(self.isDaemonAvailable)")
+
+        // If not available, try to auto-launch the terminal
         if !isDaemonAvailable {
             attemptAutoLaunch()
         }
@@ -45,9 +55,9 @@ final class DaemonStatusChecker: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                let available = self.checkPortFile()
+                let available = self.checkInstanceFile()
                 if available != self.isDaemonAvailable {
-                    log.info("Daemon availability changed: \(available)")
+                    log.info("Daemon availability changed for instance \(self.instanceID ?? "?", privacy: .public): \(available)")
                     self.isDaemonAvailable = available
                 }
             }
@@ -59,7 +69,7 @@ final class DaemonStatusChecker: ObservableObject {
     /// `NSWorkspace.shared.open(url:)` with a custom URL scheme triggers.
     /// Only tries once per checker lifetime to avoid spamming.
     func attemptAutoLaunch() {
-        guard !hasAttemptedLaunch, portFileDirectoryOverride == nil else { return }
+        guard !hasAttemptedLaunch, instanceDirectoryOverride == nil else { return }
         hasAttemptedLaunch = true
 
         // The terminal is embedded at ConjureDSP.app/Contents/Library/ConjureDSPTerminal.app.
@@ -88,33 +98,33 @@ final class DaemonStatusChecker: ObservableObject {
         timer = nil
     }
 
-    func checkPortFile() -> Bool {
-        let container: URL
-        if let override = portFileDirectoryOverride {
-            container = override
-        } else {
-            container = AppGroupContainer.url
-        }
+    /// Check if the terminal app has written a wsPort for this instance.
+    func checkInstanceFile() -> Bool {
+        guard let instanceID else { return false }
 
-        let portFile = container.appendingPathComponent("terminal-server-port")
-        guard let contents = try? String(contentsOf: portFile, encoding: .utf8),
-              let port = UInt16(contents.trimmingCharacters(in: .whitespacesAndNewlines)),
-              port > 0 else {
+        let container: URL
+        if let override = instanceDirectoryOverride {
+            container = override
+        } else if let url = appGroupContainerURL {
+            container = url.appendingPathComponent("mcp-instances")
+        } else {
             return false
         }
 
-        // When using the test override, skip the connectivity check —
-        // unit tests validate port file parsing; connectivity is tested
-        // separately via UI/integration tests.
-        if portFileDirectoryOverride != nil {
+        let instanceFile = container.appendingPathComponent("\(instanceID).json")
+        guard let info = MCPInstanceInfo.read(from: instanceFile),
+              let wsPort = info.wsPort, wsPort > 0 else {
+            return false
+        }
+
+        // When using the test override, skip the connectivity check
+        if instanceDirectoryOverride != nil {
             return true
         }
 
-        // Verify the daemon is actually listening on this port.
-        // For localhost, connect() returns immediately: 0 if open,
-        // -1 with ECONNREFUSED if nothing is listening.
-        guard canConnect(toPort: port) else {
-            log.info("Port file exists (\(port)) but daemon is not reachable — stale port file")
+        // Verify the daemon is actually listening on the WebSocket port
+        guard canConnect(toPort: wsPort) else {
+            log.info("Instance file has wsPort \(wsPort) but daemon is not reachable — stale")
             return false
         }
         return true
@@ -124,6 +134,11 @@ final class DaemonStatusChecker: ObservableObject {
         let sock = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard sock >= 0 else { return false }
         defer { Darwin.close(sock) }
+
+        // Set a 2-second send/connect timeout to avoid blocking the main
+        // thread if something is wrong with the port.
+        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
         var addr = sockaddr_in()
         addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)

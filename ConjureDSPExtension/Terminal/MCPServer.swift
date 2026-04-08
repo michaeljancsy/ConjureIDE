@@ -90,7 +90,6 @@ final class MCPServer {
             if let listenerPort = listener?.port?.rawValue {
                 port = listenerPort
                 log.info("MCP server listening on port \(listenerPort)")
-                writePortToAppGroup()
             }
         case .failed(let error):
             log.error("MCP listener failed: \(error.localizedDescription, privacy: .public)")
@@ -414,20 +413,4 @@ final class MCPServer {
         sendHTTPResponse(connection: connection, status: 200, body: jsonString, contentType: "application/json")
     }
 
-    // MARK: - App Group Port Discovery
-
-    private func writePortToAppGroup() {
-        guard let port else { return }
-        guard let containerURL = appGroupContainerURL else {
-            log.warning("Failed to get App Group container URL")
-            return
-        }
-        let portFileURL = containerURL.appendingPathComponent("mcp-server-port")
-        do {
-            try "\(port)".write(to: portFileURL, atomically: true, encoding: .utf8)
-            log.info("Wrote MCP port \(port) to App Group container")
-        } catch {
-            log.warning("Failed to write MCP port to App Group: \(error.localizedDescription, privacy: .public)")
-        }
-    }
 }

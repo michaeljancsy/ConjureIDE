@@ -46,6 +46,7 @@ struct ConjureDSPExtensionMainView: View {
     var onExport: (String) async -> ExportResult
     var defaultBenchmark: (processTimeMs: Double, budgetMs: Double)?
     var appGroupContainerURL: URL?
+    var instanceID: String = ""
     var isBypassed: () -> Bool = { false }
     var setBypass: (Bool) -> Void = { _ in }
 
@@ -233,7 +234,7 @@ struct ConjureDSPExtensionMainView: View {
                             .accessibilityHidden(!showAIPromptTab)
 
                             if daemonChecker.isDaemonAvailable {
-                                TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL)
+                                TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL, instanceID: instanceID)
                                     .accessibilityIdentifier("terminalPanel")
                                     .opacity(showAIPromptTab ? 0 : 1)
                                     .allowsHitTesting(!showAIPromptTab)
@@ -426,7 +427,7 @@ struct ConjureDSPExtensionMainView: View {
                 lastBenchmark = bench
             }
             bypassed = isBypassed()
-            daemonChecker.startChecking()
+            daemonChecker.startChecking(instanceID: instanceID, appGroupContainerURL: appGroupContainerURL)
 
             // Listen for export finalization results from the daemon
             DistributedNotificationCenter.default().addObserver(
