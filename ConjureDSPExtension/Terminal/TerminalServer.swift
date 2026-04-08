@@ -96,8 +96,9 @@ final class TerminalServer {
         return dir.appendingPathComponent("\(instanceID).json")
     }
 
-    /// Write (or update) this instance's JSON registration file.
-    /// Preserves the wsPort field if it was already written by the terminal app.
+    /// Write this instance's JSON registration file.
+    /// Only writes when the file is missing or the mcpPort has changed,
+    /// to avoid racing with the terminal app's wsPort writes.
     private func writeInstanceFile() {
         guard let port = mcpServer.port else { return }
         guard let fileURL = instanceFileURL(),
@@ -105,17 +106,19 @@ final class TerminalServer {
             log.warning("Failed to get App Group container URL")
             return
         }
+
+        // If the file already exists with the correct mcpPort, skip writing.
+        // The heartbeat calls this periodically for recovery (file deleted),
+        // but we must not overwrite the terminal app's wsPort field.
+        if let existing = MCPInstanceInfo.read(from: fileURL),
+           existing.mcpPort == port {
+            return
+        }
+
         do {
             try FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
 
-            // Preserve wsPort if already set by the terminal app
-            var existingWSPort: UInt16?
-            if let existing = MCPInstanceInfo.read(from: fileURL) {
-                existingWSPort = existing.wsPort
-            }
-
             var info = MCPInstanceInfo(mcpPort: port)
-            info.wsPort = existingWSPort
             info.pid = Int32(ProcessInfo.processInfo.processIdentifier)
             info.createdAt = Date().timeIntervalSince1970
             try info.write(to: fileURL)
