@@ -16,8 +16,8 @@
 		25BC19432F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		25BC19442F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
 		25BC19452F563DB20009EA0D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 25BC19412F563DB20009EA0D /* Assets.xcassets */; };
-		25E930F62F773AC300D36258 /* ConjureDSPHelper in CopyFiles */ = {isa = PBXBuildFile; fileRef = 25E930E32F7733EE00D36258 /* ConjureDSPHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		25FE99E52F75CECC0004DC3A /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000200000001SPARKLE /* Sparkle */; };
+		AA00EMBED0TERMINAL0FILE0 /* ConjureDSPTerminal.app in Embed Terminal App */ = {isa = PBXBuildFile; fileRef = 25E930FB2F773DC200D36258 /* ConjureDSPTerminal.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA11000100000001MIXPANEL /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000200000001MIXPANEL /* Mixpanel */; };
 		AA11000300000001MIXPANEL /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = AA11000400000001MIXPANEL /* Mixpanel */; };
 		AA11000600000001MIXPANEL /* Analytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000700000001MIXPANEL /* Analytics.swift */; };
@@ -27,7 +27,6 @@
 		AA44000200000001MCPINF /* MCPInstanceInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA44000100000001MCPINF /* MCPInstanceInfo.swift */; };
 		AA5E00012F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00022F5013850036AAB6 /* Sentry */; };
 		AA5E00032F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00042F5013850036AAB6 /* Sentry */; };
-		AA00EMBED0TERMINAL0FILE0 /* ConjureDSPTerminal.app in Embed Terminal App */ = {isa = PBXBuildFile; fileRef = 25E930FB2F773DC200D36258 /* ConjureDSPTerminal.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -52,20 +51,6 @@
 			remoteGlobalIDString = 2579117D2F5013850036AAB6;
 			remoteInfo = ConjureDSPExtension;
 		};
-		25E930F32F773A9900D36258 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 257911382F5013840036AAB6 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 25E930E22F7733EE00D36258;
-			remoteInfo = ConjureDSPHelper;
-		};
-		AA00EMBED0TERMINAL0PROXY /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 257911382F5013840036AAB6 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 25E930FA2F773DC200D36258;
-			remoteInfo = ConjureDSPTerminal;
-		};
 		25E9310A2F773DC300D36258 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 257911382F5013840036AAB6 /* Project object */;
@@ -74,6 +59,13 @@
 			remoteInfo = ConjureDSPTerminal;
 		};
 		25E931142F773DC300D36258 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 257911382F5013840036AAB6 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 25E930FA2F773DC200D36258;
+			remoteInfo = ConjureDSPTerminal;
+		};
+		AA00EMBED0TERMINAL0PROXY /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 257911382F5013840036AAB6 /* Project object */;
 			proxyType = 1;
@@ -103,14 +95,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 1;
 		};
-		25E930F52F773AA100D36258 /* CopyFiles */ = {
+		AA00EMBED0TERMINAL0COPY0 /* Embed Terminal App */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 6;
+			dstPath = Contents/Library;
+			dstSubfolderSpec = 1;
 			files = (
-				25E930F62F773AC300D36258 /* ConjureDSPHelper in CopyFiles */,
+				AA00EMBED0TERMINAL0FILE0 /* ConjureDSPTerminal.app in Embed Terminal App */,
 			);
+			name = "Embed Terminal App";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -336,7 +329,7 @@
 				2579113D2F5013840036AAB6 /* Frameworks */,
 				2579113E2F5013840036AAB6 /* Resources */,
 				257911B02F5013850036AAB6 /* Embed Foundation Extensions */,
-				AA00EMBED0TERMINAL0COPY0 /* Copy Terminal App */,
+				AA00EMBED0TERMINAL0COPY0 /* Embed Terminal App */,
 				AABB000F2F5013850036AAB6 /* Bust AU Cache */,
 				AABB00132F5013850036AAB6 /* Upload dSYMs to Sentry */,
 			);
@@ -957,17 +950,6 @@
 			shellPath = /bin/bash;
 			shellScript = "# Copy rustc-dist into ConjureDSPTerminal.app/Contents/Resources/rustc-dist/\n# This provides cargo + rustc + wasm32-wasip1 std for crate package management.\nRUSTC_SRC=\"${SRCROOT}/rustc-dist\"\nRUSTC_DST=\"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/rustc-dist\"\nSTAMP=\"${RUSTC_DST}/.copy-stamp\"\n\nif [ ! -d \"$RUSTC_SRC\" ]; then\n    echo \"warning: rustc-dist not found at $RUSTC_SRC, skipping (run scripts/setup-rustc.sh)\" >&2\n    exit 0\nfi\n\n# Skip if already copied and source hasn't changed\nif [ -f \"$STAMP\" ] && [ \"$RUSTC_SRC/bin/cargo\" -ot \"$STAMP\" ] && [ \"$RUSTC_SRC/bin/rustc\" -ot \"$STAMP\" ]; then\n    echo \"note: Rust toolchain unchanged, skipping copy\" >&2\n    exit 0\nfi\n\necho \"Copying Rust toolchain to Terminal app bundle...\"\nrm -rf \"$RUSTC_DST\"\ncp -R \"$RUSTC_SRC\" \"$RUSTC_DST\"\n\n# Code-sign executables and dylibs\nfor f in \"$RUSTC_DST/bin/rustc\" \"$RUSTC_DST/bin/cargo\" \"$RUSTC_DST/lib/rustlib/${ARCHS}-apple-darwin/bin/rust-lld\"; do\n    [ -f \"$f\" ] && codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"$f\"\ndone\nfind \"$RUSTC_DST/lib\" -name '*.dylib' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp {} \\;\n\ntouch \"$STAMP\"\n";
 		};
-		AA00EMBED0TERMINAL0COPY0 /* Embed Terminal App */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = Contents/Library;
-			dstSubfolderSpec = 1;
-			files = (
-				AA00EMBED0TERMINAL0FILE0 /* ConjureDSPTerminal.app in Embed Terminal App */,
-			);
-			name = "Embed Terminal App";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -1049,11 +1031,6 @@
 			isa = PBXTargetDependency;
 			target = 2579117D2F5013850036AAB6 /* ConjureDSPExtension */;
 			targetProxy = 257911802F5013850036AAB6 /* PBXContainerItemProxy */;
-		};
-		25E930F42F773A9900D36258 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 25E930E22F7733EE00D36258 /* ConjureDSPHelper */;
-			targetProxy = 25E930F32F773A9900D36258 /* PBXContainerItemProxy */;
 		};
 		25E9310B2F773DC300D36258 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1177,7 +1154,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSP.ConjureDSPExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "com.MichaelJancsy.ConjureDSP.ConjureDSPExtension";
+				PROVISIONING_PROFILE_SPECIFIER = com.MichaelJancsy.ConjureDSP.ConjureDSPExtension;
 				SDKROOT = auto;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1407,7 +1384,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSP;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "com.MichaelJancsy.ConjureDSP";
+				PROVISIONING_PROFILE_SPECIFIER = com.MichaelJancsy.ConjureDSP;
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1650,7 +1627,7 @@
 				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminal;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "com.MichaelJancsy.ConjureDSPTerminal";
+				PROVISIONING_PROFILE_SPECIFIER = com.MichaelJancsy.ConjureDSPTerminal;
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
