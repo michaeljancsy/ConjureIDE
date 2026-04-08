@@ -34,6 +34,7 @@ struct PackageManagerView: View {
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>?
     @State private var confirmUninstall: String?
+    @State private var showErrorLog = false
 
     struct SearchResult: Identifiable {
         var id: String { name }
@@ -184,13 +185,23 @@ struct PackageManagerView: View {
                 }
 
                 if let error = lastError {
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                        Text(error)
-                            .font(.caption)
-                            .foregroundColor(.red)
+                    Button(action: { showErrorLog = true }) {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                                .lineLimit(4)
+                                .multilineTextAlignment(.leading)
+                            Spacer(minLength: 0)
+                            Text("View Log")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("packageManagerErrorButton")
                 }
 
                 if activeLanguage == .rust {
@@ -205,6 +216,11 @@ struct PackageManagerView: View {
         .onAppear {
             installManager.refreshInstalledPackages()
             crateInstallManager.refreshInstalledCrates()
+        }
+        .sheet(isPresented: $showErrorLog) {
+            if let error = lastError {
+                BuildLogView(log: error)
+            }
         }
         .alert("Uninstall", isPresented: .init(
             get: { confirmUninstall != nil },
@@ -460,5 +476,45 @@ struct PackageManagerView: View {
                 searchResults = []
             }
         }
+    }
+}
+
+// MARK: - Build Log Detail View
+
+private struct BuildLogView: View {
+    let log: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Build Log")
+                    .font(.headline)
+                Spacer()
+                Button("Copy") {
+                    #if canImport(AppKit)
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(log, forType: .string)
+                    #endif
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+            .padding(12)
+
+            Divider()
+
+            ScrollView {
+                Text(log)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
+        }
+        .frame(width: 520, height: 400)
     }
 }

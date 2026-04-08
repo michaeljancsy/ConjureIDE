@@ -258,6 +258,14 @@ final class PackageInstallManager {
             let errorMsg = result.error ?? "Unknown error"
             log.error("Package operation failed: \(errorMsg, privacy: .public)")
             lastError = errorMsg
+            let names = result.packages.joined(separator: ", ")
+            let operation = wasUninstall ? "uninstall" : "install"
+            SentryHelper.capture(
+                "Package \(operation) failed: \(names)",
+                level: .error,
+                category: "packages",
+                extra: ["packages": names, "error": errorMsg]
+            )
         }
     }
 

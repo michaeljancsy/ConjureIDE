@@ -278,6 +278,14 @@ final class CrateInstallManager {
             let errorMsg = result.error ?? "Unknown error"
             log.error("Crate operation failed: \(errorMsg, privacy: .public)")
             lastError = errorMsg
+            let names = result.crates.joined(separator: ", ")
+            let operation = wasUninstall ? "uninstall" : "install"
+            SentryHelper.capture(
+                "Crate \(operation) failed: \(names)",
+                level: .error,
+                category: "crates",
+                extra: ["crates": names, "error": errorMsg]
+            )
         }
     }
 
