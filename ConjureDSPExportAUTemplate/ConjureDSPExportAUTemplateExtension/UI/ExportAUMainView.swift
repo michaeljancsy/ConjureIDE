@@ -214,17 +214,41 @@ struct ExportParamSliderRow: View {
     @Binding var value: Float
     let metadata: ExportParamMetadata?
 
+    @State private var isEditing = false
+    @State private var editText = ""
+    @FocusState private var fieldFocused: Bool
+
+    private var isEditTextValid: Bool {
+        editText.isEmpty || Float(editText) != nil
+    }
+
+    private var fieldHelpText: String {
+        let lo = metadata?.min ?? 0
+        let hi = metadata?.max ?? 1
+        let unit = (metadata?.unit.isEmpty == false) ? " \(metadata!.unit)" : ""
+        let range = "\(String(format: "%g", lo))–\(String(format: "%g", hi))\(unit)"
+        if !isEditTextValid {
+            return "\"\(editText)\" is not a valid number. Enter a value between \(range)."
+        }
+        return "Valid range: \(range). Press Return to apply, Escape to cancel."
+    }
+
+    private var isSlider: Bool {
+        !(metadata?.isToggle ?? false) && !(metadata?.isChoice ?? false)
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Text(label)
                 .font(.caption)
-                .frame(width: 60, alignment: .leading)
+                .frame(width: 80, alignment: .leading)
                 .lineLimit(1)
 
             if let meta = metadata, meta.isToggle {
                 Spacer()
                 Toggle("", isOn: toggleBinding)
                     .labelsHidden()
+                    .accessibilityIdentifier("\(label)Toggle")
             } else if let meta = metadata, meta.isChoice, let options = meta.options {
                 Spacer()
                 Picker("", selection: choiceBinding(optionCount: options.count)) {
@@ -233,16 +257,76 @@ struct ExportParamSliderRow: View {
                     }
                 }
                 .labelsHidden()
+                .accessibilityIdentifier("\(label)Picker")
             } else if let meta = metadata {
                 DSPSlider(value: $value, range: meta.min...meta.max, onDoubleTap: { value = meta.`default` })
+                    .accessibilityIdentifier("\(label)Slider")
             } else {
                 DSPSlider(value: $value, range: 0...1, onDoubleTap: { value = 0.5 })
+                    .accessibilityIdentifier("\(label)Slider")
             }
 
-            Text(formattedValue)
-                .font(.caption.monospaced())
-                .frame(width: 64, alignment: .trailing)
+            if isEditing {
+                TextField("", text: $editText)
+                    .font(.caption.monospaced())
+                    .frame(width: 64)
+                    .textFieldStyle(.plain)
+                    .multilineTextAlignment(.trailing)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(isEditTextValid
+                                ? Color.accentColor.opacity(0.10)
+                                : Color.red.opacity(0.12))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(isEditTextValid
+                                ? Color.accentColor.opacity(0.5)
+                                : Color.red.opacity(0.8), lineWidth: 1)
+                    )
+                    .help(fieldHelpText)
+                    .focused($fieldFocused)
+                    .onSubmit { commitEdit(exitOnError: false) }
+                    .onChange(of: fieldFocused) { _, focused in
+                        if !focused { commitEdit(exitOnError: true) }
+                    }
+                    .onKeyPress(.escape) {
+                        isEditing = false
+                        return .handled
+                    }
+            } else {
+                Text(formattedValue)
+                    .font(.caption.monospaced())
+                    .frame(width: 64, alignment: .trailing)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.06)))
+                    .accessibilityIdentifier("\(label)Value")
+                    .onTapGesture {
+                        guard isSlider else { return }
+                        editText = String(format: "%g", value)
+                        isEditing = true
+                        fieldFocused = true
+                    }
+            }
         }
+    }
+
+    private func commitEdit(exitOnError: Bool = true) {
+        guard let parsed = Float(editText) else {
+            if exitOnError {
+                isEditing = false
+            } else {
+                fieldFocused = true
+            }
+            return
+        }
+        let lo = metadata?.min ?? 0
+        let hi = metadata?.max ?? 1
+        value = max(lo, min(hi, parsed))
+        isEditing = false
     }
 
     private var toggleBinding: Binding<Bool> {
