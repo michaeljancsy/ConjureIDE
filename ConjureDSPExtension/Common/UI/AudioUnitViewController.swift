@@ -59,6 +59,8 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var subscriptionManager: SubscriptionManager?
     private var gitHubService: GitHubService?
     private var terminalServer: TerminalServer?
+    /// Unique identifier for this AU instance — used for per-instance terminal discovery.
+    private let instanceID = UUID().uuidString
     private var paramNamesCancellable: AnyCancellable?
     private var paramMetadataCancellable: AnyCancellable?
     private var renderResourcesCancellable: AnyCancellable?
@@ -538,6 +540,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
             onExport: onExport,
             defaultBenchmark: initialBenchmark,
             appGroupContainerURL: appGroupContainerURL,
+            instanceID: instanceID,
             isBypassed: { [weak au] in au?.shouldBypassEffect ?? false },
             setBypass: { [weak au] bypass in au?.shouldBypassEffect = bypass }
         )
@@ -555,11 +558,11 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 
         // Start terminal/MCP infrastructure — direct access to the real AU, no proxy
         if terminalServer == nil {
-            let ts = TerminalServer(appGroupContainerURL: appGroupContainerURL)
+            let ts = TerminalServer(instanceID: instanceID, appGroupContainerURL: appGroupContainerURL)
             ts.mcpServer.toolProvider = au  // Set before start so first connection sees it
             ts.start()
             terminalServer = ts
-            log.info("Terminal server started with direct AU access")
+            log.info("Terminal server started with direct AU access (instance \(self.instanceID, privacy: .public))")
         }
 
         log.info("configureSwiftUIView done")

@@ -2,8 +2,8 @@
 //  TerminalView.swift
 //  ConjureDSPExtension
 //
-//  WKWebView wrapper for xterm.js terminal that connects to the host app's
-//  WebSocket relay to display Claude Code.
+//  WKWebView wrapper for xterm.js terminal that connects to this AU instance's
+//  dedicated WebSocket relay (provided by ConjureDSPTerminal companion app).
 //
 
 import os
@@ -15,6 +15,7 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExte
 struct TerminalView: NSViewRepresentable {
     var colorScheme: ColorScheme
     var appGroupContainerURL: URL?
+    var instanceID: String
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -61,7 +62,9 @@ struct TerminalView: NSViewRepresentable {
         }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(appGroupContainerURL: appGroupContainerURL) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(appGroupContainerURL: appGroupContainerURL, instanceID: instanceID)
+    }
 
     // MARK: - Coordinator
 
@@ -71,9 +74,11 @@ struct TerminalView: NSViewRepresentable {
         var lastTheme: String?
         var pendingTheme: ColorScheme?
         let appGroupContainerURL: URL?
+        let instanceID: String
 
-        init(appGroupContainerURL: URL?) {
+        init(appGroupContainerURL: URL?, instanceID: String) {
             self.appGroupContainerURL = appGroupContainerURL
+            self.instanceID = instanceID
         }
 
         func disconnect() {
@@ -120,19 +125,33 @@ struct TerminalView: NSViewRepresentable {
             }
         }
 
-        private func connectToWebSocket() {
+        /// Read the wsPort from this instance's JSON file and connect xterm.js.
+        /// Retries up to 30 times (1s intervals) to handle the race where the
+        /// AU registers before the terminal app has started the WebSocket.
+        private func connectToWebSocket(attempt: Int = 0) {
             guard let url = appGroupContainerURL else {
                 log.error("App Group container not available")
                 showFallbackMessage(); return
             }
-            let portFile = url.appendingPathComponent("terminal-server-port")
-            guard let s = try? String(contentsOf: portFile, encoding: .utf8),
-                  let port = UInt16(s.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                log.warning("WebSocket port file not found or unreadable at \(portFile.path, privacy: .public)")
-                showFallbackMessage(); return
+            let instanceFile = url
+                .appendingPathComponent("mcp-instances")
+                .appendingPathComponent("\(instanceID).json")
+            if let info = MCPInstanceInfo.read(from: instanceFile),
+               let wsPort = info.wsPort, wsPort > 0 {
+                log.info("Connecting to WebSocket on port \(wsPort) (instance \(self.instanceID, privacy: .public))")
+                webView?.evaluateJavaScript("terminalBridge.connect(\(wsPort))") { _, _ in }
+                return
             }
-            log.info("Connecting to WebSocket on port \(port)")
-            webView?.evaluateJavaScript("terminalBridge.connect(\(port))") { _, _ in }
+
+            // Retry — terminal app may not have processed this instance yet
+            if attempt < 30 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    self?.connectToWebSocket(attempt: attempt + 1)
+                }
+            } else {
+                log.warning("WebSocket port not available after 30 retries for instance \(self.instanceID, privacy: .public)")
+                showFallbackMessage()
+            }
         }
 
         private func showFallbackMessage() {

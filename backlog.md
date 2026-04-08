@@ -13,7 +13,7 @@
 ### v1 Release
 - NAM exports work
 - export pipeline flags/gates exporting NAM tones without explicit authorization from the creator of the tone
-- Terminal auto-quit: ConjureDSPTerminal stays running as an invisible orphan (LSUIElement) after DAW/host closes. Should auto-quit after inactivity (no WebSocket connections, no MCP port file).
+- Terminal auto-quit: ConjureDSPTerminal stays running as an invisible orphan (LSUIElement) after DAW/host closes. Should auto-quit after inactivity (no active sessions in mcp-instances/).
 - Landing page (static site with Buy + Download)
 - Single-source download URL config: one config file in the repo defining the canonical download link, referenced everywhere (landing page, in-app links, etc.) so it only needs updating in one place
 
@@ -23,6 +23,9 @@
 ### Bugs
 - Cmd+Shift+A triggers Ableton's project save as dialog instead of the extension's save as dialog
 
+### UX
+- Make the ConjureDSPTerminal (companion app) icon visible in the Dock so users can see when it's running
+
 ### Other
 - Export AU instantiation tests: add integration tests that instantiate exported AUs via `AVAudioUnitComponentManager` (the full DAW loading path) rather than just testing the Rust FFI directly. Would catch issues like Debug template stubs, `findPythonHome` sandbox failures, PluginKit registration, and parameter tree setup — bugs that the current `ExportDSPIntegrationTests` miss because they bypass the Swift AU class.
 - Self-contained Python exports: option to bundle a Python runtime directory inside the exported AU (in Resources/python-dist), making Python exports shareable across machines without requiring ConjureDSP to be installed. Tradeoff is ~100MB per exported AU.
@@ -30,6 +33,7 @@
 
 ## Done
 
+- Multi-instance terminal support: each AU instance gets its own dedicated Claude Code PTY + WebSocket pair. Discovery uses mcp-instances/{uuid}.json directory instead of single port file. Terminal app manages multiple concurrent sessions, with per-instance health checks and stale PID cleanup. (2026-04-08)
 - Embed terminal + fix macOS 26 TCC loop: embedded ConjureDSPTerminal in host app bundle (single DMG), deduplicated python-dist/rustc-dist, replaced manual Group Containers path with `containerURL(forSecurityApplicationGroupIdentifier:)` to fix endless `kTCCServiceSystemPolicyAppData` prompts, replaced URL scheme launch with `openApplication(at:)` to fix `kTCCServiceAppleEvents`, switched R2 uploads from wrangler to rclone (2026-04-08)
 - Release pipeline end-to-end: fixed Xcode 17 archive/export issues (ONLY_ACTIVE_ARCH, manual signing, -exportArchive bypass), added Developer ID signing for all bundled binaries (Sparkle, python-dist, rustc-dist), bundle size reduction (stripped tests/cache/pip/sanitizers/cargo: 917MB→761MB, DMG 273MB), DMG sizing fix, Sparkle appcast generation, R2 upload. Notarization creds stored in Keychain. (2026-04-07)
 - Host-side NAM inference for Rust/WASM presets: fixed two WaveNet buffer bugs (ping-pong addressing, cross-array head accumulation order), moved NAM inference from WASM sandbox to native host via `__conjuredsp_nam_process` import, added native Accelerate to accel module, fixed debug-mode optimization (15x speedup), zero-copy host import, WasmCache invalidation on rlib change (2026-04-03)

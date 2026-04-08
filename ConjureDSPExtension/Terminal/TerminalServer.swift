@@ -5,6 +5,11 @@
 //  Manages the MCP server (in-process, direct AU access). The PTY and
 //  WebSocket relay run in the separate ConjureDSPTerminal companion app.
 //
+//  Each AU instance gets a unique ID. The instance registers itself by
+//  writing mcp-instances/{instanceID}.json to the App Group container.
+//  The terminal app watches that directory and spins up a dedicated
+//  PTY + WebSocket pair per instance.
+//
 
 import Foundation
 import os.log
@@ -16,29 +21,28 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "T
 final class TerminalServer {
 
     let mcpServer: MCPServer
+    let instanceID: String
     private let appGroupContainerURL: URL?
     private var heartbeatTask: Task<Void, Never>?
 
-    init(appGroupContainerURL: URL?) {
+    init(instanceID: String, appGroupContainerURL: URL?) {
+        self.instanceID = instanceID
         self.appGroupContainerURL = appGroupContainerURL
         self.mcpServer = MCPServer(appGroupContainerURL: appGroupContainerURL)
     }
 
     // MARK: - Lifecycle
 
-    /// Start the MCP server and signal readiness to the companion app.
+    /// Start the MCP server and register this instance for discovery.
     func start() {
-        // Clean up any stale shutdown signal from a previous session
-        deleteAppGroupFile("terminal-shutdown")
-
         mcpServer.start()
 
-        // Wait for port assignment then write to App Group
+        // Wait for port assignment then write instance file
         Task { @MainActor in
             for _ in 0..<40 {
                 if let port = mcpServer.port, port > 0 {
-                    writeMCPPortToAppGroup()
-                    log.info("MCP server ready on port \(port)")
+                    writeInstanceFile()
+                    log.info("MCP server ready on port \(port) (instance \(self.instanceID, privacy: .public))")
                     self.startHeartbeat()
                     return
                 }
@@ -49,12 +53,11 @@ final class TerminalServer {
         }
     }
 
-    /// Stop the MCP server, clean up port file, and signal the companion app to reset.
+    /// Stop the MCP server and remove this instance's registration file.
     /// Nonisolated so it can be called from deinit.
     nonisolated func stop() {
-        // File operations are safe from any thread
-        deleteAppGroupFile("mcp-server-port")
-        writeAppGroupFile("terminal-shutdown", content: "\(ProcessInfo.processInfo.processIdentifier)")
+        // Remove instance file
+        deleteInstanceFile()
 
         // MCP server stop and heartbeat cancel must happen on main actor
         Task { @MainActor [mcpServer, weak self] in
@@ -63,49 +66,70 @@ final class TerminalServer {
             mcpServer.stop()
         }
 
-        log.info("Terminal server stopped — shutdown signal written")
+        log.info("Terminal server stopped — instance \(self.instanceID, privacy: .public) deregistered")
     }
 
-    /// Periodically re-write the MCP port file so the daemon can rediscover
-    /// the extension if the file gets deleted (e.g., after health check failures).
+    /// Periodically re-write the instance file so the terminal app can
+    /// rediscover this instance if the file gets deleted.
     private func startHeartbeat() {
         heartbeatTask?.cancel()
         heartbeatTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
-                guard !Task.isCancelled, let self, let port = self.mcpServer.port else { break }
-                self.writeMCPPortToAppGroup()
+                guard !Task.isCancelled, let self, self.mcpServer.port != nil else { break }
+                self.writeInstanceFile()
             }
         }
     }
 
-    // MARK: - App Group helpers
+    // MARK: - Instance file helpers
 
-    nonisolated private func appGroupURL() -> URL? {
-        appGroupContainerURL
+    /// URL of the mcp-instances directory in the App Group container.
+    nonisolated private func instancesDirectoryURL() -> URL? {
+        guard let url = appGroupContainerURL else { return nil }
+        return url.appendingPathComponent("mcp-instances")
     }
 
-    private func writeMCPPortToAppGroup() {
+    /// URL of this instance's JSON file.
+    nonisolated private func instanceFileURL() -> URL? {
+        guard let dir = instancesDirectoryURL() else { return nil }
+        return dir.appendingPathComponent("\(instanceID).json")
+    }
+
+    /// Write this instance's JSON registration file.
+    /// Only writes when the file is missing or the mcpPort has changed,
+    /// to avoid racing with the terminal app's wsPort writes.
+    private func writeInstanceFile() {
         guard let port = mcpServer.port else { return }
-        writeAppGroupFile("mcp-server-port", content: "\(port)")
-    }
-
-    nonisolated private func writeAppGroupFile(_ name: String, content: String) {
-        guard let url = appGroupURL() else {
+        guard let fileURL = instanceFileURL(),
+              let dirURL = instancesDirectoryURL() else {
             log.warning("Failed to get App Group container URL")
             return
         }
-        let file = url.appendingPathComponent(name)
+
+        // If the file already exists with the correct mcpPort, skip writing.
+        // The heartbeat calls this periodically for recovery (file deleted),
+        // but we must not overwrite the terminal app's wsPort field.
+        if let existing = MCPInstanceInfo.read(from: fileURL),
+           existing.mcpPort == port {
+            return
+        }
+
         do {
-            try content.write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
+
+            var info = MCPInstanceInfo(mcpPort: port)
+            info.pid = Int32(ProcessInfo.processInfo.processIdentifier)
+            info.createdAt = Date().timeIntervalSince1970
+            try info.write(to: fileURL)
         } catch {
-            log.warning("Failed to write \(name): \(error.localizedDescription, privacy: .public)")
+            log.warning("Failed to write instance file: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    nonisolated private func deleteAppGroupFile(_ name: String) {
-        guard let url = appGroupURL() else { return }
-        let file = url.appendingPathComponent(name)
-        try? FileManager.default.removeItem(at: file)
+    /// Remove this instance's registration file.
+    nonisolated private func deleteInstanceFile() {
+        guard let fileURL = instanceFileURL() else { return }
+        try? FileManager.default.removeItem(at: fileURL)
     }
 }
