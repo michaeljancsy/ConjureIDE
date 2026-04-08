@@ -14,7 +14,7 @@ async function handleDownload(): Promise<Response> {
     return new Response("No release found", { status: 503 });
   }
   const dmgUrl = match[1];
-  const redirectUrl = `https://conjuredsp.com/downloaded?file=${encodeURIComponent(dmgUrl)}`;
+  const redirectUrl = `https://www.conjuredsp.com/downloaded?file=${encodeURIComponent(dmgUrl)}`;
   return Response.redirect(redirectUrl, 302);
 }
 
