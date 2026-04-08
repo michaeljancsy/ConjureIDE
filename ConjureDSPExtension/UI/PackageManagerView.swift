@@ -34,7 +34,7 @@ struct PackageManagerView: View {
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>?
     @State private var confirmUninstall: String?
-    @State private var showErrorLog = false
+    @State private var errorLogText: String?
 
     struct SearchResult: Identifiable {
         var id: String { name }
@@ -185,7 +185,7 @@ struct PackageManagerView: View {
                 }
 
                 if let error = lastError {
-                    Button(action: { showErrorLog = true }) {
+                    Button(action: { errorLogText = error }) {
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundColor(.orange)
@@ -217,9 +217,12 @@ struct PackageManagerView: View {
             installManager.refreshInstalledPackages()
             crateInstallManager.refreshInstalledCrates()
         }
-        .sheet(isPresented: $showErrorLog) {
-            if let error = lastError {
-                BuildLogView(log: error)
+        .sheet(isPresented: .init(
+            get: { errorLogText != nil },
+            set: { if !$0 { errorLogText = nil } }
+        )) {
+            if let text = errorLogText {
+                BuildLogView(log: text)
             }
         }
         .alert("Uninstall", isPresented: .init(
