@@ -26,6 +26,12 @@
 
 set -euo pipefail
 
+SKIP_NOTARIZE=false
+if [[ "${1:-}" == "--skip-notarize" ]]; then
+    SKIP_NOTARIZE=true
+    shift
+fi
+
 # Ensure Homebrew binaries are on PATH (needed for wrangler/node)
 export PATH="/opt/homebrew/bin:$PATH"
 
@@ -49,8 +55,12 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_P
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
 
 echo ""
-echo "[2/6] Notarizing app..."
-"$SCRIPT_DIR/notarize.sh" "$APP_PATH"
+if $SKIP_NOTARIZE; then
+    echo "[2/6] Skipping app notarization (--skip-notarize)"
+else
+    echo "[2/6] Notarizing app..."
+    "$SCRIPT_DIR/notarize.sh" "$APP_PATH"
+fi
 
 echo ""
 echo "[3/6] Creating DMG..."
@@ -58,8 +68,12 @@ DMG_PATH="$OUTPUT_DIR/ConjureDSP-${VERSION}.dmg"
 "$SCRIPT_DIR/create-dmg.sh" "$APP_PATH" "$DMG_PATH"
 
 echo ""
-echo "[4/6] Notarizing DMG..."
-"$SCRIPT_DIR/notarize.sh" "$DMG_PATH"
+if $SKIP_NOTARIZE; then
+    echo "[4/6] Skipping DMG notarization (--skip-notarize)"
+else
+    echo "[4/6] Notarizing DMG..."
+    "$SCRIPT_DIR/notarize.sh" "$DMG_PATH"
+fi
 
 echo ""
 echo "[5/6] Generating Sparkle appcast..."
@@ -172,6 +186,14 @@ if command -v rclone >/dev/null 2>&1 && [ -f "$APPCAST_DIR/appcast.xml" ]; then
         rclone copyto "$APPCAST_DIR/versions.html" "${R2_REMOTE}/versions.html" \
             --header-upload "Content-Type: text/html; charset=utf-8"
     fi
+    # Upload Sparkle delta files (small binary diffs for incremental updates)
+    for delta in "$APPCAST_DIR"/*.delta; do
+        [ -f "$delta" ] || continue
+        DELTA_NAME=$(basename "$delta")
+        echo "  Uploading delta $DELTA_NAME..."
+        rclone copyto "$delta" "${R2_REMOTE}/${DELTA_NAME}" \
+            --header-upload "Content-Type: application/octet-stream"
+    done
     echo "  Uploaded to ${UPDATES_BASE_URL}/"
 else
     echo "  WARNING: skipping upload. Install rclone and configure the 'r2' remote,"
