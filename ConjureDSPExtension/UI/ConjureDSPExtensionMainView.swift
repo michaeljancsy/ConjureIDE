@@ -11,8 +11,17 @@ import SwiftUI
 struct ScriptSaveResult {
     let success: Bool
     let error: String?
+    let warning: String?
     let processTimeMs: Double?
     let budgetMs: Double?
+
+    init(success: Bool, error: String? = nil, warning: String? = nil, processTimeMs: Double? = nil, budgetMs: Double? = nil) {
+        self.success = success
+        self.error = error
+        self.warning = warning
+        self.processTimeMs = processTimeMs
+        self.budgetMs = budgetMs
+    }
 }
 
 struct ConjureDSPExtensionMainView: View {
@@ -53,6 +62,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var scriptSource: String = ""
     @State private var selectedLanguage: ScriptLanguage = .python
     @State private var errorMessage: String?
+    @State private var warningMessage: String?
     @State private var editorMarkers: [MonacoEditorView.Marker] = []
     @State private var showingSaveAs = false
     @State private var saveAsName = ""
@@ -293,6 +303,7 @@ struct ConjureDSPExtensionMainView: View {
                 StatusBarView(
                     isCompiling: isCompiling,
                     errorMessage: errorMessage,
+                    warningMessage: warningMessage,
                     processProfiler: processProfiler,
                     memoryMonitor: memoryMonitor,
                     lastBenchmark: lastBenchmark,
@@ -450,7 +461,9 @@ struct ConjureDSPExtensionMainView: View {
             scriptSource = change.source
             lastRunSource = change.source
             selectedLanguage = ScriptLanguage.detect(from: change.source)
-            // Clear error — this fires after successful compile (preset select, AI fix, fullState restore)
+            // Clear error — this fires after successful compile (preset select, AI fix, fullState restore).
+            // warningMessage is NOT cleared here: handleResult manages it, and clearing here
+            // would race with handleResult during preset selection, making warnings invisible.
             errorMessage = nil
             editorMarkers = []
             if let processTimeMs = change.processTimeMs, let budgetMs = change.budgetMs {
@@ -513,6 +526,7 @@ struct ConjureDSPExtensionMainView: View {
     private func handleResult(_ result: ScriptSaveResult) {
         if result.success {
             errorMessage = nil
+            warningMessage = result.warning
             editorMarkers = []
             if let processTimeMs = result.processTimeMs, let budgetMs = result.budgetMs {
                 lastBenchmark = (processTimeMs, budgetMs)
@@ -521,6 +535,7 @@ struct ConjureDSPExtensionMainView: View {
             }
         } else {
             lastBenchmark = nil
+            warningMessage = nil
             let errorStr = result.error ?? "Unknown error"
             errorMessage = errorStr
             let parsed = ErrorLineParser.parse(errorStr, language: selectedLanguage)
@@ -580,6 +595,7 @@ private struct MeterBar: View {
 private struct StatusBarView: View {
     var isCompiling: Bool
     var errorMessage: String?
+    var warningMessage: String?
     @ObservedObject var processProfiler: ProcessProfiler
     @ObservedObject var memoryMonitor: MemoryMonitor
     var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
@@ -623,6 +639,13 @@ private struct StatusBarView: View {
                     Image(systemName: "doc.on.doc")
                 }
                 .buttonStyle(.borderless)
+            } else if let warn = warningMessage {
+                Image(systemName: "info.circle")
+                    .foregroundColor(.orange)
+                Text(warn)
+                    .foregroundColor(.orange)
+                    .lineLimit(3)
+                    .accessibilityIdentifier("warningStatus")
             } else if processProfiler.isActive {
                 let budget = processProfiler.budgetMs
                 let avgFrac = budget > 0 ? processProfiler.avgMs / budget : 0

@@ -2,7 +2,13 @@ use conjuredsp::*;
 
 setup!();
 
-conjuredsp::nam!("tone3000://60092/351559");
+// Fender Super Reverb 1977
+// https://www.tone3000.com/tones/fender-super-reverb-1977-19
+//
+// To load this tone, open the Tones panel from the toolbar,
+// search for "Fender Super Reverb 1977", download the
+// "EQ Flat, Volume 3, sm57 and AKG 414" model, then click Run.
+conjuredsp::nam!("tone3000://19/56");
 
 
 params! {

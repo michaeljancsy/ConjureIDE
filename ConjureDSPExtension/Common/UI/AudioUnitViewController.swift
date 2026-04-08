@@ -297,7 +297,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                 "language": ScriptLanguage.detect(from: source).rawValue,
                 "success": result.success,
             ])
-            return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
+            return ScriptSaveResult(success: result.success, error: result.error, warning: result.warning, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
         }
 
         // Select preset: load into kernel + update preset manager
