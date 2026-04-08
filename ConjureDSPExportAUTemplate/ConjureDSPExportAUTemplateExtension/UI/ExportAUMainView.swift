@@ -172,8 +172,10 @@ struct ExportParamSliderRow: View {
                 .labelsHidden()
             } else if let meta = metadata {
                 Slider(value: $value, in: meta.min...meta.max)
+                    .onTapGesture(count: 2) { value = meta.`default` }
             } else {
                 Slider(value: $value, in: 0...1)
+                    .onTapGesture(count: 2) { value = 0.5 }
             }
 
             Text(formattedValue)
