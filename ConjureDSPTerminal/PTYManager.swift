@@ -22,6 +22,11 @@ final class PTYManager {
         case error(String)
     }
 
+    enum AgentMode: String {
+        case claude   // auto-launch Claude Code if found (default)
+        case manual   // open shell only; user manages their own MCP agent
+    }
+
     /// Current state of the pty/process.
     private(set) var state: State = .idle
 
@@ -165,23 +170,47 @@ final class PTYManager {
         waitSrc.resume()
         waitSource = waitSrc
 
-        // Auto-launch Claude Code after shell initializes.
-        // Define a shell alias so re-typing `claude` after exit reconnects to MCP.
-        if let claudePath {
-            var fullCmd = "\(shellQuote(claudePath)) --allowedTools 'mcp__conjuredsp__*'"
+        // Build the full Claude launch command (with MCP flags) used in both claude-mode branches.
+        func buildClaudeFullCmd(path: String) -> String {
+            var cmd = "\(shellQuote(path)) --allowedTools 'mcp__conjuredsp__*'"
             if let contextPath = contextFilePath {
-                fullCmd += " --append-system-prompt-file \(shellQuote(contextPath))"
+                cmd += " --append-system-prompt-file \(shellQuote(contextPath))"
             }
             if let mcpPath = mcpConfigPath {
-                fullCmd += " --mcp-config \(shellQuote(mcpPath))"
+                cmd += " --mcp-config \(shellQuote(mcpPath))"
             }
-            let aliasCmd = "alias claude=\(shellQuote(fullCmd))\n"
-            let launchCmd = aliasCmd + "claude\n"
+            return cmd
+        }
+
+        let mcpURL = mcpServerPort.map { "http://localhost:\($0)/mcp" } ?? "http://localhost:<port>/mcp"
+        let modeSetup = buildModeSetupCommands()
+
+        switch readAgentMode() {
+        case .claude:
+            if let claudePath {
+                // Auto-launch Claude Code; alias lets the user re-launch after exit.
+                let fullCmd = buildClaudeFullCmd(path: claudePath)
+                let aliasCmd = "alias claude=\(shellQuote(fullCmd))"
+                let cmd = modeSetup + "\n" + aliasCmd + "\nclaude\n"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    self?.write(cmd)
+                }
+            } else {
+                ptyLog.warning("Claude Code CLI not found — showing install prompt")
+                // Alias points to bare `command claude` so it works once the user installs.
+                let fullCmd = buildClaudeFullCmd(path: "command claude")
+                let aliasCmd = "alias claude=\(shellQuote(fullCmd))"
+                let cmd = modeSetup + "\n" + aliasCmd + "\n" + buildWelcomeCommand(mcpURL: mcpURL) + "\n"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    self?.write(cmd)
+                }
+            }
+        case .manual:
+            ptyLog.info("External agent mode — skipping Claude auto-launch")
+            let cmd = modeSetup + "\n" + buildExternalAgentBanner(mcpURL: mcpURL) + "\n"
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.write(launchCmd)
+                self?.write(cmd)
             }
-        } else {
-            ptyLog.warning("Claude Code CLI not found — shell started without auto-launch")
         }
     }
 
@@ -352,6 +381,18 @@ final class PTYManager {
         }
         return NSHomeDirectory()
     }()
+
+    /// Path to the agent mode preference file.
+    static let agentModeFilePath: String =
+        realHomeDirectory + "/Library/Application Support/ConjureDSP/agent-mode"
+
+    /// Read the persisted agent mode. Defaults to `.claude` if file is absent or unrecognised.
+    private func readAgentMode() -> AgentMode {
+        guard let raw = try? String(contentsOfFile: Self.agentModeFilePath, encoding: .utf8) else {
+            return .claude
+        }
+        return AgentMode(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines)) ?? .claude
+    }
 
     /// Build environment variables for the child process.
     private func buildEnvironment() -> [String] {
@@ -539,6 +580,56 @@ final class PTYManager {
     is still loaded — always call `get_script` to check before deciding whether to modify or replace. \
     Do not rely on conversation memory for what script is currently active.
     """
+
+    /// Shell function definitions for switching agent mode, written on every terminal start.
+    /// The functions write to the preference file and print a confirmation message.
+    private func buildModeSetupCommands() -> String {
+        let prefPath = shellQuote(Self.agentModeFilePath)
+        let prefDir  = shellQuote((Self.agentModeFilePath as NSString).deletingLastPathComponent)
+        let useClaude   = "conjure-use-claude()   { mkdir -p \(prefDir); echo claude > \(prefPath); printf '\\033[32mClaude Code will auto-launch next session. Restart the terminal to apply.\\033[0m\\n'; }"
+        let useExternal = "conjure-use-external() { mkdir -p \(prefDir); echo manual > \(prefPath); printf '\\033[32mExternal agent mode set. Claude will not auto-launch next session.\\033[0m\\n'; }"
+        return useClaude + "\n" + useExternal
+    }
+
+    /// printf command that displays install instructions when Claude Code is not found.
+    private func buildWelcomeCommand(mcpURL: String) -> String {
+        let msg = [
+            "",
+            "\\033[1;36m  ConjureDSP - AI Terminal\\033[0m",
+            "  -----------------------------------------",
+            "",
+            "  Claude Code CLI was not found.",
+            "  This terminal connects an AI coding agent to ConjureDSP via MCP,",
+            "  enabling it to compile scripts, adjust parameters, and test audio.",
+            "",
+            "  \\033[1mTo install Claude Code (requires Node.js):\\033[0m",
+            "",
+            "    npm install -g @anthropic-ai/claude-code",
+            "",
+            "  After installing, type claude to start.",
+            "",
+            "  \\033[2mUsing a different MCP-compatible agent? Connect it to:\\033[0m",
+            "  \\033[2m  \(mcpURL)\\033[0m",
+            "  \\033[2mThen type conjure-use-external to disable this message.\\033[0m",
+            "",
+        ].joined(separator: "\\n")
+        return "printf '\(msg)\\n'"
+    }
+
+    /// printf command that displays the MCP URL when the user has chosen external agent mode.
+    private func buildExternalAgentBanner(mcpURL: String) -> String {
+        let msg = [
+            "",
+            "\\033[1;36m  ConjureDSP - AI Terminal  \\033[2m[external agent mode]\\033[0m",
+            "  -----------------------------------------",
+            "",
+            "  \\033[32mMCP server: \(mcpURL)\\033[0m",
+            "",
+            "  \\033[2mType conjure-use-claude to switch back to Claude Code auto-launch.\\033[0m",
+            "",
+        ].joined(separator: "\\n")
+        return "printf '\(msg)\\n'"
+    }
 
     /// Shell-escape a path by wrapping in single quotes (handles spaces, parens, etc.).
     private func shellQuote(_ path: String) -> String {
