@@ -315,6 +315,8 @@ class TerminalAppServer {
     // MARK: - Health checks
 
     private func healthCheckAllSessions() async {
+        // Snapshot the keys to avoid mutating `sessions` during iteration.
+        var uuidsToTearDown: [String] = []
         for (uuid, session) in sessions {
             let healthy = await checkMCPHealth(port: session.mcpPort)
             if healthy {
@@ -322,13 +324,15 @@ class TerminalAppServer {
             } else {
                 session.healthCheckFailCount += 1
                 if session.healthCheckFailCount >= healthCheckThreshold {
-                    log.info("MCP server for \(uuid, privacy: .public) unreachable after \(session.healthCheckFailCount) checks — tearing down")
-                    teardownSession(uuid: uuid)
-                    // Remove the stale instance file too
-                    let file = instancesDirectoryURL().appendingPathComponent("\(uuid).json")
-                    try? FileManager.default.removeItem(at: file)
+                    log.info("MCP server for \(uuid, privacy: .public) unreachable after \(session.healthCheckFailCount) checks — scheduling teardown")
+                    uuidsToTearDown.append(uuid)
                 }
             }
+        }
+        for uuid in uuidsToTearDown {
+            teardownSession(uuid: uuid)
+            let file = instancesDirectoryURL().appendingPathComponent("\(uuid).json")
+            try? FileManager.default.removeItem(at: file)
         }
     }
 
