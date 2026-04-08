@@ -275,16 +275,16 @@ final class CrateInstallManager {
                 }
             }
         } else {
-            let errorMsg = result.error ?? "Unknown error"
-            log.error("Crate operation failed: \(errorMsg, privacy: .public)")
-            lastError = errorMsg
+            let rawError = result.error ?? "Unknown error"
+            log.error("Crate operation failed: \(rawError, privacy: .public)")
+            lastError = Self.userFriendlyError(rawError)
             let names = result.crates.joined(separator: ", ")
             let operation = wasUninstall ? "uninstall" : "install"
             SentryHelper.capture(
                 "Crate \(operation) failed: \(names)",
                 level: .error,
                 category: "crates",
-                extra: ["crates": names, "error": errorMsg]
+                extra: ["crates": names, "error": rawError]
             )
         }
     }
@@ -346,6 +346,21 @@ final class CrateInstallManager {
     /// Returns the directory containing installed rlibs, for rustc `-L` flag.
     nonisolated static func cratesLibURL() -> URL {
         containerURL().appendingPathComponent(rlibDir)
+    }
+
+    // MARK: - Error messages
+
+    /// Prepends a user-friendly explanation to cargo errors when the failure is a
+    /// recognizable class (e.g. build script failures during cross-compilation).
+    private static func userFriendlyError(_ raw: String) -> String {
+        // Build script failures: the crate has native/system dependencies that
+        // can't cross-compile to WebAssembly (e.g. pyo3, openssl-sys, cmake).
+        if raw.contains("failed to run custom build command for") {
+            return "This crate has a build script that failed during WebAssembly cross-compilation. "
+                + "It likely depends on system libraries or native bindings not available in WASM.\n\n"
+                + raw
+        }
+        return raw
     }
 
     // MARK: - Helpers
