@@ -257,14 +257,26 @@ final class CrateInstaller {
         // Create a rustc wrapper script that sets DYLD_LIBRARY_PATH before exec.
         // macOS SIP strips DYLD_* env vars from child processes of signed binaries,
         // so cargo's spawned rustc won't inherit our DYLD_LIBRARY_PATH directly.
+        //
+        // --sysroot is only passed when compiling for wasm32-wasip1. Cargo also
+        // invokes rustc for host-target build scripts and proc-macros; those need
+        // the default sysroot so proc_macro and other host crates resolve correctly.
+        // Baked into the wrapper (not RUSTFLAGS) because RUSTFLAGS splits on
+        // whitespace and the sysroot path may contain spaces ("Group Containers").
         let rustcWrapper = tempDir.appendingPathComponent("rustc-wrapper.sh")
-        let wrapperScript = "#!/bin/bash\nexport DYLD_LIBRARY_PATH=\"\(sysrootPath)/lib\"\nexec \"\(rustcPath)\" --sysroot \"\(sysrootPath)\" \"$@\"\n"
+        let wrapperScript = """
+        #!/bin/bash
+        export DYLD_LIBRARY_PATH="\(sysrootPath)/lib"
+        for arg in "$@"; do
+            if [ "$arg" = "wasm32-wasip1" ]; then
+                exec "\(rustcPath)" --sysroot "\(sysrootPath)" "$@"
+            fi
+        done
+        exec "\(rustcPath)" "$@"
+
+        """
         try wrapperScript.write(to: rustcWrapper, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rustcWrapper.path)
-
-        // Bake --sysroot into the wrapper script instead of RUSTFLAGS,
-        // because RUSTFLAGS splits on whitespace and the sysroot path
-        // may contain spaces (e.g. "Group Containers").
         var env: [String: String] = [
             "CARGO_HOME": cargoHome,
             "RUSTC": rustcWrapper.path,
