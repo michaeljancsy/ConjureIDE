@@ -236,6 +236,12 @@ final class CrateInstaller {
         let cargoHome = appGroupURL.appendingPathComponent("cargo-home").path
         try fm.createDirectory(atPath: cargoHome, withIntermediateDirectories: true)
 
+        // Remove stale package-cache lock file left by previously killed cargo processes.
+        // Without this, cargo blocks with "Blocking waiting for file lock on package cache"
+        // until the lock times out.
+        let lockFile = URL(fileURLWithPath: cargoHome).appendingPathComponent(".package-cache")
+        try? fm.removeItem(at: lockFile)
+
         // Use .cargo/config.toml to pass --sysroot only for wasm32-wasip1.
         // This is critical: cargo also invokes rustc for host-target build scripts
         // and proc-macros. Those MUST use the default sysroot (which includes host
