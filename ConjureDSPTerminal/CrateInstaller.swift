@@ -254,24 +254,34 @@ final class CrateInstaller {
         let cargoHome = appGroupURL.appendingPathComponent("cargo-home").path
         try fm.createDirectory(atPath: cargoHome, withIntermediateDirectories: true)
 
+        // Use .cargo/config.toml to pass --sysroot only for wasm32-wasip1.
+        // This is critical: cargo also invokes rustc for host-target build scripts
+        // and proc-macros. Those MUST use the default sysroot (which includes host
+        // standard libraries). A rustc wrapper script that conditionally passes
+        // --sysroot interferes with cargo's --extern flag passing for build-script
+        // dependencies, causing "can't find crate" errors for proc-macros.
+        //
+        // Cargo config's [target.wasm32-wasip1] rustflags only apply to the cross
+        // target, leaving host compilations untouched.
+        let cargoConfigDir = tempDir.appendingPathComponent(".cargo")
+        try fm.createDirectory(at: cargoConfigDir, withIntermediateDirectories: true)
+        let cargoConfig = """
+        [target.wasm32-wasip1]
+        rustflags = ["--sysroot", "\(sysrootPath)"]
+        """
+        try cargoConfig.write(
+            to: cargoConfigDir.appendingPathComponent("config.toml"),
+            atomically: true, encoding: .utf8
+        )
+
         // Create a rustc wrapper script that sets DYLD_LIBRARY_PATH before exec.
         // macOS SIP strips DYLD_* env vars from child processes of signed binaries,
         // so cargo's spawned rustc won't inherit our DYLD_LIBRARY_PATH directly.
-        //
-        // --sysroot is only passed when compiling for wasm32-wasip1. Cargo also
-        // invokes rustc for host-target build scripts and proc-macros; those need
-        // the default sysroot so proc_macro and other host crates resolve correctly.
-        // Baked into the wrapper (not RUSTFLAGS) because RUSTFLAGS splits on
-        // whitespace and the sysroot path may contain spaces ("Group Containers").
+        // The wrapper does NOT set --sysroot (handled by cargo config above).
         let rustcWrapper = tempDir.appendingPathComponent("rustc-wrapper.sh")
         let wrapperScript = """
         #!/bin/bash
         export DYLD_LIBRARY_PATH="\(sysrootPath)/lib"
-        for arg in "$@"; do
-            if [ "$arg" = "wasm32-wasip1" ]; then
-                exec "\(rustcPath)" --sysroot "\(sysrootPath)" "$@"
-            fi
-        done
         exec "\(rustcPath)" "$@"
 
         """
