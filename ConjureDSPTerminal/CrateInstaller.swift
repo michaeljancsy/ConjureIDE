@@ -171,7 +171,7 @@ final class CrateInstaller {
     private func installCrates(_ newCrates: [CrateSpec]) async throws {
         // Reject built-in crate names to avoid conflicts with the bundled rlib
         for crate in newCrates {
-            if crate.name.lowercased().replacingOccurrences(of: "-", with: "_") == "conjuredsp" {
+            if Self.isBuiltInCrate(crate.name) {
                 throw CrateInstallerError.buildFailed("conjuredsp is a built-in crate and cannot be installed as a dependency")
             }
         }
@@ -228,26 +228,7 @@ final class CrateInstaller {
         try "".write(to: tempDir.appendingPathComponent("src/lib.rs"), atomically: true, encoding: .utf8)
 
         // Write Cargo.toml with all user-requested crates.
-        // Keys use hyphens (the canonical crates.io / Cargo.toml form).
-        var depsSection = ""
-        for (name, version) in userCrates.sorted(by: { $0.key < $1.key }) {
-            depsSection += "\(name) = \"\(version)\"\n"
-        }
-
-        let cargoToml = """
-        [package]
-        name = "conjuredsp-user-deps"
-        version = "0.1.0"
-        edition = "2021"
-
-        [dependencies]
-        \(depsSection)
-        [lib]
-        crate-type = ["rlib"]
-
-        [profile.release]
-        opt-level = 2
-        """
+        let cargoToml = Self.generateCargoToml(userCrates: userCrates)
         try cargoToml.write(to: tempDir.appendingPathComponent("Cargo.toml"), atomically: true, encoding: .utf8)
 
         // Run cargo build
@@ -265,10 +246,7 @@ final class CrateInstaller {
         // target, leaving host compilations untouched.
         let cargoConfigDir = tempDir.appendingPathComponent(".cargo")
         try fm.createDirectory(at: cargoConfigDir, withIntermediateDirectories: true)
-        let cargoConfig = """
-        [target.wasm32-wasip1]
-        rustflags = ["--sysroot", "\(sysrootPath)"]
-        """
+        let cargoConfig = Self.generateCargoConfig(sysrootPath: sysrootPath)
         try cargoConfig.write(
             to: cargoConfigDir.appendingPathComponent("config.toml"),
             atomically: true, encoding: .utf8
@@ -279,12 +257,7 @@ final class CrateInstaller {
         // so cargo's spawned rustc won't inherit our DYLD_LIBRARY_PATH directly.
         // The wrapper does NOT set --sysroot (handled by cargo config above).
         let rustcWrapper = tempDir.appendingPathComponent("rustc-wrapper.sh")
-        let wrapperScript = """
-        #!/bin/bash
-        export DYLD_LIBRARY_PATH="\(sysrootPath)/lib"
-        exec "\(rustcPath)" "$@"
-
-        """
+        let wrapperScript = Self.generateWrapperScript(sysrootPath: sysrootPath, rustcPath: rustcPath)
         try wrapperScript.write(to: rustcWrapper, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rustcWrapper.path)
         var env: [String: String] = [
@@ -303,6 +276,7 @@ final class CrateInstaller {
             "--release",
             "--target", "wasm32-wasip1",
             "--manifest-path", tempDir.appendingPathComponent("Cargo.toml").path,
+            "-v",
         ]
 
         log.info("Running cargo build with \(userCrates.count) crate(s)")
@@ -355,21 +329,12 @@ final class CrateInstaller {
 
         for file in contents {
             let filename = file.lastPathComponent
-            guard filename.hasPrefix("lib") && filename.hasSuffix(".rlib") else { continue }
-
-            // Skip std library rlibs (they start with lib followed by std/core/alloc/etc.)
-            let stdCrates = ["std", "core", "alloc", "compiler_builtins", "panic_abort",
-                             "panic_unwind", "rustc_std_workspace_core", "rustc_std_workspace_alloc",
-                             "unwind", "proc_macro", "rustc_demangle", "hashbrown", "cfg_if",
-                             "libc", "wasi", "getopts", "unicode_width"]
 
             // Parse crate name from rlib filename: lib<name>-<hash>.rlib
-            let stem = String(filename.dropFirst(3).dropLast(5)) // remove "lib" and ".rlib"
-            guard let dashIdx = stem.lastIndex(of: "-") else { continue }
-            let crateName = String(stem[..<dashIdx])
+            guard let crateName = Self.parseCrateName(from: filename) else { continue }
 
             // Skip stdlib crates and the dummy project itself
-            if stdCrates.contains(crateName) || crateName == "conjuredsp_user_deps" { continue }
+            if Self.stdCrateNames.contains(crateName) || crateName == "conjuredsp_user_deps" { continue }
 
             // Copy rlib to shared location
             let destFile = rlibURL.appendingPathComponent(filename)
@@ -404,7 +369,7 @@ final class CrateInstaller {
     // MARK: - Cargo.lock parsing
 
     /// Parse Cargo.lock to extract package name → version mappings.
-    private func parseLockFile(at url: URL) -> [String: String] {
+    func parseLockFile(at url: URL) -> [String: String] {
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
 
         var versions: [String: String] = [:]
@@ -428,13 +393,13 @@ final class CrateInstaller {
 
     // MARK: - Manifest
 
-    private func readManifest() -> CrateManifest? {
+    func readManifest() -> CrateManifest? {
         let url = appGroupURL.appendingPathComponent(Self.manifestFile)
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(CrateManifest.self, from: data)
     }
 
-    private func writeManifest(_ manifest: CrateManifest) {
+    func writeManifest(_ manifest: CrateManifest) {
         let url = appGroupURL.appendingPathComponent(Self.manifestFile)
         let dir = url.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -444,7 +409,7 @@ final class CrateInstaller {
     }
 
     /// Returns user-requested crate name → version from the existing manifest.
-    private func readExistingUserCrates() -> [String: String] {
+    func readExistingUserCrates() -> [String: String] {
         guard let manifest = readManifest() else { return [:] }
         var result: [String: String] = [:]
         for (name, entry) in manifest.crates where entry.userRequested {
@@ -453,15 +418,88 @@ final class CrateInstaller {
         return result
     }
 
-    private func computeManifestHash(_ crateVersions: [String: String]) -> String {
+    func computeManifestHash(_ crateVersions: [String: String]) -> String {
         let sorted = crateVersions.sorted(by: { $0.key < $1.key })
         let input = sorted.map { "\($0.key):\($0.value)" }.joined(separator: ",")
         let digest = SHA256.hash(data: Data(input.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    private func rustVersion() -> String {
+    func rustVersion() -> String {
         "1.93.1"  // Must match scripts/setup-rustc.sh RUST_VERSION
+    }
+
+    // MARK: - Testable generation helpers
+
+    /// Generate the rustc wrapper script content.
+    static func generateWrapperScript(sysrootPath: String, rustcPath: String) -> String {
+        """
+        #!/bin/bash
+        export DYLD_FALLBACK_LIBRARY_PATH="\(sysrootPath)/lib:$DYLD_FALLBACK_LIBRARY_PATH"
+        exec "\(rustcPath)" "$@"
+
+        """
+    }
+
+    /// Generate the .cargo/config.toml content for per-target rustflags.
+    ///
+    /// `[target.wasm32-wasip1]` passes `--sysroot` so cross-compiled crates find
+    /// the WASM standard library. Host compilations (build scripts, proc-macros)
+    /// use the default sysroot and don't need special flags — the rustc wrapper
+    /// script handles DYLD_FALLBACK_LIBRARY_PATH, and the bundled rustc is signed
+    /// with `disable-library-validation` so it can dlopen unsigned proc-macro dylibs.
+    static func generateCargoConfig(sysrootPath: String) -> String {
+        """
+        [target.wasm32-wasip1]
+        rustflags = ["--sysroot", "\(sysrootPath)"]
+        """
+    }
+
+    /// Generate the Cargo.toml content for a user crate build.
+    static func generateCargoToml(userCrates: [String: String]) -> String {
+        var depsSection = ""
+        for (name, version) in userCrates.sorted(by: { $0.key < $1.key }) {
+            depsSection += "\(name) = \"\(version)\"\n"
+        }
+
+        return """
+        [package]
+        name = "conjuredsp-user-deps"
+        version = "0.1.0"
+        edition = "2021"
+
+        [dependencies]
+        \(depsSection)
+        [lib]
+        crate-type = ["rlib"]
+
+        [profile.release]
+        opt-level = 2
+        """
+    }
+
+    /// Standard library crate names that should be excluded from harvested rlibs.
+    static let stdCrateNames: Set<String> = [
+        "std", "core", "alloc", "compiler_builtins", "panic_abort",
+        "panic_unwind", "rustc_std_workspace_core", "rustc_std_workspace_alloc",
+        "unwind", "proc_macro", "rustc_demangle", "hashbrown", "cfg_if",
+        "libc", "wasi", "getopts", "unicode_width"
+    ]
+
+    /// Parse a crate name from an rlib filename like "libfoo_bar-abc123def.rlib".
+    /// Returns nil for non-matching filenames.
+    static func parseCrateName(from rlibFilename: String) -> String? {
+        guard rlibFilename.hasPrefix("lib") && rlibFilename.hasSuffix(".rlib") else { return nil }
+        let stem = String(rlibFilename.dropFirst(3).dropLast(5)) // remove "lib" and ".rlib"
+        guard let dashIdx = stem.lastIndex(of: "-") else { return nil }
+        return String(stem[..<dashIdx])
+    }
+
+    /// Check whether a crate name is a built-in that cannot be installed.
+    /// Matches "conjuredsp", "conjure-dsp", "conjure_dsp", etc.
+    static func isBuiltInCrate(_ name: String) -> Bool {
+        let normalized = name.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "")
+        return normalized == "conjuredsp"
     }
 
     // MARK: - Result file

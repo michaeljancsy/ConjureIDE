@@ -171,9 +171,12 @@ fi
 
 # Re-sign rustc binaries with hardened runtime
 RUSTC_DST="$APPEX_PATH/Contents/Resources/rustc-dist"
+RUSTC_ENT="$SRCROOT/scripts/rustc-entitlements.plist"
 if [ -d "$RUSTC_DST" ]; then
-    # Sign all executables and dylibs in rustc-dist
-    find "$RUSTC_DST/bin" -type f -perm +111 \
+    # rustc needs disable-library-validation to dlopen proc-macro dylibs compiled by cargo
+    codesign --force --sign "$SIGN_ID" --options runtime --timestamp --entitlements "$RUSTC_ENT" "$RUSTC_DST/bin/rustc"
+    # Sign remaining executables (cargo, etc.) without the entitlement
+    find "$RUSTC_DST/bin" -type f -perm +111 ! -name rustc \
         -exec codesign --force --sign "$SIGN_ID" --options runtime --timestamp {} \;
     find "$RUSTC_DST/lib" -name '*.dylib' -exec codesign --force --sign "$SIGN_ID" --options runtime --timestamp {} \;
     codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$RUSTC_DST/lib/rustlib/aarch64-apple-darwin/bin/rust-lld"
