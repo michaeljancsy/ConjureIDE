@@ -244,6 +244,10 @@ class TerminalAppServer {
             ws?.broadcast(data)
         }
 
+        p.onDisplayText = { [weak ws] text in
+            ws?.broadcastText(text)
+        }
+
         ws.onClientInput = { [weak p] data in
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let type = json["type"] as? String, type == "resize",

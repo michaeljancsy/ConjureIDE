@@ -36,6 +36,9 @@ final class PTYManager {
     /// Called when the process state changes.
     var onStateChange: ((State) -> Void)?
 
+    /// Called to display text directly in the terminal (bypasses the PTY).
+    var onDisplayText: ((String) -> Void)?
+
     /// The MCP server port that Claude Code should connect to.
     var mcpServerPort: UInt16?
 
@@ -207,16 +210,20 @@ final class PTYManager {
                     aliasValue += " --mcp-config \(shellQuote(mcpPath))"
                 }
                 let aliasCmd = "alias claude=\(shellQuote(aliasValue))"
-                let cmd = modeSetup + "\n" + aliasCmd + "\n" + buildWelcomeCommand(mcpURL: mcpURL) + "\n"
+                let banner = buildWelcomeBanner(mcpURL: mcpURL)
+                let cmd = modeSetup + "\n" + aliasCmd + "\n"
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                     self?.write(cmd)
+                    self?.onDisplayText?(banner)
                 }
             }
         case .manual:
             ptyLog.info("External agent mode — skipping Claude auto-launch")
-            let cmd = modeSetup + "\n" + buildExternalAgentBanner(mcpURL: mcpURL) + "\n"
+            let banner = buildExternalAgentBanner(mcpURL: mcpURL)
+            let cmd = modeSetup + "\n"
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 self?.write(cmd)
+                self?.onDisplayText?(banner)
             }
         }
     }
@@ -598,44 +605,44 @@ final class PTYManager {
         return useClaude + "\n" + useExternal
     }
 
-    /// printf command that displays install instructions when Claude Code is not found.
-    private func buildWelcomeCommand(mcpURL: String) -> String {
-        let msg = [
+    /// ANSI banner shown when Claude Code is not found (sent directly to xterm.js via WebSocket).
+    private func buildWelcomeBanner(mcpURL: String) -> String {
+        let esc = "\u{1b}"
+        return [
             "",
-            "\\033[1;36m  ConjureDSP - AI Terminal\\033[0m",
+            "\(esc)[1;36m  ConjureDSP - AI Terminal\(esc)[0m",
             "  -----------------------------------------",
             "",
             "  Claude Code CLI was not found.",
             "  This terminal connects an AI coding agent to ConjureDSP via MCP,",
             "  enabling it to compile scripts, adjust parameters, and test audio.",
             "",
-            "  \\033[1mTo install Claude Code (requires Node.js):\\033[0m",
+            "  \(esc)[1mTo install Claude Code (requires Node.js):\(esc)[0m",
             "",
             "    npm install -g @anthropic-ai/claude-code",
             "",
             "  After installing, type claude to start.",
             "",
-            "  \\033[2mUsing a different MCP-compatible agent? Connect it to:\\033[0m",
-            "  \\033[2m  \(mcpURL)\\033[0m",
-            "  \\033[2mThen type conjure-use-external to disable this message.\\033[0m",
+            "  \(esc)[2mUsing a different MCP-compatible agent? Connect it to:\(esc)[0m",
+            "  \(esc)[2m  \(mcpURL)\(esc)[0m",
+            "  \(esc)[2mThen type conjure-use-external to disable this message.\(esc)[0m",
             "",
-        ].joined(separator: "\\n")
-        return "printf '\(msg)\\n'"
+        ].joined(separator: "\r\n") + "\r\n"
     }
 
-    /// printf command that displays the MCP URL when the user has chosen external agent mode.
+    /// ANSI banner for external agent mode (sent directly to xterm.js via WebSocket).
     private func buildExternalAgentBanner(mcpURL: String) -> String {
-        let msg = [
+        let esc = "\u{1b}"
+        return [
             "",
-            "\\033[1;36m  ConjureDSP - AI Terminal  \\033[2m[external agent mode]\\033[0m",
+            "\(esc)[1;36m  ConjureDSP - AI Terminal  \(esc)[2m[external agent mode]\(esc)[0m",
             "  -----------------------------------------",
             "",
-            "  \\033[32mMCP server: \(mcpURL)\\033[0m",
+            "  \(esc)[32mMCP server: \(mcpURL)\(esc)[0m",
             "",
-            "  \\033[2mType conjure-use-claude to switch back to Claude Code auto-launch.\\033[0m",
+            "  \(esc)[2mType conjure-use-claude to switch back to Claude Code auto-launch.\(esc)[0m",
             "",
-        ].joined(separator: "\\n")
-        return "printf '\(msg)\\n'"
+        ].joined(separator: "\r\n") + "\r\n"
     }
 
     /// Shell-escape a path by wrapping in single quotes (handles spaces, parens, etc.).
