@@ -1,82 +1,53 @@
 #!/bin/bash
 #
-# release.sh — Full release pipeline: build, notarize, package DMG.
+# release.sh — Release an already-built DMG: generate appcast and upload to R2.
 #
-# Usage: ./scripts/release.sh
+# Usage: ./scripts/release.sh [build-dir]
+#   build-dir: directory containing ConjureDSP.app and DMG (default: build/release)
 #
 # Prerequisites:
-#   1. Developer ID Application certificate in Keychain
-#   2. Notarization credentials stored:
-#        xcrun notarytool store-credentials "ConjureDSP-Notarize" \
-#          --apple-id "your@email.com" \
-#          --team-id "A4R63LAVLS" \
-#          --password "xxxx-xxxx-xxxx-xxxx"
-#   3. Rust toolchain + bundled Python runtime (rust/setup-python.sh)
-#   4. Sparkle EdDSA keypair: run the `generate_keys` tool once (bundled
-#      alongside generate_appcast in the Sparkle SPM artifacts — find it with
-#      `find ~/Library/Developer/Xcode/DerivedData -name generate_keys -type f`).
-#      It stores the private key in the login Keychain and prints the public
-#      key. Paste the public key into INFOPLIST_KEY_SUPublicEDKey in the
-#      Release build settings of ConjureDSP.xcodeproj. This is already done
-#      for the main dev machine; only needed when setting up a new signer.
-#   5. Cloudflare R2 bucket `conjuredsp-updates` with custom domain
-#      updates.conjuredsp.com. Wrangler CLI authenticated (same auth as the
-#      subscriptions Worker in server/). Uploads are skipped with a warning
-#      if wrangler is not installed.
+#   1. A built DMG from build.sh (run build.sh --notarize first for public releases)
+#   2. Sparkle EdDSA keypair (see build-and-release.sh header for setup)
+#   3. Cloudflare R2 bucket `conjuredsp-updates` with rclone configured
 
 set -euo pipefail
 
-SKIP_NOTARIZE=false
-if [[ "${1:-}" == "--skip-notarize" ]]; then
-    SKIP_NOTARIZE=true
-    shift
-fi
-
-# Ensure Homebrew binaries are on PATH (needed for wrangler/node)
+# Ensure Homebrew binaries are on PATH (needed for rclone/node)
 export PATH="/opt/homebrew/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-OUTPUT_DIR="$PROJECT_DIR/build/release"
+OUTPUT_DIR="${1:-$PROJECT_DIR/build/release}"
 R2_BUCKET="conjuredsp-updates"
 UPDATES_BASE_URL="https://updates.conjuredsp.com"
 
-echo "========================================"
-echo "  ConjureDSP Release Pipeline"
-echo "========================================"
-echo ""
-
-# Step 1: Build and export
-echo "[1/6] Building Release archive..."
-"$SCRIPT_DIR/build-release.sh" "$OUTPUT_DIR"
-
 APP_PATH="$OUTPUT_DIR/ConjureDSP.app"
+if [ ! -d "$APP_PATH" ]; then
+    echo "ERROR: No built app found at $APP_PATH"
+    echo "Run ./scripts/build.sh first."
+    exit 1
+fi
+
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
-
-echo ""
-if $SKIP_NOTARIZE; then
-    echo "[2/6] Skipping app notarization (--skip-notarize)"
-else
-    echo "[2/6] Notarizing app..."
-    "$SCRIPT_DIR/notarize.sh" "$APP_PATH"
-fi
-
-echo ""
-echo "[3/6] Creating DMG..."
 DMG_PATH="$OUTPUT_DIR/ConjureDSP-${VERSION}.dmg"
-"$SCRIPT_DIR/create-dmg.sh" "$APP_PATH" "$DMG_PATH"
 
-echo ""
-if $SKIP_NOTARIZE; then
-    echo "[4/6] Skipping DMG notarization (--skip-notarize)"
-else
-    echo "[4/6] Notarizing DMG..."
-    "$SCRIPT_DIR/notarize.sh" "$DMG_PATH"
+if [ ! -f "$DMG_PATH" ]; then
+    echo "ERROR: No DMG found at $DMG_PATH"
+    echo "Run ./scripts/build.sh first."
+    exit 1
 fi
 
+echo "========================================"
+echo "  ConjureDSP Release"
+echo "========================================"
 echo ""
-echo "[5/6] Generating Sparkle appcast..."
+echo "  Version: $VERSION (build $BUILD)"
+echo "  DMG:     $DMG_PATH"
+echo ""
+
+# Step 1: Generate Sparkle appcast
+echo "[1/2] Generating Sparkle appcast..."
 # APPCAST_DIR is preserved across release runs: it accumulates every historic
 # DMG so generate_appcast can emit a feed containing all versions (enables
 # rollback via versions.html below). On a fresh machine we pull any missing
@@ -120,8 +91,6 @@ for item in tree.getroot().iter("item"):
     if not url.startswith("http"):
         url = base_url.rstrip("/") + "/" + url.lstrip("/")
     version = enclosure.get("{http://www.andymatuschak.org/xml-namespaces/sparkle}shortVersionString") or title
-    # Parse RFC 822 pubDate for sorting; fall back to epoch so unparseable
-    # entries sort last rather than crashing.
     try:
         sort_dt = parsedate_to_datetime(pub_date_raw) if pub_date_raw else None
     except (TypeError, ValueError):
@@ -131,8 +100,6 @@ for item in tree.getroot().iter("item"):
     elif sort_dt.tzinfo is None:
         sort_dt = sort_dt.replace(tzinfo=datetime.timezone.utc)
     items.append((sort_dt, version, pub_date_raw, url))
-# Sort newest first by publication date. Robust against pre-release version
-# strings like "1.0-beta" that would break a naive version-string sort.
 items.sort(key=lambda row: row[0], reverse=True)
 items = [(v, d, u) for _, v, d, u in items]
 rows = "\n".join(
@@ -171,38 +138,39 @@ else
 fi
 
 echo ""
-echo "[6/6] Uploading to R2..."
-R2_REMOTE="r2:${R2_BUCKET}"
-if command -v rclone >/dev/null 2>&1 && [ -f "$APPCAST_DIR/appcast.xml" ]; then
-    DMG_NAME="ConjureDSP-${VERSION}.dmg"
-    echo "  Uploading $DMG_NAME..."
-    rclone copyto "$APPCAST_DIR/${DMG_NAME}" "${R2_REMOTE}/${DMG_NAME}" \
-        --header-upload "Content-Type: application/x-apple-diskimage"
-    echo "  Uploading appcast.xml..."
-    rclone copyto "$APPCAST_DIR/appcast.xml" "${R2_REMOTE}/appcast.xml" \
-        --header-upload "Content-Type: application/xml"
-    if [ -f "$APPCAST_DIR/versions.html" ]; then
-        echo "  Uploading versions.html..."
-        rclone copyto "$APPCAST_DIR/versions.html" "${R2_REMOTE}/versions.html" \
-            --header-upload "Content-Type: text/html; charset=utf-8"
-    fi
-    # Upload Sparkle delta files (small binary diffs for incremental updates)
-    for delta in "$APPCAST_DIR"/*.delta; do
-        [ -f "$delta" ] || continue
-        DELTA_NAME=$(basename "$delta")
-        echo "  Uploading delta $DELTA_NAME..."
-        rclone copyto "$delta" "${R2_REMOTE}/${DELTA_NAME}" \
-            --header-upload "Content-Type: application/octet-stream"
-    done
-    echo "  Uploaded to ${UPDATES_BASE_URL}/"
-else
-    echo "  WARNING: skipping upload. Install rclone and configure the 'r2' remote,"
-    echo "  or manually upload these files to the R2 bucket"
-    echo "  ${R2_BUCKET} (served at ${UPDATES_BASE_URL}/):"
-    echo "    - $APPCAST_DIR/ConjureDSP-${VERSION}.dmg"
-    echo "    - $APPCAST_DIR/appcast.xml"
-    [ -f "$APPCAST_DIR/versions.html" ] && echo "    - $APPCAST_DIR/versions.html"
+if ! command -v rclone >/dev/null 2>&1; then
+    echo "ERROR: rclone is not installed. Install it and configure the 'r2' remote."
+    echo "  brew install rclone"
+    exit 1
 fi
+if [ ! -f "$APPCAST_DIR/appcast.xml" ]; then
+    echo "ERROR: appcast.xml was not generated. Cannot upload."
+    exit 1
+fi
+
+echo "[2/2] Uploading to R2..."
+R2_REMOTE="r2:${R2_BUCKET}"
+DMG_NAME="ConjureDSP-${VERSION}.dmg"
+echo "  Uploading $DMG_NAME..."
+rclone copyto "$APPCAST_DIR/${DMG_NAME}" "${R2_REMOTE}/${DMG_NAME}" \
+    --header-upload "Content-Type: application/x-apple-diskimage"
+echo "  Uploading appcast.xml..."
+rclone copyto "$APPCAST_DIR/appcast.xml" "${R2_REMOTE}/appcast.xml" \
+    --header-upload "Content-Type: application/xml"
+if [ -f "$APPCAST_DIR/versions.html" ]; then
+    echo "  Uploading versions.html..."
+    rclone copyto "$APPCAST_DIR/versions.html" "${R2_REMOTE}/versions.html" \
+        --header-upload "Content-Type: text/html; charset=utf-8"
+fi
+# Upload Sparkle delta files (small binary diffs for incremental updates)
+for delta in "$APPCAST_DIR"/*.delta; do
+    [ -f "$delta" ] || continue
+    DELTA_NAME=$(basename "$delta")
+    echo "  Uploading delta $DELTA_NAME..."
+    rclone copyto "$delta" "${R2_REMOTE}/${DELTA_NAME}" \
+        --header-upload "Content-Type: application/octet-stream"
+done
+echo "  Uploaded to ${UPDATES_BASE_URL}/"
 
 echo ""
 echo "========================================"
@@ -215,7 +183,4 @@ echo "  Size:    $(du -h "$DMG_PATH" | awk '{print $1}')"
 if [ -f "$APPCAST_DIR/appcast.xml" ]; then
 echo "  Appcast: $APPCAST_DIR/appcast.xml"
 fi
-echo ""
-echo "  The DMG is signed, notarized, and ready to distribute."
-echo "  Upload the DMG and appcast.xml to your update server."
 echo ""

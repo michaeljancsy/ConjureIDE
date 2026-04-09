@@ -1,9 +1,12 @@
 #!/bin/bash
 #
-# build-release.sh — Build a Release archive and export with Developer ID signing.
+# build.sh — Build a Release archive, sign, package DMG, and optionally notarize.
 #
-# Usage: ./scripts/build-release.sh [output-dir]
-#   output-dir: where to place the exported .app (default: build/release)
+# Usage: ./scripts/build.sh [--notarize] [--version X.Y.Z] [--build N] [output-dir]
+#   --notarize:      submit the app and DMG to Apple's notary service (takes a few minutes)
+#   --version X.Y.Z: set MARKETING_VERSION before building (updates all targets in pbxproj)
+#   --build N:       set CURRENT_PROJECT_VERSION before building (updates all targets in pbxproj)
+#   output-dir:      where to place the exported .app and DMG (default: build/release)
 #
 # Requires: Xcode, Developer ID Application certificate in Keychain,
 #   Developer ID provisioning profiles installed for both bundle IDs.
@@ -14,9 +17,32 @@
 
 set -euo pipefail
 
+NOTARIZE=false
+SET_VERSION=""
+SET_BUILD=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --notarize) NOTARIZE=true; shift ;;
+        --version)  SET_VERSION="$2"; shift 2 ;;
+        --build)    SET_BUILD="$2"; shift 2 ;;
+        *) break ;;
+    esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PBXPROJ="$PROJECT_DIR/ConjureDSP.xcodeproj/project.pbxproj"
 OUTPUT_DIR="${1:-$PROJECT_DIR/build/release}"
+
+# Update version/build in pbxproj if requested (only main project, not ExportAUTemplate)
+if [ -n "$SET_VERSION" ]; then
+    sed -i '' "s/MARKETING_VERSION = [^;]*/MARKETING_VERSION = $SET_VERSION/" "$PBXPROJ"
+    echo "Set MARKETING_VERSION = $SET_VERSION"
+fi
+if [ -n "$SET_BUILD" ]; then
+    sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*/CURRENT_PROJECT_VERSION = $SET_BUILD/" "$PBXPROJ"
+    echo "Set CURRENT_PROJECT_VERSION = $SET_BUILD"
+fi
 # Ensure OUTPUT_DIR is absolute (needed because we cd into temp dirs during signing)
 case "$OUTPUT_DIR" in /*) ;; *) OUTPUT_DIR="$PROJECT_DIR/$OUTPUT_DIR" ;; esac
 ARCHIVE_PATH="$PROJECT_DIR/build/ConjureDSP.xcarchive"
@@ -215,13 +241,38 @@ codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
     --preserve-metadata=entitlements "$APP_PATH"
 echo "Re-signed extension and app"
 
-# Read version from the exported app
+# Read version from the built app
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
 
 echo ""
+if $NOTARIZE; then
+    echo "=== Notarizing app ==="
+    "$SCRIPT_DIR/notarize.sh" "$APP_PATH"
+else
+    echo "=== Skipping notarization (pass --notarize to enable) ==="
+fi
+
+echo ""
+echo "=== Creating DMG ==="
+DMG_PATH="$OUTPUT_DIR/ConjureDSP-${VERSION}.dmg"
+"$SCRIPT_DIR/create-dmg.sh" "$APP_PATH" "$DMG_PATH"
+
+if $NOTARIZE; then
+    echo ""
+    echo "=== Notarizing DMG ==="
+    "$SCRIPT_DIR/notarize.sh" "$DMG_PATH"
+fi
+
+echo ""
 echo "=== Build complete ==="
 echo "App:     $APP_PATH"
+echo "DMG:     $DMG_PATH"
 echo "Version: $VERSION (build $BUILD)"
+echo "Size:    $(du -h "$DMG_PATH" | awk '{print $1}')"
+if $NOTARIZE; then
+    echo "Status:  Notarized"
+else
+    echo "Status:  NOT notarized (local testing only)"
+fi
 echo ""
-echo "Next: run scripts/notarize.sh \"$APP_PATH\""
