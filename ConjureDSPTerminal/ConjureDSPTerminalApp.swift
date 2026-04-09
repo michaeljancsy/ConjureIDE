@@ -22,6 +22,7 @@ struct ConjureDSPTerminalApp: App {
     @State private var server = TerminalAppServer()
 
     init() {
+        NSApplication.shared.setActivationPolicy(.regular)
         SentrySetup.start()
     }
 
