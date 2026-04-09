@@ -25,7 +25,7 @@ class PaddleCheckoutManager: ObservableObject {
         isCheckingOut = true
         checkoutError = nil
 
-        if let url = URL(string: "https://conjuredsp.com/buy") {
+        if let url = URL(string: "https://conjuredsp.com/subscribe") {
             NSWorkspace.shared.open(url)
         }
         isCheckingOut = false

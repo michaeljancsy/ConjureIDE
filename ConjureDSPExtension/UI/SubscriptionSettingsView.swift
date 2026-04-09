@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct SubscriptionSettingsView: View {
-    static let subscribeURL = URL(string: "https://conjuredsp.com/buy")!
+    static let subscribeURL = URL(string: "https://conjuredsp.com/subscribe")!
 
     @ObservedObject var subscriptionManager: SubscriptionManager
 
@@ -118,7 +118,7 @@ struct SubscriptionSettingsView: View {
 
         case .expired, .cancelled:
             Button("Subscribe") {
-                if let url = URL(string: "https://conjuredsp.com/buy") {
+                if let url = URL(string: "https://conjuredsp.com/subscribe") {
                     NSWorkspace.shared.open(url)
                 }
             }
@@ -132,7 +132,7 @@ struct SubscriptionSettingsView: View {
 
         case .noSubscription:
             Button("Subscribe") {
-                if let url = URL(string: "https://conjuredsp.com/buy") {
+                if let url = URL(string: "https://conjuredsp.com/subscribe") {
                     NSWorkspace.shared.open(url)
                 }
             }

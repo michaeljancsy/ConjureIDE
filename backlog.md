@@ -48,7 +48,7 @@
 - Audio visualization polish: persist spectrogram preferences, host app spectrogram (2026-03-28)
 
 - Comprehensive Monaco autocomplete for conjuredsp: Python/Rust dot-completions (Biquad, DelayLine, LFO, BiquadCoeffs::, Waveform::, ctx.), signature help on `(`, hover docs, function-level completions for DSP utils/param builders, latency!() macro, ParamSpec chain methods (2026-03-28)
-- In-app "Buy" link for unlicensed users — subscribe buttons in SubscriptionSettingsView and demo-expired overlay linking to conjuredsp.com/buy (2026-03-28)
+- In-app "Buy" link for unlicensed users — subscribe buttons in SubscriptionSettingsView and demo-expired overlay linking to conjuredsp.com/subscribe (2026-03-28)
 - Deploy Paddle subscription server — Cloudflare Worker at api.conjuredsp.com with activate/verify/webhook endpoints, D1 SQLite, Ed25519 token signing (2026-03-27)
 - Website licensing link — buy/account URLs in subscription UI (2026-03-28)
 - Process function profiler — ProcessProfiler.swift polling kernel FFI timing, status bar display of current/avg/peak ms and budget % (2026-03-28)
