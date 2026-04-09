@@ -54,7 +54,6 @@ echo "[1/2] Generating Sparkle appcast..."
 # DMGs down from R2 before regenerating.
 APPCAST_DIR="$OUTPUT_DIR/appcast"
 mkdir -p "$APPCAST_DIR"
-cp "$DMG_PATH" "$APPCAST_DIR/"
 
 # Sync historic DMGs from R2 for multi-version appcast.
 # Best-effort — if rclone isn't configured, we just use what's on disk.
@@ -63,10 +62,18 @@ if command -v rclone >/dev/null 2>&1; then
     rclone copy "r2:${R2_BUCKET}" "$APPCAST_DIR" --include "*.dmg" 2>/dev/null || true
 fi
 
+# Copy AFTER rclone sync so the fresh build isn't overwritten by a stale R2 copy
+cp "$DMG_PATH" "$APPCAST_DIR/"
+
+# Delete stale appcast.xml so generate_appcast regenerates from scratch.
+# A leftover appcast.xml causes it to skip archives it considers "already processed",
+# silently dropping new versions from the feed.
+rm -f "$APPCAST_DIR/appcast.xml"
+
 # generate_appcast scans the directory for archives, extracts version info
 # from embedded app bundles, signs with the EdDSA private key stored in the
 # login Keychain (put there by `generate_keys`), and produces appcast.xml.
-SPARKLE_BIN=$(find "$PROJECT_DIR/.build" ~/Library/Developer/Xcode/DerivedData -name "generate_appcast" -type f 2>/dev/null | head -1)
+SPARKLE_BIN=$(find "$PROJECT_DIR/.build" ~/Library/Developer/Xcode/DerivedData -name "generate_appcast" -type f 2>/dev/null | head -1 || true)
 if [ -n "$SPARKLE_BIN" ]; then
     "$SPARKLE_BIN" "$APPCAST_DIR"
     echo "  Appcast: $APPCAST_DIR/appcast.xml"
