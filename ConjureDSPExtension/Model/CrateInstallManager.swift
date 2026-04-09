@@ -277,7 +277,7 @@ final class CrateInstallManager {
         } else {
             let rawError = result.error ?? "Unknown error"
             log.error("Crate operation failed: \(rawError, privacy: .public)")
-            lastError = Self.userFriendlyError(rawError)
+            lastError = CrateErrorMapper.userFriendlyError(rawError)
             let names = result.crates.joined(separator: ", ")
             let operation = wasUninstall ? "uninstall" : "install"
             SentryHelper.capture(
