@@ -405,7 +405,7 @@ class TerminalAppServer {
         }
     }
 
-    // MARK: - Python/UV/Rust provisioning (unchanged)
+    // MARK: - Python/UV/Rust provisioning
 
     nonisolated static func installPythonRuntimeIfNeeded() {
         let runtimeURL = pythonRuntimeURL
@@ -417,9 +417,8 @@ class TerminalAppServer {
             return
         }
 
-        let stdlibPath = runtimeURL.appendingPathComponent("lib/python3.14t").path
-        if FileManager.default.fileExists(atPath: stdlibPath) {
-            log.info("Shared Python runtime already installed at \(runtimeURL.path, privacy: .public)")
+        if isProvisionedCurrent(at: runtimeURL) {
+            log.info("Shared Python runtime already installed and current at \(runtimeURL.path, privacy: .public)")
         } else {
             do {
                 let fm = FileManager.default
@@ -449,6 +448,7 @@ class TerminalAppServer {
                 }
                 try fm.copyItem(at: srcStdlib, to: dstStdlib)
 
+                writeVersionMarker(at: runtimeURL)
                 log.info("Shared Python runtime installed at \(runtimeURL.path, privacy: .public)")
                 migrateUserPackages(to: dstStdlib.appendingPathComponent("site-packages"))
             } catch {
@@ -518,13 +518,31 @@ class TerminalAppServer {
         return nil
     }
 
+    /// The current app build number, used to detect when provisioned tools need updating.
+    private nonisolated static var appBuildVersion: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
+    }
+
+    /// Check whether a provisioned directory is current by comparing a `.version` marker
+    /// against the app's build number. Returns true if already up-to-date.
+    private nonisolated static func isProvisionedCurrent(at directory: URL) -> Bool {
+        let versionFile = directory.appendingPathComponent(".version")
+        guard let stored = try? String(contentsOf: versionFile, encoding: .utf8) else { return false }
+        return stored.trimmingCharacters(in: .whitespacesAndNewlines) == appBuildVersion
+    }
+
+    /// Write the current app build version into a `.version` marker file.
+    private nonisolated static func writeVersionMarker(at directory: URL) {
+        let versionFile = directory.appendingPathComponent(".version")
+        try? appBuildVersion.write(to: versionFile, atomically: true, encoding: .utf8)
+    }
+
     nonisolated static func provisionRustToolchainIfNeeded() {
         let containerURL = AppGroupContainer.url
         let dstRustcDist = containerURL.appendingPathComponent("rustc-dist")
-        let dstCargo = dstRustcDist.appendingPathComponent("bin/cargo")
 
-        if FileManager.default.fileExists(atPath: dstCargo.path) {
-            log.info("Rust toolchain already provisioned at \(dstRustcDist.path, privacy: .public)")
+        if isProvisionedCurrent(at: dstRustcDist) {
+            log.info("Rust toolchain already provisioned and current at \(dstRustcDist.path, privacy: .public)")
             return
         }
 
@@ -539,6 +557,7 @@ class TerminalAppServer {
                 try fm.removeItem(at: dstRustcDist)
             }
             try fm.copyItem(at: rustcDistSource, to: dstRustcDist)
+            writeVersionMarker(at: dstRustcDist)
             log.info("Rust toolchain provisioned to App Group at \(dstRustcDist.path, privacy: .public)")
         } catch {
             log.error("Failed to provision Rust toolchain: \(error.localizedDescription, privacy: .public)")
@@ -549,8 +568,11 @@ class TerminalAppServer {
     nonisolated static func provisionUVIfNeeded() {
         let containerURL = AppGroupContainer.url
         let dstUV = containerURL.appendingPathComponent("uv")
-        if FileManager.default.fileExists(atPath: dstUV.path) {
-            log.info("uv already provisioned in App Group at \(dstUV.path, privacy: .public)")
+        let versionFile = containerURL.appendingPathComponent(".uv-version")
+
+        if let stored = try? String(contentsOf: versionFile, encoding: .utf8),
+           stored.trimmingCharacters(in: .whitespacesAndNewlines) == appBuildVersion {
+            log.info("uv already provisioned and current in App Group at \(dstUV.path, privacy: .public)")
             return
         }
 
@@ -561,7 +583,12 @@ class TerminalAppServer {
         }
 
         do {
-            try FileManager.default.copyItem(at: bundledUV, to: dstUV)
+            let fm = FileManager.default
+            if fm.fileExists(atPath: dstUV.path) {
+                try fm.removeItem(at: dstUV)
+            }
+            try fm.copyItem(at: bundledUV, to: dstUV)
+            try appBuildVersion.write(to: versionFile, atomically: true, encoding: .utf8)
             log.info("uv provisioned to App Group at \(dstUV.path, privacy: .public)")
         } catch {
             log.error("Failed to provision uv to App Group: \(error.localizedDescription, privacy: .public)")
