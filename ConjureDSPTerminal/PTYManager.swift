@@ -271,11 +271,21 @@ final class PTYManager {
     // MARK: - I/O
 
     /// Write data to the pty (user input from terminal UI).
+    /// Handles partial writes by retrying until all bytes are sent.
     func write(_ data: Data) {
         guard masterFD >= 0 else { return }
         data.withUnsafeBytes { buffer in
-            guard let ptr = buffer.baseAddress else { return }
-            Darwin.write(masterFD, ptr, buffer.count)
+            guard let base = buffer.baseAddress else { return }
+            var offset = 0
+            while offset < buffer.count {
+                let written = Darwin.write(masterFD, base + offset, buffer.count - offset)
+                if written < 0 {
+                    if errno == EAGAIN || errno == EINTR { continue }
+                    ptyLog.warning("PTY write error: \(String(cString: strerror(errno)), privacy: .public)")
+                    break
+                }
+                offset += written
+            }
         }
     }
 
