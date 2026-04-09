@@ -171,7 +171,7 @@ fi
 
 # Re-sign rustc binaries with hardened runtime
 RUSTC_DST="$APPEX_PATH/Contents/Resources/rustc-dist"
-RUSTC_ENT="$SRCROOT/scripts/rustc-entitlements.plist"
+RUSTC_ENT="$PROJECT_DIR/scripts/rustc-entitlements.plist"
 if [ -d "$RUSTC_DST" ]; then
     # rustc needs disable-library-validation to dlopen proc-macro dylibs compiled by cargo
     codesign --force --sign "$SIGN_ID" --options runtime --timestamp --entitlements "$RUSTC_ENT" "$RUSTC_DST/bin/rustc"
