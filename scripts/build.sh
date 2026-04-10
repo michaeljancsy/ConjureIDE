@@ -2,10 +2,14 @@
 #
 # build.sh — Build a Release archive, sign, package DMG, and optionally notarize.
 #
-# Usage: ./scripts/build.sh [--notarize] [--version X.Y.Z] [--build N] [output-dir]
+# Usage: ./scripts/build.sh [--notarize] [--version X.Y.Z] [--build N] [--beta] [output-dir]
 #   --notarize:      submit the app and DMG to Apple's notary service (takes a few minutes)
 #   --version X.Y.Z: set MARKETING_VERSION before building (updates all targets in pbxproj)
 #   --build N:       set CURRENT_PROJECT_VERSION before building (updates all targets in pbxproj)
+#   --beta:          build with BETA_BUILD Swift flag — plugin runs unlicensed for
+#                    7 days from the build date then reverts to Demo (no 60s timer,
+#                    no "DEMO" badge — shows "BETA" instead). Use this when the
+#                    subscription infrastructure is unavailable.
 #   output-dir:      where to place the exported .app and DMG (default: build/release)
 #
 # Requires: Xcode, Developer ID Application certificate in Keychain,
@@ -20,11 +24,13 @@ set -euo pipefail
 NOTARIZE=false
 SET_VERSION=""
 SET_BUILD=""
+BETA_BUILD=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --notarize) NOTARIZE=true; shift ;;
         --version)  SET_VERSION="$2"; shift 2 ;;
         --build)    SET_BUILD="$2"; shift 2 ;;
+        --beta)     BETA_BUILD=true; shift ;;
         *) break ;;
     esac
 done
@@ -47,7 +53,16 @@ fi
 case "$OUTPUT_DIR" in /*) ;; *) OUTPUT_DIR="$PROJECT_DIR/$OUTPUT_DIR" ;; esac
 ARCHIVE_PATH="$PROJECT_DIR/build/ConjureDSP.xcarchive"
 
-echo "=== Building Release archive ==="
+if $BETA_BUILD; then
+    echo "=== Building Release archive (BETA — 7-day window from build date) ==="
+else
+    echo "=== Building Release archive ==="
+fi
+
+BETA_FLAGS=()
+if $BETA_BUILD; then
+    BETA_FLAGS=(SWIFT_ACTIVE_COMPILATION_CONDITIONS="BETA_BUILD")
+fi
 
 xcodebuild archive \
     -project "$PROJECT_DIR/ConjureDSP.xcodeproj" \
@@ -56,6 +71,7 @@ xcodebuild archive \
     -archivePath "$ARCHIVE_PATH" \
     -destination "generic/platform=macOS" \
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
+    "${BETA_FLAGS[@]}" \
     | tail -1
 
 echo "=== Extracting app from archive ==="

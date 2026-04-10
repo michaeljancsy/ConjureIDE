@@ -42,6 +42,16 @@ class SubscriptionManager: ObservableObject {
     @Published private(set) var demoSecondsRemaining: Double = 60.0
     @Published private(set) var email: String?
 
+    /// Whether this build is currently running in Beta mode (BETA_BUILD flag set
+    /// and the 7-day window from the build date has not elapsed). Beta mode
+    /// grants full access without a license but reverts to Demo after the window.
+    @Published private(set) var isBetaActive: Bool = false
+
+    /// Unix timestamp of the build (from Info.plist BuildID). Used by Beta mode
+    /// to compute how much of the 7-day Beta window remains. Set by the host
+    /// (AudioUnitViewController) before `loadAndVerify()`.
+    var buildID: Int = 0
+
     /// Whether the user currently has licensed access (active or grace period).
     var isLicensed: Bool { status.isLicensed }
 
@@ -79,6 +89,11 @@ class SubscriptionManager: ObservableObject {
     /// Periodic server refresh timer.
     private var refreshTimer: Timer?
 
+    /// Beta window recheck timer. Fires hourly while Beta is active, so the
+    /// plugin transitions smoothly from Beta → Demo when the 7-day window
+    /// elapses without requiring a restart.
+    private var betaRecheckTimer: Timer?
+
     /// Cached token for server refresh.
     private var cachedToken: String?
 
@@ -107,6 +122,9 @@ class SubscriptionManager: ObservableObject {
         guard let token = loadToken() else {
             log.info("No cached subscription token found")
             status = .noSubscription
+            if activateBetaIfApplicable() {
+                return
+            }
             setSubscriptionStatusInKernel?(SubscriptionStatus.noSubscription.rawValue)
             startDemoTimer()
             return
@@ -145,11 +163,16 @@ class SubscriptionManager: ObservableObject {
         if newStatus.isLicensed {
             log.info("Subscription status: \(newStatus.displayName, privacy: .public)")
             stopDemoTimer()
+            stopBetaRecheckTimer()
+            isBetaActive = false
             if newStatus == .gracePeriod && previousStatus != .gracePeriod {
                 Analytics.track(.subscriptionActivate, properties: ["status": "grace_period"])
             }
         } else {
             log.info("Not licensed, status: \(newStatus.displayName, privacy: .public)")
+            if activateBetaIfApplicable() {
+                return
+            }
             startDemoTimer()
         }
     }
@@ -202,12 +225,19 @@ class SubscriptionManager: ObservableObject {
         cachedToken = nil
         email = nil
 
-        // Reset kernel + published status to no-subscription and (re)start demo
-        // countdown. Stop any existing demo timer first so startDemoTimer's
+        // Reset published status to no-subscription. If this is a Beta build
+        // still inside the 7-day window, hand off to Beta mode (which keeps the
+        // kernel licensed and skips the demo timer) — otherwise drop into Demo.
+        // Stop any existing demo timer first so startDemoTimer's
         // `guard demoTimer == nil` early-return doesn't drop the new one — this
         // matters when deactivation is triggered from a state that already had
         // a demo timer running (e.g. grace period UI showing the countdown).
         status = .noSubscription
+        if activateBetaIfApplicable() {
+            SentryHelper.configureUser(subscriptionStatus: status.displayName, email: nil)
+            log.info("License deactivated on this machine; reverted to Beta mode")
+            return
+        }
         setSubscriptionStatusInKernel?(SubscriptionStatus.noSubscription.rawValue)
         resetDemoInKernel?()
         updateDemoTime()
@@ -283,6 +313,63 @@ class SubscriptionManager: ObservableObject {
 
     private func updateDemoTime() {
         demoSecondsRemaining = getDemoSecondsRemaining?() ?? 0
+    }
+
+    // MARK: - Beta Mode
+
+    /// If this is a Beta build and still within the 7-day window, grant licensed
+    /// access in the kernel and skip the demo timer. Returns `true` if Beta was
+    /// activated, `false` otherwise (caller should fall back to Demo).
+    @discardableResult
+    private func activateBetaIfApplicable() -> Bool {
+        guard BetaMode.isActive(buildID: buildID) else {
+            isBetaActive = false
+            return false
+        }
+        log.info("Beta mode active, granting licensed access until build+7d")
+        isBetaActive = true
+        // Treat as licensed on the audio thread so output is not silenced.
+        setSubscriptionStatusInKernel?(SubscriptionStatus.active.rawValue)
+        stopDemoTimer()
+        startBetaRecheckTimer()
+        return true
+    }
+
+    /// Re-checks the Beta window periodically so the plugin transitions from
+    /// Beta → Demo when the 7 days elapse, without requiring a restart.
+    private func startBetaRecheckTimer() {
+        guard betaRecheckTimer == nil else { return }
+        betaRecheckTimer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.recheckBetaWindow()
+            }
+        }
+    }
+
+    private func stopBetaRecheckTimer() {
+        betaRecheckTimer?.invalidate()
+        betaRecheckTimer = nil
+    }
+
+    private func recheckBetaWindow() {
+        guard isBetaActive else { return }
+        if !BetaMode.isActive(buildID: buildID) {
+            log.info("Beta window elapsed, reverting to Demo mode")
+            isBetaActive = false
+            stopBetaRecheckTimer()
+            setSubscriptionStatusInKernel?(SubscriptionStatus.noSubscription.rawValue)
+            startDemoTimer()
+        }
+    }
+
+    /// Seconds remaining in the Beta window (0 if Beta is not active).
+    var betaSecondsRemaining: TimeInterval {
+        BetaMode.secondsRemaining(buildID: buildID)
+    }
+
+    /// The date at which a Beta build will revert to Demo (nil if not a Beta build).
+    var betaExpiryDate: Date? {
+        BetaMode.expiryDate(buildID: buildID)
     }
 
     // MARK: - Token Persistence (App Group)
