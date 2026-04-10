@@ -48,3 +48,7 @@ rust/conjuredsp/__pycache__/
 # Claude Code worktrees
 .claude/worktrees/
 DAW Projects/
+
+# Cloudflare Workers server dependencies and build cache
+server/node_modules/
+server/.wrangler/

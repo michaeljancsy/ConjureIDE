@@ -7,7 +7,7 @@ routes = [
 ]
 
 [vars]
-PADDLE_API_BASE = "https://api.paddle.com"
+PADDLE_API_BASE = "https://sandbox-api.paddle.com"
 
 # Secrets (set via `wrangler secret put`):
 # - PADDLE_API_KEY
