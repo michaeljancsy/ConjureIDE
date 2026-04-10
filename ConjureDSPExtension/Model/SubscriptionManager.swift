@@ -179,9 +179,20 @@ class SubscriptionManager: ObservableObject {
     /// Does not contact the server; the server-side activation record remains
     /// until the subscription expires naturally.
     func deactivateLicense() {
-        // Delete the token file from the App Group container.
+        // Delete the token file from the App Group container. If removal fails
+        // (permissions, I/O error), the token would be re-loaded and re-verified
+        // on next launch — silently undoing the deactivation. Log loudly so we
+        // notice in Sentry, but still proceed with the in-memory clearing so the
+        // UI reflects the user's intent immediately.
         let tokenURL = appGroupContainerURL.appendingPathComponent(Self.tokenFilename)
-        try? FileManager.default.removeItem(at: tokenURL)
+        if FileManager.default.fileExists(atPath: tokenURL.path) {
+            do {
+                try FileManager.default.removeItem(at: tokenURL)
+            } catch {
+                log.error("Failed to delete subscription token at \(tokenURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                SentryHelper.captureError(error, category: "subscription", extra: ["op": "deactivate_remove_token"])
+            }
+        }
 
         // Stop the periodic server refresh.
         refreshTimer?.invalidate()
@@ -191,11 +202,16 @@ class SubscriptionManager: ObservableObject {
         cachedToken = nil
         email = nil
 
-        // Reset kernel + published status to no-subscription and start demo countdown.
+        // Reset kernel + published status to no-subscription and (re)start demo
+        // countdown. Stop any existing demo timer first so startDemoTimer's
+        // `guard demoTimer == nil` early-return doesn't drop the new one — this
+        // matters when deactivation is triggered from a state that already had
+        // a demo timer running (e.g. grace period UI showing the countdown).
         status = .noSubscription
         setSubscriptionStatusInKernel?(SubscriptionStatus.noSubscription.rawValue)
         resetDemoInKernel?()
         updateDemoTime()
+        stopDemoTimer()
         startDemoTimer()
 
         SentryHelper.configureUser(subscriptionStatus: status.displayName, email: nil)
