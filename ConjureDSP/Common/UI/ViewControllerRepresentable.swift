@@ -54,7 +54,11 @@ struct AUViewControllerUI: NSViewControllerRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsViewController: NSViewController, context: Context) -> CGSize? {
-        return nil
+        // Accept the proposed size so the AU view fills the host window when it
+        // is resized. Returning nil would make SwiftUI fall back to the VC's
+        // preferredContentSize, which pins the view at a fixed size and leaves
+        // empty margins when the window grows.
+        return proposal.replacingUnspecifiedDimensions(by: nsViewController.preferredContentSize)
     }
 }
 #endif
