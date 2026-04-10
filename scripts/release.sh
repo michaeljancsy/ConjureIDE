@@ -75,7 +75,7 @@ rm -f "$APPCAST_DIR/appcast.xml"
 # login Keychain (put there by `generate_keys`), and produces appcast.xml.
 SPARKLE_BIN=$(find "$PROJECT_DIR/.build" ~/Library/Developer/Xcode/DerivedData -name "generate_appcast" -type f 2>/dev/null | head -1 || true)
 if [ -n "$SPARKLE_BIN" ]; then
-    "$SPARKLE_BIN" "$APPCAST_DIR"
+    "$SPARKLE_BIN" --maximum-versions 0 "$APPCAST_DIR"
     echo "  Appcast: $APPCAST_DIR/appcast.xml"
 
     # Generate versions.html from the appcast — linked from the app's
