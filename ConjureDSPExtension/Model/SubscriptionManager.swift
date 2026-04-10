@@ -225,12 +225,19 @@ class SubscriptionManager: ObservableObject {
         cachedToken = nil
         email = nil
 
-        // Reset kernel + published status to no-subscription and (re)start demo
-        // countdown. Stop any existing demo timer first so startDemoTimer's
+        // Reset published status to no-subscription. If this is a Beta build
+        // still inside the 7-day window, hand off to Beta mode (which keeps the
+        // kernel licensed and skips the demo timer) — otherwise drop into Demo.
+        // Stop any existing demo timer first so startDemoTimer's
         // `guard demoTimer == nil` early-return doesn't drop the new one — this
         // matters when deactivation is triggered from a state that already had
         // a demo timer running (e.g. grace period UI showing the countdown).
         status = .noSubscription
+        if activateBetaIfApplicable() {
+            SentryHelper.configureUser(subscriptionStatus: status.displayName, email: nil)
+            log.info("License deactivated on this machine; reverted to Beta mode")
+            return
+        }
         setSubscriptionStatusInKernel?(SubscriptionStatus.noSubscription.rawValue)
         resetDemoInKernel?()
         updateDemoTime()
