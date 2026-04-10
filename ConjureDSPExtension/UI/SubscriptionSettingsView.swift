@@ -5,6 +5,7 @@
 //  Shows subscription status and management controls.
 //
 
+import Combine
 import SwiftUI
 
 struct SubscriptionSettingsView: View {
@@ -15,6 +16,10 @@ struct SubscriptionSettingsView: View {
     @State private var isActivating = false
     @State private var activationError: String?
     @State private var showDeactivateConfirmation = false
+    @State private var clipboardHasTransactionID = false
+    @State private var lastPasteboardChangeCount = -1
+
+    private static let clipboardPollTimer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -26,6 +31,17 @@ struct SubscriptionSettingsView: View {
             actionSection
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { refreshClipboardState() }
+        .onReceive(Self.clipboardPollTimer) { _ in refreshClipboardState() }
+    }
+
+    private func refreshClipboardState() {
+        let pasteboard = NSPasteboard.general
+        guard pasteboard.changeCount != lastPasteboardChangeCount else { return }
+        lastPasteboardChangeCount = pasteboard.changeCount
+        let trimmed = pasteboard.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        clipboardHasTransactionID = trimmed.hasPrefix("txn_")
     }
 
     @ViewBuilder
@@ -112,6 +128,14 @@ struct SubscriptionSettingsView: View {
                 TextField("txn_...", text: $activationKey)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("activationKeyField")
+                if clipboardHasTransactionID {
+                    Button("Paste") {
+                        if let pasted = NSPasteboard.general.string(forType: .string) {
+                            activationKey = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+                        }
+                    }
+                    .accessibilityIdentifier("pasteActivationKeyButton")
+                }
                 Button(isActivating ? "Activating..." : "Activate") {
                     Task {
                         isActivating = true
