@@ -173,6 +173,35 @@ class SubscriptionManager: ObservableObject {
         }
     }
 
+    // MARK: - Deactivation
+
+    /// Clear the locally cached subscription token and return to demo mode.
+    /// Does not contact the server; the server-side activation record remains
+    /// until the subscription expires naturally.
+    func deactivateLicense() {
+        // Delete the token file from the App Group container.
+        let tokenURL = appGroupContainerURL.appendingPathComponent(Self.tokenFilename)
+        try? FileManager.default.removeItem(at: tokenURL)
+
+        // Stop the periodic server refresh.
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+
+        // Clear in-memory state.
+        cachedToken = nil
+        email = nil
+
+        // Reset kernel + published status to no-subscription and start demo countdown.
+        status = .noSubscription
+        setSubscriptionStatusInKernel?(SubscriptionStatus.noSubscription.rawValue)
+        resetDemoInKernel?()
+        updateDemoTime()
+        startDemoTimer()
+
+        SentryHelper.configureUser(subscriptionStatus: status.displayName, email: nil)
+        log.info("License deactivated on this machine; reverted to demo mode")
+    }
+
     // MARK: - Server Refresh
 
     private func scheduleRefresh() {

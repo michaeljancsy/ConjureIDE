@@ -14,6 +14,7 @@ struct SubscriptionSettingsView: View {
     @State private var activationKey = ""
     @State private var isActivating = false
     @State private var activationError: String?
+    @State private var showDeactivateConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -146,12 +147,16 @@ struct SubscriptionSettingsView: View {
             }
             .accessibilityIdentifier("manageSubscriptionButton")
 
+            deactivateButton
+
         case .gracePeriod:
             Button("Manage Subscription") {
                 if let url = URL(string: "https://www.conjuredsp.com/account") {
                     NSWorkspace.shared.open(url)
                 }
             }
+
+            deactivateButton
 
         case .expired, .cancelled, .noSubscription:
             Button("Subscribe") {
@@ -168,6 +173,26 @@ struct SubscriptionSettingsView: View {
             }
             .disabled(subscriptionManager.demoSecondsRemaining > 0)
             .accessibilityIdentifier("restartDemoButton")
+        }
+    }
+
+    @ViewBuilder
+    private var deactivateButton: some View {
+        Button("Deactivate License") {
+            showDeactivateConfirmation = true
+        }
+        .accessibilityIdentifier("deactivateLicenseButton")
+        .confirmationDialog(
+            "Deactivate ConjureDSP's license on this machine?",
+            isPresented: $showDeactivateConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Deactivate License", role: .destructive) {
+                subscriptionManager.deactivateLicense()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Deactivating the license on this machine will allow you to activate ConjureDSP on a different machine. This machine will revert to \"Demo\" mode unless activated again with an activation key. Are you sure you want to deactivate ConjureDSP's license on this machine?")
         }
     }
 }
