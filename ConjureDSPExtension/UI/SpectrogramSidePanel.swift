@@ -53,7 +53,7 @@ struct SpectrogramSidePanel: View {
                 Divider()
                 spectrogramSection("Difference", channel: .difference, isExpanded: $showDifference)
                 Divider()
-                spectrogramSection("Normalized Diff", channel: .normalizedDifference, isExpanded: $showNormalizedDiff)
+                spectrogramSection("Normalized Difference", channel: .normalizedDifference, isExpanded: $showNormalizedDiff)
             }
         }
         .accessibilityIdentifier("spectrogramSidePanel")
