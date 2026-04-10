@@ -2,6 +2,20 @@
 
 Incomplete test items from open PRs. Check off as you verify each item.
 
+## PR #202 — [Fix truncated terminal welcome message](https://github.com/michaeljancsy/conjuredsp-application/pull/202)
+
+- [ ] Launch ConjureDSP without Claude Code installed — verify the full welcome message renders in the terminal
+- [ ] Launch with Claude Code installed — verify auto-launch still works
+
+## PR #201 — [Fix stale App Group provisioning on app update](https://github.com/michaeljancsy/conjuredsp-application/pull/201)
+
+- [ ] Manual: install previous version, then update to this build — verify rustc-dist is re-provisioned with correct entitlements
+
+## PR #198 — [Clean up cargo cache after failed crate installs](https://github.com/michaeljancsy/conjuredsp-application/pull/198)
+
+- [ ] Install an incompatible crate (e.g. one with native deps), verify error appears and cargo cache is cleaned
+- [ ] Install a compatible crate, then attempt an incompatible one — verify cache is NOT cleaned (existing crate deps preserved)
+
 ## PR #164 — [Require NAM redistribution certification on preset export](https://github.com/michaeljancsy/conjuredsp-application/pull/164)
 
 - [x] Manual: load `preset_nam.py`, click Export, verify certification section appears and Export button is disabled until a choice is made
@@ -56,6 +70,12 @@ Incomplete test items from open PRs. Check off as you verify each item.
 
 - [ ] Standalone multi-instance isolation tests in `rust/multi_instance_test/` verify: independent output, module-level state isolation, concurrent thread safety, reload isolation, and module name collision fix
 - [ ] Load ConjureDSP on two tracks in a DAW with different presets, verify both produce correct independent output
+
+## PR #122 — [Add 100 community presets with Python + Rust implementations and parity tests](https://github.com/michaeljancsy/conjuredsp-application/pull/122)
+
+- [ ] Run `xcodebuild test -only-testing:ConjureDSPTests/CommunityPresetParityTests` to verify Python/Rust parity
+- [ ] Spot-check a few presets in the plugin (load .py, listen, load .rs, compare)
+- [ ] Verify parity test auto-discovers all 100 preset pairs
 
 ## PR #115 — [Add Python package management](https://github.com/michaeljancsy/conjuredsp-application/pull/115)
 
