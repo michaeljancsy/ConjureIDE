@@ -38,7 +38,18 @@ Use AskUserQuestion with these options:
 
 Wait for the answer before continuing.
 
-## Step 3: Ask about notarization
+## Step 3: Ask about Beta build
+
+Use AskUserQuestion with these options:
+
+- **Regular build**
+- **Beta build**
+
+A Beta build adds the `BETA_BUILD` Swift compilation condition so the plugin runs fully licensed for 7 days from the build date (shows a cyan "BETA" toolbar badge, disables the 60s demo timer), then auto-reverts to Demo mode. Use this when the Paddle subscription infrastructure is unavailable.
+
+Wait for the answer before continuing.
+
+## Step 4: Ask about notarization
 
 Use AskUserQuestion with these options:
 
@@ -47,7 +58,7 @@ Use AskUserQuestion with these options:
 
 Wait for the answer before continuing.
 
-## Step 4: Ask about R2 upload
+## Step 5: Ask about R2 upload
 
 Use AskUserQuestion with these options:
 
@@ -56,11 +67,11 @@ Use AskUserQuestion with these options:
 
 Wait for the answer before continuing.
 
-## Step 5: Confirm and run
+## Step 6: Confirm and run
 
-Summarize the plan (version, build number, notarize yes/no, upload yes/no) and ask the user to confirm before running.
+Summarize the plan (version, build number, beta yes/no, notarize yes/no, upload yes/no) and ask the user to confirm before running.
 
-Then run the appropriate script. Pass version/build flags directly — the scripts handle updating the pbxproj.
+Then run the appropriate script. Pass version/build flags directly — the scripts handle updating the pbxproj. Append `--beta` to any of these commands if a Beta build was selected.
 
 - **Build + notarize + upload**: `./scripts/build-and-release.sh --version X.Y.Z --build N`
 - **Build + notarize, no upload**: `./scripts/build.sh --notarize --version X.Y.Z --build N`
@@ -71,7 +82,7 @@ Then run the appropriate script. Pass version/build flags directly — the scrip
 
 Use a long timeout (600000ms / 10 minutes) since builds and notarization take a while.
 
-## Step 6: Report results
+## Step 7: Report results
 
 After the script completes, report whether it succeeded or failed, the version and build number, the DMG path and size, and what steps completed.
 

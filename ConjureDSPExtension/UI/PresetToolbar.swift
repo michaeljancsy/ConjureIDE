@@ -460,18 +460,31 @@ struct PresetToolbar: View {
             // — Status/settings zone —
             Divider().frame(height: 28)
 
-            // Demo mode indicator — links to subscribe page
+            // Beta / Demo mode indicator — links to subscribe page
             if !subscriptionManager.isLicensed {
-                Link(destination: SubscriptionSettingsView.subscribeURL) {
-                    Text("DEMO")
-                        .font(.caption2.bold())
-                        .foregroundColor(.orange)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color.orange.opacity(0.15))
-                        .cornerRadius(3)
+                if subscriptionManager.isBetaActive {
+                    Link(destination: SubscriptionSettingsView.subscribeURL) {
+                        Text("BETA")
+                            .font(.caption2.bold())
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.cyan.opacity(0.15))
+                            .cornerRadius(3)
+                    }
+                    .accessibilityIdentifier("betaIndicator")
+                } else {
+                    Link(destination: SubscriptionSettingsView.subscribeURL) {
+                        Text("DEMO")
+                            .font(.caption2.bold())
+                            .foregroundColor(.orange)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.orange.opacity(0.15))
+                            .cornerRadius(3)
+                    }
+                    .accessibilityIdentifier("demoIndicator")
                 }
-                .accessibilityIdentifier("demoIndicator")
             }
 
             // Packages / Crates

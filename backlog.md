@@ -41,6 +41,7 @@
 
 ## Done
 
+- Beta build mode: `--beta` flag on `scripts/build.sh` injects `BETA_BUILD` Swift compilation condition. Plugin runs fully licensed for 7 days from the build date, shows a cyan "BETA" toolbar badge instead of amber "DEMO", disables the 60s demo timer, and auto-reverts to Demo (hourly re-check, no restart needed) once the window elapses. Pure Swift/Info.plist layer — no Rust/FFI/server changes. Used while Paddle subscription infra is offline. (2026-04-10)
 - v1.0.4 release build: bumped version, fixed $SRCROOT→$PROJECT_DIR bug in build-release.sh (rustc entitlements path), built DMG, uploaded to R2 with appcast (2026-04-08)
 - Multi-instance terminal support: each AU instance gets its own dedicated Claude Code PTY + WebSocket pair. Discovery uses mcp-instances/{uuid}.json directory instead of single port file. Terminal app manages multiple concurrent sessions, with per-instance health checks and stale PID cleanup. (2026-04-08)
 - Embed terminal + fix macOS 26 TCC loop: embedded ConjureDSPTerminal in host app bundle (single DMG), deduplicated python-dist/rustc-dist, replaced manual Group Containers path with `containerURL(forSecurityApplicationGroupIdentifier:)` to fix endless `kTCCServiceSystemPolicyAppData` prompts, replaced URL scheme launch with `openApplication(at:)` to fix `kTCCServiceAppleEvents`, switched R2 uploads from wrangler to rclone (2026-04-08)

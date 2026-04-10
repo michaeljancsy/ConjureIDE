@@ -82,25 +82,47 @@ struct SubscriptionSettingsView: View {
                 .foregroundColor(.secondary)
 
         case .noSubscription:
-            HStack(spacing: 6) {
-                Image(systemName: "music.note")
-                    .foregroundColor(.secondary)
-                Text("Demo Mode")
-                    .foregroundColor(.secondary)
-                    .fontWeight(.medium)
-            }
-            let remaining = Int(subscriptionManager.demoSecondsRemaining)
-            if remaining > 0 {
-                Text("\(remaining)s of demo remaining")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            if subscriptionManager.isBetaActive {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .foregroundColor(.cyan)
+                    Text("Beta Mode")
+                        .foregroundColor(.cyan)
+                        .fontWeight(.medium)
+                }
+                if let expiry = subscriptionManager.betaExpiryDate {
+                    Text("Reverts to Demo on \(Self.betaExpiryFormatter.string(from: expiry))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             } else {
-                Text("Demo time expired")
-                    .font(.caption)
-                    .foregroundColor(.orange)
+                HStack(spacing: 6) {
+                    Image(systemName: "music.note")
+                        .foregroundColor(.secondary)
+                    Text("Demo Mode")
+                        .foregroundColor(.secondary)
+                        .fontWeight(.medium)
+                }
+                let remaining = Int(subscriptionManager.demoSecondsRemaining)
+                if remaining > 0 {
+                    Text("\(remaining)s of demo remaining")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Demo time expired")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
             }
         }
     }
+
+    private static let betaExpiryFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
 
     @ViewBuilder
     private var activationSection: some View {
@@ -168,11 +190,13 @@ struct SubscriptionSettingsView: View {
 
             activationSection
 
-            Button("Restart Demo") {
-                subscriptionManager.restartDemo()
+            if !subscriptionManager.isBetaActive {
+                Button("Restart Demo") {
+                    subscriptionManager.restartDemo()
+                }
+                .disabled(subscriptionManager.demoSecondsRemaining > 0)
+                .accessibilityIdentifier("restartDemoButton")
             }
-            .disabled(subscriptionManager.demoSecondsRemaining > 0)
-            .accessibilityIdentifier("restartDemoButton")
         }
     }
 
