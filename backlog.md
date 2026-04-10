@@ -27,6 +27,7 @@
 
 ### UX
 - Make the ConjureDSPTerminal (companion app) icon visible in the Dock so users can see when it's running
+- Stereo / width visualization
 
 ### Optimization
 - Preset optimization: audit factory presets for render-loop inefficiencies (allocations, per-sample Python, redundant math).
