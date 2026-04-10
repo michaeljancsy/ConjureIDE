@@ -98,8 +98,8 @@ class SubscriptionManager: ObservableObject {
 
     /// Load cached token from App Group and verify with kernel.
     func loadAndVerify() {
-        #if DEBUG
-        // worktree: always licensed
+        #if FORCE_LICENSE
+        // Skip server verification — force licensed status for development
         status = .active
         setSubscriptionStatusInKernel?(SubscriptionStatus.active.rawValue)
         return
@@ -151,6 +151,25 @@ class SubscriptionManager: ObservableObject {
         } else {
             log.info("Not licensed, status: \(newStatus.displayName, privacy: .public)")
             startDemoTimer()
+        }
+    }
+
+    // MARK: - Activation
+
+    /// Activate a subscription using a transaction ID from Paddle checkout.
+    func activate(transactionID: String) async throws {
+        let machineID = SubscriptionAPI.machineID()
+        let token = try await SubscriptionAPI.activate(transactionID: transactionID, machineID: machineID)
+
+        try saveToken(token)
+        cachedToken = token
+        verifyAndUpdateStatus(token: token)
+        email = parseEmailFromToken(token)
+
+        log.info("Subscription activated, status: \(self.status.displayName, privacy: .public)")
+
+        if status.isLicensed {
+            scheduleRefresh()
         }
     }
 

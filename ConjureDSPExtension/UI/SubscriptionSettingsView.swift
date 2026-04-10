@@ -8,9 +8,12 @@
 import SwiftUI
 
 struct SubscriptionSettingsView: View {
-    static let subscribeURL = URL(string: "https://conjuredsp.com/subscribe")!
+    static let subscribeURL = URL(string: "https://www.conjuredsp.com/subscribe")!
 
     @ObservedObject var subscriptionManager: SubscriptionManager
+    @State private var activationKey = ""
+    @State private var isActivating = false
+    @State private var activationError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -99,11 +102,45 @@ struct SubscriptionSettingsView: View {
     }
 
     @ViewBuilder
+    private var activationSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Activation Key")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            HStack(spacing: 8) {
+                TextField("txn_...", text: $activationKey)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("activationKeyField")
+                Button(isActivating ? "Activating..." : "Activate") {
+                    Task {
+                        isActivating = true
+                        activationError = nil
+                        do {
+                            try await subscriptionManager.activate(transactionID: activationKey.trimmingCharacters(in: .whitespacesAndNewlines))
+                            activationKey = ""
+                        } catch {
+                            activationError = error.localizedDescription
+                        }
+                        isActivating = false
+                    }
+                }
+                .disabled(activationKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isActivating)
+                .accessibilityIdentifier("activateButton")
+            }
+            if let error = activationError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+    }
+
+    @ViewBuilder
     private var actionSection: some View {
         switch subscriptionManager.status {
         case .active:
             Button("Manage Subscription") {
-                if let url = URL(string: "https://conjuredsp.com/account") {
+                if let url = URL(string: "https://www.conjuredsp.com/account") {
                     NSWorkspace.shared.open(url)
                 }
             }
@@ -111,32 +148,20 @@ struct SubscriptionSettingsView: View {
 
         case .gracePeriod:
             Button("Manage Subscription") {
-                if let url = URL(string: "https://conjuredsp.com/account") {
+                if let url = URL(string: "https://www.conjuredsp.com/account") {
                     NSWorkspace.shared.open(url)
                 }
             }
 
-        case .expired, .cancelled:
+        case .expired, .cancelled, .noSubscription:
             Button("Subscribe") {
-                if let url = URL(string: "https://conjuredsp.com/subscribe") {
+                if let url = URL(string: "https://www.conjuredsp.com/subscribe") {
                     NSWorkspace.shared.open(url)
                 }
             }
             .accessibilityIdentifier("subscribeButton")
 
-            Button("Restart Demo") {
-                subscriptionManager.restartDemo()
-            }
-            .disabled(subscriptionManager.demoSecondsRemaining > 0)
-            .accessibilityIdentifier("restartDemoButton")
-
-        case .noSubscription:
-            Button("Subscribe") {
-                if let url = URL(string: "https://conjuredsp.com/subscribe") {
-                    NSWorkspace.shared.open(url)
-                }
-            }
-            .accessibilityIdentifier("subscribeButton")
+            activationSection
 
             Button("Restart Demo") {
                 subscriptionManager.restartDemo()

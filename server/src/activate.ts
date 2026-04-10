@@ -52,6 +52,9 @@ export async function handleActivate(
       );
     }
 
+    // Fetch customer email
+    const customerEmail = await fetchPaddleCustomerEmail(sub.customer_id, env);
+
     // Upsert subscription in D1
     await env.DB.prepare(
       `INSERT INTO subscriptions (id, email, paddle_customer_id, status, current_period_end, created_at, updated_at)
@@ -65,7 +68,7 @@ export async function handleActivate(
     )
       .bind(
         sub.id,
-        sub.customer_email,
+        customerEmail,
         sub.customer_id,
         sub.status,
         sub.current_billing_period?.ends_at ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
@@ -84,7 +87,7 @@ export async function handleActivate(
     const periodEnd = sub.current_billing_period?.ends_at ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const payload = createTokenPayload(
       subscriptionId,
-      sub.customer_email,
+      customerEmail,
       sub.status,
       periodEnd
     );
@@ -110,7 +113,6 @@ interface PaddleTransaction {
 interface PaddleSubscription {
   id: string;
   customer_id: string;
-  customer_email: string;
   status: string;
   current_billing_period: {
     starts_at: string;
@@ -141,7 +143,7 @@ async function fetchPaddleSubscription(
   env: Env
 ): Promise<PaddleSubscription | null> {
   const res = await fetch(
-    `${env.PADDLE_API_BASE}/subscriptions/${subscriptionId}?include=customer`,
+    `${env.PADDLE_API_BASE}/subscriptions/${subscriptionId}`,
     {
       headers: {
         Authorization: `Bearer ${env.PADDLE_API_KEY}`,
@@ -152,4 +154,22 @@ async function fetchPaddleSubscription(
   if (!res.ok) return null;
   const json = (await res.json()) as { data: PaddleSubscription };
   return json.data;
+}
+
+async function fetchPaddleCustomerEmail(
+  customerId: string,
+  env: Env
+): Promise<string> {
+  const res = await fetch(
+    `${env.PADDLE_API_BASE}/customers/${customerId}`,
+    {
+      headers: {
+        Authorization: `Bearer ${env.PADDLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+  if (!res.ok) return "";
+  const json = (await res.json()) as { data: { email: string } };
+  return json.data.email ?? "";
 }
