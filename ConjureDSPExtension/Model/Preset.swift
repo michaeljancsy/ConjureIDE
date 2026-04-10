@@ -148,5 +148,23 @@ enum FactoryPresetRegistry {
         // NAM / Amp Modeling
         Entry(name: "NAM Tone (Python)", number: 53, resourceName: "preset_nam", language: .python, category: .other),
         Entry(name: "NAM Tone (Rust)", number: 54, resourceName: "preset_nam_rust", language: .rust, category: .other),
+
+        // Creative / Hero
+        Entry(name: "Haunted Cathedral (Python)", number: 55, resourceName: "preset_haunted_cathedral", language: .python, category: .other),
+        Entry(name: "Haunted Cathedral (Rust)", number: 56, resourceName: "preset_haunted_cathedral_rust", language: .rust, category: .other),
+        Entry(name: "Dying Star (Python)", number: 57, resourceName: "preset_dying_star", language: .python, category: .other),
+        Entry(name: "Dying Star (Rust)", number: 58, resourceName: "preset_dying_star_rust", language: .rust, category: .other),
+        Entry(name: "Broken Fax Lullaby (Python)", number: 59, resourceName: "preset_broken_fax_lullaby", language: .python, category: .other),
+        Entry(name: "Broken Fax Lullaby (Rust)", number: 60, resourceName: "preset_broken_fax_lullaby_rust", language: .rust, category: .other),
+        Entry(name: "Sun-Baked Cassette (Python)", number: 61, resourceName: "preset_sunbaked_cassette", language: .python, category: .other),
+        Entry(name: "Sun-Baked Cassette (Rust)", number: 62, resourceName: "preset_sunbaked_cassette_rust", language: .rust, category: .other),
+        Entry(name: "Alien Radio (Python)", number: 63, resourceName: "preset_alien_radio", language: .python, category: .other),
+        Entry(name: "Alien Radio (Rust)", number: 64, resourceName: "preset_alien_radio_rust", language: .rust, category: .other),
+        Entry(name: "Underwater Spy (Python)", number: 65, resourceName: "preset_underwater_spy", language: .python, category: .other),
+        Entry(name: "Underwater Spy (Rust)", number: 66, resourceName: "preset_underwater_spy_rust", language: .rust, category: .other),
+        Entry(name: "Glass Smash (Python)", number: 67, resourceName: "preset_glass_smash", language: .python, category: .other),
+        Entry(name: "Glass Smash (Rust)", number: 68, resourceName: "preset_glass_smash_rust", language: .rust, category: .other),
+        Entry(name: "Ghost Choir (Python)", number: 69, resourceName: "preset_ghost_choir", language: .python, category: .other),
+        Entry(name: "Ghost Choir (Rust)", number: 70, resourceName: "preset_ghost_choir_rust", language: .rust, category: .other),
     ]
 }

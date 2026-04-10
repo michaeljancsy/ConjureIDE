@@ -7,9 +7,6 @@
 
 ## To Do
 
-### Creative Presets
-- HeroScrollColumns presets: 8 Python + 8 Rust/WASM presets matching the website hero prompts (haunted cathedral, dying star, broken fax, sun cassette, alien radio, underwater spy, glass shatter, ghost choir), plus parity tests for each pair. Plan at `~/.claude/plans/composed-stirring-porcupine.md`.
-
 ### v1 Release
 - NAM exports work
 - export pipeline flags/gates exporting NAM tones without explicit authorization from the creator of the tone
@@ -41,6 +38,7 @@
 
 ## Done
 
+- HeroScrollColumns presets: 8 sophisticated Python + 8 Rust/WASM showpiece presets matching the website hero prompts — Haunted Cathedral, Dying Star, Broken Fax Lullaby, Sun-Baked Cassette, Alien Radio, Underwater Spy, Glass Smash, Ghost Choir. Each pair uses techniques like dual-tap pitch shifting, modal resonator banks, multi-carrier ring modulation, Schroeder reverb networks, frequency-dependent saturation, and mid/side widening. All 16 files pass `PresetComparisonTests` parity (1e-4 tolerance, A440 + white noise). Plan at `~/.claude/plans/majestic-doodling-liskov.md`. (2026-04-10)
 - Beta build mode: `--beta` flag on `scripts/build.sh` injects `BETA_BUILD` Swift compilation condition. Plugin runs fully licensed for 7 days from the build date, shows a cyan "BETA" toolbar badge instead of amber "DEMO", disables the 60s demo timer, and auto-reverts to Demo (hourly re-check, no restart needed) once the window elapses. Pure Swift/Info.plist layer — no Rust/FFI/server changes. Used while Paddle subscription infra is offline. (2026-04-10)
 - v1.0.4 release build: bumped version, fixed $SRCROOT→$PROJECT_DIR bug in build-release.sh (rustc entitlements path), built DMG, uploaded to R2 with appcast (2026-04-08)
 - Multi-instance terminal support: each AU instance gets its own dedicated Claude Code PTY + WebSocket pair. Discovery uses mcp-instances/{uuid}.json directory instead of single port file. Terminal app manages multiple concurrent sessions, with per-instance health checks and stale PID cleanup. (2026-04-08)
