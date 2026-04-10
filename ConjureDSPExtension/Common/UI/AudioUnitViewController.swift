@@ -287,6 +287,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         lm.getGraceDeadlineUnix = { [weak au] in
             au?.graceDeadlineUnix() ?? 0
         }
+        lm.buildID = Bundle(for: type(of: self)).infoDictionary?["BuildID"] as? Int ?? 0
         lm.loadAndVerify()
 
         // Run: detect language, compile if needed, load into kernel + benchmark
