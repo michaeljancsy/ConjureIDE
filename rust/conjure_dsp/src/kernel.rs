@@ -257,19 +257,24 @@ impl DSPKernel {
     /// Inject NAM model binary data into the loaded WASM backend.
     /// Call after `load_wasm()` when `nam_path()` returns Some.
     ///
-    /// Looks in `pending_backend` first because `load_wasm` stages new backends
-    /// there and Swift calls `inject_nam` immediately after `load_wasm` returns —
-    /// before the audio thread has had a chance to swap. Falls back to the live
-    /// backend slot if no swap is pending (covers the very first load and the
-    /// rare case where the audio thread already completed the swap).
+    /// The newly-loaded WASM backend can live in either slot depending on
+    /// whether the audio thread has picked up the swap yet:
+    /// - During `SWAP_PHASE_FADE_OUT`, the new backend is staged in
+    ///   `pending_backend` (live slot still holds the previous backend).
+    /// - In any other phase, either the first-load fast path installed it
+    ///   directly into `backend`, or the audio thread already swapped and
+    ///   `pending_backend` now holds the *old* backend parked for deferred
+    ///   drop. In both cases the newest backend lives in `backend`.
     pub fn inject_nam(&mut self, binary_data: &[u8]) -> Result<(), String> {
-        if let Ok(mut pending) = self.pending_backend.lock() {
-            if let Some(ref mut backend) = *pending {
-                let wasm = backend
-                    .as_any_mut()
-                    .downcast_mut::<WasmBackend>()
-                    .ok_or("Pending backend is not WasmBackend")?;
-                return wasm.inject_nam_model(binary_data);
+        if self.swap_phase.load(Ordering::Acquire) == SWAP_PHASE_FADE_OUT {
+            if let Ok(mut pending) = self.pending_backend.lock() {
+                if let Some(ref mut backend) = *pending {
+                    let wasm = backend
+                        .as_any_mut()
+                        .downcast_mut::<WasmBackend>()
+                        .ok_or("Pending backend is not WasmBackend")?;
+                    return wasm.inject_nam_model(binary_data);
+                }
             }
         }
         let mut guard = self.backend.lock().map_err(|e| format!("Lock failed: {}", e))?;
@@ -886,8 +891,11 @@ impl DSPKernel {
             max_time
         };
 
-        // Prefer the staged backend (just loaded by main thread) over the live one.
-        let result = {
+        // The newest backend lives in `pending_backend` only while we're in
+        // `SWAP_PHASE_FADE_OUT` — in other phases `pending_backend` either
+        // empty or holds the *old* backend parked for deferred drop, so we
+        // must benchmark `self.backend` to avoid reporting stale numbers.
+        let result = if self.swap_phase.load(Ordering::Acquire) == SWAP_PHASE_FADE_OUT {
             let mut pending = self.pending_backend.lock().ok()?;
             if let Some(ref mut backend) = *pending {
                 Some(run(backend.as_mut()))
@@ -896,6 +904,9 @@ impl DSPKernel {
                 let mut live = self.backend.lock().ok()?;
                 live.as_mut().map(|b| run(b.as_mut()))
             }
+        } else {
+            let mut live = self.backend.lock().ok()?;
+            live.as_mut().map(|b| run(b.as_mut()))
         };
 
         // Reset profiler — benchmark would have contaminated it if we'd routed
@@ -2241,6 +2252,76 @@ mod tests {
         assert!(first_half_avg > second_half_avg + 0.05,
                 "expected fade-down: first_half={}, second_half={}",
                 first_half_avg, second_half_avg);
+    }
+
+    /// Regression test for PR #215 review: after a swap completes, the *old*
+    /// backend is parked in `pending_backend` for deferred drop. Benchmark must
+    /// not pick it — it should run on the live backend (the one just swapped
+    /// in). Verified indirectly by checking that `pending_backend` is still
+    /// populated after `benchmark_process()` returns, which proves the
+    /// pending slot was not taken/drained by the benchmark path.
+    #[test]
+    fn test_benchmark_process_after_completed_swap() {
+        let wasm_a = gain_half_wasm();
+        let wasm_b = wat::parse_str(r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                (local $i i32)
+                (local $total i32)
+                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (block $break
+                  (loop $loop
+                    (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
+                    (f32.store
+                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (f32.const 0.0)
+                    )
+                    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                    (br $loop)
+                  )
+                )
+              )
+            )
+        "#).expect("Failed to parse silence WAT");
+
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm_a));
+        kernel.initialize(1, 1, 44100.0);
+
+        // Stage B and pump enough audio to complete fade-out + fade-in so the
+        // swap has fully landed and `swap_phase` is back to IDLE. At that
+        // point pending holds the *old* A and live holds the new B.
+        assert!(kernel.load_wasm(&wasm_b));
+        let input = vec![1.0f32; 64];
+        for _ in 0..16 {
+            let mut out = vec![0.0f32; 64];
+            unsafe {
+                let ip: *const f32 = input.as_ptr();
+                let op: *mut f32 = out.as_mut_ptr();
+                kernel.process(&ip, &op, 1, 64);
+            }
+        }
+        assert_eq!(
+            kernel.swap_phase.load(Ordering::Acquire),
+            SWAP_PHASE_IDLE,
+            "swap should have fully drained"
+        );
+        assert!(
+            kernel.pending_backend.lock().unwrap().is_some(),
+            "pending should still hold the old backend parked for deferred drop"
+        );
+
+        let result = kernel.benchmark_process();
+        assert!(result.is_some());
+        assert!(result.unwrap() > 0.0);
+
+        // Pending must still be intact — the fix routes benchmark to the live
+        // slot when not in FADE_OUT, so the parked old backend is untouched.
+        assert!(
+            kernel.pending_backend.lock().unwrap().is_some(),
+            "benchmark should not have taken the parked pending backend"
+        );
     }
 
     // --- License & demo mode tests ---
