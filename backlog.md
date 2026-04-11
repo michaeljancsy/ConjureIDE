@@ -23,6 +23,7 @@
 ### Bugs
 - v1.0.9 still has loud noise when switching presets — the 5ms declick fade envelope (39194e7) is not fully eliminating the glitch in the shipped build; needs further investigation.
 - Cmd+Shift+A triggers Ableton's project save as dialog instead of the extension's save as dialog
+- `ConjureDSPTests.rustFactoryPresetsHaveRustContent` hardcodes `rustPresets.count == 27` at `ConjureDSPTests/ConjureDSPTests.swift:441`; after PRs #212/#217 the actual count is 52. Bump the expectation (and consider switching to a lower-bound `>=` so future preset additions don't break the test).
 
 ### UX
 - Make the ConjureDSPTerminal (companion app) icon visible in the Dock so users can see when it's running
