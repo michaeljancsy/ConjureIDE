@@ -27,7 +27,7 @@ params! {
     MIX = mix().default(0.55),
 }
 
-const MAX_DL: usize = 32000;
+const MAX_DL: usize = 40000;
 
 const FUNDAMENTAL: f64 = 220.0;
 const HARMONICS: [f64; 8] = [1.0, 2.0, 3.0, 5.0, 6.0, 7.0, 9.0, 11.0];

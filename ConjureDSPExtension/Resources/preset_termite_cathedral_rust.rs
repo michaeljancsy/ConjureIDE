@@ -27,7 +27,7 @@ params! {
     MIX = mix().default(0.6),
 }
 
-const MAX_DL: usize = 24000;
+const MAX_DL: usize = 50000;
 
 const TAP_MS: [f64; 8] = [3.1, 5.3, 7.9, 11.7, 14.3, 18.1, 22.9, 27.7];
 const TAP_LFO_HZ: [f64; 8] = [0.7, 1.1, 1.4, 1.9, 2.3, 3.1, 4.1, 5.3];

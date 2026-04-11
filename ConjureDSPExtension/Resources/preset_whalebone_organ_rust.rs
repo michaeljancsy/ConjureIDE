@@ -30,7 +30,7 @@ params! {
     MIX = mix().default(0.55),
 }
 
-const MAX_DL: usize = 16000;
+const MAX_DL: usize = 30000;
 
 const PIPE_HZ: [f64; 8] = [82.4, 123.5, 164.8, 220.0, 329.6, 440.0, 523.3, 659.3];
 const BREATH_HZ: [f64; 8] = [0.11, 0.13, 0.17, 0.19, 0.23, 0.29, 0.31, 0.37];

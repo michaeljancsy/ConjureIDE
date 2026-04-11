@@ -27,7 +27,7 @@ params! {
     MIX = mix().default(0.55),
 }
 
-const MAX_DL: usize = 28000;
+const MAX_DL: usize = 60000;
 
 const DRIP_HZ: f64 = 0.5;
 const DRIFT_HZ: f64 = 0.23;

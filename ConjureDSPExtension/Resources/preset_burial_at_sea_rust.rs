@@ -27,7 +27,7 @@ params! {
     MIX = mix().default(0.55),
 }
 
-const MAX_DL: usize = 28000;
+const MAX_DL: usize = 60000;
 
 const SHIFT_BASE_MS: f64 = 60.0;
 const GRAIN_MS: f64 = 100.0;

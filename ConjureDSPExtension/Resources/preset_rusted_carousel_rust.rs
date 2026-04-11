@@ -28,7 +28,7 @@ params! {
     MIX = mix().default(0.55),
 }
 
-const MAX_DL: usize = 6000;
+const MAX_DL: usize = 10000;
 
 const CHORUS_MS: [f64; 5] = [9.0, 13.0, 17.0, 23.0, 29.0];
 const CHORUS_LFO_HZ: [f64; 5] = [0.17, 0.23, 0.29, 0.37, 0.41];

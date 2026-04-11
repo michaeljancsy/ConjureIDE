@@ -27,7 +27,7 @@ params! {
     MIX = mix().default(0.55),
 }
 
-const MAX_DL: usize = 12000;
+const MAX_DL: usize = 20000;
 
 const TREM_HZ: [f64; 3] = [5.7, 8.3, 12.1];
 const BP_HZ: [f64; 3] = [1800.0, 3200.0, 5500.0];

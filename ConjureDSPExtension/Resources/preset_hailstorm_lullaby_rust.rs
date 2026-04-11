@@ -27,7 +27,7 @@ params! {
     MIX = mix().default(0.55),
 }
 
-const MAX_DL: usize = 20000;
+const MAX_DL: usize = 36000;
 
 const AP_MS: [f64; 2] = [7.3, 11.1];
 const AP_G: f64 = 0.55;
