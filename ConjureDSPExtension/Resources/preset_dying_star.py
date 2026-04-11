@@ -6,21 +6,29 @@
 # resonance bandpass at 110 Hz → event-horizon bit reduction → final mix.
 #
 # Params:
-#   collapse (pct) — closes lowpass cutoff + drives bit reduction
-#   gravity  (pct) — pitch-shift drift rate
-#   sub      (pct) — rumble bus level
-#   mix            — wet/dry blend
+#   collapse      (pct)    — closes lowpass cutoff + drives bit reduction
+#   gravity       (pct)    — pitch-shift drift rate (Free mode only)
+#   sub           (pct)    — rumble bus level
+#   mix                    — wet/dry blend
+#   gravity_sync  (choice) — lock pitch-shift grain phase to host beat
+#   collapse_sync (choice) — beat-locked decay envelope on the closing lowpass
 
 import math
-from conjuredsp import (mix, pct,
+from conjuredsp import (mix, pct, choice,
                         DelayLine, Biquad, BiquadCoeffs)
 
 PARAMS = {
-    "collapse": pct(default=55),
-    "gravity":  pct(default=60),
-    "sub":      pct(default=70),
-    "mix":      mix(default=0.6),
+    "collapse":      pct(default=55),
+    "gravity":       pct(default=60),
+    "sub":           pct(default=70),
+    "mix":           mix(default=0.6),
+    "gravity_sync":  choice("Free", "1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars"),
+    "collapse_sync": choice("Free", "1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars"),
 }
+
+# Sync division → quarter-note beats. None entries are computed per-call from
+# the host's time signature numerator (1 bar = num quarter notes in N/4).
+_SYNC_DIVISIONS = (None, 0.25, 0.5, 1.0, 2.0, None, None)
 
 # Pitch shifter parameters
 SHIFT_BASE_MS = 50.0       # base read offset behind write head
@@ -45,7 +53,19 @@ class _S:
         self.grain_phase = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def _resolve_sync(idx, time_sig_num):
+    """Map a sync choice index → division length in quarter notes, or 0 for Free."""
+    if idx <= 0 or idx >= len(_SYNC_DIVISIONS):
+        return 0.0
+    div = _SYNC_DIVISIONS[idx]
+    if div is not None:
+        return div
+    # 1 bar = time_sig_num quarter notes; 2 bars = 2 * time_sig_num
+    bar = float(time_sig_num) if time_sig_num > 0 else 4.0
+    return bar if idx == 5 else 2.0 * bar
+
+
+def process(inputs, outputs, frame_count, sample_rate, params, transport):
     global _st, _sr
     nch = len(inputs)
     if _st is None or _sr != sample_rate:
@@ -57,6 +77,21 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     gravity = params["gravity"] / 100.0
     sub = params["sub"] / 100.0
     mx = params["mix"]
+
+    # Host transport for beat-locked sync. If the host isn't playing or has no
+    # tempo, both sync modes fall back to free-running so the preset still
+    # works in auval and stopped DAWs.
+    tempo = transport["tempo"]
+    beat = transport["beat"]
+    playing = transport["playing"]
+    time_sig_num = transport["time_sig_num"]
+    sync_active = bool(playing) and tempo > 0.0
+    beats_per_sample = (tempo / 60.0) / sample_rate if sync_active else 0.0
+
+    grav_div = _resolve_sync(int(round(params["gravity_sync"])), time_sig_num) if sync_active else 0.0
+    coll_div = _resolve_sync(int(round(params["collapse_sync"])), time_sig_num) if sync_active else 0.0
+    grav_synced = grav_div > 0.0
+    coll_synced = coll_div > 0.0
 
     # Sub-bass lowpass coefficients (80 Hz Q=0.7)
     sub_lpc = BiquadCoeffs.lowpass(80.0, 0.707, sample_rate)
@@ -89,9 +124,14 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     ring_gain = 0.4
 
     for i in range(frame_count):
-        # Advance grain phase once per sample (shared across channels)
-        ph0 = s.grain_phase
-        ph1 = (s.grain_phase + 0.5) % 1.0
+        # Pitch-shifter grain phase: free-running by default, beat-locked when synced.
+        if grav_synced:
+            beat_now = beat + i * beats_per_sample
+            ph0 = (beat_now / grav_div) % 1.0
+        else:
+            ph0 = s.grain_phase
+            s.grain_phase = (s.grain_phase + grain_rate) % 1.0
+        ph1 = (ph0 + 0.5) % 1.0
         # sin² window peaks at center of grain (0.5), zero at boundaries
         w0 = math.sin(math.pi * ph0)
         w0 = w0 * w0
@@ -99,7 +139,22 @@ def process(inputs, outputs, frame_count, sample_rate, params):
         w1 = w1 * w1
         read0 = base_d + ph0 * grain_samples
         read1 = base_d + ph1 * grain_samples
-        s.grain_phase = (s.grain_phase + grain_rate) % 1.0
+
+        # Closing-lowpass coefficients: per-buffer in Free mode, per-sample when
+        # collapse is beat-pulsed. Bit reduction stays tied to the static collapse.
+        if coll_synced:
+            beat_now = beat + i * beats_per_sample
+            pulse_phase = (beat_now / coll_div) % 1.0
+            pulse_env = math.exp(-3.0 * pulse_phase)
+            eff_collapse = collapse + (1.0 - collapse) * pulse_env
+            if eff_collapse > 1.0:
+                eff_collapse = 1.0
+            cur_close_fc = 8000.0 - 7650.0 * eff_collapse
+            cur_close_alpha = math.exp(-2.0 * math.pi * cur_close_fc / sample_rate)
+            cur_close_one_minus = 1.0 - cur_close_alpha
+        else:
+            cur_close_alpha = close_alpha
+            cur_close_one_minus = close_one_minus
 
         for ch in range(nch):
             dry = float(inputs[ch][i])
@@ -124,7 +179,7 @@ def process(inputs, outputs, frame_count, sample_rate, params):
                 sig = vd - AP_G * vn
 
             # Stage D: closing one-pole lowpass
-            s.close_lp[ch] = close_alpha * s.close_lp[ch] + close_one_minus * sig
+            s.close_lp[ch] = cur_close_alpha * s.close_lp[ch] + cur_close_one_minus * sig
             closed = s.close_lp[ch]
 
             # Stage E: Schwarzschild resonance bandpass (parallel)
