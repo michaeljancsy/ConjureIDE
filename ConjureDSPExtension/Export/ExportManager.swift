@@ -315,6 +315,11 @@ final class ExportManager {
                 ]
                 if let key = m.key { dict["key"] = key }
                 if let curve = m.curve, curve != "linear" { dict["curve"] = curve }
+                // Preserve non-default styles (toggle/choice/integer) so the
+                // exported standalone AU keeps the same UI affordance and
+                // automation behavior as the source preset.
+                if let style = m.style, style != "slider" { dict["style"] = style }
+                if let options = m.options, !options.isEmpty { dict["options"] = options }
                 return dict
             }
             config["paramMetadata"] = metaArray

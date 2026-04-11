@@ -177,6 +177,26 @@ pub const fn param(min: f64, max: f64) -> ParamSpec {
     }
 }
 
+/// Integer-valued parameter with explicit min/max.
+///
+/// Renders as a slider/knob in the in-plugin UI and as a discrete-stepped
+/// parameter (`AudioUnitParameterUnit.indexed`) in DAWs, so automation lanes
+/// snap to whole numbers. The script receives an exact integer-valued float
+/// in `PARAMS_BUF` (e.g. `4.0`).
+///
+/// Default value is min. Customize with `.unit()`, `.default()`.
+pub const fn integer(min: f64, max: f64) -> ParamSpec {
+    ParamSpec {
+        min_val: min,
+        max_val: max,
+        unit_str: "",
+        default_val: min,
+        curve_str: "linear",
+        style_str: "integer",
+        options: &[],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -277,6 +297,28 @@ mod tests {
         assert!(approx_eq(p.max_val, 10.0, 1e-10));
         assert!(approx_eq(p.default_val, 5.0, 1e-10));
         assert_eq!(p.unit_str, "");
+    }
+
+    #[test]
+    fn test_integer_defaults() {
+        let p = integer(2.0, 6.0);
+        assert!(approx_eq(p.min_val, 2.0, 1e-10));
+        assert!(approx_eq(p.max_val, 6.0, 1e-10));
+        assert!(approx_eq(p.default_val, 2.0, 1e-10));
+        assert_eq!(p.unit_str, "");
+        assert_eq!(p.style_str, "integer");
+        assert_eq!(p.curve_str, "linear");
+        assert!(p.options.is_empty());
+    }
+
+    #[test]
+    fn test_integer_with_default_and_unit() {
+        let p = integer(1.0, 16.0).default(8.0).unit("bits");
+        assert!(approx_eq(p.min_val, 1.0, 1e-10));
+        assert!(approx_eq(p.max_val, 16.0, 1e-10));
+        assert!(approx_eq(p.default_val, 8.0, 1e-10));
+        assert_eq!(p.unit_str, "bits");
+        assert_eq!(p.style_str, "integer");
     }
 
     #[test]

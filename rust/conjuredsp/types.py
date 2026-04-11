@@ -27,7 +27,7 @@ class ParamSpec(TypedDict, total=False):
     unit: str
     default: float
     curve: Literal["linear", "log"]
-    style: Literal["slider", "toggle", "choice"]
+    style: Literal["slider", "toggle", "choice", "integer"]
     options: list[str]
 
 

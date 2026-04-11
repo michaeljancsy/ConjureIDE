@@ -21,7 +21,7 @@ pub struct ParamMetadata {
     /// Log curve: min * (max/min)^normalized — ideal for frequency and time params.
     #[serde(default = "default_curve")]
     pub curve: String,
-    /// Display style: "slider" (default), "toggle", or "choice".
+    /// Display style: "slider" (default), "toggle", "choice", or "integer".
     #[serde(default = "default_style")]
     pub style: String,
     /// Option labels for "choice" style parameters (e.g., ["Low", "Mid", "High"]).
@@ -38,20 +38,42 @@ fn default_style() -> String {
 }
 
 impl ParamMetadata {
+    /// Whether this parameter snaps to integer values.
+    pub fn is_integer(&self) -> bool {
+        self.style == "integer"
+    }
+
     /// Map a normalized 0–1 value to the actual parameter range.
+    /// For integer-styled params, the result is rounded to the nearest whole
+    /// number and clamped to `[min, max]` so scripts always receive an exact
+    /// integer-valued float.
     pub fn denormalize(&self, normalized: f32) -> f32 {
         let n = normalized.clamp(0.0, 1.0);
-        if self.curve == "log" && self.min > 0.0 && self.max > 0.0 {
+        let raw = if self.curve == "log" && self.min > 0.0 && self.max > 0.0 {
             // Log curve: min * (max/min)^n
             self.min * (self.max / self.min).powf(n)
         } else {
             // Linear
             self.min + n * (self.max - self.min)
+        };
+        if self.is_integer() {
+            let lo = self.min.min(self.max);
+            let hi = self.min.max(self.max);
+            raw.round().clamp(lo, hi)
+        } else {
+            raw
         }
     }
 
     /// Map an actual parameter value to the normalized 0–1 range.
+    /// For integer-styled params, the input is rounded to the nearest whole
+    /// number first so round-trips through `denormalize`/`normalize` are stable.
     pub fn normalize(&self, actual: f32) -> f32 {
+        let actual = if self.is_integer() {
+            actual.round()
+        } else {
+            actual
+        };
         if self.curve == "log" && self.min > 0.0 && self.max > 0.0 {
             // Inverse of log curve: log(actual/min) / log(max/min)
             let ratio = (actual / self.min).max(f32::EPSILON);
@@ -99,6 +121,20 @@ mod tests {
             unit: "Hz".into(),
             curve: "log".into(),
             style: "slider".into(),
+            options: None,
+        }
+    }
+
+    fn integer_param(min: f32, max: f32) -> ParamMetadata {
+        ParamMetadata {
+            name: "Stages".into(),
+            key: "stages".into(),
+            min,
+            max,
+            default: min,
+            unit: "".into(),
+            curve: "linear".into(),
+            style: "integer".into(),
             options: None,
         }
     }
@@ -162,6 +198,54 @@ mod tests {
         let p = linear_param(0.0, 100.0);
         assert!((p.denormalize(-0.5) - 0.0).abs() < 1e-5);
         assert!((p.denormalize(1.5) - 100.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn integer_denormalize_endpoints() {
+        let p = integer_param(2.0, 6.0);
+        assert_eq!(p.denormalize(0.0), 2.0);
+        assert_eq!(p.denormalize(1.0), 6.0);
+    }
+
+    #[test]
+    fn integer_denormalize_midpoint_snaps() {
+        let p = integer_param(2.0, 6.0);
+        // Linear midpoint of [2, 6] is 4.0 — already integer
+        assert_eq!(p.denormalize(0.5), 4.0);
+        // 0.6 → linear 4.4 → rounds to 4
+        assert_eq!(p.denormalize(0.6), 4.0);
+        // 0.7 → linear 4.8 → rounds to 5
+        assert_eq!(p.denormalize(0.7), 5.0);
+        // 0.1 → linear 2.4 → rounds to 2
+        assert_eq!(p.denormalize(0.1), 2.0);
+        // 0.9 → linear 5.6 → rounds to 6
+        assert_eq!(p.denormalize(0.9), 6.0);
+    }
+
+    #[test]
+    fn integer_denormalize_clamps_to_range() {
+        let p = integer_param(1.0, 16.0);
+        assert_eq!(p.denormalize(-0.5), 1.0);
+        assert_eq!(p.denormalize(1.5), 16.0);
+    }
+
+    #[test]
+    fn integer_normalize_roundtrip_at_each_step() {
+        let p = integer_param(2.0, 6.0);
+        // Each integer value should normalize → denormalize back to itself
+        for v in [2.0_f32, 3.0, 4.0, 5.0, 6.0] {
+            let n = p.normalize(v);
+            let back = p.denormalize(n);
+            assert_eq!(back, v, "v={v}, n={n}, back={back}");
+        }
+    }
+
+    #[test]
+    fn integer_is_integer_helper() {
+        let p = integer_param(0.0, 10.0);
+        assert!(p.is_integer());
+        let s = linear_param(0.0, 10.0);
+        assert!(!s.is_integer());
     }
 
     #[test]

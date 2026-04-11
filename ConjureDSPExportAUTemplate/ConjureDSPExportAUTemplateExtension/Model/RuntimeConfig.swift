@@ -19,18 +19,31 @@ struct ExportParamMetadata: Codable {
 
     var isToggle: Bool { style == "toggle" }
     var isChoice: Bool { style == "choice" }
+    var isInteger: Bool { style == "integer" }
 
     /// Denormalize a 0–1 value to the actual parameter range.
+    /// Integer-styled params snap the result to the nearest whole number
+    /// within `[min, max]`.
     func denormalize(_ normalized: Float) -> Float {
         let n = Swift.min(Swift.max(normalized, 0), 1)
+        let raw: Float
         if curve == "log", min > 0, max > 0 {
-            return min * powf(max / min, n)
+            raw = min * powf(max / min, n)
+        } else {
+            raw = min + n * (max - min)
         }
-        return min + n * (max - min)
+        if isInteger {
+            let lo = Swift.min(min, max)
+            let hi = Swift.max(min, max)
+            return Swift.min(Swift.max(raw.rounded(), lo), hi)
+        }
+        return raw
     }
 
     /// Normalize an actual value to 0–1.
+    /// Integer-styled params round the input first so round-trips are stable.
     func normalize(_ actual: Float) -> Float {
+        let actual = isInteger ? actual.rounded() : actual
         if curve == "log", min > 0, max > 0 {
             let ratio = Swift.max(actual / min, Float.ulpOfOne)
             let range = logf(max / min)
