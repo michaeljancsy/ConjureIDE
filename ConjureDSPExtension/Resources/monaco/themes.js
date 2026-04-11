@@ -213,4 +213,39 @@ function registerConjureDSPThemes() {
             'editorBracketMatch.border': '#79c0ff',
         },
     });
+
+    // ── ConjureDSP ───────────────────────────────────────────────────
+    monaco.editor.defineTheme('conjuredsp', {
+        base: 'vs-dark',
+        inherit: true,
+        rules: [
+            { token: 'comment',         foreground: '6b7394', fontStyle: 'italic' },
+            { token: 'keyword',         foreground: '7b9fff' }, // ice blue
+            { token: 'string',          foreground: 'ffd166' }, // warm gold
+            { token: 'number',          foreground: '4fc3f7' }, // sky blue
+            { token: 'type',            foreground: '00e5ff', fontStyle: 'italic' }, // electric cyan
+            { token: 'function',        foreground: 'b06eff' }, // soft purple
+            { token: 'variable',        foreground: 'c5d4ff' }, // pale ice blue
+            { token: 'operator',        foreground: '4fc3f7' }, // sky blue
+            { token: 'delimiter',       foreground: 'c5d4ff' },
+            { token: 'identifier',      foreground: 'c5d4ff' },
+            { token: 'tag',             foreground: '7b9fff' }, // ice blue
+            { token: 'attribute.name',  foreground: 'b06eff' }, // soft purple
+            { token: 'attribute.value', foreground: 'ffd166' },
+            { token: 'string.escape',   foreground: '00e5ff' }, // electric cyan
+        ],
+        colors: {
+            'editor.background':                   '#0D0F1A',
+            'editor.foreground':                   '#C5D4FF', // pale ice blue
+            'editor.selectionBackground':          '#1C2235',
+            'editor.lineHighlightBackground':      '#141826',
+            'editorCursor.foreground':             '#00E5FF',
+            'editorWhitespace.foreground':         '#1C2235',
+            'editorLineNumber.foreground':         '#3a4060',
+            'editorLineNumber.activeForeground':   '#B06EFF', // purple accent
+            'editor.selectionHighlightBackground': '#1C223588',
+            'editorBracketMatch.background':       '#1C2235',
+            'editorBracketMatch.border':           '#7B9FFF', // ice blue
+        },
+    });
 }

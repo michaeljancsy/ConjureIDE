@@ -86,7 +86,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var spectrogramShowNoteNames: Bool = false
     @StateObject private var daemonChecker = DaemonStatusChecker()
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("editorTheme") private var selectedTheme: String = "auto"
+    @AppStorage("editorTheme") private var selectedTheme: String = "conjuredsp"
 
     /// Resolved Monaco theme ID based on user preference and system appearance.
     private var resolvedTheme: String {

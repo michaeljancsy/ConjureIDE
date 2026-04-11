@@ -7,27 +7,31 @@
     // --- Theme definitions ---
     const themes = {
         dark: {
-            background: '#1e1e1e',
-            foreground: '#d4d4d4',
-            cursor: '#d4d4d4',
-            cursorAccent: '#1e1e1e',
-            selectionBackground: '#264f78',
-            black: '#000000',
-            red: '#cd3131',
-            green: '#0dbc79',
-            yellow: '#e5e510',
-            blue: '#2472c8',
-            magenta: '#bc3fbc',
-            cyan: '#11a8cd',
-            white: '#e5e5e5',
-            brightBlack: '#666666',
-            brightRed: '#f14c4c',
-            brightGreen: '#23d18b',
-            brightYellow: '#f5f543',
-            brightBlue: '#3b8eea',
-            brightMagenta: '#d670d6',
-            brightCyan: '#29b8db',
-            brightWhite: '#e5e5e5'
+            // ConjureDSP branded theme — mirrors the Monaco editor theme.
+            // ANSI palette keeps semantic meaning (red = error, green = success,
+            // yellow = warning) while pulling blue/magenta/cyan/yellow from the
+            // brand palette in `assets/palette.md`.
+            background: '#0D0F1A',          // deep navy
+            foreground: '#C5D4FF',          // pale ice blue
+            cursor: '#00E5FF',              // electric cyan
+            cursorAccent: '#0D0F1A',
+            selectionBackground: '#1C2235', // brushed metal
+            black: '#0D0F1A',
+            red: '#FF5570',                 // true red (reserved for errors)
+            green: '#5EE0A1',               // success green
+            yellow: '#FFD166',              // warm gold (palette)
+            blue: '#7B9FFF',                // ice blue (palette)
+            magenta: '#B06EFF',             // soft purple (palette)
+            cyan: '#00E5FF',                // electric cyan (palette)
+            white: '#C5D4FF',               // pale ice blue
+            brightBlack: '#3A4060',
+            brightRed: '#FF7A8E',
+            brightGreen: '#7EEBB4',
+            brightYellow: '#FFDE8A',
+            brightBlue: '#4FC3F7',          // sky blue (palette)
+            brightMagenta: '#E0B4FF',       // pale lilac (palette)
+            brightCyan: '#7BF0FF',
+            brightWhite: '#FFFFFF'
         },
         light: {
             background: '#ffffff',
