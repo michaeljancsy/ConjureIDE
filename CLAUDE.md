@@ -458,7 +458,7 @@ Debug and Release builds use different AU identities and bundle IDs so they can 
 | Host App Bundle ID | `com.MichaelJancsy.ConjureDSP.debug` | `com.MichaelJancsy.ConjureDSP` |
 | Extension Bundle ID | `com.MichaelJancsy.ConjureDSP.debug.ConjureDSPExtension` | `com.MichaelJancsy.ConjureDSP.ConjureDSPExtension` |
 | AU Subtype | `DBG1` | `0001` |
-| AU Name | `Michael Jancsy: ConjureDSPExtension (Debug)` | `Michael Jancsy: ConjureDSPExtension` |
+| AU Name | `ConjureDSP: ConjureDSP(Debug)` | `ConjureDSP: ConjureDSP` |
 
 These are configured via per-configuration build settings (`CD_AU_SUBTYPE`, `CD_AU_NAME`, `PRODUCT_BUNDLE_IDENTIFIER`) in the pbxproj, referenced in `ConjureDSPExtension/Info.plist` via `$(VARIABLE)` substitution. Both the host app and extension use separate bundle IDs per configuration so PluginKit registers them independently — this prevents a Release build installed at `/Applications/` from shadowing the Debug extension during development.
 

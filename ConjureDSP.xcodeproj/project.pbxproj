@@ -1053,7 +1053,7 @@
 		257911AB2F5013850036AAB6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CD_AU_NAME = "Michael Jancsy: ConjureDSPExtension (Debug)";
+				CD_AU_NAME = "ConjureDSP: ConjureDSP(Debug)";
 				CD_AU_SUBTYPE = DBG1;
 				CODE_SIGN_ENTITLEMENTS = ConjureDSPExtension/ConjureDSPExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -1112,7 +1112,7 @@
 		257911AC2F5013850036AAB6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CD_AU_NAME = "Michael Jancsy: ConjureDSPExtension";
+				CD_AU_NAME = "ConjureDSP: ConjureDSP";
 				CD_AU_SUBTYPE = 0001;
 				CODE_SIGN_ENTITLEMENTS = ConjureDSPExtension/ConjureDSPExtension.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
