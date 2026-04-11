@@ -193,6 +193,10 @@ struct ConjureDSPExtensionMainView: View {
                 showingSaveAs: $showingSaveAs,
                 saveAsName: $saveAsName,
                 onInsertTone: { insertion in
+                    Analytics.track(.namToneInsert, properties: [
+                        "tone_title": insertion.title,
+                        "language": selectedLanguage.rawValue,
+                    ])
                     scriptSource = insertNAMTone(
                         into: scriptSource,
                         insertion: insertion,
@@ -426,9 +430,11 @@ struct ConjureDSPExtensionMainView: View {
             if newValue {
                 terminalHasBeenOpened = true
             }
+            Analytics.track(.terminalToggle, properties: ["opened": newValue])
         }
         .onChange(of: showSpectrogram) { _, newValue in
             captureManager.isActive = newValue
+            Analytics.track(.spectrogramToggle, properties: ["opened": newValue])
         }
         .onAppear {
             scriptSource = defaultScriptSource

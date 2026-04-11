@@ -307,6 +307,10 @@ struct GitHubSettingsView: View {
                 try await gitHubService.validateRepo(owner: owner, repo: repo)
                 gitHubService.personalRepoOwner = owner
                 gitHubService.personalRepoName = repo
+                Analytics.track(.githubRepoConnect, properties: [
+                    "type": "existing",
+                    "owner": owner,
+                ])
                 showConnectFlow = false
                 isConnecting = false
 
@@ -333,6 +337,10 @@ struct GitHubSettingsView: View {
                     isPrivate: newRepoPrivate,
                     presetManager: presetManager
                 )
+                Analytics.track(.githubRepoConnect, properties: [
+                    "type": "new",
+                    "owner": gitHubService.personalRepoOwner,
+                ])
                 showCreateFlow = false
                 isCreating = false
                 statusMessage = "Created \(gitHubService.personalRepoOwner)/\(gitHubService.personalRepoName)"

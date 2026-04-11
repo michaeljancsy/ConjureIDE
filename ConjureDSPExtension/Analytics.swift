@@ -17,6 +17,13 @@ enum AnalyticsEvent: String {
     case export = "Export"
     case aiGenerate = "AI Generate"
     case subscriptionActivate = "Subscription Activate"
+    case terminalToggle = "Terminal Toggle"
+    case spectrogramToggle = "Spectrogram Toggle"
+    case githubRepoConnect = "GitHub Repo Connect"
+    case namToneDownload = "NAM Tone Download"
+    case namToneInsert = "NAM Tone Insert"
+    case packageInstall = "Package Install"
+    case crateInstall = "Crate Install"
 }
 
 enum Analytics {

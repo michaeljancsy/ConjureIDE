@@ -130,6 +130,13 @@ final class ToneModelStore {
 
         log.info("Downloaded tone model: \(toneName)/\(modelName) (\(data.count) bytes)")
 
+        Analytics.track(.namToneDownload, properties: [
+            "tone_name": toneName,
+            "model_name": modelName,
+            "model_size": modelSize,
+            "bytes": data.count,
+        ])
+
         refreshFromDisk()
     }
 
