@@ -247,6 +247,11 @@ final class PackageInstallManager {
             installStatusMessage = "\(verb) \(names) ✓"
             refreshInstalledPackages()
             onPackagesChanged?()
+            Analytics.track(.packageInstall, properties: [
+                "packages": result.packages,
+                "count": result.packages.count,
+                "operation": wasUninstall ? "uninstall" : "install",
+            ])
             // Auto-clear success message after 3 seconds
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(3))

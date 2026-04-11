@@ -267,6 +267,11 @@ final class CrateInstallManager {
             installStatusMessage = "\(verb) \(names) ✓"
             refreshInstalledCrates()
             onCratesChanged?()
+            Analytics.track(.crateInstall, properties: [
+                "crates": result.crates,
+                "count": result.crates.count,
+                "operation": wasUninstall ? "uninstall" : "install",
+            ])
             // Auto-clear success message after 3 seconds
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(3))
