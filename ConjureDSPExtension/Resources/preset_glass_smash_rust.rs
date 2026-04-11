@@ -101,8 +101,8 @@ pub extern "C" fn process(
         ];
         let comb_fb_amt = 0.55 + 0.30 * time_p;
 
-        let modal_gain: f64 = 1.0 / 6.0;
-        let sub_gain: f64 = 0.4;
+        let modal_gain: f64 = 2.0;
+        let sub_gain: f64 = 0.8;
 
         for f in 0..ctx.frames() {
             let sh_ph0 = SHIM_PHASE;
@@ -180,7 +180,10 @@ pub extern "C" fn process(
                     * 0.25;
 
                 // Stage F: final wet sum + mix
-                let wet = modal_sum + shim_voice + gran_voice + sub_voice + tail;
+                let wet = soft_clip(
+                    modal_sum + shim_voice + gran_voice + sub_voice + tail,
+                    1.0,
+                );
                 ctx.set_output(ch, f, (dry * (1.0 - mx) + wet * mx) as f32);
             }
         }
