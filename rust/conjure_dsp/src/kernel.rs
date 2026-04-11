@@ -768,11 +768,22 @@ impl DSPKernel {
         //   2. The user clicked another preset before the audio thread even
         //      reached the previous swap point — drop the unconsumed previous
         //      pending backend so it doesn't leak.
+        //
+        // The backend and its parameter defaults must be published atomically
+        // from the audio thread's perspective: if we released
+        // `pending_backend.lock()` between writing the backend and writing the
+        // defaults, `perform_swap_locked` could run in the gap, swap in the
+        // new backend, then find `pending_param_defaults` locked by us and
+        // skip applying the defaults — leaving the new backend running with
+        // stale parameter values from the previous preset. To prevent this
+        // we hold `pending_backend.lock()` across both writes. The audio
+        // thread takes the same lock order (pending_backend → pending_param_defaults
+        // inside `perform_swap_locked`), so there is no deadlock risk.
         if let Ok(mut pending) = self.pending_backend.lock() {
             *pending = Some(new_backend);
-        }
-        if let Ok(mut staged_defaults) = self.pending_param_defaults.lock() {
-            *staged_defaults = defaults;
+            if let Ok(mut staged_defaults) = self.pending_param_defaults.lock() {
+                *staged_defaults = defaults;
+            }
         }
         // Raise the request flag after the backend + defaults are published so
         // the Acquire load on the audio side synchronizes with those writes.
