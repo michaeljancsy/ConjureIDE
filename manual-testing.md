@@ -2,14 +2,6 @@
 
 Incomplete test items from open PRs. Check off as you verify each item.
 
-## PR #220 — [Rename AU manufacturer from "Michael Jancsy" to "ConjureDSP"](https://github.com/michaeljancsy/conjuredsp-application/pull/220)
-
-- [ ] Debug build: `xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP build`
-- [ ] Verify embedded Info.plist has the new name: `/usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionAttributes:AudioComponents:0:name" <DerivedData>/Debug/ConjureDSP.app/Contents/PlugIns/ConjureDSPExtension.appex/Contents/Info.plist`
-- [ ] `pluginkit -mv -p com.apple.AudioUnit-UI | grep ConjureDSP` shows the extension registered and elected
-- [ ] In Logic and Ableton, rescan Audio Units and confirm the plugin now groups under "ConjureDSP"
-- [ ] Existing Live/Logic project with the plugin still loads the instance correctly
-
 ## PR #156 — [Build numpy/scipy against Accelerate instead of OpenBLAS](https://github.com/michaeljancsy/conjuredsp-application/pull/156)
 
 - [ ] Delete `rust/python-dist/` and re-run `cd rust && ./setup-python.sh`
