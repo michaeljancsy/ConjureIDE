@@ -44,25 +44,39 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		public let unit: String
 		/// Mapping curve: "linear" (default) or "log" (exponential/logarithmic).
 		public let curve: String?
-		/// Display style: "slider" (default), "toggle", or "choice".
+		/// Display style: "slider" (default), "toggle", "choice", or "integer".
 		public let style: String?
 		/// Option labels for "choice" style parameters.
 		public let options: [String]?
 
 		var isToggle: Bool { style == "toggle" }
 		var isChoice: Bool { style == "choice" }
+		var isInteger: Bool { style == "integer" }
 
 		/// Denormalize a 0–1 value to the actual parameter range.
+		/// Integer-styled params snap the result to the nearest whole number
+		/// within `[min, max]` so DAW automation reports exact integers.
 		func denormalize(_ normalized: Float) -> Float {
 			let n = Swift.min(Swift.max(normalized, 0), 1)
+			let raw: Float
 			if curve == "log", min > 0, max > 0 {
-				return min * powf(max / min, n)
+				raw = min * powf(max / min, n)
+			} else {
+				raw = min + n * (max - min)
 			}
-			return min + n * (max - min)
+			if isInteger {
+				let lo = Swift.min(min, max)
+				let hi = Swift.max(min, max)
+				return Swift.min(Swift.max(raw.rounded(), lo), hi)
+			}
+			return raw
 		}
 
 		/// Normalize an actual value to 0–1.
+		/// Integer-styled params round the input first so round-trips through
+		/// `denormalize`/`normalize` land exactly on integer steps.
 		func normalize(_ actual: Float) -> Float {
+			let actual = isInteger ? actual.rounded() : actual
 			if curve == "log", min > 0, max > 0 {
 				let ratio = Swift.max(actual / min, Float.ulpOfOne)
 				let range = logf(max / min)
@@ -145,7 +159,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						return opts[choiceIdx]
 					}
 				}
-				return Self.formatParamValue(value, unit: m.unit)
+				return Self.formatParamValue(value, unit: m.unit, isInteger: m.isInteger)
 			}
 			return String(format: "%.3f", value)
 		}
@@ -178,6 +192,12 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				} else if meta.isChoice, let opts = meta.options {
 					auUnit = .indexed
 					valueStrings = opts
+				} else if meta.isInteger {
+					// .indexed without valueStrings tells hosts the parameter is
+					// discrete-stepped (integer-valued) but should still display
+					// the numeric value with its unit instead of an enum label.
+					auUnit = .indexed
+					valueStrings = nil
 				} else {
 					auUnit = .generic
 					valueStrings = nil
@@ -249,7 +269,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						return opts[choiceIdx]
 					}
 				}
-				return Self.formatParamValue(value, unit: m.unit)
+				return Self.formatParamValue(value, unit: m.unit, isInteger: m.isInteger)
 			}
 			return String(format: "%.3f", value)
 		}
@@ -271,6 +291,20 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	/// Format a parameter value with its unit string.
 	static func formatParamValue(_ value: Float, unit: String) -> String {
+		return formatParamValue(value, unit: unit, isInteger: false)
+	}
+
+	/// Format a parameter value with its unit string. When `isInteger` is true,
+	/// the value is rounded to the nearest whole number and rendered without
+	/// any decimal places (e.g., `"4 bits"`, `"3 x"`, or `"4"` when unit is empty).
+	static func formatParamValue(_ value: Float, unit: String, isInteger: Bool) -> String {
+		if isInteger {
+			let intVal = Int(value.rounded())
+			if unit.isEmpty {
+				return "\(intVal)"
+			}
+			return "\(intVal) \(unit)"
+		}
 		switch unit {
 		case "dB":
 			return String(format: "%.1f dB", value)

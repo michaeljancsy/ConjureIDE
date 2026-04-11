@@ -354,6 +354,20 @@ mod tests {
     }
 
     #[test]
+    fn test_write_param_json_integer() {
+        let spec = crate::integer(2.0, 6.0).default(4.0);
+        let buf = write_param_json(JsonBuf::new(), "STAGES", &spec);
+        let s = buf_to_string(&buf);
+        assert!(s.contains(r#""style":"integer""#), "integer param should include style, got: {}", s);
+        assert!(s.contains(r#""name":"Stages""#), "got: {}", s);
+        assert!(s.contains(r#""min":2.0"#), "got: {}", s);
+        assert!(s.contains(r#""max":6.0"#), "got: {}", s);
+        assert!(s.contains(r#""default":4.0"#), "got: {}", s);
+        assert!(!s.contains("options"), "integer should not have options, got: {}", s);
+        assert!(!s.contains("curve"), "integer (linear) should omit curve, got: {}", s);
+    }
+
+    #[test]
     fn test_write_param_json_choice() {
         let spec = crate::choice(&["Low", "Mid", "High"]).default(1.0);
         let buf = write_param_json(JsonBuf::new(), "MODE", &spec);

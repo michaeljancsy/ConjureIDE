@@ -185,6 +185,12 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
             } else if meta.isChoice, let opts = meta.options {
                 auUnit = .indexed
                 valueStrings = opts
+            } else if meta.isInteger {
+                // .indexed without valueStrings tells hosts the parameter is
+                // discrete-stepped (integer-valued) but should still display
+                // the numeric value with its unit instead of an enum label.
+                auUnit = .indexed
+                valueStrings = nil
             } else {
                 auUnit = .generic
                 valueStrings = nil
@@ -241,7 +247,7 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
                         return opts[choiceIdx]
                     }
                 }
-                return Self.formatParamValue(value, unit: meta.unit)
+                return Self.formatParamValue(value, unit: meta.unit, isInteger: meta.isInteger)
             }
             return String(format: "%.3f", value)
         }
@@ -293,6 +299,20 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
     /// Format a parameter value with its unit string.
     static func formatParamValue(_ value: Float, unit: String) -> String {
+        return formatParamValue(value, unit: unit, isInteger: false)
+    }
+
+    /// Format a parameter value with its unit string. When `isInteger` is true,
+    /// the value is rounded to the nearest whole number and rendered without
+    /// any decimal places (e.g., `"4 bits"`, `"3 x"`, or `"4"` when unit is empty).
+    static func formatParamValue(_ value: Float, unit: String, isInteger: Bool) -> String {
+        if isInteger {
+            let intVal = Int(value.rounded())
+            if unit.isEmpty {
+                return "\(intVal)"
+            }
+            return "\(intVal) \(unit)"
+        }
         switch unit {
         case "dB":
             return String(format: "%.1f dB", value)

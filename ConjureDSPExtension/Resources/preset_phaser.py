@@ -1,11 +1,11 @@
 import math
-from conjuredsp.params import param, mix as mix_param, freq
+from conjuredsp.params import param, mix as mix_param, freq, integer
 
 PARAMS = {
     "rate":     param(0.1, 5, unit="Hz", default=0.5),
     "min_freq": freq(min=50, max=500, default=200),
     "max_freq": freq(min=500, max=10000, default=4000),
-    "stages":   param(2, 6, default=4),
+    "stages":   integer(2, 6, default=4),
     "mix":      mix_param(default=0.5),
 }
 

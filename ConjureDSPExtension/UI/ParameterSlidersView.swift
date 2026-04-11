@@ -123,6 +123,9 @@ struct ParameterSliderRow: View {
                 }
                 .labelsHidden()
                 .accessibilityIdentifier("\(label)Picker")
+            } else if let meta = metadata, meta.isInteger {
+                DSPSlider(value: integerBinding, range: meta.min...meta.max, onDoubleTap: { value = meta.`default`.rounded() })
+                    .accessibilityIdentifier("\(label)Slider")
             } else if let meta = metadata {
                 DSPSlider(value: $value, range: meta.min...meta.max, onDoubleTap: { value = meta.`default` })
                     .accessibilityIdentifier("\(label)Slider")
@@ -193,7 +196,8 @@ struct ParameterSliderRow: View {
         }
         let lo = metadata?.min ?? 0
         let hi = metadata?.max ?? 1
-        value = max(lo, min(hi, parsed))
+        let snapped = (metadata?.isInteger ?? false) ? parsed.rounded() : parsed
+        value = max(lo, min(hi, snapped))
         isEditing = false
     }
 
@@ -214,6 +218,21 @@ struct ParameterSliderRow: View {
         )
     }
 
+    /// Slider binding that snaps the value to the nearest integer (clamped to
+    /// `[meta.min, meta.max]`) before forwarding it. Used for `style="integer"`
+    /// params so dragging the slider feels detented and matches what the script
+    /// and DAW will see.
+    private var integerBinding: Binding<Float> {
+        Binding<Float>(
+            get: { value },
+            set: { newValue in
+                let lo = metadata?.min ?? 0
+                let hi = metadata?.max ?? 1
+                value = max(lo, min(hi, newValue.rounded()))
+            }
+        )
+    }
+
     private var formattedValue: String {
         if let meta = metadata, meta.isToggle {
             return value >= 0.5 ? "On" : "Off"
@@ -227,7 +246,7 @@ struct ParameterSliderRow: View {
         guard let meta = metadata else {
             return String(format: "%.3f", value)
         }
-        return ConjureDSPExtensionAudioUnit.formatParamValue(value, unit: meta.unit)
+        return ConjureDSPExtensionAudioUnit.formatParamValue(value, unit: meta.unit, isInteger: meta.isInteger)
     }
 }
 

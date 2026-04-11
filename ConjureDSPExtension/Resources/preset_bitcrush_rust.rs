@@ -14,8 +14,8 @@ use conjuredsp::*;
 setup!();
 
 params! {
-    BIT_DEPTH = param(1.0, 16.0).unit("bits").default(16.0),
-    DOWNSAMPLE = param(1.0, 16.0).unit("x").default(1.0),
+    BIT_DEPTH = integer(1.0, 16.0).unit("bits").default(16.0),
+    DOWNSAMPLE = integer(1.0, 16.0).unit("x").default(1.0),
 }
 
 // Persistent held sample per channel for sample-rate reduction

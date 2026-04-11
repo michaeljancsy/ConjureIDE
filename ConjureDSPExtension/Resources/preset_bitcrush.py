@@ -1,9 +1,9 @@
 import numpy as np
-from conjuredsp.params import param
+from conjuredsp.params import integer
 
 PARAMS = {
-    "bit_depth":  param(1, 16, unit="bits", default=8),
-    "downsample": param(1, 16, unit="x", default=1),
+    "bit_depth":  integer(1, 16, unit="bits", default=8),
+    "downsample": integer(1, 16, unit="x", default=1),
 }
 
 
@@ -28,8 +28,12 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     for ch in range(len(inputs)):
         signal = inputs[ch][:frame_count]
 
-        # Bit depth reduction: quantize to fewer levels
-        crushed = np.round(signal * levels) / levels
+        # Bit depth reduction: quantize to fewer levels.
+        # Use half-away-from-zero rounding (matches Rust f32::round) rather than
+        # numpy's default banker's rounding, so the Python and Rust backends
+        # produce bit-identical output.
+        scaled = signal * levels
+        crushed = np.trunc(scaled + np.sign(scaled) * 0.5) / levels
 
         # Sample rate reduction: hold every Nth sample
         for i in range(frame_count):

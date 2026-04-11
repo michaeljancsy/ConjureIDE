@@ -106,3 +106,31 @@ def choice(*labels: str, default: str | None = None) -> ParamSpec:
 def ratio(min: float = 1.0, max: float = 20.0, default: float = 4.0) -> ParamSpec:
     """Compression/expansion ratio parameter."""
     return param(min, max, unit=":1", default=default)
+
+
+def integer(
+    min: int,
+    max: int,
+    *,
+    unit: str = "",
+    default: int | None = None,
+) -> ParamSpec:
+    """Integer-valued parameter.
+
+    Renders as a slider/knob in the in-plugin UI and as a discrete-stepped
+    parameter (`AudioUnitParameterUnit.indexed`) in DAWs, so automation lanes
+    snap to whole numbers. The script receives an exact integer-valued float
+    (e.g. ``4.0``).
+
+    Args:
+        min: Minimum integer value (inclusive).
+        max: Maximum integer value (inclusive).
+        unit: Display unit (e.g., ``"bits"``, ``"x"``). Empty string for none.
+        default: Initial value. Defaults to ``min`` if not specified.
+
+    Returns:
+        A ParamSpec dict with ``style="integer"`` and a linear curve.
+    """
+    spec = param(float(min), float(max), unit=unit, default=float(default if default is not None else min))
+    spec["style"] = "integer"
+    return spec
