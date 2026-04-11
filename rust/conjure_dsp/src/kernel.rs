@@ -18,6 +18,18 @@ const DEMO_LIMIT_SECONDS: f64 = 60.0;
 /// and do not count against the demo time limit.
 const DEMO_SILENCE_THRESHOLD: f32 = 0.001;
 
+/// Length of each fade ramp (out and in) applied around a backend swap, in milliseconds.
+/// Total silenced window across a swap is ~2 * SWAP_FADE_MS.
+/// 5 ms is well below human click-perception threshold and short enough to feel
+/// instantaneous, while long enough to fully absorb a step discontinuity between
+/// two arbitrary DSP backends with different state.
+const SWAP_FADE_MS: f64 = 5.0;
+
+/// Swap state machine values stored in `DSPKernel::swap_phase` (AtomicU8).
+const SWAP_PHASE_IDLE: u8 = 0;
+const SWAP_PHASE_FADE_OUT: u8 = 1;
+const SWAP_PHASE_FADE_IN: u8 = 2;
+
 /// Host DAW transport state, updated once per render callback via `set_transport()`.
 /// All fields default to zero/false, meaning "no transport data available."
 /// Written and read on the render thread only — no synchronization needed.
@@ -115,6 +127,37 @@ pub struct DSPKernel {
     /// NAM model path from the loaded WASM module's `get_nam_path_ptr`/`get_nam_path_len` exports.
     /// Set during `load_wasm()`, read by Swift to resolve and inject the .nam file.
     nam_path: Option<String>,
+    /// Newly loaded backend, staged by the main thread, consumed by the audio thread
+    /// at the end of the fade-out half of a preset swap. After the swap completes the
+    /// audio thread leaves the *old* backend here so the next main-thread `load_*` call
+    /// (or kernel destruction) drops it on a non-real-time thread.
+    pending_backend: Mutex<Option<Box<dyn Backend>>>,
+    /// Normalized parameter defaults for the staged backend, written by the main thread
+    /// alongside `pending_backend` and consumed by the audio thread at the swap point.
+    /// Applied atomically with the backend swap so the new backend's first frame already
+    /// sees its declared defaults.
+    pending_param_defaults: Mutex<Option<[f32; PARAM_COUNT]>>,
+    /// Swap state machine: SWAP_PHASE_IDLE / FADE_OUT / FADE_IN.
+    /// After the first-load fast path, the audio thread is the sole writer:
+    /// the main thread only *requests* a swap by setting `pending_stage_request`
+    /// and the audio thread performs the phase transition at the top of its
+    /// next callback. This keeps (phase, remaining) updates coherent without
+    /// needing a packed atomic or mutex.
+    swap_phase: AtomicU8,
+    /// Remaining samples in the current fade ramp. Decremented per-sample by the audio
+    /// thread; reaching zero triggers a phase transition. Audio-thread-only writer
+    /// except during `initialize()` / `install_backend_immediate()` (both cold paths).
+    swap_fade_remaining: AtomicU32,
+    /// Total length of one fade ramp in samples, recomputed from `sample_rate` in
+    /// `initialize()`. Read by the audio thread to derive per-sample envelope step.
+    swap_fade_length: AtomicU32,
+    /// Signal from main thread to audio thread that a new backend has been staged
+    /// and the swap state machine should be (re)armed. The audio thread consumes
+    /// this flag at the top of each callback and decides how to transition
+    /// `swap_phase` based on its current phase — crucially, a FADE_IN → FADE_OUT
+    /// transition preserves gain continuity (rem_out = len − rem_in) so rapid
+    /// preset switches mid-fade don't click.
+    pending_stage_request: AtomicBool,
 }
 
 /// Get the current process resident memory in bytes via mach task_info.
@@ -207,6 +250,14 @@ impl DSPKernel {
             wasm_memory_bytes: AtomicU64::new(0),
             last_render_frame_count: AtomicU32::new(0),
             nam_path: None,
+            pending_backend: Mutex::new(None),
+            pending_param_defaults: Mutex::new(None),
+            swap_phase: AtomicU8::new(SWAP_PHASE_IDLE),
+            swap_fade_remaining: AtomicU32::new(0),
+            // Initial value matches the default sample rate (44.1 kHz) so a swap
+            // requested before `initialize()` still gets a sensible fade length.
+            swap_fade_length: AtomicU32::new((SWAP_FADE_MS / 1000.0 * 44100.0) as u32),
+            pending_stage_request: AtomicBool::new(false),
         }
     }
 
@@ -217,7 +268,49 @@ impl DSPKernel {
 
     /// Inject NAM model binary data into the loaded WASM backend.
     /// Call after `load_wasm()` when `nam_path()` returns Some.
+    ///
+    /// The newly-loaded WASM backend can live in either slot depending on
+    /// whether the audio thread has picked up the swap yet:
+    /// - If `pending_stage_request` is still set, or the audio thread has
+    ///   already moved to `SWAP_PHASE_FADE_OUT`, the new backend is sitting
+    ///   in `pending_backend`.
+    /// - Otherwise (first-load fast path, or the audio thread already
+    ///   completed the swap so the old backend is parked in pending), the
+    ///   newest backend lives in the live slot.
     pub fn inject_nam(&mut self, binary_data: &[u8]) -> Result<(), String> {
+        // Lock-first ordering closes a TOCTOU race against the audio thread.
+        //
+        // The newest backend lives in `pending_backend` if either (a) we have
+        // staged but the audio thread has not yet consumed the request, or
+        // (b) the audio thread is mid-fade-out but has not yet swapped. After
+        // the swap completes, `pending_backend` holds the *old* backend parked
+        // for deferred drop, and the newest is in `self.backend`.
+        //
+        // We must not read those state atomics and *then* take the lock — in
+        // the gap, the audio thread can finish a fade-out and call
+        // `perform_swap_locked`, flipping pending from NEW → OLD. Instead,
+        // acquire `pending_backend.lock()` first: while we hold it, the audio
+        // thread's `try_lock(pending)` inside `perform_swap_locked` bails out,
+        // freezing pending's contents. Only then read the (flag, phase) pair
+        // to decide which slot to inject into. The Acquire load on the flag
+        // pairs with `apply_pending_stage`'s Release store, so observing
+        // `flag=false` guarantees the updated phase is visible.
+        let mut pending = self
+            .pending_backend
+            .lock()
+            .map_err(|e| format!("Lock failed: {}", e))?;
+        let newest_in_pending = self.pending_stage_request.load(Ordering::Acquire)
+            || self.swap_phase.load(Ordering::Acquire) == SWAP_PHASE_FADE_OUT;
+        if newest_in_pending {
+            if let Some(ref mut backend) = *pending {
+                let wasm = backend
+                    .as_any_mut()
+                    .downcast_mut::<WasmBackend>()
+                    .ok_or("Pending backend is not WasmBackend")?;
+                return wasm.inject_nam_model(binary_data);
+            }
+        }
+        drop(pending);
         let mut guard = self.backend.lock().map_err(|e| format!("Lock failed: {}", e))?;
         if let Some(ref mut backend) = *guard {
             let wasm = backend.as_any_mut().downcast_mut::<WasmBackend>()
@@ -238,6 +331,10 @@ impl DSPKernel {
         self.sample_rate = sample_rate;
         self.channel_count = input_channels as usize;
         self.demo_limit_samples.store((DEMO_LIMIT_SECONDS * sample_rate) as u64, Ordering::Relaxed);
+        // Recompute swap-fade length so the declick envelope is the same wall-clock
+        // duration regardless of host sample rate.
+        self.swap_fade_length
+            .store((SWAP_FADE_MS / 1000.0 * sample_rate) as u32, Ordering::Relaxed);
 
         if let Ok(mut guard) = self.backend.lock() {
             if let Some(backend) = guard.as_mut() {
@@ -257,6 +354,11 @@ impl DSPKernel {
     /// Load a Python script containing a `process()` function.
     /// `python_home` sets PYTHONHOME before interpreter init.
     /// Returns true on success.
+    ///
+    /// On the first load (no live backend yet) the new backend is installed
+    /// directly with no fade. On subsequent loads it is staged into
+    /// `pending_backend` and the audio thread performs a fade-out → swap →
+    /// fade-in declick envelope so users don't hear a pop on preset switch.
     pub fn load_script(&mut self, python_home: &str, script_path: &str) -> bool {
         match PythonBackend::load(python_home, script_path) {
             Ok(mut pb) => {
@@ -267,16 +369,27 @@ impl DSPKernel {
                 let names = pb.param_names();
                 let metadata = pb.param_metadata().map(|m| m.to_vec());
                 let latency = pb.latency_samples();
-                // Lock to swap — render thread will passthrough during this brief window
-                if let Ok(mut guard) = self.backend.lock() {
-                    *guard = Some(Box::new(pb));
-                }
+                let defaults = Self::defaults_from_metadata(metadata.as_deref());
+                let boxed: Box<dyn Backend> = Box::new(pb);
+
+                // Update caches and reset stats. These are read by Swift via FFI on
+                // the main thread (and by the audio thread via atomics for the bare
+                // counters), not by the render thread's hot path; safe to publish
+                // before the swap actually happens.
                 self.update_param_names_cache(names);
                 self.update_param_metadata_cache(metadata);
                 self.latency_samples = latency;
                 self.reset_profiler();
-                self.memory_baseline_bytes.store(process_resident_bytes(), Ordering::Relaxed);
+                self.memory_baseline_bytes
+                    .store(process_resident_bytes(), Ordering::Relaxed);
                 self.wasm_memory_bytes.store(0, Ordering::Relaxed);
+
+                if self.has_live_backend() {
+                    self.stage_backend_for_swap(boxed, defaults);
+                } else {
+                    self.install_backend_immediate(boxed, defaults);
+                }
+
                 if let Ok(mut guard) = self.last_error.lock() { *guard = None; }
                 true
             }
@@ -290,6 +403,8 @@ impl DSPKernel {
     /// Load a WASM module for DSP processing.
     /// The module must export a `process` function and `memory`.
     /// Returns true on success.
+    ///
+    /// Uses the same staging + declick path as `load_script`.
     pub fn load_wasm(&mut self, wasm_bytes: &[u8]) -> bool {
         match WasmBackend::load(wasm_bytes) {
             Ok(mut wb) => {
@@ -301,21 +416,24 @@ impl DSPKernel {
                 let latency = wb.latency_samples();
                 // Store NAM path for Swift to read and inject model data
                 self.nam_path = wb.nam_path().map(String::from);
-                // Lock to swap — render thread will passthrough during this brief window
-                if let Ok(mut guard) = self.backend.lock() {
-                    *guard = Some(Box::new(wb));
-                }
+                let initial_mem = wb.memory_bytes();
+                let defaults = Self::defaults_from_metadata(metadata.as_deref());
+                let boxed: Box<dyn Backend> = Box::new(wb);
+
                 self.update_param_names_cache(names);
                 self.update_param_metadata_cache(metadata);
                 self.latency_samples = latency;
                 self.reset_profiler();
-                self.memory_baseline_bytes.store(process_resident_bytes(), Ordering::Relaxed);
-                // Store initial WASM memory size
-                if let Ok(guard) = self.backend.lock() {
-                    if let Some(ref b) = *guard {
-                        self.wasm_memory_bytes.store(b.memory_bytes(), Ordering::Relaxed);
-                    }
+                self.memory_baseline_bytes
+                    .store(process_resident_bytes(), Ordering::Relaxed);
+                self.wasm_memory_bytes.store(initial_mem, Ordering::Relaxed);
+
+                if self.has_live_backend() {
+                    self.stage_backend_for_swap(boxed, defaults);
+                } else {
+                    self.install_backend_immediate(boxed, defaults);
                 }
+
                 if let Ok(mut guard) = self.last_error.lock() { *guard = None; }
                 true
             }
@@ -587,17 +705,18 @@ impl DSPKernel {
     }
 
     /// Update the cached JSON for rich parameter metadata.
-    /// Also sets kernel parameter defaults from the metadata.
+    ///
+    /// Note: this used to also write the metadata defaults into the param atomics.
+    /// That happened on the main thread immediately after a backend swap, which
+    /// caused parameter values to jump abruptly mid-render and contributed to the
+    /// audible pop on preset switch. Defaults are now staged into
+    /// `pending_param_defaults` and applied atomically with the swap on the audio
+    /// thread (see `stage_backend_for_swap`), so the new backend's first frame
+    /// already sees its declared defaults and old-backend frames keep their old
+    /// values until the fade-out completes.
     fn update_param_metadata_cache(&mut self, metadata: Option<Vec<crate::params::ParamMetadata>>) {
         match metadata {
             Some(meta) if !meta.is_empty() => {
-                // Set default values in the kernel (normalized 0–1)
-                for (i, m) in meta.iter().enumerate() {
-                    if i < PARAM_COUNT {
-                        let normalized = m.normalize(m.default);
-                        self.params[i].store(normalized.to_bits(), Ordering::Relaxed);
-                    }
-                }
                 self.param_metadata_json = serde_json::to_string(&meta)
                     .ok()
                     .and_then(|s| std::ffi::CString::new(s).ok());
@@ -606,6 +725,156 @@ impl DSPKernel {
                 self.param_metadata_json = None;
             }
         }
+    }
+
+    /// Compute normalized parameter defaults from rich metadata.
+    /// Returns `None` for backends with no metadata (legacy 0–1 mode); in that case
+    /// the existing param values are preserved across the swap.
+    fn defaults_from_metadata(
+        metadata: Option<&[crate::params::ParamMetadata]>,
+    ) -> Option<[f32; PARAM_COUNT]> {
+        let meta = metadata?;
+        if meta.is_empty() {
+            return None;
+        }
+        let mut out = [0.0f32; PARAM_COUNT];
+        for (i, m) in meta.iter().enumerate().take(PARAM_COUNT) {
+            out[i] = m.normalize(m.default);
+        }
+        Some(out)
+    }
+
+    /// Stage a freshly loaded backend for installation by the audio thread.
+    ///
+    /// Drains any previously staged backend (dropped on this main thread, never on
+    /// the audio thread), writes the new backend and its parameter defaults into
+    /// the staging slots, and raises `pending_stage_request` so the audio thread
+    /// will arm the swap state machine at the top of its next callback.
+    ///
+    /// Phase transitions are deliberately delegated to the audio thread — it is
+    /// the sole writer of `swap_phase`/`swap_fade_remaining` during the hot path,
+    /// so updating them from here would require a coherent multi-field atomic
+    /// update. Letting the audio thread own the transition also makes the
+    /// gain-preserving FADE_IN → FADE_OUT path trivial (see `apply_pending_stage`).
+    fn stage_backend_for_swap(
+        &mut self,
+        new_backend: Box<dyn Backend>,
+        defaults: Option<[f32; PARAM_COUNT]>,
+    ) {
+        // Drain any previously staged backend so it's dropped here, not on audio.
+        // This handles two cases:
+        //   1. Audio thread has already completed a previous swap and parked the
+        //      old backend in pending_backend for us to drop.
+        //   2. The user clicked another preset before the audio thread even
+        //      reached the previous swap point — drop the unconsumed previous
+        //      pending backend so it doesn't leak.
+        //
+        // The backend and its parameter defaults must be published atomically
+        // from the audio thread's perspective: if we released
+        // `pending_backend.lock()` between writing the backend and writing the
+        // defaults, `perform_swap_locked` could run in the gap, swap in the
+        // new backend, then find `pending_param_defaults` locked by us and
+        // skip applying the defaults — leaving the new backend running with
+        // stale parameter values from the previous preset. To prevent this
+        // we hold `pending_backend.lock()` across both writes. The audio
+        // thread takes the same lock order (pending_backend → pending_param_defaults
+        // inside `perform_swap_locked`), so there is no deadlock risk.
+        if let Ok(mut pending) = self.pending_backend.lock() {
+            *pending = Some(new_backend);
+            if let Ok(mut staged_defaults) = self.pending_param_defaults.lock() {
+                *staged_defaults = defaults;
+            }
+        }
+        // Raise the request flag after the backend + defaults are published so
+        // the Acquire load on the audio side synchronizes with those writes.
+        self.pending_stage_request
+            .store(true, Ordering::Release);
+    }
+
+    /// Audio-thread handler for a pending stage request. Transitions the swap
+    /// state machine based on the current phase:
+    ///
+    /// - `IDLE`: start a fresh fade-out from full volume (new len samples).
+    /// - `FADE_OUT`: already fading out — leave `swap_fade_remaining` alone so
+    ///   the in-progress fade completes naturally before picking up the newly
+    ///   staged backend.
+    /// - `FADE_IN`: preserve gain continuity. During fade-in the current
+    ///   envelope gain is `1 − rem_in/len`; to continue smoothly into a
+    ///   fade-out at that same gain we need `rem_out/len` to equal the same
+    ///   value, i.e. `rem_out = len − rem_in`. This avoids the click that
+    ///   would otherwise occur when the user rapidly switches presets during
+    ///   the fade-in half of a previous swap.
+    ///
+    /// **Ordering invariant**: the phase/remaining updates must happen *before*
+    /// clearing `pending_stage_request`, with a Release store on the clear.
+    /// Main-thread readers (`inject_nam`, `benchmark_process`) use this to
+    /// decide whether the newest backend lives in `pending_backend` or the
+    /// live slot: reading `flag=false` via Acquire guarantees the updated
+    /// phase is visible, so a `(flag=false, phase=FADE_OUT)` snapshot reliably
+    /// means "audio consumed the stage, pending still holds the new backend,
+    /// swap has not yet completed". If we cleared the flag before the phase
+    /// store, a reader could see `(flag=false, phase=IDLE-stale)` and wrongly
+    /// route to the live slot, injecting into the old backend.
+    fn apply_pending_stage(&self) {
+        if !self.pending_stage_request.load(Ordering::Acquire) {
+            return;
+        }
+        let len = self.swap_fade_length.load(Ordering::Relaxed);
+        let phase = self.swap_phase.load(Ordering::Relaxed);
+        match phase {
+            SWAP_PHASE_IDLE => {
+                self.swap_fade_remaining.store(len, Ordering::Relaxed);
+                self.swap_phase
+                    .store(SWAP_PHASE_FADE_OUT, Ordering::Release);
+            }
+            SWAP_PHASE_FADE_IN => {
+                let rem_in = self.swap_fade_remaining.load(Ordering::Relaxed);
+                self.swap_fade_remaining
+                    .store(len.saturating_sub(rem_in), Ordering::Relaxed);
+                self.swap_phase
+                    .store(SWAP_PHASE_FADE_OUT, Ordering::Release);
+            }
+            SWAP_PHASE_FADE_OUT => {
+                // Already fading out — finish this fade, then pick up the new
+                // backend at the swap point. `swap_fade_remaining` left alone.
+            }
+            _ => {}
+        }
+        // Clear the flag LAST, with Release ordering, so any reader observing
+        // flag=false via Acquire is guaranteed to also see the updated phase.
+        self.pending_stage_request
+            .store(false, Ordering::Release);
+    }
+
+    /// Install a backend directly into the live slot, bypassing the staging path.
+    /// Used for the very first load on a fresh kernel where there is no live backend
+    /// to fade out from. Falls back to the staging path if a live backend already
+    /// exists, so callers can use this unconditionally.
+    fn install_backend_immediate(
+        &mut self,
+        new_backend: Box<dyn Backend>,
+        defaults: Option<[f32; PARAM_COUNT]>,
+    ) {
+        // Apply defaults first (no audio thread is using these atomics yet).
+        if let Some(d) = defaults {
+            for (i, &val) in d.iter().enumerate().take(PARAM_COUNT) {
+                self.params[i].store(val.to_bits(), Ordering::Relaxed);
+            }
+        }
+        if let Ok(mut guard) = self.backend.lock() {
+            *guard = Some(new_backend);
+        }
+        // Make sure we're not stuck in a fade phase from a previous swap.
+        self.swap_phase.store(SWAP_PHASE_IDLE, Ordering::Release);
+        self.swap_fade_remaining.store(0, Ordering::Relaxed);
+    }
+
+    /// True if the live backend slot is empty (no backend has been installed yet).
+    fn has_live_backend(&self) -> bool {
+        self.backend
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
     }
 
     /// Returns a pointer to the cached parameter metadata JSON, or null if none declared.
@@ -637,38 +906,32 @@ impl DSPKernel {
 
     /// Benchmark the process function with a 440 Hz sine wave.
     /// Returns the max execution time in seconds over 5 runs (after 1 warm-up),
-    /// or None if no backend is loaded.
+    /// or None if no backend is loaded or the swap doesn't complete in time.
+    ///
+    /// Waits (up to 100 ms) for any in-flight preset swap to complete, then
+    /// benchmarks the live slot. We intentionally do NOT benchmark while the
+    /// new backend is still parked in `pending_backend`: holding
+    /// `pending_backend.lock()` for the full ~50-100 ms benchmark duration
+    /// would block the audio thread's `perform_swap_locked` from completing
+    /// its non-blocking `try_lock`, stranding the envelope in `FADE_OUT` with
+    /// `remaining=0` and producing an extended silence dropout. Waiting for
+    /// `phase == IDLE` costs at most ~10 ms (the full fade envelope) in
+    /// exchange for benchmarking the freshly-loaded preset from the live slot
+    /// exactly like a first-load backend.
     pub fn benchmark_process(&mut self) -> Option<f64> {
-        {
-            let guard = self.backend.lock().ok()?;
-            if guard.is_none() {
-                return None;
-            }
-        }
-
         let channel_count = if self.channel_count > 0 {
             self.channel_count
         } else {
             2
         };
         let frame_count = self.max_frames_to_render as usize;
-
-        // Temporarily initialize backend if needed
-        let needs_temp_init = self.channel_count == 0;
-        if needs_temp_init {
-            if let Ok(mut guard) = self.backend.lock() {
-                if let Some(backend) = guard.as_mut() {
-                    backend.initialize(channel_count, self.sample_rate, self.max_frames_to_render);
-                }
-            }
-        }
-
-        // Generate 440 Hz sine wave input
         let sample_rate = if self.sample_rate > 0.0 {
             self.sample_rate
         } else {
             44100.0
         };
+
+        // Generate 440 Hz sine wave input
         let input_data: Vec<Vec<f32>> = (0..channel_count)
             .map(|_| {
                 (0..frame_count)
@@ -684,49 +947,91 @@ impl DSPKernel {
         let input_ptrs: Vec<*const f32> = input_data.iter().map(|v| v.as_ptr()).collect();
         let output_ptrs: Vec<*mut f32> = output_data.iter_mut().map(|v| v.as_mut_ptr()).collect();
 
-        // Warm-up
-        unsafe {
-            self.process(
-                input_ptrs.as_ptr(),
-                output_ptrs.as_ptr(),
-                channel_count as u32,
-                self.max_frames_to_render,
-            );
-        }
+        let needs_temp_init = self.channel_count == 0;
+        let params = self.snapshot_params();
+        let transport = self.transport;
+        let max_frames = self.max_frames_to_render;
 
-        // Timed runs
-        let n = 5;
-        let mut max_time = 0.0f64;
-        for _ in 0..n {
-            let start = std::time::Instant::now();
+        // Helper that runs the actual benchmark on a given backend.
+        // Defined as a closure to avoid the borrow-checker tangle from calling
+        // a `&mut self` method while holding a MutexGuard from a `&self` field.
+        let run = |backend: &mut dyn Backend| -> f64 {
+            if needs_temp_init {
+                backend.initialize(channel_count, sample_rate, max_frames);
+            }
+            // Warm-up
             unsafe {
-                self.process(
-                    input_ptrs.as_ptr(),
-                    output_ptrs.as_ptr(),
-                    channel_count as u32,
-                    self.max_frames_to_render,
+                backend.process(
+                    &input_ptrs,
+                    &output_ptrs,
+                    channel_count,
+                    frame_count,
+                    sample_rate,
+                    &params,
+                    &transport,
                 );
             }
-            let elapsed = start.elapsed().as_secs_f64();
-            if elapsed > max_time {
-                max_time = elapsed;
-            }
-        }
-
-        // Clean up temp init
-        if needs_temp_init {
-            if let Ok(mut guard) = self.backend.lock() {
-                if let Some(backend) = guard.as_mut() {
-                    backend.deinitialize();
+            let mut max_time = 0.0f64;
+            for _ in 0..5 {
+                let start = std::time::Instant::now();
+                unsafe {
+                    backend.process(
+                        &input_ptrs,
+                        &output_ptrs,
+                        channel_count,
+                        frame_count,
+                        sample_rate,
+                        &params,
+                        &transport,
+                    );
+                }
+                let elapsed = start.elapsed().as_secs_f64();
+                if elapsed > max_time {
+                    max_time = elapsed;
                 }
             }
+            if needs_temp_init {
+                backend.deinitialize();
+            }
+            max_time
+        };
+
+        // Wait for any in-flight swap to complete before benchmarking. While
+        // a swap is pending or mid-fade, the newest backend lives in
+        // `pending_backend` and benchmarking it there would require holding
+        // `pending_backend.lock()` for ~50-100 ms — long enough to block the
+        // audio thread's `perform_swap_locked` from ever progressing, which
+        // strands the envelope at zero gain and produces an audible silence
+        // dropout. Instead, poll `swap_phase` (Acquire) until the audio thread
+        // has completed the swap and reached `IDLE`, at which point the
+        // newest backend is in the live slot.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+        while self.swap_phase.load(Ordering::Acquire) != SWAP_PHASE_IDLE
+            || self.pending_stage_request.load(Ordering::Acquire)
+        {
+            if std::time::Instant::now() >= deadline {
+                // Swap is wedged or taking longer than expected — bail out
+                // rather than benchmark a backend that might still be stale.
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
 
-        // Reset profiler — benchmark calls process() which updates profiler
-        // atomics with artificial data that would contaminate live stats.
+        // After phase == IDLE the newest backend is guaranteed to be in the
+        // live slot (either via the first-load fast path or because the
+        // audio thread already swapped and the fade-in has completed). We
+        // can lock `self.backend` directly and leave `pending_backend`
+        // untouched so the audio thread's swap machinery is never blocked.
+        let mut live = self.backend.lock().ok()?;
+        let result = live.as_mut().map(|b| run(b.as_mut()));
+        drop(live);
+
+        // Reset profiler — benchmark would have contaminated it if we'd routed
+        // through self.process(). We don't go through process() any more, but
+        // keep the reset for parity with previous behavior.
         self.reset_profiler();
 
-        Some(max_time)
+        result
     }
 
     /// Process audio buffers. Called from the real-time audio thread.
@@ -798,9 +1103,19 @@ impl DSPKernel {
         // Snapshot parameters once per callback (lock-free atomic reads)
         let params = self.snapshot_params();
 
+        // Consume any pending stage request from the main thread before we
+        // latch the phase for this callback. This is where FADE_IN → FADE_OUT
+        // gain-preserving transitions happen, so rapid preset switches don't
+        // click mid-fade.
+        self.apply_pending_stage();
+        let phase = self.swap_phase.load(Ordering::Acquire);
+
         // Try backend processing — use try_lock to never block the render thread.
-        // If the main thread is swapping backends, we fall through to passthrough.
+        // If the main thread is briefly holding the lock (e.g. inject_nam), we
+        // fall through to passthrough below.
         if let Ok(mut guard) = self.backend.try_lock() {
+            let mut produced = false;
+
             if let Some(ref mut backend) = *guard {
                 let t0 = std::time::Instant::now();
                 let ok = backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate, &params, &self.transport);
@@ -814,34 +1129,72 @@ impl DSPKernel {
                 }
                 if ok {
                     Self::safety_clamp(outputs, channel_count, frame_count);
-                    // Capture output audio for spectrogram (after processing)
-                    if capturing {
-                        self.capture_to_ring(Self::as_const_ptrs(outputs), channel_count, frame_count, &self.output_ring);
-                    }
-                    // Increment demo counter only if output is non-silent
-                    if !self.licensed.load(Ordering::Relaxed)
-                        && Self::buffer_peak(Self::as_const_ptrs(outputs), channel_count, frame_count)
-                            >= DEMO_SILENCE_THRESHOLD
-                    {
-                        self.demo_samples_processed
-                            .fetch_add(frame_count as u64, Ordering::Relaxed);
-                    }
-                    return;
-                }
-                // Backend failed — capture error before dropping guard
-                if let Some(err) = backend.last_error() {
-                    if let Ok(mut last) = self.last_error.lock() {
-                        *last = Some(err.to_string());
+                    produced = true;
+                } else {
+                    // Backend failed — capture error before dropping the &mut borrow
+                    if let Some(err) = backend.last_error() {
+                        if let Ok(mut last) = self.last_error.lock() {
+                            *last = Some(err.to_string());
+                        }
                     }
                 }
             }
+
+            if !produced {
+                // No backend yet, or backend errored — passthrough so the user
+                // hears something. The fade envelope still applies on top.
+                Self::passthrough(inputs, outputs, channel_count, frame_count);
+            }
+
+            // Apply the swap declick envelope (if any). This must run *after*
+            // processing so the envelope shapes the actual audio that will be
+            // emitted, regardless of whether it came from the backend or
+            // passthrough fallback.
+            if phase != SWAP_PHASE_IDLE {
+                self.apply_swap_envelope(outputs, channel_count, frame_count, phase);
+                // If the fade just hit zero, transition the state machine.
+                if self.swap_fade_remaining.load(Ordering::Relaxed) == 0 {
+                    match phase {
+                        SWAP_PHASE_FADE_OUT => {
+                            // We hold the live backend lock — perform the swap
+                            // here so the very next callback starts processing
+                            // the new backend.
+                            self.perform_swap_locked(&mut *guard);
+                        }
+                        SWAP_PHASE_FADE_IN => {
+                            self.swap_phase.store(SWAP_PHASE_IDLE, Ordering::Release);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Capture output audio for spectrogram (after processing + envelope)
+            if capturing {
+                self.capture_to_ring(Self::as_const_ptrs(outputs), channel_count, frame_count, &self.output_ring);
+            }
+            // Increment demo counter only if output is non-silent
+            if !self.licensed.load(Ordering::Relaxed)
+                && Self::buffer_peak(Self::as_const_ptrs(outputs), channel_count, frame_count)
+                    >= DEMO_SILENCE_THRESHOLD
+            {
+                self.demo_samples_processed
+                    .fetch_add(frame_count as u64, Ordering::Relaxed);
+            }
+            return;
         }
 
-        // Fallback: passthrough (copy input to output unchanged)
+        // Fallback: backend lock contended — passthrough and still apply envelope.
+        // The actual swap will happen on the next callback when we re-acquire it.
         Self::passthrough(inputs, outputs, channel_count, frame_count);
-        // Capture output (same as input during passthrough)
+        if phase != SWAP_PHASE_IDLE {
+            self.apply_swap_envelope(outputs, channel_count, frame_count, phase);
+            // Don't transition state here — we couldn't perform the swap without
+            // the backend lock, so leave the phase machine to the next callback.
+        }
+        // Capture output (same as input during passthrough, but envelope may have scaled it)
         if capturing {
-            self.capture_to_ring(inputs, channel_count, frame_count, &self.output_ring);
+            self.capture_to_ring(Self::as_const_ptrs(outputs), channel_count, frame_count, &self.output_ring);
         }
         // Increment demo counter only if output is non-silent
         if !self.licensed.load(Ordering::Relaxed)
@@ -851,6 +1204,98 @@ impl DSPKernel {
             self.demo_samples_processed
                 .fetch_add(frame_count as u64, Ordering::Relaxed);
         }
+    }
+
+    /// Apply a linear fade envelope to the output buffers in place and decrement
+    /// `swap_fade_remaining` by `frame_count` (saturating at zero). Called from
+    /// the audio thread inside `process()`.
+    ///
+    /// Phase semantics:
+    /// - `SWAP_PHASE_FADE_OUT`: gain ramps from `rem/len` toward `0`.
+    /// - `SWAP_PHASE_FADE_IN`:  gain ramps from `1 - rem/len` toward `1`.
+    /// - Other phases: no-op.
+    ///
+    /// The per-sample gain is clamped to `[0, 1]` so even if `rem` reached zero
+    /// mid-buffer the trailing samples sit at the boundary value (silence for
+    /// fade-out, full level for fade-in).
+    unsafe fn apply_swap_envelope(
+        &self,
+        outputs: &[*mut f32],
+        channel_count: usize,
+        frame_count: usize,
+        phase: u8,
+    ) {
+        let len = self.swap_fade_length.load(Ordering::Relaxed);
+        if len == 0 {
+            // Defensive: nothing to fade — transition immediately.
+            self.swap_fade_remaining.store(0, Ordering::Relaxed);
+            return;
+        }
+        let inv_len = 1.0f32 / len as f32;
+        let rem_start = self.swap_fade_remaining.load(Ordering::Relaxed);
+
+        let (mut gain, gain_step) = match phase {
+            SWAP_PHASE_FADE_OUT => (rem_start as f32 * inv_len, -inv_len),
+            SWAP_PHASE_FADE_IN => (1.0f32 - rem_start as f32 * inv_len, inv_len),
+            _ => return,
+        };
+
+        for frame in 0..frame_count {
+            let g = gain.clamp(0.0, 1.0);
+            for ch in 0..channel_count {
+                *outputs[ch].add(frame) *= g;
+            }
+            gain += gain_step;
+        }
+
+        let new_rem = rem_start.saturating_sub(frame_count as u32);
+        self.swap_fade_remaining.store(new_rem, Ordering::Relaxed);
+    }
+
+    /// Perform the actual backend swap on the audio thread. Called when fade-out
+    /// has reached zero. Caller must hold a `MutexGuard` for `self.backend` so we
+    /// can mutate the live slot in place.
+    ///
+    /// Tries (non-blocking) to take the staged backend out of `pending_backend`
+    /// and install it. The previously live backend is parked back into
+    /// `pending_backend` so the *next* main-thread `load_*` call drops it on a
+    /// non-real-time thread (avoiding allocator/GIL work on the audio thread).
+    ///
+    /// If `pending_backend` is contended (main thread mid-stage) we silently
+    /// skip the swap; the next callback will retry, with `swap_phase` still
+    /// `FADE_OUT` and `swap_fade_remaining` still `0` (so the envelope keeps
+    /// outputting silence in the meantime).
+    fn perform_swap_locked(&self, live: &mut Option<Box<dyn Backend>>) {
+        let Ok(mut pending) = self.pending_backend.try_lock() else {
+            return;
+        };
+        if pending.is_none() {
+            // No backend staged — nothing to install. Transition straight to
+            // fade-in so we don't get stuck in fade-out forever.
+            let len = self.swap_fade_length.load(Ordering::Relaxed);
+            self.swap_fade_remaining.store(len, Ordering::Relaxed);
+            self.swap_phase
+                .store(SWAP_PHASE_FADE_IN, Ordering::Release);
+            return;
+        }
+        // Move new → live, old → pending (where main thread will drop it).
+        std::mem::swap(live, &mut *pending);
+
+        // Apply staged param defaults atomically with the swap, so the new
+        // backend's first frame already sees its declared defaults.
+        if let Ok(mut defaults) = self.pending_param_defaults.try_lock() {
+            if let Some(d) = defaults.take() {
+                for (i, &val) in d.iter().enumerate().take(PARAM_COUNT) {
+                    self.params[i].store(val.to_bits(), Ordering::Relaxed);
+                }
+            }
+        }
+
+        // Begin the fade-in half of the envelope.
+        let len = self.swap_fade_length.load(Ordering::Relaxed);
+        self.swap_fade_remaining.store(len, Ordering::Relaxed);
+        self.swap_phase
+            .store(SWAP_PHASE_FADE_IN, Ordering::Release);
     }
 
     /// Clamp all output samples to [-1.0, 1.0] to prevent dangerously loud output.
@@ -1368,11 +1813,21 @@ mod tests {
         assert!(kernel.load_script(&python_home, script_quarter.to_str().unwrap()));
         kernel.initialize(1, 1, 44100.0);
 
-        output = [0.0; 4];
-        unsafe {
-            kernel.process(&ip, &op, 1, 4);
+        // Drive enough samples to complete the swap fade envelope
+        // (~5ms fade-out + ~5ms fade-in at 44.1 kHz ≈ 440 samples). The audio
+        // thread performs the actual backend swap at end-of-buffer, so we
+        // process multiple chunks until the new backend's steady-state output
+        // is visible.
+        let chunk_input = vec![1.0f32; 256];
+        let mut chunk_output = vec![0.0f32; 256];
+        for _ in 0..6 {
+            chunk_output.fill(0.0);
+            let cip: *const f32 = chunk_input.as_ptr();
+            let cop: *mut f32 = chunk_output.as_mut_ptr();
+            unsafe { kernel.process(&cip, &cop, 1, 256); }
         }
-        assert_eq!(output, [0.25, 0.25, 0.25, 0.25]);
+        let tail = &chunk_output[chunk_output.len() - 4..];
+        assert_eq!(tail, &[0.25, 0.25, 0.25, 0.25]);
 
         std::fs::remove_file(script_half).ok();
         std::fs::remove_file(script_quarter).ok();
@@ -1601,9 +2056,19 @@ mod tests {
         // Hot-reload to passthrough WASM
         assert!(kernel.load_wasm(&passthrough_wasm));
 
-        output = [0.0; 4];
-        unsafe { kernel.process(&ip, &op, 1, 4); }
-        assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
+        // Drive enough chunks through to complete the swap fade envelope; the
+        // audio thread performs the swap at end-of-buffer so several callbacks
+        // are needed before the new backend is producing steady-state output.
+        let chunk_input = vec![0.7f32; 256];
+        let mut chunk_output = vec![0.0f32; 256];
+        for _ in 0..6 {
+            chunk_output.fill(0.0);
+            let cip: *const f32 = chunk_input.as_ptr();
+            let cop: *mut f32 = chunk_output.as_mut_ptr();
+            unsafe { kernel.process(&cip, &cop, 1, 256); }
+        }
+        let tail = &chunk_output[chunk_output.len() - 4..];
+        assert_eq!(tail, &[0.7, 0.7, 0.7, 0.7]);
     }
 
     #[test]
@@ -1625,13 +2090,18 @@ mod tests {
         // Hot-reload to WASM
         assert!(kernel.load_wasm(&wasm));
 
-        let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
-        let mut output: [f32; 4] = [0.0; 4];
-        let ip: *const f32 = input.as_ptr();
-        let op: *mut f32 = output.as_mut_ptr();
-
-        unsafe { kernel.process(&ip, &op, 1, 4); }
-        assert_eq!(output, [0.5, 0.25, -0.5, 0.0]);
+        // Drive enough chunks for the swap fade to complete; check the tail.
+        let chunk_input = vec![1.0f32; 256];
+        let mut chunk_output = vec![0.0f32; 256];
+        for _ in 0..6 {
+            chunk_output.fill(0.0);
+            let cip: *const f32 = chunk_input.as_ptr();
+            let cop: *mut f32 = chunk_output.as_mut_ptr();
+            unsafe { kernel.process(&cip, &cop, 1, 256); }
+        }
+        let tail = &chunk_output[chunk_output.len() - 4..];
+        // gain_half_wasm applies 0.5x
+        assert_eq!(tail, &[0.5, 0.5, 0.5, 0.5]);
     }
 
     // --- Safety limiter tests ---
@@ -1791,9 +2261,373 @@ mod tests {
         // Hot-reload to Python (process.py applies 0 dB gain = unity)
         assert!(kernel.load_script(&python_home, &script_path));
 
-        output = [0.0; 4];
-        unsafe { kernel.process(&ip, &op, 1, 4); }
-        assert_eq!(output, [1.0, 0.5, -1.0, 0.0]);
+        // Drive enough chunks for the swap fade to complete; check the tail.
+        let chunk_input = vec![1.0f32; 256];
+        let mut chunk_output = vec![0.0f32; 256];
+        for _ in 0..6 {
+            chunk_output.fill(0.0);
+            let cip: *const f32 = chunk_input.as_ptr();
+            let cop: *mut f32 = chunk_output.as_mut_ptr();
+            unsafe { kernel.process(&cip, &cop, 1, 256); }
+        }
+        let tail = &chunk_output[chunk_output.len() - 4..];
+        // process.py is unity gain
+        assert_eq!(tail, &[1.0, 1.0, 1.0, 1.0]);
+    }
+
+    /// Regression test for the preset-switch pop. Loads a backend that emits a
+    /// constant 0.5, swaps to a backend that emits silence, and verifies that
+    /// the transition is smooth — no single-sample step exceeds a small
+    /// threshold and there is a visible fade region in the output.
+    #[test]
+    fn test_preset_swap_declick_envelope() {
+        // Backend A: outputs the input scaled by 0.5 (we'll feed it constant 1.0
+        // to get a steady 0.5 output).
+        let wasm_a = gain_half_wasm();
+
+        // Backend B: outputs silence regardless of input.
+        let wasm_b = wat::parse_str(r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                (local $i i32)
+                (local $total i32)
+                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (block $break
+                  (loop $loop
+                    (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
+                    (f32.store
+                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (f32.const 0.0)
+                    )
+                    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                    (br $loop)
+                  )
+                )
+              )
+            )
+        "#).expect("Failed to parse silence WAT");
+
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm_a));
+        kernel.initialize(1, 1, 44100.0);
+
+        // Process a chunk with the original backend so it's producing 0.5
+        // before the swap is requested.
+        let input = vec![1.0f32; 64];
+        let mut warm = vec![0.0f32; 64];
+        unsafe {
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = warm.as_mut_ptr();
+            kernel.process(&ip, &op, 1, 64);
+        }
+        assert!(warm.iter().all(|&v| (v - 0.5).abs() < 1e-6),
+                "warm-up should produce constant 0.5");
+
+        // Stage the silent backend — this arms the fade-out.
+        assert!(kernel.load_wasm(&wasm_b));
+
+        // Capture the audio across the entire swap window. Process in 64-frame
+        // chunks (mirroring a small DAW callback) and concatenate.
+        const CHUNK: u32 = 64;
+        const NUM_CHUNKS: usize = 16; // 16 * 64 = 1024 samples ≫ 440-sample fade
+        let mut captured: Vec<f32> = Vec::with_capacity(CHUNK as usize * NUM_CHUNKS);
+        for _ in 0..NUM_CHUNKS {
+            let mut out = vec![0.0f32; CHUNK as usize];
+            unsafe {
+                let ip: *const f32 = input.as_ptr();
+                let op: *mut f32 = out.as_mut_ptr();
+                kernel.process(&ip, &op, 1, CHUNK);
+            }
+            captured.extend_from_slice(&out);
+        }
+
+        // No single-sample step in the output should exceed a small threshold.
+        // Without declick, the swap would produce a 0.5-sample step (from 0.5
+        // to 0.0 in one frame). The fade brings the per-sample delta well below
+        // 0.02 across all transitions.
+        let mut max_delta = 0.0f32;
+        for w in captured.windows(2) {
+            let d = (w[1] - w[0]).abs();
+            if d > max_delta {
+                max_delta = d;
+            }
+        }
+        assert!(
+            max_delta < 0.02,
+            "step discontinuity {} exceeds declick threshold (0.02)",
+            max_delta
+        );
+
+        // The first sample should still be at the old backend's level (0.5),
+        // and the final samples should reach the new backend's level (0.0).
+        assert!((captured[0] - 0.5).abs() < 1e-3,
+                "first sample should be ~0.5 (old backend), got {}", captured[0]);
+        assert!(captured[captured.len() - 1].abs() < 1e-3,
+                "last sample should be ~0.0 (new backend), got {}",
+                captured[captured.len() - 1]);
+
+        // There should be a visible monotonic-ish fade region: the first half
+        // should average noticeably higher than the second half.
+        let mid = captured.len() / 2;
+        let first_half_avg: f32 = captured[..mid].iter().sum::<f32>() / mid as f32;
+        let second_half_avg: f32 = captured[mid..].iter().sum::<f32>() / (captured.len() - mid) as f32;
+        assert!(first_half_avg > second_half_avg + 0.05,
+                "expected fade-down: first_half={}, second_half={}",
+                first_half_avg, second_half_avg);
+    }
+
+    /// Regression test for PR #215 review: rapidly switching presets during
+    /// the FADE_IN half of a previous swap must preserve gain continuity.
+    /// Before the fix, `stage_backend_for_swap` reset `swap_fade_remaining`
+    /// to full length and flipped to FADE_OUT, jumping the envelope gain
+    /// from its current mid-fade-in value straight to 1.0 — an audible click.
+    ///
+    /// This test drives A → B → C in quick succession: after only a few
+    /// callbacks of fade-in on (A → B), it loads C. The captured output must
+    /// still have no step discontinuity anywhere.
+    #[test]
+    fn test_preset_swap_interrupted_fade_in_declicks() {
+        // Build three trivial WASM backends with distinct constant outputs.
+        let silence_wat = |c: f32| {
+            let bits = c.to_bits();
+            format!(
+                r#"
+                (module
+                  (memory (export "memory") 1)
+                  (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                    (local $i i32)
+                    (local $total i32)
+                    (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                    (block $break
+                      (loop $loop
+                        (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
+                        (f32.store
+                          (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                          (f32.const {c})
+                        )
+                        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                        (br $loop)
+                      )
+                    )
+                  )
+                )
+                "#,
+                c = f32::from_bits(bits),
+            )
+        };
+
+        let wasm_a = gain_half_wasm(); // outputs input * 0.5
+        let wasm_b = wat::parse_str(&silence_wat(0.25)).unwrap();
+        let wasm_c = wat::parse_str(&silence_wat(0.0)).unwrap();
+
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm_a));
+        kernel.initialize(1, 1, 44100.0);
+
+        // Warm up A so it's producing steady 0.5.
+        let input = vec![1.0f32; 64];
+        let mut warm = vec![0.0f32; 64];
+        unsafe {
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = warm.as_mut_ptr();
+            kernel.process(&ip, &op, 1, 64);
+        }
+        assert!(warm.iter().all(|&v| (v - 0.5).abs() < 1e-6));
+
+        // Stage B. Fade length at 44.1 kHz is ~220 samples (5 ms). Run a
+        // fade-out + just part of fade-in so we catch it mid-fade-in.
+        assert!(kernel.load_wasm(&wasm_b));
+        const CHUNK: u32 = 64;
+        let mut captured: Vec<f32> = Vec::new();
+        // 8 * 64 = 512 samples — 220 fade-out + 220 fade-in would complete at
+        // ~440 samples, so after 8 chunks we're well into the FADE_IN half
+        // but not necessarily done.
+        for _ in 0..4 {
+            let mut out = vec![0.0f32; CHUNK as usize];
+            unsafe {
+                let ip: *const f32 = input.as_ptr();
+                let op: *mut f32 = out.as_mut_ptr();
+                kernel.process(&ip, &op, 1, CHUNK);
+            }
+            captured.extend_from_slice(&out);
+        }
+
+        // Now stage C while we're *during* the FADE_IN toward B. Verify the
+        // audio thread is in fact in FADE_IN by peeking the phase.
+        let phase_before_interrupt = kernel.swap_phase.load(Ordering::Acquire);
+        assert_eq!(
+            phase_before_interrupt, SWAP_PHASE_FADE_IN,
+            "precondition: should be mid fade-in after 4 chunks (256 samples, \
+             fade-out was 220) but phase = {}",
+            phase_before_interrupt
+        );
+        assert!(kernel.load_wasm(&wasm_c));
+
+        // Continue processing long enough for A → B fade-out (interrupted),
+        // B fade-out, and C fade-in to all complete.
+        for _ in 0..32 {
+            let mut out = vec![0.0f32; CHUNK as usize];
+            unsafe {
+                let ip: *const f32 = input.as_ptr();
+                let op: *mut f32 = out.as_mut_ptr();
+                kernel.process(&ip, &op, 1, CHUNK);
+            }
+            captured.extend_from_slice(&out);
+        }
+
+        // No single-sample step in the output should exceed the declick
+        // threshold. Before the fix, we'd see a large step (up to ~0.5 worst
+        // case) right at the interrupted-fade-in transition.
+        let mut max_delta = 0.0f32;
+        let mut max_delta_idx = 0usize;
+        for (i, w) in captured.windows(2).enumerate() {
+            let d = (w[1] - w[0]).abs();
+            if d > max_delta {
+                max_delta = d;
+                max_delta_idx = i;
+            }
+        }
+        assert!(
+            max_delta < 0.02,
+            "step discontinuity {} at sample {} exceeds declick threshold \
+             (0.02) — interrupted fade-in caused a click",
+            max_delta, max_delta_idx
+        );
+
+        // Final value should settle at C's output (0.0).
+        assert!(
+            captured[captured.len() - 1].abs() < 1e-3,
+            "should settle at C's output (0.0), got {}",
+            captured[captured.len() - 1]
+        );
+    }
+
+    /// Regression test for PR #215 review: after a swap completes, the *old*
+    /// backend is parked in `pending_backend` for deferred drop. Benchmark must
+    /// not pick it — it should run on the live backend (the one just swapped
+    /// in). Verified indirectly by checking that `pending_backend` is still
+    /// populated after `benchmark_process()` returns, which proves the
+    /// pending slot was not taken/drained by the benchmark path.
+    #[test]
+    fn test_benchmark_process_after_completed_swap() {
+        let wasm_a = gain_half_wasm();
+        let wasm_b = wat::parse_str(r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                (local $i i32)
+                (local $total i32)
+                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (block $break
+                  (loop $loop
+                    (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
+                    (f32.store
+                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (f32.const 0.0)
+                    )
+                    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                    (br $loop)
+                  )
+                )
+              )
+            )
+        "#).expect("Failed to parse silence WAT");
+
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm_a));
+        kernel.initialize(1, 1, 44100.0);
+
+        // Stage B and pump enough audio to complete fade-out + fade-in so the
+        // swap has fully landed and `swap_phase` is back to IDLE. At that
+        // point pending holds the *old* A and live holds the new B.
+        assert!(kernel.load_wasm(&wasm_b));
+        let input = vec![1.0f32; 64];
+        for _ in 0..16 {
+            let mut out = vec![0.0f32; 64];
+            unsafe {
+                let ip: *const f32 = input.as_ptr();
+                let op: *mut f32 = out.as_mut_ptr();
+                kernel.process(&ip, &op, 1, 64);
+            }
+        }
+        assert_eq!(
+            kernel.swap_phase.load(Ordering::Acquire),
+            SWAP_PHASE_IDLE,
+            "swap should have fully drained"
+        );
+        assert!(
+            kernel.pending_backend.lock().unwrap().is_some(),
+            "pending should still hold the old backend parked for deferred drop"
+        );
+
+        let result = kernel.benchmark_process();
+        assert!(result.is_some());
+        assert!(result.unwrap() > 0.0);
+
+        // Pending must still be intact — the fix routes benchmark to the live
+        // slot when not in FADE_OUT, so the parked old backend is untouched.
+        assert!(
+            kernel.pending_backend.lock().unwrap().is_some(),
+            "benchmark should not have taken the parked pending backend"
+        );
+    }
+
+    /// Regression test for Seer finding on `9df9ee1`: benchmarking while a
+    /// swap is still in flight used to hold `pending_backend.lock()` for
+    /// ~50-100 ms, blocking the audio thread's `perform_swap_locked` and
+    /// producing a silence dropout. The fix polls `swap_phase` until the
+    /// audio thread has completed the swap, then benchmarks the live slot
+    /// and never touches `pending_backend`. With no audio thread running to
+    /// advance the swap, the poll must time out and return `None` rather
+    /// than grabbing the pending lock and stalling the (would-be) audio
+    /// thread.
+    #[test]
+    fn test_benchmark_process_times_out_if_swap_never_completes() {
+        use std::sync::atomic::Ordering;
+
+        let wasm_a = gain_half_wasm();
+        let wasm_b = gain_half_wasm();
+
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm_a));
+        kernel.initialize(1, 1, 44100.0);
+
+        // Stage B but don't pump audio — `pending_stage_request` stays set
+        // and `swap_phase` stays `IDLE` (no audio thread to transition it).
+        assert!(kernel.load_wasm(&wasm_b));
+        assert!(
+            kernel.pending_stage_request.load(Ordering::Acquire),
+            "precondition: stage request should be pending before audio runs"
+        );
+
+        // Benchmark should time out (the polling loop waits up to 100 ms for
+        // phase=IDLE with the request flag cleared; neither condition ever
+        // becomes true because no audio thread is running).
+        let start = std::time::Instant::now();
+        let result = kernel.benchmark_process();
+        let elapsed = start.elapsed();
+
+        assert!(
+            result.is_none(),
+            "benchmark should time out while a swap is still pending"
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_millis(90),
+            "benchmark should wait ~100 ms for swap completion before bailing, got {:?}",
+            elapsed
+        );
+
+        // The staged pending backend must still be there — benchmark must
+        // not have consumed or mutated it.
+        assert!(
+            kernel.pending_backend.lock().unwrap().is_some(),
+            "pending backend should still hold the staged new backend"
+        );
+        assert!(
+            kernel.pending_stage_request.load(Ordering::Acquire),
+            "pending_stage_request should still be set after benchmark timeout"
+        );
     }
 
     // --- License & demo mode tests ---
