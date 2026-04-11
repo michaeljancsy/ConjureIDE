@@ -18,6 +18,11 @@ const DEMO_LIMIT_SECONDS: f64 = 60.0;
 /// and do not count against the demo time limit.
 const DEMO_SILENCE_THRESHOLD: f32 = 0.001;
 
+/// Length of the fade ramp applied when the demo gate opens or closes, in milliseconds.
+/// Prevents a click when the demo counter expires (fade to silence) or resets
+/// (fade back up to full level on license activation).
+const DEMO_FADE_MS: f64 = 5.0;
+
 /// Length of each fade ramp (out and in) applied around a backend swap, in milliseconds.
 /// Total silenced window across a swap is ~2 * SWAP_FADE_MS.
 /// 5 ms is well below human click-perception threshold and short enough to feel
@@ -87,6 +92,13 @@ pub struct DSPKernel {
     /// Computed in `initialize()` from the host sample rate.
     /// Main thread writes (at initialize), audio thread reads — lock-free.
     demo_limit_samples: AtomicU64,
+    /// Smoothed demo-gate gain, 0.0..=1.0. Ramps toward 0 when the demo counter
+    /// expires and back toward 1 when it's reset, preventing clicks. Written and
+    /// read only on the audio thread (inside `process`), so a plain `f32` is fine.
+    demo_gain: f32,
+    /// Per-sample ramp increment for `demo_gain`, computed from `sample_rate` in
+    /// `initialize()` so the fade is a fixed wall-clock duration (DEMO_FADE_MS).
+    demo_fade_step: f32,
     /// Cached JSON representation of script-declared parameter names.
     /// Set after each successful script/WASM load. None means "no names declared."
     /// Pointer returned by `param_names_json_ptr()` is valid until next script load or destroy.
@@ -237,6 +249,10 @@ impl DSPKernel {
             licensed: AtomicBool::new(false),
             demo_samples_processed: AtomicU64::new(0),
             demo_limit_samples: AtomicU64::new((DEMO_LIMIT_SECONDS * 44100.0) as u64),
+            // Start fully open so the first callback after plugin load isn't faded in.
+            // Gets driven to 0 on demo expiry and back to 1 on reset.
+            demo_gain: 1.0,
+            demo_fade_step: (1000.0 / (DEMO_FADE_MS * 44100.0)) as f32,
             param_names_json: None,
             param_metadata_json: None,
             latency_samples: 0,
@@ -335,6 +351,9 @@ impl DSPKernel {
         // duration regardless of host sample rate.
         self.swap_fade_length
             .store((SWAP_FADE_MS / 1000.0 * sample_rate) as u32, Ordering::Relaxed);
+        // Recompute demo-gate fade step for the new sample rate so the 5ms ramp
+        // is consistent across hosts.
+        self.demo_fade_step = (1000.0 / (DEMO_FADE_MS * sample_rate)) as f32;
 
         if let Ok(mut guard) = self.backend.lock() {
             if let Some(backend) = guard.as_mut() {
@@ -1075,29 +1094,38 @@ impl DSPKernel {
             return;
         }
 
-        // Demo mode gate: if unlicensed and demo time exhausted, output silence.
-        if !self.licensed.load(Ordering::Relaxed) {
-            let processed = self.demo_samples_processed.load(Ordering::Relaxed);
-            if processed >= self.demo_limit_samples.load(Ordering::Relaxed) {
-                // Zero all output buffers
-                for ch in 0..channel_count {
-                    let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
-                    for sample in dst.iter_mut() {
-                        *sample = 0.0;
-                    }
+        // Demo-gate target: 0 when unlicensed and the demo counter has expired,
+        // 1 otherwise. The actual gain ramps toward this target over DEMO_FADE_MS
+        // to avoid a click at the transition (see apply_demo_gain_envelope below).
+        let demo_target: f32 = if !self.licensed.load(Ordering::Relaxed)
+            && self.demo_samples_processed.load(Ordering::Relaxed)
+                >= self.demo_limit_samples.load(Ordering::Relaxed)
+        {
+            0.0
+        } else {
+            1.0
+        };
+
+        // Fast path: once the fade-out has fully completed, short-circuit with a
+        // hard zero-write so we skip backend processing entirely.
+        if demo_target == 0.0 && self.demo_gain == 0.0 {
+            for ch in 0..channel_count {
+                let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
+                for sample in dst.iter_mut() {
+                    *sample = 0.0;
                 }
-                if capturing {
-                    let out_as_const: Vec<*const f32> =
-                        outputs.iter().map(|p| *p as *const f32).collect();
-                    self.capture_to_ring(
-                        &out_as_const,
-                        channel_count,
-                        frame_count,
-                        &self.output_ring,
-                    );
-                }
-                return;
             }
+            if capturing {
+                let out_as_const: Vec<*const f32> =
+                    outputs.iter().map(|p| *p as *const f32).collect();
+                self.capture_to_ring(
+                    &out_as_const,
+                    channel_count,
+                    frame_count,
+                    &self.output_ring,
+                );
+            }
+            return;
         }
 
         // Snapshot parameters once per callback (lock-free atomic reads)
@@ -1169,6 +1197,17 @@ impl DSPKernel {
                 }
             }
 
+            // Declick the demo gate: ramp `demo_gain` toward `demo_target` and
+            // multiply into the outputs. No-op when fully open (common case).
+            Self::apply_demo_gain_envelope(
+                &mut self.demo_gain,
+                self.demo_fade_step,
+                outputs,
+                channel_count,
+                frame_count,
+                demo_target,
+            );
+
             // Capture output audio for spectrogram (after processing + envelope)
             if capturing {
                 self.capture_to_ring(Self::as_const_ptrs(outputs), channel_count, frame_count, &self.output_ring);
@@ -1192,6 +1231,15 @@ impl DSPKernel {
             // Don't transition state here — we couldn't perform the swap without
             // the backend lock, so leave the phase machine to the next callback.
         }
+        // Declick the demo gate on the fallback path too.
+        Self::apply_demo_gain_envelope(
+            &mut self.demo_gain,
+            self.demo_fade_step,
+            outputs,
+            channel_count,
+            frame_count,
+            demo_target,
+        );
         // Capture output (same as input during passthrough, but envelope may have scaled it)
         if capturing {
             self.capture_to_ring(Self::as_const_ptrs(outputs), channel_count, frame_count, &self.output_ring);
@@ -1203,6 +1251,42 @@ impl DSPKernel {
         {
             self.demo_samples_processed
                 .fetch_add(frame_count as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// Apply the demo-gate fade envelope to output buffers in place, ramping
+    /// `*demo_gain` toward `target` by `step` per sample and multiplying each
+    /// output sample by the current gain. Fast-path no-op when `*demo_gain` is
+    /// already `1.0` and the target is also `1.0` (the common licensed / demo-
+    /// not-yet-expired case).
+    ///
+    /// Static (takes `&mut f32` instead of `&mut self`) so it can be called from
+    /// inside the backend-mutex-guard scope without borrow conflicts.
+    ///
+    /// # Safety
+    /// - Each pointer in `outputs` must point to at least `frame_count` writable f32 samples.
+    unsafe fn apply_demo_gain_envelope(
+        demo_gain: &mut f32,
+        step: f32,
+        outputs: &[*mut f32],
+        channel_count: usize,
+        frame_count: usize,
+        target: f32,
+    ) {
+        if *demo_gain == 1.0 && target == 1.0 {
+            // Hot path: demo gate fully open and staying open — nothing to do.
+            return;
+        }
+        for frame in 0..frame_count {
+            if *demo_gain < target {
+                *demo_gain = (*demo_gain + step).min(target);
+            } else if *demo_gain > target {
+                *demo_gain = (*demo_gain - step).max(target);
+            }
+            let g = *demo_gain;
+            for ch in 0..channel_count {
+                *outputs[ch].add(frame) *= g;
+            }
         }
     }
 
@@ -2711,6 +2795,113 @@ mod tests {
         // Output should be silence
         assert_eq!(output[0], 0.0);
         assert!(output.iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn test_demo_expiry_fades_out_smoothly() {
+        // When the demo counter crosses the limit, the output should ramp from
+        // full level to zero over ~DEMO_FADE_MS rather than producing a click.
+        let mut kernel = DSPKernel::new();
+        assert!(!kernel.is_licensed());
+        kernel.initialize(1, 1, 48000.0);
+
+        // Park the counter right at the limit so the very next buffer is gated.
+        let limit = kernel.demo_limit_samples.load(Ordering::Relaxed);
+        kernel.demo_samples_processed.store(limit, Ordering::Relaxed);
+
+        // Process a buffer of non-zero input with no backend → passthrough shapes
+        // by the fade envelope.
+        let frames = 1024usize;
+        let input = vec![0.5f32; frames];
+        let mut output = vec![0.0f32; frames];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, frames as u32) };
+
+        // First sample must not be the hard-cut zero — it should still be close
+        // to the pre-expiry level (0.5) because the ramp has only moved one step.
+        assert!(
+            output[0] > 0.4,
+            "expected fade-out to start from ~1.0, got first sample {}",
+            output[0]
+        );
+
+        // No adjacent-sample jump should exceed a single fade step worth of level
+        // (plus a small epsilon). At 48kHz / 5ms that's ~0.5 * (1/240) ≈ 0.0021.
+        let max_step = 0.5 * (1000.0 / (DEMO_FADE_MS as f32 * 48000.0)) + 1e-5;
+        for i in 1..frames {
+            let d = (output[i] - output[i - 1]).abs();
+            assert!(
+                d <= max_step,
+                "adjacent-sample jump {} at index {} exceeds max step {}",
+                d,
+                i,
+                max_step
+            );
+        }
+
+        // The fade must have fully completed within this buffer (5ms @ 48k = 240 samples).
+        assert_eq!(
+            output[frames - 1],
+            0.0,
+            "expected fade-out to have reached zero by end of buffer"
+        );
+    }
+
+    #[test]
+    fn test_demo_reset_fades_in_smoothly() {
+        // After the demo gate has fully closed, resetting the counter should
+        // ramp the output back up rather than jumping straight to full level.
+        let mut kernel = DSPKernel::new();
+        kernel.initialize(1, 1, 48000.0);
+
+        // Drive the kernel past the limit so demo_gain reaches 0.
+        let frames = 4096usize;
+        let input = vec![0.5f32; frames];
+        let mut output = vec![0.0f32; frames];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        let iterations = (TEST_DEMO_LIMIT_SAMPLES / frames as u64) + 10;
+        for _ in 0..iterations {
+            unsafe { kernel.process(&ip, &op, 1, frames as u32) };
+        }
+        // Sanity: gate is fully closed, last buffer is fully silent.
+        assert!(output.iter().all(|&s| s == 0.0));
+
+        // Reset the demo counter (simulates license activation).
+        kernel.reset_demo();
+
+        // Process another buffer — output should ramp up from 0, not jump to 0.5.
+        for s in output.iter_mut() {
+            *s = 0.0;
+        }
+        unsafe { kernel.process(&ip, &op, 1, frames as u32) };
+
+        assert!(
+            output[0] < 0.01,
+            "expected fade-in to start near zero, got first sample {}",
+            output[0]
+        );
+
+        let max_step = 0.5 * (1000.0 / (DEMO_FADE_MS as f32 * 48000.0)) + 1e-5;
+        for i in 1..frames {
+            let d = (output[i] - output[i - 1]).abs();
+            assert!(
+                d <= max_step,
+                "adjacent-sample jump {} at index {} exceeds max step {}",
+                d,
+                i,
+                max_step
+            );
+        }
+
+        // Ramp should have reached full level well within one 4096-sample buffer
+        // at 48kHz (5ms fade = 240 samples).
+        assert!(
+            (output[frames - 1] - 0.5).abs() < 1e-5,
+            "expected fade-in to have reached full level by end of buffer, got {}",
+            output[frames - 1]
+        );
     }
 
     #[test]
