@@ -182,7 +182,7 @@ pub extern "C" fn process(
                 // Stage F: final wet sum + mix
                 let wet = soft_clip(
                     modal_sum + shim_voice + gran_voice + sub_voice + tail,
-                    0.7,
+                    1.0,
                 );
                 ctx.set_output(ch, f, (dry * (1.0 - mx) + wet * mx) as f32);
             }

@@ -175,5 +175,5 @@ def process(inputs, outputs, frame_count, sample_rate, params):
 
             # Stage F: final wet sum + mix
             wet = soft_clip(
-                modal_sum + shim_voice + gran_voice + sub_voice + tail, 0.7)
+                modal_sum + shim_voice + gran_voice + sub_voice + tail, 1.0)
             outputs[ch][i] = dry * (1.0 - mx) + wet * mx
