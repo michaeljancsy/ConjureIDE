@@ -895,12 +895,18 @@ impl DSPKernel {
 
     /// Benchmark the process function with a 440 Hz sine wave.
     /// Returns the max execution time in seconds over 5 runs (after 1 warm-up),
-    /// or None if no backend is loaded.
+    /// or None if no backend is loaded or the swap doesn't complete in time.
     ///
-    /// Targets the staged backend in `pending_backend` if one is present (so the
-    /// caller benchmarks the preset they just loaded, not the previous one that
-    /// is still in the live slot waiting to be faded out). Falls back to the
-    /// live backend otherwise.
+    /// Waits (up to 100 ms) for any in-flight preset swap to complete, then
+    /// benchmarks the live slot. We intentionally do NOT benchmark while the
+    /// new backend is still parked in `pending_backend`: holding
+    /// `pending_backend.lock()` for the full ~50-100 ms benchmark duration
+    /// would block the audio thread's `perform_swap_locked` from completing
+    /// its non-blocking `try_lock`, stranding the envelope in `FADE_OUT` with
+    /// `remaining=0` and producing an extended silence dropout. Waiting for
+    /// `phase == IDLE` costs at most ~10 ms (the full fade envelope) in
+    /// exchange for benchmarking the freshly-loaded preset from the live slot
+    /// exactly like a first-load backend.
     pub fn benchmark_process(&mut self) -> Option<f64> {
         let channel_count = if self.channel_count > 0 {
             self.channel_count
@@ -979,35 +985,35 @@ impl DSPKernel {
             max_time
         };
 
-        // The newest backend lives in `pending_backend` if we've just staged
-        // one (`pending_stage_request` still set) or the audio thread has
-        // begun the fade-out but not yet completed the swap. Otherwise the
-        // newest lives in `self.backend` — either because the first-load
-        // fast path installed it directly or because the audio thread already
-        // swapped and parked the *old* backend in pending for deferred drop.
-        //
-        // Lock-first ordering: acquire `pending_backend.lock()` before reading
-        // the swap-state atomics. This freezes pending's contents for the
-        // duration of the decision, closing the TOCTOU race where the audio
-        // thread could complete a fade-out (turning pending NEW → OLD) between
-        // our atomic reads and the eventual lock acquisition. See `inject_nam`
-        // for the full ordering rationale.
-        let mut pending = self.pending_backend.lock().ok()?;
-        let newest_in_pending = self.pending_stage_request.load(Ordering::Acquire)
-            || self.swap_phase.load(Ordering::Acquire) == SWAP_PHASE_FADE_OUT;
-        let result = if newest_in_pending {
-            if let Some(ref mut backend) = *pending {
-                Some(run(backend.as_mut()))
-            } else {
-                drop(pending);
-                let mut live = self.backend.lock().ok()?;
-                live.as_mut().map(|b| run(b.as_mut()))
+        // Wait for any in-flight swap to complete before benchmarking. While
+        // a swap is pending or mid-fade, the newest backend lives in
+        // `pending_backend` and benchmarking it there would require holding
+        // `pending_backend.lock()` for ~50-100 ms — long enough to block the
+        // audio thread's `perform_swap_locked` from ever progressing, which
+        // strands the envelope at zero gain and produces an audible silence
+        // dropout. Instead, poll `swap_phase` (Acquire) until the audio thread
+        // has completed the swap and reached `IDLE`, at which point the
+        // newest backend is in the live slot.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+        while self.swap_phase.load(Ordering::Acquire) != SWAP_PHASE_IDLE
+            || self.pending_stage_request.load(Ordering::Acquire)
+        {
+            if std::time::Instant::now() >= deadline {
+                // Swap is wedged or taking longer than expected — bail out
+                // rather than benchmark a backend that might still be stale.
+                return None;
             }
-        } else {
-            drop(pending);
-            let mut live = self.backend.lock().ok()?;
-            live.as_mut().map(|b| run(b.as_mut()))
-        };
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        // After phase == IDLE the newest backend is guaranteed to be in the
+        // live slot (either via the first-load fast path or because the
+        // audio thread already swapped and the fade-in has completed). We
+        // can lock `self.backend` directly and leave `pending_backend`
+        // untouched so the audio thread's swap machinery is never blocked.
+        let mut live = self.backend.lock().ok()?;
+        let result = live.as_mut().map(|b| run(b.as_mut()));
+        drop(live);
 
         // Reset profiler — benchmark would have contaminated it if we'd routed
         // through self.process(). We don't go through process() any more, but
@@ -2553,6 +2559,63 @@ mod tests {
         assert!(
             kernel.pending_backend.lock().unwrap().is_some(),
             "benchmark should not have taken the parked pending backend"
+        );
+    }
+
+    /// Regression test for Seer finding on `9df9ee1`: benchmarking while a
+    /// swap is still in flight used to hold `pending_backend.lock()` for
+    /// ~50-100 ms, blocking the audio thread's `perform_swap_locked` and
+    /// producing a silence dropout. The fix polls `swap_phase` until the
+    /// audio thread has completed the swap, then benchmarks the live slot
+    /// and never touches `pending_backend`. With no audio thread running to
+    /// advance the swap, the poll must time out and return `None` rather
+    /// than grabbing the pending lock and stalling the (would-be) audio
+    /// thread.
+    #[test]
+    fn test_benchmark_process_times_out_if_swap_never_completes() {
+        use std::sync::atomic::Ordering;
+
+        let wasm_a = gain_half_wasm();
+        let wasm_b = gain_half_wasm();
+
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm_a));
+        kernel.initialize(1, 1, 44100.0);
+
+        // Stage B but don't pump audio — `pending_stage_request` stays set
+        // and `swap_phase` stays `IDLE` (no audio thread to transition it).
+        assert!(kernel.load_wasm(&wasm_b));
+        assert!(
+            kernel.pending_stage_request.load(Ordering::Acquire),
+            "precondition: stage request should be pending before audio runs"
+        );
+
+        // Benchmark should time out (the polling loop waits up to 100 ms for
+        // phase=IDLE with the request flag cleared; neither condition ever
+        // becomes true because no audio thread is running).
+        let start = std::time::Instant::now();
+        let result = kernel.benchmark_process();
+        let elapsed = start.elapsed();
+
+        assert!(
+            result.is_none(),
+            "benchmark should time out while a swap is still pending"
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_millis(90),
+            "benchmark should wait ~100 ms for swap completion before bailing, got {:?}",
+            elapsed
+        );
+
+        // The staged pending backend must still be there — benchmark must
+        // not have consumed or mutated it.
+        assert!(
+            kernel.pending_backend.lock().unwrap().is_some(),
+            "pending backend should still hold the staged new backend"
+        );
+        assert!(
+            kernel.pending_stage_request.load(Ordering::Acquire),
+            "pending_stage_request should still be set after benchmark timeout"
         );
     }
 
