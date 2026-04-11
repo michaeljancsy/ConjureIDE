@@ -14,7 +14,7 @@
 #   mix            — wet/dry blend
 
 import math
-from conjuredsp import (mix, pct,
+from conjuredsp import (mix, pct, soft_clip,
                         DelayLine, Biquad, BiquadCoeffs)
 
 PARAMS = {
@@ -98,8 +98,8 @@ def process(inputs, outputs, frame_count, sample_rate, params):
     comb_d = [COMB_MS[k] * 0.001 * sample_rate for k in range(4)]
     comb_fb_amt = 0.55 + 0.30 * time_p
 
-    modal_gain = 1.0 / 6.0
-    sub_gain = 0.4
+    modal_gain = 2.0
+    sub_gain = 0.8
 
     for i in range(frame_count):
         # Advance shimmer phase (octave up: read approaches write)
@@ -174,5 +174,6 @@ def process(inputs, outputs, frame_count, sample_rate, params):
                     + s.comb_fb[ch][2] + s.comb_fb[ch][3]) * 0.25
 
             # Stage F: final wet sum + mix
-            wet = modal_sum + shim_voice + gran_voice + sub_voice + tail
+            wet = soft_clip(
+                modal_sum + shim_voice + gran_voice + sub_voice + tail, 0.7)
             outputs[ch][i] = dry * (1.0 - mx) + wet * mx
