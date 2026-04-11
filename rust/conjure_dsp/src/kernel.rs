@@ -278,19 +278,39 @@ impl DSPKernel {
     ///   completed the swap so the old backend is parked in pending), the
     ///   newest backend lives in the live slot.
     pub fn inject_nam(&mut self, binary_data: &[u8]) -> Result<(), String> {
+        // Lock-first ordering closes a TOCTOU race against the audio thread.
+        //
+        // The newest backend lives in `pending_backend` if either (a) we have
+        // staged but the audio thread has not yet consumed the request, or
+        // (b) the audio thread is mid-fade-out but has not yet swapped. After
+        // the swap completes, `pending_backend` holds the *old* backend parked
+        // for deferred drop, and the newest is in `self.backend`.
+        //
+        // We must not read those state atomics and *then* take the lock — in
+        // the gap, the audio thread can finish a fade-out and call
+        // `perform_swap_locked`, flipping pending from NEW → OLD. Instead,
+        // acquire `pending_backend.lock()` first: while we hold it, the audio
+        // thread's `try_lock(pending)` inside `perform_swap_locked` bails out,
+        // freezing pending's contents. Only then read the (flag, phase) pair
+        // to decide which slot to inject into. The Acquire load on the flag
+        // pairs with `apply_pending_stage`'s Release store, so observing
+        // `flag=false` guarantees the updated phase is visible.
+        let mut pending = self
+            .pending_backend
+            .lock()
+            .map_err(|e| format!("Lock failed: {}", e))?;
         let newest_in_pending = self.pending_stage_request.load(Ordering::Acquire)
             || self.swap_phase.load(Ordering::Acquire) == SWAP_PHASE_FADE_OUT;
         if newest_in_pending {
-            if let Ok(mut pending) = self.pending_backend.lock() {
-                if let Some(ref mut backend) = *pending {
-                    let wasm = backend
-                        .as_any_mut()
-                        .downcast_mut::<WasmBackend>()
-                        .ok_or("Pending backend is not WasmBackend")?;
-                    return wasm.inject_nam_model(binary_data);
-                }
+            if let Some(ref mut backend) = *pending {
+                let wasm = backend
+                    .as_any_mut()
+                    .downcast_mut::<WasmBackend>()
+                    .ok_or("Pending backend is not WasmBackend")?;
+                return wasm.inject_nam_model(binary_data);
             }
         }
+        drop(pending);
         let mut guard = self.backend.lock().map_err(|e| format!("Lock failed: {}", e))?;
         if let Some(ref mut backend) = *guard {
             let wasm = backend.as_any_mut().downcast_mut::<WasmBackend>()
@@ -773,11 +793,19 @@ impl DSPKernel {
     ///   value, i.e. `rem_out = len − rem_in`. This avoids the click that
     ///   would otherwise occur when the user rapidly switches presets during
     ///   the fade-in half of a previous swap.
+    ///
+    /// **Ordering invariant**: the phase/remaining updates must happen *before*
+    /// clearing `pending_stage_request`, with a Release store on the clear.
+    /// Main-thread readers (`inject_nam`, `benchmark_process`) use this to
+    /// decide whether the newest backend lives in `pending_backend` or the
+    /// live slot: reading `flag=false` via Acquire guarantees the updated
+    /// phase is visible, so a `(flag=false, phase=FADE_OUT)` snapshot reliably
+    /// means "audio consumed the stage, pending still holds the new backend,
+    /// swap has not yet completed". If we cleared the flag before the phase
+    /// store, a reader could see `(flag=false, phase=IDLE-stale)` and wrongly
+    /// route to the live slot, injecting into the old backend.
     fn apply_pending_stage(&self) {
-        if !self
-            .pending_stage_request
-            .swap(false, Ordering::AcqRel)
-        {
+        if !self.pending_stage_request.load(Ordering::Acquire) {
             return;
         }
         let len = self.swap_fade_length.load(Ordering::Relaxed);
@@ -801,6 +829,10 @@ impl DSPKernel {
             }
             _ => {}
         }
+        // Clear the flag LAST, with Release ordering, so any reader observing
+        // flag=false via Acquire is guaranteed to also see the updated phase.
+        self.pending_stage_request
+            .store(false, Ordering::Release);
     }
 
     /// Install a backend directly into the live slot, bypassing the staging path.
@@ -953,10 +985,17 @@ impl DSPKernel {
         // newest lives in `self.backend` — either because the first-load
         // fast path installed it directly or because the audio thread already
         // swapped and parked the *old* backend in pending for deferred drop.
+        //
+        // Lock-first ordering: acquire `pending_backend.lock()` before reading
+        // the swap-state atomics. This freezes pending's contents for the
+        // duration of the decision, closing the TOCTOU race where the audio
+        // thread could complete a fade-out (turning pending NEW → OLD) between
+        // our atomic reads and the eventual lock acquisition. See `inject_nam`
+        // for the full ordering rationale.
+        let mut pending = self.pending_backend.lock().ok()?;
         let newest_in_pending = self.pending_stage_request.load(Ordering::Acquire)
             || self.swap_phase.load(Ordering::Acquire) == SWAP_PHASE_FADE_OUT;
         let result = if newest_in_pending {
-            let mut pending = self.pending_backend.lock().ok()?;
             if let Some(ref mut backend) = *pending {
                 Some(run(backend.as_mut()))
             } else {
@@ -965,6 +1004,7 @@ impl DSPKernel {
                 live.as_mut().map(|b| run(b.as_mut()))
             }
         } else {
+            drop(pending);
             let mut live = self.backend.lock().ok()?;
             live.as_mut().map(|b| run(b.as_mut()))
         };
