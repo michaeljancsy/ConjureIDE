@@ -21,6 +21,7 @@
 - Native Rust compilation mode ("use at your own risk"): opt-in alternative to WASM that compiles user scripts + crates natively to aarch64-apple-darwin as a dylib, loaded at runtime. Unlocks the full Rust crate ecosystem (pyo3, openssl, C bindings, etc.) but loses WASM fuel metering (no infinite loop protection). Could be a per-preset toggle or a global setting. Requires a separate native compilation path in RustCompiler, native crate builds in CrateInstaller, and a native backend alongside wasm_backend in the kernel.
 
 ### Bugs
+- v1.0.9 still has loud noise when switching presets — the 5ms declick fade envelope (39194e7) is not fully eliminating the glitch in the shipped build; needs further investigation.
 - Cmd+Shift+A triggers Ableton's project save as dialog instead of the extension's save as dialog
 
 ### UX
