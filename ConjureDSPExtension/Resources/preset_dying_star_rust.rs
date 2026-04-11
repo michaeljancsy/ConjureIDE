@@ -6,19 +6,42 @@
 // resonance bandpass at 110 Hz → event-horizon bit reduction → final mix.
 //
 // Params:
-//   COLLAPSE (pct) — closes lowpass cutoff + drives bit reduction
-//   GRAVITY  (pct) — pitch-shift drift rate
-//   SUB      (pct) — rumble bus level
-//   MIX            — wet/dry blend
+//   COLLAPSE      (pct)    — closes lowpass cutoff + drives bit reduction
+//   GRAVITY       (pct)    — pitch-shift drift rate (Free mode only)
+//   SUB           (pct)    — rumble bus level
+//   MIX                    — wet/dry blend
+//   GRAVITY_SYNC  (choice) — lock pitch-shift grain phase to host beat
+//   COLLAPSE_SYNC (choice) — beat-locked decay envelope on the closing lowpass
 
 use conjuredsp::*;
 setup!();
+
+const SYNC_LABELS: &[&str] = &["Free", "1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars"];
 
 params! {
     COLLAPSE = pct().default(55.0),
     GRAVITY = pct().default(60.0),
     SUB = pct().default(70.0),
     MIX = mix().default(0.6),
+    GRAVITY_SYNC = choice(SYNC_LABELS),
+    COLLAPSE_SYNC = choice(SYNC_LABELS),
+}
+
+// Sync index → quarter-note beats. 0.0 means "computed at runtime from
+// the host's time signature numerator" (1 bar = num quarter notes).
+const SYNC_DIVISIONS: [f64; 7] = [0.0, 0.25, 0.5, 1.0, 2.0, 0.0, 0.0];
+
+#[inline]
+fn resolve_sync(idx: usize, time_sig_num: f64) -> f64 {
+    if idx == 0 || idx >= SYNC_DIVISIONS.len() {
+        return 0.0;
+    }
+    let preset = SYNC_DIVISIONS[idx];
+    if preset > 0.0 {
+        return preset;
+    }
+    let bar = if time_sig_num > 0.0 { time_sig_num } else { 4.0 };
+    if idx == 5 { bar } else { 2.0 * bar }
 }
 
 const MAX_DL: usize = 24000;
@@ -49,6 +72,29 @@ pub extern "C" fn process(
         let gravity = ctx.param(GRAVITY) as f64 / 100.0;
         let sub = ctx.param(SUB) as f64 / 100.0;
         let mx = ctx.param(MIX) as f64;
+
+        // Host transport for beat-locked sync. If the host isn't playing or has
+        // no tempo, both sync modes fall back to free-running so the preset still
+        // works in auval and stopped DAWs.
+        let tempo = TRANSPORT_BUF[T_TEMPO] as f64;
+        let beat = TRANSPORT_BUF[T_BEAT] as f64;
+        let playing = TRANSPORT_BUF[T_PLAYING] as f64 >= 0.5;
+        let time_sig_num = TRANSPORT_BUF[T_TIME_SIG_NUM] as f64;
+        let sync_active = playing && tempo > 0.0;
+        let beats_per_sample = if sync_active { (tempo / 60.0) / sr } else { 0.0 };
+
+        let grav_div = if sync_active {
+            resolve_sync(ctx.param(GRAVITY_SYNC).round() as usize, time_sig_num)
+        } else {
+            0.0
+        };
+        let coll_div = if sync_active {
+            resolve_sync(ctx.param(COLLAPSE_SYNC).round() as usize, time_sig_num)
+        } else {
+            0.0
+        };
+        let grav_synced = grav_div > 0.0;
+        let coll_synced = coll_div > 0.0;
 
         // Sub-bass lowpass coefficients (80 Hz Q=0.7)
         let sub_lpc = BiquadCoeffs::lowpass(80.0, 0.707, sr);
@@ -87,15 +133,39 @@ pub extern "C" fn process(
         let ring_gain: f64 = 0.4;
 
         for f in 0..ctx.frames() {
-            let ph0 = GRAIN_PHASE;
-            let ph1 = (GRAIN_PHASE + 0.5) % 1.0;
+            // Pitch-shifter grain phase: free-running by default, beat-locked when synced.
+            let ph0 = if grav_synced {
+                let beat_now = beat + f as f64 * beats_per_sample;
+                let p = (beat_now / grav_div) % 1.0;
+                if p < 0.0 { p + 1.0 } else { p }
+            } else {
+                let p = GRAIN_PHASE;
+                GRAIN_PHASE = (GRAIN_PHASE + grain_rate) % 1.0;
+                p
+            };
+            let ph1 = (ph0 + 0.5) % 1.0;
             let w0_ = (core::f64::consts::PI * ph0).sin();
             let w0 = w0_ * w0_;
             let w1_ = (core::f64::consts::PI * ph1).sin();
             let w1 = w1_ * w1_;
             let read0 = base_d + ph0 * grain_samples;
             let read1 = base_d + ph1 * grain_samples;
-            GRAIN_PHASE = (GRAIN_PHASE + grain_rate) % 1.0;
+
+            // Closing-lowpass coefficients: per-buffer in Free mode, per-sample
+            // when collapse is beat-pulsed. Bit reduction stays tied to the static collapse.
+            let (cur_close_alpha, cur_close_one_minus) = if coll_synced {
+                let beat_now = beat + f as f64 * beats_per_sample;
+                let mut pulse_phase = (beat_now / coll_div) % 1.0;
+                if pulse_phase < 0.0 { pulse_phase += 1.0; }
+                let pulse_env = (-3.0 * pulse_phase).exp();
+                let mut eff_collapse = collapse + (1.0 - collapse) * pulse_env;
+                if eff_collapse > 1.0 { eff_collapse = 1.0; }
+                let cur_close_fc = 8000.0 - 7650.0 * eff_collapse;
+                let a = (-2.0 * core::f64::consts::PI * cur_close_fc / sr).exp();
+                (a, 1.0 - a)
+            } else {
+                (close_alpha, close_one_minus)
+            };
 
             for ch in 0..nch {
                 let dry = ctx.input(ch, f) as f64;
@@ -121,7 +191,7 @@ pub extern "C" fn process(
                 }
 
                 // Stage D: closing one-pole lowpass
-                CLOSE_LP[ch] = close_alpha * CLOSE_LP[ch] + close_one_minus * sig;
+                CLOSE_LP[ch] = cur_close_alpha * CLOSE_LP[ch] + cur_close_one_minus * sig;
                 let closed = CLOSE_LP[ch];
 
                 // Stage E: Schwarzschild resonance bandpass (parallel)
