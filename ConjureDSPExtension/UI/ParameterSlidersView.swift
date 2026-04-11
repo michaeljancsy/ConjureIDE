@@ -244,6 +244,15 @@ private struct DSPSlider: View {
         return CGFloat((value - range.lowerBound) / (range.upperBound - range.lowerBound))
     }
 
+    /// Interpolated fill color: soft purple `#B06EFF` at fraction 0 → ice blue `#7B9FFF` at fraction 1.
+    private var fillColor: Color {
+        let f = Double(max(0, min(1, fraction)))
+        let r = 0.690 + f * (0.482 - 0.690)
+        let g = 0.431 + f * (0.624 - 0.431)
+        let b = 1.000 // both anchor colors have B = 1.0
+        return Color(red: r, green: g, blue: b)
+    }
+
     var body: some View {
         GeometryReader { geo in
             let trackHeight: CGFloat = 3
@@ -258,9 +267,9 @@ private struct DSPSlider: View {
                     .frame(height: trackHeight)
                     .padding(.horizontal, thumbDiameter / 2)
 
-                // Track fill
+                // Track fill — purple at 0 → ice blue at 1
                 RoundedRectangle(cornerRadius: trackHeight / 2)
-                    .fill(Color.accentColor)
+                    .fill(fillColor)
                     .frame(width: max(thumbDiameter / 2, thumbX), height: trackHeight)
                     .padding(.leading, thumbDiameter / 2)
                     .clipped()

@@ -1,10 +1,11 @@
 import SwiftUI
 
 struct EditorSettingsView: View {
-    @AppStorage("editorTheme") private var selectedTheme: String = "auto"
+    @AppStorage("editorTheme") private var selectedTheme: String = "conjuredsp"
 
     private static let themes: [(id: String, name: String)] = [
         ("auto", "Auto (System)"),
+        ("conjuredsp", "ConjureDSP"),
         ("vs", "Light"),
         ("vs-dark", "Dark"),
         ("monokai", "Monokai"),

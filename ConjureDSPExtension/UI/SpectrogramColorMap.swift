@@ -30,37 +30,43 @@ enum SpectrogramColorMap {
         return colors
     }()
 
-    /// Magma colormap interpolation (approximation of matplotlib's magma).
+    /// Branded colormap using the ConjureDSP palette (`assets/palette.md`).
+    /// Ramp: deep navy → brushed metal → soft purple → hot pink → warm gold.
     private static func magmaColor(_ t: Float) -> (Float, Float, Float) {
-        // Simplified magma: black → dark purple → magenta → orange → yellow
+        // Anchor colors (sRGB, 0–1):
+        //  0.00 #0D0F1A deep navy        (0.051, 0.059, 0.102)
+        //  0.25 #1C2235 brushed metal    (0.110, 0.133, 0.208)
+        //  0.50 #B06EFF soft purple      (0.690, 0.431, 1.000)
+        //  0.75 #FF4FD8 hot pink         (1.000, 0.310, 0.847)
+        //  1.00 #FFD166 warm gold        (1.000, 0.820, 0.400)
         let r: Float
         let g: Float
         let b: Float
 
         if t < 0.25 {
-            // Black to dark purple
+            // Deep navy → brushed metal
             let s = t / 0.25
-            r = s * 0.27
-            g = 0
-            b = s * 0.33
+            r = 0.051 + s * (0.110 - 0.051)
+            g = 0.059 + s * (0.133 - 0.059)
+            b = 0.102 + s * (0.208 - 0.102)
         } else if t < 0.5 {
-            // Dark purple to magenta
+            // Brushed metal → soft purple
             let s = (t - 0.25) / 0.25
-            r = 0.27 + s * 0.45
-            g = s * 0.05
-            b = 0.33 + s * 0.25
+            r = 0.110 + s * (0.690 - 0.110)
+            g = 0.133 + s * (0.431 - 0.133)
+            b = 0.208 + s * (1.000 - 0.208)
         } else if t < 0.75 {
-            // Magenta to orange
+            // Soft purple → hot pink
             let s = (t - 0.5) / 0.25
-            r = 0.72 + s * 0.23
-            g = 0.05 + s * 0.40
-            b = 0.58 - s * 0.45
+            r = 0.690 + s * (1.000 - 0.690)
+            g = 0.431 + s * (0.310 - 0.431)
+            b = 1.000 + s * (0.847 - 1.000)
         } else {
-            // Orange to yellow
+            // Hot pink → warm gold
             let s = (t - 0.75) / 0.25
-            r = 0.95 + s * 0.05
-            g = 0.45 + s * 0.50
-            b = 0.13 - s * 0.08
+            r = 1.000 + s * (1.000 - 1.000)
+            g = 0.310 + s * (0.820 - 0.310)
+            b = 0.847 + s * (0.400 - 0.847)
         }
 
         return (min(max(r, 0), 1), min(max(g, 0), 1), min(max(b, 0), 1))
