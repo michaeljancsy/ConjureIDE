@@ -2,6 +2,13 @@
 
 Incomplete test items from open PRs. Check off as you verify each item.
 
+## PR #224 — [Fix exports disabled in beta mode](https://github.com/michaeljancsy/conjuredsp-application/pull/224)
+
+- [ ] Build with `BETA_BUILD` flag, verify export button is enabled
+- [ ] Confirm exported AU is created successfully
+- [ ] Verify export button still disabled when beta window has elapsed
+- [ ] Verify export button works normally with active subscription (no regression)
+
 ## PR #156 — [Build numpy/scipy against Accelerate instead of OpenBLAS](https://github.com/michaeljancsy/conjuredsp-application/pull/156)
 
 - [ ] Delete `rust/python-dist/` and re-run `cd rust && ./setup-python.sh`
