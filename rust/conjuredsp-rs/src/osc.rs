@@ -86,6 +86,17 @@ impl Lfo {
         self.value
     }
 
+    /// Advance by `n` samples, writing values into `out[..n]`.
+    ///
+    /// Equivalent to calling `tick()` in a loop but mirrors the Python
+    /// `tick_n()` API for parity.
+    pub fn tick_n(&mut self, out: &mut [f64], n: usize) {
+        let len = if n < out.len() { n } else { out.len() };
+        for i in 0..len {
+            out[i] = self.tick();
+        }
+    }
+
     /// Reset phase to zero.
     pub fn reset(&mut self) {
         self.phase = 0.0;
@@ -246,6 +257,36 @@ mod tests {
         // First tick at phase=0 for square (phase < 0.5) should be 1.0
         let val = lfo.tick();
         assert!(approx_eq(val, 1.0, 1e-10));
+    }
+
+    #[test]
+    fn test_lfo_tick_n_matches_tick_loop() {
+        // tick_n should produce identical results to calling tick() in a loop
+        let mut lfo_a = Lfo::new();
+        lfo_a.init(44100.0, 440.0);
+        let mut lfo_b = Lfo::new();
+        lfo_b.init(44100.0, 440.0);
+
+        let n = 128;
+        let mut buf_a = [0.0f64; 128];
+        for i in 0..n {
+            buf_a[i] = lfo_a.tick();
+        }
+
+        let mut buf_b = [0.0f64; 128];
+        lfo_b.tick_n(&mut buf_b, n);
+
+        for i in 0..n {
+            assert!(
+                approx_eq(buf_a[i], buf_b[i], 1e-15),
+                "mismatch at sample {}: tick()={} tick_n()={}",
+                i, buf_a[i], buf_b[i]
+            );
+        }
+        // Phase should be identical after both
+        let val_a = lfo_a.tick();
+        let val_b = lfo_b.tick();
+        assert!(approx_eq(val_a, val_b, 1e-15));
     }
 
     // advance_phase tests

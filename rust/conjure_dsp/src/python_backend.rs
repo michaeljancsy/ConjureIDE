@@ -363,7 +363,7 @@ impl PythonBackend {
                 let _ = dict.set_item("playing", false);
                 let _ = dict.set_item("time_sig_num", 4.0f64);
                 let _ = dict.set_item("time_sig_den", 4.0f64);
-                let _ = dict.set_item("sample_position", 0.0f64);
+                let _ = dict.set_item("sample_pos", 0.0f64);
                 self.py_transport_dict = Some(dict.into_any().unbind());
             }
 
@@ -458,7 +458,7 @@ impl PythonBackend {
                         dict.set_item("playing", transport.is_playing)?;
                         dict.set_item("time_sig_num", transport.time_sig_numerator)?;
                         dict.set_item("time_sig_den", transport.time_sig_denominator)?;
-                        dict.set_item("sample_position", transport.sample_position)?;
+                        dict.set_item("sample_pos", transport.sample_position)?;
                         dict.clone()
                     } else {
                         let dict = PyDict::new(py);
@@ -467,7 +467,7 @@ impl PythonBackend {
                         dict.set_item("playing", transport.is_playing)?;
                         dict.set_item("time_sig_num", transport.time_sig_numerator)?;
                         dict.set_item("time_sig_den", transport.time_sig_denominator)?;
-                        dict.set_item("sample_position", transport.sample_position)?;
+                        dict.set_item("sample_pos", transport.sample_position)?;
                         dict.into_any()
                     };
                     self.py_process_fn.call1(
