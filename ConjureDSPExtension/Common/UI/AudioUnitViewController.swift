@@ -650,6 +650,7 @@ pub extern "C" fn process(
     /// Poll for the Python runtime to appear (provisioned by ConjureDSPTerminal),
     /// then load the default preset and update the UI. Stops after success or 30s.
     private func startRuntimePolling(au: ConjureDSPExtensionAudioUnit, pm: PresetManager) {
+        runtimePollTimer?.invalidate()
         var attempts = 0
         let maxAttempts = 30  // 30 x 1s = 30s max wait
         runtimePollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self, weak au, weak pm] timer in
