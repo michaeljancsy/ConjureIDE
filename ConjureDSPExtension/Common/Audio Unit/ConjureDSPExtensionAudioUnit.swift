@@ -325,8 +325,16 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
-	// Cached path to bundled Python runtime for script reloads
-	private var pythonHome: String?
+	/// Lazily resolved path to Python runtime. Re-checks the filesystem if nil,
+	/// so it picks up a runtime provisioned after AU initialization.
+	private var pythonHome: String? {
+		if let cached = _pythonHome { return cached }
+		let stdlibPath = Self.pythonRuntimeURL.appendingPathComponent("lib/python3.14t").path
+		guard FileManager.default.fileExists(atPath: stdlibPath) else { return nil }
+		_pythonHome = Self.pythonRuntimeURL.path
+		return _pythonHome
+	}
+	private var _pythonHome: String?
 
 	// Current script source (cached on successful reload, persisted in fullState)
 	private var currentScriptSource: String?
@@ -411,14 +419,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		let bundle = Bundle(for: type(of: self))
 
 		// Python home: shared runtime in App Group container, provisioned by ConjureDSPTerminal.
-		let runtimeURL = Self.pythonRuntimeURL
-		let stdlibPath = runtimeURL.appendingPathComponent("lib/python3.14t").path
-		guard FileManager.default.fileExists(atPath: stdlibPath) else {
-			pluginLog.error("Python runtime not available at \(runtimeURL.path, privacy: .public) — launch ConjureDSP app to provision it")
+		// Uses the lazy pythonHome property which re-checks the filesystem if not yet cached.
+		guard let pythonHome = self.pythonHome else {
+			pluginLog.error("Python runtime not available at \(Self.pythonRuntimeURL.path, privacy: .public) — launch ConjureDSP app to provision it")
 			return
 		}
-		let pythonHome = runtimeURL.path
-		self.pythonHome = pythonHome
 
 		guard let scriptPath = bundle.path(forResource: Self.defaultPresetResource, ofType: "py") else {
 			pluginLog.error("\(Self.defaultPresetResource).py not found in bundle, using Rust fallback DSP")
@@ -466,6 +471,19 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				SentryHelper.capture("Failed to load Python DSP script (no error details)", level: .error, category: "dsp.python")
 			}
 		}
+	}
+
+	/// Attempt to load the default preset. Used by the UI to retry after the
+	/// Python runtime is provisioned on first launch. Returns true if the
+	/// script loaded successfully (and fires scriptSourceDidChange).
+	func retryLoadDefaultPreset() -> Bool {
+		guard currentScriptSource == nil else { return true }
+		loadPythonScript()
+		if let source = currentScriptSource {
+			scriptSourceDidChange.send(ScriptSourceChange(source: source))
+			return true
+		}
+		return false
 	}
 
 	/// Convert a SCREAMING_SNAKE_CASE name to a display label.
