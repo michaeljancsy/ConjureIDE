@@ -52,8 +52,9 @@ class SubscriptionManager: ObservableObject {
     /// (AudioUnitViewController) before `loadAndVerify()`.
     var buildID: Int = 0
 
-    /// Whether the user currently has licensed access (active or grace period).
-    var isLicensed: Bool { status.isLicensed }
+    /// Whether the user currently has licensed access (active subscription,
+    /// grace period, or active beta window).
+    var isLicensed: Bool { status.isLicensed || isBetaActive }
 
     /// App Group container identifier shared between host app and AU extension.
     static let appGroupIdentifier = AppGroupContainer.id
