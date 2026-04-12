@@ -43,6 +43,81 @@ private class SafeHostingView<Content: View>: NSHostingView<Content> {
 
 @MainActor
 public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
+
+    // MARK: - New Preset Templates
+
+    // swiftlint:disable indentation_width
+    static let newPythonTemplate = """
+import numpy as np
+
+PARAMS = {
+    "gain": {"min": -24.0, "max": 12.0, "unit": "dB", "default": 0.0},
+}
+
+
+def process(inputs, outputs, frame_count, sample_rate, params):
+    \"""
+    Process audio buffers.
+
+    Called once per audio render callback with pre-allocated numpy arrays.
+    Write your processed audio into outputs[ch][:frame_count].
+
+    Args:
+        inputs:      list of numpy.float32 arrays, one per channel
+        outputs:     list of numpy.float32 arrays, one per channel
+        frame_count: number of valid samples this callback
+        sample_rate: current sample rate in Hz (e.g. 44100.0)
+        params:      dict of actual parameter values keyed by PARAMS name
+    \"""
+    gain_db = params["gain"]
+    gain = 10.0 ** (gain_db / 20.0)
+
+    for ch in range(len(inputs)):
+        np.multiply(inputs[ch][:frame_count], gain, out=outputs[ch][:frame_count])
+"""
+
+    static let newRustTemplate = """
+// ConjureDSP DSP — Rust Template
+//
+// This script is compiled to WebAssembly and runs in the audio render callback.
+// The `process` function is called once per audio buffer.
+//
+// Quick start:
+//   - setup!() declares all required buffers and WASM exports
+//   - params! {} declares parameters with rich metadata
+//   - ctx() provides safe access to input/output buffers and parameters
+//
+// Safety: avoid allocations, I/O, or panics in process().
+
+use conjuredsp::*;
+setup!();
+
+// Declare parameters — the host shows real ranges, units, and sliders.
+// Builders: freq(), db(), time_ms(), mix(), pct(), toggle(), ratio(), param(min, max)
+params! {
+    GAIN = db().min(-24.0).max(12.0).default(0.0),
+}
+
+#[no_mangle]
+pub extern "C" fn process(
+    input: *const f32,
+    output: *mut f32,
+    channels: i32,
+    frame_count: i32,
+    sample_rate: f32,
+) {
+    let ctx = ctx(input, output, channels, frame_count, sample_rate);
+    let gain = db_to_gain(ctx.param(GAIN) as f64) as f32;
+
+    for c in 0..ctx.channels() {
+        for i in 0..ctx.frames() {
+            ctx.set_output(c, i, ctx.input(c, i) * gain);
+        }
+    }
+}
+"""
+    // swiftlint:enable indentation_width
+
     private static var sentryStarted = false
 
     var audioUnit: AUAudioUnit? {
@@ -64,6 +139,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     private var paramNamesCancellable: AnyCancellable?
     private var paramMetadataCancellable: AnyCancellable?
     private var renderResourcesCancellable: AnyCancellable?
+    private var runtimePollTimer: Timer?
 
     /// App Group container URL — uses direct path construction to avoid
     /// TCC "access data from other apps" prompts on macOS 26.
@@ -72,6 +148,7 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
     }
 
 	deinit {
+        runtimePollTimer?.invalidate()
         captureManager?.isActive = false
         processProfiler?.stop()
         memoryMonitor?.stop()
@@ -197,9 +274,13 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
                 initialBenchmark = nil
             }
         } else {
-            initialScript = "# Default preset not found in bundle\n"
+            initialScript = ""
             initialLanguage = .python
             initialBenchmark = nil
+
+            // Python runtime not provisioned yet (clean install race).
+            // Poll until ConjureDSPTerminal finishes provisioning, then load the default preset.
+            self.startRuntimePolling(au: au, pm: pm)
         }
 
         if captureManager == nil {
@@ -407,16 +488,11 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
 
         // New: reset to default template for the selected language
         let extensionBundle = Bundle(for: type(of: self))
-        log.info("Extension bundle path: \(extensionBundle.bundlePath, privacy: .public)")
         let onNew: (ScriptLanguage) -> ScriptSaveResult = { [weak au, weak pm] language in
             guard let au, let pm else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
-            let ext = language == .rust ? "rs" : "py"
-            guard let url = extensionBundle.url(forResource: "process", withExtension: ext),
-                  let source = try? String(contentsOf: url, encoding: .utf8) else {
-                return ScriptSaveResult(success: false, error: "Default \(language.rawValue) template not found", processTimeMs: nil, budgetMs: nil)
-            }
+            let source = language == .rust ? Self.newRustTemplate : Self.newPythonTemplate
             switch language {
             case .python:
                 let result = au.reloadScript(source: source)
@@ -567,5 +643,37 @@ public class AudioUnitViewController: AUViewController, AUAudioUnitFactory {
         }
 
         log.info("configureSwiftUIView done")
+    }
+
+    // MARK: - Runtime Provisioning Retry
+
+    /// Poll for the Python runtime to appear (provisioned by ConjureDSPTerminal),
+    /// then load the default preset and update the UI. Stops after success or 30s.
+    private func startRuntimePolling(au: ConjureDSPExtensionAudioUnit, pm: PresetManager) {
+        var attempts = 0
+        let maxAttempts = 30  // 30 x 1s = 30s max wait
+        runtimePollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self, weak au, weak pm] timer in
+            guard let self, let au, let pm else {
+                timer.invalidate()
+                return
+            }
+            attempts += 1
+            if au.retryLoadDefaultPreset() {
+                timer.invalidate()
+                self.runtimePollTimer = nil
+                log.info("Python runtime found after \(attempts)s — default preset loaded")
+                // Select the default preset in the preset manager
+                if let defaultPreset = pm.presets.first(where: { preset in
+                    guard case .factory(let name) = preset.source else { return false }
+                    return name == ConjureDSPExtensionAudioUnit.defaultPresetResource
+                }) {
+                    pm.setCurrentPreset(defaultPreset, source: au.scriptSource ?? "")
+                }
+            } else if attempts >= maxAttempts {
+                timer.invalidate()
+                self.runtimePollTimer = nil
+                log.error("Python runtime not provisioned after \(maxAttempts)s — giving up")
+            }
+        }
     }
 }
