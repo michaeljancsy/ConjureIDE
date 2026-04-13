@@ -56,6 +56,20 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "AABB000100LOGICTARGET01"
+               BuildableName = "ConjureDSPLogicTests.xctest"
+               BlueprintName = "ConjureDSPLogicTests"
+               ReferencedContainer = "container:ConjureDSP.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "257911672F5013850036AAB6"
                BuildableName = "ConjureDSPTests.xctest"
                BlueprintName = "ConjureDSPTests"
@@ -93,6 +107,17 @@
          </BuildableReference>
       </MacroExpansion>
       <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "AABB000100LOGICTARGET01"
+               BuildableName = "ConjureDSPLogicTests.xctest"
+               BlueprintName = "ConjureDSPLogicTests"
+               ReferencedContainer = "container:ConjureDSP.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
          <TestableReference
             skipped = "NO"
             parallelizable = "NO">
