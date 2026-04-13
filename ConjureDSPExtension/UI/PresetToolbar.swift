@@ -91,7 +91,6 @@ struct PresetToolbar: View {
     @State private var toneModelStore = ToneModelStore()
     @State private var showingExport = false
     @State private var showingPresetBrowser = false
-    @State private var showingCommunityBrowser = false
     @State private var showingImportURL = false
     @State private var showingSync = false
     @State private var exportName = ""
@@ -132,7 +131,6 @@ struct PresetToolbar: View {
                         showingPresetBrowser = false
                         onSelectPreset(preset)
                     },
-                    onBrowseCommunity: { showingCommunityBrowser = true },
                     onImportURL: { showingImportURL = true },
                     onDismiss: { showingPresetBrowser = false }
                 )
@@ -573,17 +571,6 @@ struct PresetToolbar: View {
         .padding(.vertical, 4)
         .onReceive(NotificationCenter.default.publisher(for: .openLicenseSettings)) { _ in
             showingSettings = true
-        }
-        .popover(isPresented: $showingCommunityBrowser) {
-            CommunityBrowserView(
-                store: gitHubService.communityStore,
-                presetManager: presetManager,
-                onInstalled: { preset in
-                    showingCommunityBrowser = false
-                    onSelectPreset(preset)
-                },
-                onDismiss: { showingCommunityBrowser = false }
-            )
         }
         .popover(isPresented: $showingImportURL) {
             ImportURLPopover(

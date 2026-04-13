@@ -2,12 +2,11 @@
 //  BrowserUITests.swift
 //  ConjureDSPUITests
 //
-//  UI tests for browser/manager popovers: preset browser, community browser,
-//  import URL, tone browser, and package manager.
+//  UI tests for browser/manager popovers: preset browser, import URL,
+//  tone browser, and package manager.
 //
-//  Note: Community browser and import URL popovers are chained — they open
-//  after the preset browser dismisses with a 150ms delay. Tests wait 0.5s
-//  to account for this timing.
+//  Note: Import URL popover is chained — it opens after the preset browser
+//  dismisses with a 150ms delay. Tests wait 0.5s to account for this timing.
 //
 
 import XCTest
@@ -57,10 +56,6 @@ final class BrowserUITests: XCTestCase {
         XCTAssertTrue(doneButton.waitForExistence(timeout: 3),
                       "Preset browser Done button should exist")
 
-        let communityButton = anyElement(in: app, id: "browseCommunityButton")
-        XCTAssertTrue(communityButton.waitForExistence(timeout: 3),
-                      "Browse Community button should exist")
-
         let importButton = anyElement(in: app, id: "importURLButton")
         XCTAssertTrue(importButton.waitForExistence(timeout: 3),
                       "Import URL button should exist")
@@ -102,28 +97,6 @@ final class BrowserUITests: XCTestCase {
             NSPredicate(format: "label == 'Factory'")
         ).firstMatch
         try assertExistsOrSkip(factoryLabel, label: "Preset browser row content")
-    }
-
-    // MARK: - Community Browser (chained from preset browser)
-
-    @MainActor
-    func testCommunityBrowserOpens() throws {
-        let app = Self.sharedApp!
-
-        try openToolbarPopover(app: app, buttonId: "presetMenu")
-
-        let communityButton = anyElement(in: app, id: "browseCommunityButton")
-        try XCTSkipUnless(communityButton.waitForExistence(timeout: 5),
-                          "Browse Community button not accessible through AU ViewBridge")
-
-        communityButton.click()
-
-        // Wait for chained popover to open (preset browser dismisses, then
-        // community browser opens after 150ms delay)
-        usleep(500_000) // 0.5s
-
-        let doneButton = anyElement(in: app, id: "communityBrowserDoneButton")
-        try assertExistsOrSkip(doneButton, label: "Community browser Done button", timeout: 5)
     }
 
     // MARK: - Import URL (chained from preset browser)

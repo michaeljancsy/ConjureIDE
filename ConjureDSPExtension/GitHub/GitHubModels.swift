@@ -19,7 +19,7 @@ struct ConjureDSPRepoMarker: Codable {
 
 /// Sidecar metadata file stored next to each preset script.
 /// e.g. `python/slicer_metadata.json` accompanies `python/slicer.py`.
-/// Used by both community and personal repos.
+/// Used by personal repo sync.
 struct PresetMetadata: Codable, Identifiable {
     let name: String
     var category: String?

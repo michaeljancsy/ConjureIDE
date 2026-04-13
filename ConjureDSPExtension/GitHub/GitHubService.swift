@@ -2,7 +2,7 @@ import Combine
 import Foundation
 import os
 
-/// Central coordinator for all GitHub features: PAT management, community browsing, personal sync.
+/// Central coordinator for all GitHub features: PAT management and personal sync.
 @MainActor
 final class GitHubService: ObservableObject {
     @Published var personalRepoOwner: String {
@@ -13,7 +13,6 @@ final class GitHubService: ObservableObject {
     }
 
     let client: GitHubClient
-    let communityStore: CommunityPresetStore
     let personalSync: PersonalRepoSync
 
     private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "GitHubService")
@@ -32,7 +31,6 @@ final class GitHubService: ObservableObject {
 
     init(client: GitHubClient = GitHubClient()) {
         self.client = client
-        self.communityStore = CommunityPresetStore(client: client)
         self.personalSync = PersonalRepoSync(client: client)
         self.personalRepoOwner = UserDefaults.standard.string(forKey: "github.personalRepo.owner") ?? ""
         self.personalRepoName = UserDefaults.standard.string(forKey: "github.personalRepo.name") ?? ""

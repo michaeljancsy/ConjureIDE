@@ -117,7 +117,7 @@ An in-plugin terminal running Claude Code CLI via a companion app architecture. 
 Setup: `scripts/setup-xterm.sh` downloads xterm.js to `Resources/terminal/xterm/` (gitignored).
 
 ### GitHub Integration
-Two workflows: **CommunityPresetStore** for browsing community presets via public GitHub search, and **PersonalRepoSync** for two-way sync with a user's private preset repository (PAT-based). Repos are validated via a `conjuredsp.json` marker file. Auto-syncs preset saves/deletes via callbacks into PresetManager.
+**PersonalRepoSync** for two-way sync with a user's private preset repository (PAT-based). Repos are validated via a `conjuredsp.json` marker file. Auto-syncs preset saves/deletes via callbacks into PresetManager.
 
 ### Spectrogram Visualization
 Lock-free ring buffers (written by audio thread, read by UI) feed FFT computation via Accelerate/vDSP on the main thread (CADisplayLink-synced). Supports 4 modes: input, output, difference, and normalized difference. Log and linear frequency scales with diverging colormaps for difference modes.
@@ -140,10 +140,10 @@ ConjureDSPExtension/         The AU plugin itself
   Audio/                     AudioCaptureManager — reads ring buffers for spectrogram FFT
   Compilation/               RustCompiler (bundled rustc → WASM), ScriptCompiler, ScriptLanguage (auto-detect), WasmCache (SHA256)
   Export/                    ExportManager (standalone AUv3 pipeline), ExportRegistry, SubtypeGenerator
-  GitHub/                    GitHubService, GitHubClient, CommunityPresetStore, PersonalRepoSync, GitHubModels
+  GitHub/                    GitHubService, GitHubClient, PersonalRepoSync, GitHubModels
   Model/                     SubscriptionManager (token verification + server refresh), SubscriptionAPI (server comms), Preset, PresetManager
   Parameters/                Parameter addresses (Swift enum)
-  UI/                        MonacoEditorView, SpectrogramView, TerminalView, CommunityBrowserView,
+  UI/                        MonacoEditorView, SpectrogramView, TerminalView,
                              PresetBrowserView, ParameterSlidersView, GitHubSettingsView, ExportPopover, and more
   Resources/                 Factory presets (.py + .wasm), process.py, monaco/ (gitignored)
   Common/Audio Unit/         ConjureDSPExtensionAudioUnit.swift — AUAudioUnit subclass + render block
