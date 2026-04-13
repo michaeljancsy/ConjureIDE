@@ -67,18 +67,12 @@ A sidecar JSON file providing metadata for a preset script. The filename must ma
 |-------|------|----------|-------------|
 | `name` | string | yes | Display name shown in the preset browser. |
 | `category` | string | no | Grouping category (e.g. "Utility", "Distortion", "Filter", "Dynamics", "Modulation", "Delay", "Generator"). Defaults to "Other" if omitted. |
-| `author` | string | no | Author name shown in the community browser. |
+| `author` | string | no | Author name. |
 | `description` | string | no | Short description of what the preset does. |
 
 If no metadata file exists for a script, ConjureDSP uses the filename stem as the display name with no category, author, or description.
 
 ## Behavior
-
-### Community repos
-
-ConjureDSP ships with a default community repo (`michaeljancsy/conjuredsp-presets`). The "Browse Community..." menu item fetches this repo's `python/` and `rust/` directories, reads sidecar metadata for each script, and displays them grouped by category with search, preview, and one-click install.
-
-Community repos are read-only — ConjureDSP never pushes to them.
 
 ### Personal repos
 

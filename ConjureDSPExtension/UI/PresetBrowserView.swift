@@ -8,7 +8,6 @@ struct PresetBrowserView: View {
     let isModified: Bool
     let hasRepoPresets: Bool
     let onSelectPreset: (Preset) -> Void
-    let onBrowseCommunity: () -> Void
     let onImportURL: () -> Void
     let onDismiss: () -> Void
 
@@ -135,18 +134,6 @@ struct PresetBrowserView: View {
 
             // Bottom bar
             HStack(spacing: 12) {
-                Button(action: {
-                    onDismiss()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                        onBrowseCommunity()
-                    }
-                }) {
-                    Label("Browse Community\u{2026}", systemImage: "globe")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-                .accessibilityIdentifier("browseCommunityButton")
-
                 Button(action: {
                     onDismiss()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
