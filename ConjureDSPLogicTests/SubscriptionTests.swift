@@ -124,14 +124,4 @@ struct SubscriptionTests {
 
         dsp_kernel_deinitialize(kernel)
     }
-
-    // MARK: - SubscriptionManager Init
-
-    @MainActor
-    @Test func subscriptionManagerInitializesAsDemoMode() {
-        let manager = SubscriptionManager()
-        #expect(manager.status == .noSubscription)
-        #expect(manager.isLicensed == false)
-        #expect(manager.demoSecondsRemaining == 60.0)
-    }
 }

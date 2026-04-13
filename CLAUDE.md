@@ -13,11 +13,21 @@ xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test   # runs unit +
 
 ### Testing
 
-UI tests are slow. **Do not run UI tests unless they specifically test something directly relevant to the most recent changes.** Always prefer running only unit tests by default. When UI tests are warranted, run only the specific relevant class or method — never the full suite.
+There are three test targets, from fastest to slowest:
+
+1. **`ConjureDSPLogicTests`** — pure logic/FFI tests that run without launching the host app (~6s). **Use this by default.**
+2. **`ConjureDSPTests`** — integration tests that require the host app (AU instantiation, factory presets, export integration). Launches `ConjureDSP.app` via `TEST_HOST` (~137s).
+3. **`ConjureDSPUITests`** — UI automation tests. Slow. Only run when directly relevant to recent changes, and only the specific class/method.
 
 ```bash
-# Unit tests only (default — use this unless UI tests are needed)
+# Logic tests only (default — fast, no app launch)
+xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPLogicTests
+
+# Host integration tests (launches the app)
 xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPTests
+
+# Both unit test targets
+xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPLogicTests -only-testing:ConjureDSPTests
 
 # Specific UI test class
 xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPUITests/ConjureDSPUITests
@@ -206,7 +216,8 @@ tools/generate-license/      Rust CLI for generating license keys
 plans/                       Implementation plans (ai-assisted-coding, host-app-daw-controls, etc.)
 rustc-dist/                  Bundled Rust compiler + wasm32-wasip1 target (gitignored)
 docs/                        Design docs (export-au-plan, python-package-management, preset-repo-format, etc.)
-ConjureDSPTests/             Unit tests (Swift Testing)
+ConjureDSPLogicTests/        Pure logic/FFI unit tests — no host app launch (Swift Testing)
+ConjureDSPTests/             Integration tests requiring host app — AU, presets, exports (Swift Testing)
 ConjureDSPUITests/           UI tests (XCUITest)
 ```
 
