@@ -123,7 +123,6 @@
 		2510F93A2F5211FC0046A41D /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		257911402F5013840036AAB6 /* ConjureDSP.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ConjureDSP.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		257911682F5013850036AAB6 /* ConjureDSPTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		AABB000100LOGICPRODREF1 /* ConjureDSPLogicTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPLogicTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		257911722F5013850036AAB6 /* ConjureDSPUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2579117E2F5013850036AAB6 /* ConjureDSPExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConjureDSPExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		25BC19412F563DB20009EA0D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = ConjureDSP/Assets.xcassets; sourceTree = "<group>"; };
@@ -135,6 +134,7 @@
 		AA22000100000001SHARED /* MCPToolProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPToolProvider.swift; sourceTree = "<group>"; };
 		AA33000100000001DAEMON /* DaemonStatusChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DaemonStatusChecker.swift; path = ConjureDSPExtension/Terminal/DaemonStatusChecker.swift; sourceTree = "<group>"; };
 		AA44000100000001MCPINF /* MCPInstanceInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MCPInstanceInfo.swift; path = ConjureDSPExtension/Terminal/MCPInstanceInfo.swift; sourceTree = "<group>"; };
+		AABB000100LOGICPRODREF1 /* ConjureDSPLogicTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPLogicTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AABB00022F5013850036AAB6 /* rust */ = {isa = PBXFileReference; lastKnownFileType = folder; path = rust; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -161,11 +161,6 @@
 		2579116B2F5013850036AAB6 /* ConjureDSPTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = ConjureDSPTests;
-			sourceTree = "<group>";
-		};
-		AABB000100LOGICFSSYNC01 /* ConjureDSPLogicTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = ConjureDSPLogicTests;
 			sourceTree = "<group>";
 		};
 		257911752F5013850036AAB6 /* ConjureDSPUITests */ = {
@@ -199,6 +194,11 @@
 		25E931162F773DC300D36258 /* ConjureDSPTerminalUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = ConjureDSPTerminalUITests;
+			sourceTree = "<group>";
+		};
+		AABB000100LOGICFSSYNC01 /* ConjureDSPLogicTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ConjureDSPLogicTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -376,29 +376,6 @@
 			productReference = 257911402F5013840036AAB6 /* ConjureDSP.app */;
 			productType = "com.apple.product-type.application";
 		};
-		AABB000100LOGICTARGET01 /* ConjureDSPLogicTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = AABB000100LOGICCFGLST01 /* Build configuration list for PBXNativeTarget "ConjureDSPLogicTests" */;
-			buildPhases = (
-				AABB000100LOGICSOURCE01 /* Sources */,
-				AABB000100LOGICFRMWRK01 /* Frameworks */,
-				AABB000100LOGICRESRCE01 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				AABB000100LOGICDEPDCY01 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				AABB000100LOGICFSSYNC01 /* ConjureDSPLogicTests */,
-			);
-			name = ConjureDSPLogicTests;
-			packageProductDependencies = (
-			);
-			productName = ConjureDSPLogicTests;
-			productReference = AABB000100LOGICPRODREF1 /* ConjureDSPLogicTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
 		257911672F5013850036AAB6 /* ConjureDSPTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 257911B42F5013850036AAB6 /* Build configuration list for PBXNativeTarget "ConjureDSPTests" */;
@@ -572,6 +549,29 @@
 			productReference = 25E931132F773DC300D36258 /* ConjureDSPTerminalUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		AABB000100LOGICTARGET01 /* ConjureDSPLogicTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AABB000100LOGICCFGLST01 /* Build configuration list for PBXNativeTarget "ConjureDSPLogicTests" */;
+			buildPhases = (
+				AABB000100LOGICSOURCE01 /* Sources */,
+				AABB000100LOGICFRMWRK01 /* Frameworks */,
+				AABB000100LOGICRESRCE01 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AABB000100LOGICDEPDCY01 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AABB000100LOGICFSSYNC01 /* ConjureDSPLogicTests */,
+			);
+			name = ConjureDSPLogicTests;
+			packageProductDependencies = (
+			);
+			productName = ConjureDSPLogicTests;
+			productReference = AABB000100LOGICPRODREF1 /* ConjureDSPLogicTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -583,9 +583,6 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					2579113F2F5013840036AAB6 = {
-						CreatedOnToolsVersion = 26.2;
-					};
-					AABB000100LOGICTARGET01 = {
 						CreatedOnToolsVersion = 26.2;
 					};
 					257911672F5013850036AAB6 = {
@@ -612,6 +609,9 @@
 					25E931122F773DC300D36258 = {
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = 25E930FA2F773DC200D36258;
+					};
+					AABB000100LOGICTARGET01 = {
+						CreatedOnToolsVersion = 26.2;
 					};
 				};
 			};
@@ -659,13 +659,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		AABB000100LOGICRESRCE01 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		257911662F5013850036AAB6 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -705,6 +698,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		25E931112F773DC300D36258 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AABB000100LOGICRESRCE01 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -1020,15 +1020,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		AABB000100LOGICSOURCE01 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				AA33000300000001DAEMON /* DaemonStatusChecker.swift in Sources */,
-				AA44000300000001MCPINF /* MCPInstanceInfo.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		257911642F5013850036AAB6 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1081,14 +1072,18 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AABB000100LOGICSOURCE01 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA33000300000001DAEMON /* DaemonStatusChecker.swift in Sources */,
+				AA44000300000001MCPINF /* MCPInstanceInfo.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		AABB000100LOGICDEPDCY01 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 2579117D2F5013850036AAB6 /* ConjureDSPExtension */;
-			targetProxy = AABB000100LOGICPROXY0001 /* PBXContainerItemProxy */;
-		};
 		2579116A2F5013850036AAB6 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 2579113F2F5013840036AAB6 /* ConjureDSP */;
@@ -1119,6 +1114,11 @@
 			target = 25E930FA2F773DC200D36258 /* ConjureDSPTerminal */;
 			targetProxy = AA00EMBED0TERMINAL0PROXY /* PBXContainerItemProxy */;
 		};
+		AABB000100LOGICDEPDCY01 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2579117D2F5013850036AAB6 /* ConjureDSPExtension */;
+			targetProxy = AABB000100LOGICPROXY0001 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -1129,7 +1129,7 @@
 				CD_AU_SUBTYPE = DBG1;
 				CODE_SIGN_ENTITLEMENTS = ConjureDSPExtension/ConjureDSPExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1159,7 +1159,7 @@
 					"$(SRCROOT)/rust/python-dist/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				OTHER_LDFLAGS = (
 					"-lconjure_dsp",
 					"-lpython3.14t",
@@ -1170,6 +1170,7 @@
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited) BETA_BUILD";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "ConjureDSPExtension/Common/ConjureDSPExtension-Bridging-Header.h";
@@ -1189,7 +1190,7 @@
 				CODE_SIGN_ENTITLEMENTS = ConjureDSPExtension/ConjureDSPExtension.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1219,7 +1220,7 @@
 					"$(SRCROOT)/rust/python-dist/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				OTHER_LDFLAGS = (
 					"-lconjure_dsp",
 					"-lpython3.14t",
@@ -1231,6 +1232,7 @@
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = BETA_BUILD;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "ConjureDSPExtension/Common/ConjureDSPExtension-Bridging-Header.h";
@@ -1299,7 +1301,7 @@
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited) BETA_BUILD";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
 			name = Debug;
@@ -1355,6 +1357,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = BETA_BUILD;
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
@@ -1367,7 +1370,7 @@
 				CODE_SIGN_ENTITLEMENTS = ConjureDSP/ConjureDSP.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1391,7 +1394,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				OTHER_LDFLAGS = (
 					"-framework",
 					AudioToolbox,
@@ -1423,7 +1426,7 @@
 				CODE_SIGN_ENTITLEMENTS = ConjureDSP/ConjureDSP.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1447,7 +1450,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				OTHER_LDFLAGS = (
 					"-framework",
 					AudioToolbox,
@@ -1471,94 +1474,12 @@
 			};
 			name = Release;
 		};
-		AABB000100LOGICDBGCFG01 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
-				DEVELOPMENT_TEAM = A4R63LAVLS;
-				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/rust/include";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
-				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
-					"$(inherited)",
-					"@loader_path/../Frameworks",
-					"$(SRCROOT)/rust/python-dist/lib",
-				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(BUILT_PRODUCTS_DIR)",
-					"$(SRCROOT)/rust/python-dist/lib",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
-				OTHER_LDFLAGS = (
-					"-lconjure_dsp",
-					"-lpython3.14t",
-					"-framework",
-					Accelerate,
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPLogicTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = auto;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_OBJC_BRIDGING_HEADER = "ConjureDSPLogicTests/ConjureDSPLogicTests-Bridging-Header.h";
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
-				XROS_DEPLOYMENT_TARGET = 26.2;
-			};
-			name = Debug;
-		};
-		AABB000100LOGICRELCFG01 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
-				DEVELOPMENT_TEAM = A4R63LAVLS;
-				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/rust/include";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
-				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
-					"$(inherited)",
-					"@loader_path/../Frameworks",
-					"$(SRCROOT)/rust/python-dist/lib",
-				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(BUILT_PRODUCTS_DIR)",
-					"$(SRCROOT)/rust/python-dist/lib",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
-				OTHER_LDFLAGS = (
-					"-lconjure_dsp",
-					"-lpython3.14t",
-					"-framework",
-					Accelerate,
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPLogicTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = auto;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_OBJC_BRIDGING_HEADER = "ConjureDSPLogicTests/ConjureDSPLogicTests-Bridging-Header.h";
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
-				XROS_DEPLOYMENT_TARGET = 26.2;
-			};
-			name = Release;
-		};
 		257911B52F5013850036AAB6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/rust/include";
@@ -1572,7 +1493,7 @@
 					"$(SRCROOT)/rust/python-dist/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				OTHER_LDFLAGS = (
 					"-lconjure_dsp",
 					"-lpython3.14t",
@@ -1600,7 +1521,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/rust/include";
@@ -1614,7 +1535,7 @@
 					"$(SRCROOT)/rust/python-dist/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				OTHER_LDFLAGS = (
 					"-lconjure_dsp",
 					"-lpython3.14t",
@@ -1641,12 +1562,12 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -1666,12 +1587,12 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
@@ -1727,7 +1648,7 @@
 				CODE_SIGN_ENTITLEMENTS = ConjureDSPTerminal/ConjureDSPTerminal.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1741,7 +1662,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminal;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -1764,7 +1685,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1778,7 +1699,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminal;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = com.MichaelJancsy.ConjureDSPTerminal;
@@ -1798,11 +1719,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminalTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -1820,11 +1741,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminalTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -1841,11 +1762,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminalUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -1862,11 +1783,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = A4R63LAVLS;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.12;
+				MARKETING_VERSION = 1.0.13;
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminalUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -1876,6 +1797,88 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TEST_TARGET_NAME = ConjureDSPTerminal;
+			};
+			name = Release;
+		};
+		AABB000100LOGICDBGCFG01 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 14;
+				DEVELOPMENT_TEAM = A4R63LAVLS;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/rust/include";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@loader_path/../Frameworks",
+					"$(SRCROOT)/rust/python-dist/lib",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(BUILT_PRODUCTS_DIR)",
+					"$(SRCROOT)/rust/python-dist/lib",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0.13;
+				OTHER_LDFLAGS = (
+					"-lconjure_dsp",
+					"-lpython3.14t",
+					"-framework",
+					Accelerate,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPLogicTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "ConjureDSPLogicTests/ConjureDSPLogicTests-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Debug;
+		};
+		AABB000100LOGICRELCFG01 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 14;
+				DEVELOPMENT_TEAM = A4R63LAVLS;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/rust/include";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@loader_path/../Frameworks",
+					"$(SRCROOT)/rust/python-dist/lib",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(BUILT_PRODUCTS_DIR)",
+					"$(SRCROOT)/rust/python-dist/lib",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0.13;
+				OTHER_LDFLAGS = (
+					"-lconjure_dsp",
+					"-lpython3.14t",
+					"-framework",
+					Accelerate,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPLogicTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "ConjureDSPLogicTests/ConjureDSPLogicTests-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.2;
 			};
 			name = Release;
 		};
@@ -1905,15 +1908,6 @@
 			buildConfigurations = (
 				257911B22F5013850036AAB6 /* Debug */,
 				257911B32F5013850036AAB6 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		AABB000100LOGICCFGLST01 /* Build configuration list for PBXNativeTarget "ConjureDSPLogicTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				AABB000100LOGICDBGCFG01 /* Debug */,
-				AABB000100LOGICRELCFG01 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1968,6 +1962,15 @@
 			buildConfigurations = (
 				25E931222F773DC300D36258 /* Debug */,
 				25E931232F773DC300D36258 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AABB000100LOGICCFGLST01 /* Build configuration list for PBXNativeTarget "ConjureDSPLogicTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AABB000100LOGICDBGCFG01 /* Debug */,
+				AABB000100LOGICRELCFG01 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
