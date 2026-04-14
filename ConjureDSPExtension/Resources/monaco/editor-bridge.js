@@ -63,6 +63,23 @@ const bridge = {
         this._suppressChanges = false;
     },
 
+    flashContent() {
+        if (!this.editor) return;
+        const model = this.editor.getModel();
+        if (!model) return;
+        const fullRange = model.getFullModelRange();
+        // Clear any prior flash decorations first so rapid successive calls restart cleanly
+        this._flashDecorations = this.editor.deltaDecorations(this._flashDecorations || [], [{
+            range: fullRange,
+            options: { isWholeLine: true, className: 'conjure-mcp-flash' }
+        }]);
+        // Remove the decoration after the animation finishes so the class no longer applies
+        setTimeout(() => {
+            if (!this.editor) return;
+            this._flashDecorations = this.editor.deltaDecorations(this._flashDecorations || [], []);
+        }, 1900);
+    },
+
     insertAtCursor(text) {
         if (!this.editor) return;
         const selection = this.editor.getSelection();

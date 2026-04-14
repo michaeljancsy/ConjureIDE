@@ -12,6 +12,9 @@ struct MonacoEditorView: NSViewRepresentable {
     var markers: [Marker] = []
     /// Set to a non-nil value to insert text at the cursor position. Resets to nil after insertion.
     @Binding var snippetToInsert: String?
+    /// Change this UUID to trigger a one-shot flash animation across the editor content
+    /// (used to highlight MCP-driven script replacements).
+    var flashToken: UUID? = nil
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -95,6 +98,12 @@ struct MonacoEditorView: NSViewRepresentable {
             webView.evaluateJavaScript("bridge.setContent(\"\(escaped)\")") { _, _ in }
         }
 
+        // Fire MCP flash animation when the token changes
+        if let token = flashToken, token != coordinator.lastFlashToken {
+            coordinator.lastFlashToken = token
+            webView.evaluateJavaScript("bridge.flashContent()") { _, _ in }
+        }
+
         // Insert snippet at cursor if requested.
         // Use coordinator.snippetConsumed to guard against duplicate insertion:
         // setting the binding to nil inside updateNSView may not take effect before
@@ -161,6 +170,9 @@ struct MonacoEditorView: NSViewRepresentable {
 
         // Last-sent markers for diffing
         var lastMarkers: [Marker] = []
+
+        // Last flash token fired, to avoid replaying on unrelated re-renders
+        var lastFlashToken: UUID?
         private var initRetryCount = 0
         private static let maxInitRetries = 2
 
