@@ -357,12 +357,18 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	/// Payload for script change notifications.
 	public struct ScriptSourceChange {
+		public enum Origin {
+			case mcp
+			case other
+		}
 		public let source: String
+		public let origin: Origin
 		public var processTimeMs: Double?
 		public var budgetMs: Double?
 
-		public init(source: String, processTimeMs: Double? = nil, budgetMs: Double? = nil) {
+		public init(source: String, origin: Origin = .other, processTimeMs: Double? = nil, budgetMs: Double? = nil) {
 			self.source = source
+			self.origin = origin
 			self.processTimeMs = processTimeMs
 			self.budgetMs = budgetMs
 		}

@@ -35,7 +35,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 let result = await self.mcpCompileAndRun(input: input)
                 // Notify Monaco editor and UI of the new script source + benchmark
                 if !result.isError, let source = input["source"] as? String {
-                    var change = ScriptSourceChange(source: source)
+                    var change = ScriptSourceChange(source: source, origin: .mcp)
                     change.processTimeMs = result.processTimeMs
                     change.budgetMs = result.budgetMs
                     self.scriptSourceDidChange.send(change)

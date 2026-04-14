@@ -12,6 +12,9 @@ struct MonacoEditorView: NSViewRepresentable {
     var markers: [Marker] = []
     /// Set to a non-nil value to insert text at the cursor position. Resets to nil after insertion.
     @Binding var snippetToInsert: String?
+    /// Change this UUID to trigger a one-shot flash animation across the editor content
+    /// (used to highlight MCP-driven script replacements).
+    var flashToken: UUID? = nil
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -65,6 +68,11 @@ struct MonacoEditorView: NSViewRepresentable {
         guard coordinator.isEditorReady else {
             // Queue initial content for after editor loads
             coordinator.pendingContent = text
+            // Also queue any pending flash so it fires after the editor is ready,
+            // attached to the content it belongs to — not to a later unrelated re-render.
+            if let token = flashToken, token != coordinator.lastFlashToken {
+                coordinator.pendingFlashToken = token
+            }
             return
         }
 
@@ -93,6 +101,12 @@ struct MonacoEditorView: NSViewRepresentable {
             coordinator.lastContent = text
             let escaped = text.jsEscaped
             webView.evaluateJavaScript("bridge.setContent(\"\(escaped)\")") { _, _ in }
+        }
+
+        // Fire MCP flash animation when the token changes
+        if let token = flashToken, token != coordinator.lastFlashToken {
+            coordinator.lastFlashToken = token
+            webView.evaluateJavaScript("bridge.flashContent()") { _, _ in }
         }
 
         // Insert snippet at cursor if requested.
@@ -152,6 +166,7 @@ struct MonacoEditorView: NSViewRepresentable {
 
         // Queued state for before editor is ready
         var pendingContent: String?
+        var pendingFlashToken: UUID?
         var pendingLanguage: ScriptLanguage = .python
         var pendingTheme: String = "vs-dark"
         var pendingReadOnly: Bool = false
@@ -161,6 +176,9 @@ struct MonacoEditorView: NSViewRepresentable {
 
         // Last-sent markers for diffing
         var lastMarkers: [Marker] = []
+
+        // Last flash token fired, to avoid replaying on unrelated re-renders
+        var lastFlashToken: UUID?
         private var initRetryCount = 0
         private static let maxInitRetries = 2
 
@@ -277,6 +295,13 @@ struct MonacoEditorView: NSViewRepresentable {
                 pendingContent = nil
             } else {
                 lastContent = text.wrappedValue
+            }
+
+            // Fire any flash that was queued before the editor was ready
+            if let token = pendingFlashToken {
+                lastFlashToken = token
+                pendingFlashToken = nil
+                webView.evaluateJavaScript("bridge.flashContent()") { _, _ in }
             }
         }
     }

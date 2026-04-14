@@ -61,6 +61,7 @@ struct ConjureDSPExtensionMainView: View {
 
     @State private var bypassed: Bool = false
     @State private var scriptSource: String = ""
+    @State private var mcpFlashToken: UUID? = nil
     @State private var selectedLanguage: ScriptLanguage = .python
     @State private var errorMessage: String?
     @State private var warningMessage: String?
@@ -297,7 +298,8 @@ struct ConjureDSPExtensionMainView: View {
                     language: selectedLanguage,
                     isEditable: true,
                     markers: editorMarkers,
-                    snippetToInsert: .constant(nil)
+                    snippetToInsert: .constant(nil),
+                    flashToken: mcpFlashToken
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .border(Color.secondary.opacity(0.3), width: 1)
@@ -468,6 +470,9 @@ struct ConjureDSPExtensionMainView: View {
             scriptSource = change.source
             lastRunSource = change.source
             selectedLanguage = ScriptLanguage.detect(from: change.source)
+            if change.origin == .mcp {
+                mcpFlashToken = UUID()
+            }
             // Clear error — this fires after successful compile (preset select, AI fix, fullState restore).
             // warningMessage is NOT cleared here: handleResult manages it, and clearing here
             // would race with handleResult during preset selection, making warnings invisible.
