@@ -10,22 +10,23 @@ Follow these steps in order. Ask each question separately — wait for the user'
 
 ## Step 1: Show current version and determine next build number
 
-Read the current version from the Xcode project:
+**IMPORTANT**: Always read the version from the **main worktree** pbxproj, not the current worktree — worktrees can be branched from stale commits. Find the main worktree path first:
 ```bash
-grep -m1 'MARKETING_VERSION' ConjureDSP.xcodeproj/project.pbxproj
-grep -m1 'CURRENT_PROJECT_VERSION' ConjureDSP.xcodeproj/project.pbxproj
+git worktree list --porcelain | awk '/^worktree/{path=$2} /^branch refs\/heads\/main$/{print path; exit}'
+```
+Then read from that path (substitute `MAIN` with the result):
+```bash
+grep -m1 'MARKETING_VERSION' MAIN/ConjureDSP.xcodeproj/project.pbxproj
+grep -m1 'CURRENT_PROJECT_VERSION' MAIN/ConjureDSP.xcodeproj/project.pbxproj
 ```
 
-Also check the highest build number in the existing appcast (Sparkle requires monotonically increasing build numbers across ALL versions):
+Also check the highest build number in the existing appcast (Sparkle requires monotonically increasing build numbers across ALL versions). Sync from R2 first to ensure the local appcast is current:
 ```bash
-grep 'sparkle:version' build/release/appcast/appcast.xml 2>/dev/null | sed 's/[^0-9]//g' | sort -n | tail -1
-```
-If no appcast exists locally, sync from R2 first:
-```bash
-mkdir -p build/release/appcast && /opt/homebrew/bin/rclone copy r2:conjuredsp-updates build/release/appcast --include "appcast.xml" 2>/dev/null
+mkdir -p MAIN/build/release/appcast && /opt/homebrew/bin/rclone copy r2:conjuredsp-updates MAIN/build/release/appcast --include "appcast.xml" 2>/dev/null
+grep 'sparkle:version' MAIN/build/release/appcast/appcast.xml 2>/dev/null | sed 's/[^0-9]//g' | sort -n | tail -1
 ```
 
-Report the current version, build number, and the highest appcast build number to the user.
+Report the current version (from main), build number, and the highest appcast build number to the user. If the pbxproj version is lower than the latest appcast entry, note the drift and use the appcast version + 1 as the baseline.
 
 ## Step 2: Ask about version bump
 
@@ -87,3 +88,37 @@ Use a long timeout (600000ms / 10 minutes) since builds and notarization take a 
 After the script completes, report whether it succeeded or failed, the version and build number, the DMG path and size, and what steps completed.
 
 If it failed, show the relevant error output and suggest fixes.
+
+## Step 8: Commit version bump, tag, and open PR (only on success)
+
+After a successful build, commit the pbxproj changes in the main worktree so the version never drifts again.
+
+All git commands run from the main worktree directory (`cd MAIN` first).
+
+```bash
+# 1. Create a release branch
+git checkout -b release/vX.Y.Z-bN
+
+# 2. Stage only the pbxproj (build artifacts are gitignored)
+git add ConjureDSP.xcodeproj/project.pbxproj
+
+# 3. Commit
+git commit -m "Release X.Y.Z (build N)"
+
+# 4. Tag the commit
+git tag vX.Y.Z-bN
+
+# 5. Push branch and tag
+git push origin release/vX.Y.Z-bN
+git push origin vX.Y.Z-bN
+
+# 6. Open a PR to main
+gh pr create --title "Release X.Y.Z (build N)" --body "$(cat <<'EOF'
+Bump version to X.Y.Z, build N.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Report the PR URL and tag name. If this step fails (e.g. nothing staged because pbxproj was already at the right version), note it and skip gracefully.
