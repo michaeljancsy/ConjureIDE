@@ -68,6 +68,11 @@ struct MonacoEditorView: NSViewRepresentable {
         guard coordinator.isEditorReady else {
             // Queue initial content for after editor loads
             coordinator.pendingContent = text
+            // Also queue any pending flash so it fires after the editor is ready,
+            // attached to the content it belongs to — not to a later unrelated re-render.
+            if let token = flashToken, token != coordinator.lastFlashToken {
+                coordinator.pendingFlashToken = token
+            }
             return
         }
 
@@ -161,6 +166,7 @@ struct MonacoEditorView: NSViewRepresentable {
 
         // Queued state for before editor is ready
         var pendingContent: String?
+        var pendingFlashToken: UUID?
         var pendingLanguage: ScriptLanguage = .python
         var pendingTheme: String = "vs-dark"
         var pendingReadOnly: Bool = false
@@ -289,6 +295,13 @@ struct MonacoEditorView: NSViewRepresentable {
                 pendingContent = nil
             } else {
                 lastContent = text.wrappedValue
+            }
+
+            // Fire any flash that was queued before the editor was ready
+            if let token = pendingFlashToken {
+                lastFlashToken = token
+                pendingFlashToken = nil
+                webView.evaluateJavaScript("bridge.flashContent()") { _, _ in }
             }
         }
     }
