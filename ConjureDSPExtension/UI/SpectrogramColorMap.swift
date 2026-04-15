@@ -85,23 +85,43 @@ enum SpectrogramColorMap {
         return colors
     }()
 
-    /// Blue (cut) → black (neutral) → red (boost)
+    /// Branded diverging ramp using the ConjureDSP palette (`assets/palette.md`).
+    /// Cyan (cut) → deep navy (neutral) → soft purple → warm gold (boost).
+    /// The boost half mirrors the magma ramp's navy→purple→gold anchors so the
+    /// two colormaps feel like a family; the cut half uses electric cyan for
+    /// unambiguous cool/warm separation.
+    ///
+    /// Anchors (sRGB, 0–1):
+    ///  0.00 #00E5FF electric cyan  (0.000, 0.898, 1.000)
+    ///  0.50 #0D0F1A deep navy      (0.051, 0.059, 0.102)
+    ///  0.75 #B06EFF soft purple    (0.690, 0.431, 1.000)
+    ///  1.00 #FFD166 warm gold      (1.000, 0.820, 0.400)
     private static func divergingColor(_ t: Float) -> (Float, Float, Float) {
+        let r: Float
+        let g: Float
+        let b: Float
+
         if t < 0.5 {
-            // Blue (cut) → black
+            // Cyan → navy
             let s = t / 0.5
-            let r: Float = 0
-            let g: Float = 0
-            let b = 0.6 * (1.0 - s)
-            return (r, g, b)
+            r = 0.000 + s * (0.051 - 0.000)
+            g = 0.898 + s * (0.059 - 0.898)
+            b = 1.000 + s * (0.102 - 1.000)
+        } else if t < 0.75 {
+            // Navy → soft purple
+            let s = (t - 0.5) / 0.25
+            r = 0.051 + s * (0.690 - 0.051)
+            g = 0.059 + s * (0.431 - 0.059)
+            b = 0.102 + s * (1.000 - 0.102)
         } else {
-            // Black → red (boost)
-            let s = (t - 0.5) / 0.5
-            let r = s * 0.9
-            let g: Float = 0
-            let b: Float = 0
-            return (r, g, b)
+            // Soft purple → warm gold
+            let s = (t - 0.75) / 0.25
+            r = 0.690 + s * (1.000 - 0.690)
+            g = 0.431 + s * (0.820 - 0.431)
+            b = 1.000 + s * (0.400 - 1.000)
         }
+
+        return (min(max(r, 0), 1), min(max(g, 0), 1), min(max(b, 0), 1))
     }
 
     // MARK: - Lookup Helpers
