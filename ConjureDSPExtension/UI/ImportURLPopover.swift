@@ -4,6 +4,10 @@ import SwiftUI
 struct ImportURLPopover: View {
     let presetManager: PresetManager
     let resolver: GitHubURLResolver
+    /// Optional — when present, imported presets are committed to the
+    /// preset-library git repo just like Save As commits would be. nil
+    /// coordinator means commits are skipped (e.g. in tests).
+    var gitCoordinator: PresetGitCoordinator? = nil
     let onImported: (Preset) -> Void
     let onCancel: () -> Void
 
@@ -148,6 +152,12 @@ struct ImportURLPopover: View {
                 source: source,
                 language: detectedLanguage
             )
+            // Mirror Save As: commit the newly imported preset so it shows up
+            // in `git log` (and auto-pushes if a remote is configured).
+            if let gc = gitCoordinator, let fileURL = preset.fileURL {
+                let message = gc.defaultMessage(for: .add(name: preset.name))
+                Task { _ = await gc.recordSave(paths: [fileURL], message: message) }
+            }
             onImported(preset)
         } catch {
             self.error = "Failed to save: \(error.localizedDescription)"

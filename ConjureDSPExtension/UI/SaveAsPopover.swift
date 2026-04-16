@@ -65,10 +65,16 @@ struct SaveAsPopover: View {
 
                 HStack {
                     Button("Don't ask again — always use timestamp") {
+                        // Flip the preference, then attempt the save so the
+                        // click isn't a silent no-op. attemptSave guards on
+                        // an empty name, so if the user hasn't typed one the
+                        // popover stays open for them to finish.
                         onDontAskAgain()
+                        attemptSave()
                     }
                     .buttonStyle(.link)
                     .font(.caption)
+                    .disabled(trimmedName.isEmpty)
                     Spacer()
                 }
             }

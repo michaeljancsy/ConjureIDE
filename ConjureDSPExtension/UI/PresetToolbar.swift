@@ -572,6 +572,7 @@ struct PresetToolbar: View {
             ImportURLPopover(
                 presetManager: presetManager,
                 resolver: GitHubURLResolver(),
+                gitCoordinator: gitCoordinator,
                 onImported: { preset in
                     showingImportURL = false
                     onSelectPreset(preset)

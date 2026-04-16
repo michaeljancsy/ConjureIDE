@@ -404,23 +404,19 @@ struct PresetManagerTests {
         #expect(manager.loadSource(for: renamed) == script)
     }
 
-    @Test @MainActor func renameFiresOnPresetWrittenCallback() throws {
+    @Test @MainActor func renameReturnsNewPresetWithUpdatedIdentity() throws {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
         try manager.savePreset(name: "Alpha", source: "# alpha\n")
 
-        var callbackArgs: (preset: Preset, oldName: String?)?
-        manager.onPresetWritten = { preset, oldName in
-            callbackArgs = (preset, oldName)
-        }
-
         let preset = manager.presets.first(where: { $0.name == "Alpha" && !$0.isFactory })!
         let renamed = try manager.renamePreset(preset, to: "Beta")
 
         #expect(renamed.name == "Beta")
-        #expect(callbackArgs?.preset.name == "Beta")
-        #expect(callbackArgs?.oldName == "Alpha")
+        #expect(renamed.id == "user:Beta.py")
+        #expect(!manager.presets.contains(where: { $0.name == "Alpha" && !$0.isFactory }))
+        #expect(manager.presets.contains(where: { $0.name == "Beta" && !$0.isFactory }))
     }
 
     @Test @MainActor func renameCurrentPresetUpdatesCurrent() throws {

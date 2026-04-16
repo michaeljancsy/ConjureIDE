@@ -18,15 +18,6 @@ class PresetManager: ObservableObject {
     /// The script source at the time the current preset was loaded, for modification detection.
     private(set) var loadedSource: String?
 
-    /// Fired after a user preset is written (saved, renamed, deleted).
-    /// PresetGitCoordinator hooks into this to stage + commit the change.
-    /// `oldName` is non-nil only for renames.
-    var onPresetWritten: ((Preset, _ oldName: String?) -> Void)?
-
-    /// Fired after a user preset file is removed from disk. Used by
-    /// PresetGitCoordinator so the removal is staged + committed.
-    var onPresetDeleted: ((_ name: String, _ url: URL, _ language: ScriptLanguage) -> Void)?
-
     private let extensionBundle: Bundle
     let presetsURL: URL
     private let fileManager = FileManager.default
@@ -165,7 +156,6 @@ class PresetManager: ObservableObject {
         guard let preset = presets.first(where: { $0.id == "user:\(sanitized).\(ext)" }) else {
             throw PresetManagerError.saveFailed
         }
-        onPresetWritten?(preset, nil)
         return preset
     }
 
@@ -180,7 +170,6 @@ class PresetManager: ObservableObject {
         case .user(let url):
             try fileManager.removeItem(at: url)
             log.info("Deleted user preset: \(preset.name, privacy: .public)")
-            onPresetDeleted?(preset.name, url, preset.language)
         }
 
         refreshPresets()
@@ -239,8 +228,6 @@ class PresetManager: ObservableObject {
         guard let renamedPreset = presets.first(where: { $0.id == newID }) else {
             throw PresetManagerError.renameFailed
         }
-
-        onPresetWritten?(renamedPreset, preset.name)
 
         // Update current preset reference if it was the renamed one
         if currentPreset?.id == preset.id {
