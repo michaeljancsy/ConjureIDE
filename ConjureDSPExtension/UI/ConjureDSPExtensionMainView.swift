@@ -69,6 +69,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var warningMessage: String?
     @State private var editorMarkers: [MonacoEditorView.Marker] = []
     @State private var showingSaveAs = false
+    @State private var showingSaveMessage = false
     @State private var saveAsName = ""
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
     @State private var showNewScriptDialog: Bool = false
@@ -196,6 +197,7 @@ struct ConjureDSPExtensionMainView: View {
                 onBypassToggle: { setBypass(bypassed) },
                 showingSaveAs: $showingSaveAs,
                 saveAsName: $saveAsName,
+                showingSaveMessage: $showingSaveMessage,
                 onInsertTone: { insertion in
                     Analytics.track(.namToneInsert, properties: [
                         "tone_title": insertion.title,
@@ -516,19 +518,20 @@ struct ConjureDSPExtensionMainView: View {
     }
 
     private func handleCmdS() {
-        // If a user preset is loaded, Cmd-S saves in place (matches every
-        // text editor's muscle memory: ⌘S means "save the thing I'm editing").
-        // Falling through to Save As would be surprising — and when `canSave`
-        // is false despite a mutable preset being present (e.g. Monaco's text
-        // binding hasn't yet fed back to the SwiftUI state), we'd rather
-        // over-save than re-open the naming dialog.
+        // If a user preset is loaded, Cmd-S saves in place. Falling through to
+        // Save As on an already-saved preset would be surprising.
         if hasMutablePreset {
-            // Cmd-S bypasses the commit-message popover and uses the
-            // coordinator's default message (timestamp or "Update <name>"
-            // depending on mode). Users who want a custom message click
-            // the toolbar Save button.
-            let result = onSavePreset(scriptSource, selectedLanguage, nil)
-            handleResult(result)
+            // Respect the commit-message preference. In alwaysPrompt mode,
+            // open the same popover that's anchored to the toolbar Save
+            // button; in alwaysTimestamp mode, save immediately with nil
+            // (the coordinator substitutes a timestamp).
+            switch gitCoordinator.mode {
+            case .alwaysPrompt:
+                showingSaveMessage = true
+            case .alwaysTimestamp:
+                let result = onSavePreset(scriptSource, selectedLanguage, nil)
+                handleResult(result)
+            }
         } else {
             // Factory preset (or nothing) loaded — the only meaningful action
             // is to create a new user preset.

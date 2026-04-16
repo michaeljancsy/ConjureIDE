@@ -76,6 +76,9 @@ struct PresetToolbar: View {
 
     @Binding var showingSaveAs: Bool
     @Binding var saveAsName: String
+    /// Binding so Cmd-S from the main view can open the same commit-message
+    /// popover that's anchored to the Save button.
+    @Binding var showingSaveMessage: Bool
     /// Callback invoked when a NAM tone is selected in the tone browser.
     /// The receiver is expected to splice imports and the model instantiation
     /// into the active script at language-appropriate locations.
@@ -86,7 +89,6 @@ struct PresetToolbar: View {
     @State private var renameName = ""
     @State private var renameError: String?
     @State private var showingSettings = false
-    @State private var showingSaveMessage = false
     @State private var showingPackages = false
     @State private var packageInstallManager = PackageInstallManager()
     @State private var crateInstallManager = CrateInstallManager()
