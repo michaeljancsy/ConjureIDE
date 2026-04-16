@@ -90,6 +90,20 @@ struct ConjureDSPExtensionMainView: View {
     /// area whenever the active bundle ships an HTML/JS UI, and persists
     /// across sessions so users don't have to re-flip the switch.
     @StateObject private var customUIPreference = CustomUIPreference()
+    /// File currently open in the Monaco editor. Nil means the entry
+    /// script (preserves pre-multi-file behavior where Monaco always
+    /// bound to `$scriptSource`). Anything else is a manifest or UI
+    /// asset — those edits write straight to disk and bypass the
+    /// DSP Run/compile pipeline.
+    @State private var editingBundleFile: BundleFileEntry? = nil
+    /// Buffer backing the editor when `editingBundleFile` is non-nil.
+    /// Kept separate from `scriptSource` so the Run button still maps
+    /// to the DSP script, never to whatever UI file is currently open.
+    @State private var altFileSource: String = ""
+    /// Debounced save task for non-script files. Cancelled and
+    /// rescheduled on every keystroke so we don't fsync on each
+    /// character.
+    @State private var altFileSaveTask: Task<Void, Never>? = nil
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("editorTheme") private var selectedTheme: String = "conjuredsp"
 
@@ -326,15 +340,16 @@ struct ConjureDSPExtensionMainView: View {
             }
 
             VStack(spacing: 0) {
-                MonacoEditorView(
-                    text: $scriptSource,
-                    theme: resolvedTheme,
-                    language: selectedLanguage,
-                    isEditable: true,
-                    markers: editorMarkers,
-                    snippetToInsert: .constant(nil),
-                    flashToken: mcpFlashToken
-                )
+                // File picker — present only when the active preset is
+                // a bundle with more than one editable file. Factory
+                // bundles render the picker read-only (no writes allowed
+                // into the app bundle's Resources). Users can still
+                // browse every file's contents, just not modify them.
+                if let bundle = presetManager.currentBundle {
+                    bundleFilePickerBar(bundle: bundle)
+                }
+
+                bundleEditor(editable: isCurrentBundleEditable)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .border(Color.secondary.opacity(0.3), width: 1)
                 .padding(.horizontal)
@@ -478,6 +493,13 @@ struct ConjureDSPExtensionMainView: View {
             // choice for the new bundle so users see their last
             // selection for THIS preset, not the previous one's.
             customUIPreference.bundleKey = newName
+            // Reset the bundle file picker to the entry script when the
+            // preset changes — keeping an old manifest.json or
+            // ui/index.html selected into an unrelated bundle would
+            // just be confusing.
+            altFileSaveTask?.cancel()
+            altFileSaveTask = nil
+            editingBundleFile = nil
         }
         .onAppear {
             customUIPreference.bundleKey = presetManager.currentBundle?.name
@@ -545,6 +567,162 @@ struct ConjureDSPExtensionMainView: View {
     private var canSave: Bool {
         guard let current = presetManager.currentPreset else { return false }
         return !current.isFactory && presetManager.isModified
+    }
+
+    /// Whether the current bundle lives in a user-writable location. User
+    /// and repo bundles live on disk and can be edited in place. Factory
+    /// bundles live inside the extension's Resources, which are read-only
+    /// under the hardened runtime — the editor is shown but can't save.
+    private var isCurrentBundleEditable: Bool {
+        guard let preset = presetManager.currentPreset else { return true }
+        switch preset.source {
+        case .factory: return false
+        default: return true
+        }
+    }
+
+    /// Segmented-ish picker above the Monaco editor listing every text file
+    /// in the active bundle. Switching the selection swaps the editor's
+    /// buffer (and Monaco language mode) without tearing down the webview.
+    @ViewBuilder
+    private func bundleFilePickerBar(bundle: PresetBundle) -> some View {
+        let entries = BundleFilePickerEntries.entries(for: bundle)
+        // Don't bother rendering the picker for bundles that only contain
+        // the entry script — the old pre-bundle behavior.
+        if entries.count > 1 {
+            HStack(spacing: 4) {
+                Text("Edit:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("", selection: bundleFilePickerBinding(for: bundle, entries: entries)) {
+                    ForEach(entries) { entry in
+                        Text(entry.relativePath).tag(entry.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .controlSize(.small)
+                .accessibilityIdentifier("bundleFilePicker")
+
+                if !isCurrentBundleEditable {
+                    Image(systemName: "lock")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .help("Factory preset files are read-only. Save As to create an editable copy.")
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+        }
+    }
+
+    /// Binding that maps the picker's selected entry id to/from
+    /// `editingBundleFile`. Writing through this binding loads the file's
+    /// content into `altFileSource` (or restores `scriptSource` for the
+    /// entry script). Reading returns the current selection's id.
+    private func bundleFilePickerBinding(
+        for bundle: PresetBundle, entries: [BundleFileEntry]
+    ) -> Binding<String> {
+        Binding<String>(
+            get: { editingBundleFile?.id ?? entries.first?.id ?? "" },
+            set: { newID in
+                guard let next = entries.first(where: { $0.id == newID }) else { return }
+                switchEditingFile(to: next, in: bundle)
+            }
+        )
+    }
+
+    /// Load `next`'s content into the editor. For the entry script we
+    /// route back through `scriptSource` so the Run button stays
+    /// meaningful; for everything else we load into `altFileSource` and
+    /// let `onChange` debounce writes back to disk.
+    private func switchEditingFile(to next: BundleFileEntry, in bundle: PresetBundle) {
+        // Cancel any in-flight save from a previous alt file so its
+        // stale content doesn't clobber the file we're about to open.
+        altFileSaveTask?.cancel()
+        altFileSaveTask = nil
+
+        if next.kind == .entryScript {
+            editingBundleFile = nil
+            if let source = try? String(contentsOf: bundle.entryScriptURL, encoding: .utf8) {
+                scriptSource = source
+                lastRunSource = source
+            }
+        } else {
+            editingBundleFile = next
+            altFileSource = (try? String(contentsOf: next.url, encoding: .utf8)) ?? ""
+        }
+    }
+
+    /// Monaco editor, parameterized by whichever file the picker currently
+    /// has open. Splitting this out keeps the view body readable and lets
+    /// us `.id(...)` the webview so switching files hard-resets Monaco
+    /// state (e.g. scroll position, language mode) rather than having it
+    /// smear across files.
+    @ViewBuilder
+    private func bundleEditor(editable: Bool) -> some View {
+        if let alt = editingBundleFile {
+            MonacoEditorView(
+                text: altFileSourceBinding,
+                theme: resolvedTheme,
+                language: selectedLanguage,
+                languageIDOverride: alt.monacoLanguageID,
+                isEditable: editable,
+                markers: [],
+                snippetToInsert: .constant(nil),
+                flashToken: nil
+            )
+            .id("bundleFile:\(alt.id)")
+        } else {
+            MonacoEditorView(
+                text: $scriptSource,
+                theme: resolvedTheme,
+                language: selectedLanguage,
+                isEditable: editable,
+                markers: editorMarkers,
+                snippetToInsert: .constant(nil),
+                flashToken: mcpFlashToken
+            )
+        }
+    }
+
+    /// Debounced-write binding for alt-file edits. Writes to disk 400ms
+    /// after the last keystroke; the bundle file watcher + custom-UI
+    /// hot-reload pick up the change and refresh the webview
+    /// automatically, so there's no explicit "save" button here.
+    private var altFileSourceBinding: Binding<String> {
+        Binding<String>(
+            get: { altFileSource },
+            set: { newValue in
+                altFileSource = newValue
+                scheduleAltFileSave()
+            }
+        )
+    }
+
+    private func scheduleAltFileSave() {
+        altFileSaveTask?.cancel()
+        guard isCurrentBundleEditable, let file = editingBundleFile else { return }
+        let url = file.url
+        let content = altFileSource
+        let kind = file.kind
+        altFileSaveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if Task.isCancelled { return }
+            do {
+                try content.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                errorMessage = "Could not save \(file.relativePath): \(error.localizedDescription)"
+                return
+            }
+            // Manifest edits change which files count as UI etc., so the
+            // preset model needs a refresh. Cheap — just re-scans the
+            // active bundles on disk.
+            if kind == .manifest {
+                presetManager.refreshPresets()
+            }
+        }
     }
 
     /// Small row that sits above the parameter panel whenever the active

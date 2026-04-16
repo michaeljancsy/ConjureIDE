@@ -8,6 +8,11 @@ struct MonacoEditorView: NSViewRepresentable {
     @Binding var text: String
     var theme: String
     var language: ScriptLanguage = .python
+    /// Monaco language identifier override (e.g. "html", "json", "css").
+    /// When non-nil this wins over `language`; used when the editor is
+    /// pointing at a non-script bundle file like manifest.json or
+    /// ui/index.html.
+    var languageIDOverride: String? = nil
     var isEditable: Bool = true
     var markers: [Marker] = []
     /// Set to a non-nil value to insert text at the cursor position. Resets to nil after insertion.
@@ -82,8 +87,15 @@ struct MonacoEditorView: NSViewRepresentable {
             webView.evaluateJavaScript("bridge.setTheme('\(theme)')") { _, _ in }
         }
 
-        // Update language if changed
-        let monacoLang = language == .rust ? "rust" : "python"
+        // Update language if changed. languageIDOverride wins when set so
+        // the editor can display non-script bundle files (HTML/JSON/CSS)
+        // with the right syntax highlighting.
+        let monacoLang: String = {
+            if let override = languageIDOverride, !override.isEmpty {
+                return override
+            }
+            return language == .rust ? "rust" : "python"
+        }()
         if coordinator.lastLanguage != monacoLang {
             coordinator.lastLanguage = monacoLang
             webView.evaluateJavaScript("bridge.setLanguage('\(monacoLang)')") { _, _ in }
