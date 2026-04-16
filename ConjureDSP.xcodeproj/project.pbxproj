@@ -135,6 +135,7 @@
 		AA11000700000001MIXPANEL /* Analytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Analytics.swift; path = ConjureDSPExtension/Analytics.swift; sourceTree = "<group>"; };
 		AA22000100000001SHARED /* MCPToolProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPToolProvider.swift; sourceTree = "<group>"; };
 		AA5000010000000LANGMOD /* LanguageModuleCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageModuleCatalog.swift; sourceTree = "<group>"; };
+		AA60000100WKTCONFIG01 /* Worktree.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Worktree.xcconfig; path = .claude/Worktree.xcconfig; sourceTree = "<group>"; };
 		AA33000100000001DAEMON /* DaemonStatusChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DaemonStatusChecker.swift; path = ConjureDSPExtension/Terminal/DaemonStatusChecker.swift; sourceTree = "<group>"; };
 		AA44000100000001MCPINF /* MCPInstanceInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MCPInstanceInfo.swift; path = ConjureDSPExtension/Terminal/MCPInstanceInfo.swift; sourceTree = "<group>"; };
 		AABB000100LOGICPRODREF1 /* ConjureDSPLogicTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPLogicTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -285,6 +286,7 @@
 				2510F9382F5211FC0046A41D /* backlog.md */,
 				2510F9392F5211FC0046A41D /* CLAUDE.md */,
 				2510F93A2F5211FC0046A41D /* README.md */,
+				AA60000100WKTCONFIG01 /* Worktree.xcconfig */,
 				257911422F5013840036AAB6 /* ConjureDSP */,
 				2579116B2F5013850036AAB6 /* ConjureDSPTests */,
 				AABB000100LOGICFSSYNC01 /* ConjureDSPLogicTests */,
@@ -1130,9 +1132,10 @@
 /* Begin XCBuildConfiguration section */
 		257911AB2F5013850036AAB6 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA60000100WKTCONFIG01 /* Worktree.xcconfig */;
 			buildSettings = {
-				CD_AU_NAME = "ConjureDSP: ConjureDSP(Debug)";
-				CD_AU_SUBTYPE = DBG1;
+				CD_AU_NAME = "ConjureDSP: ConjureDSP(Debug$(CD_WORKTREE_DISPLAY))";
+				CD_AU_SUBTYPE = "DBG$(CD_WORKTREE_AU_TAG)";
 				CODE_SIGN_ENTITLEMENTS = ConjureDSPExtension/ConjureDSPExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 15;
@@ -1170,7 +1173,7 @@
 					"-lconjure_dsp",
 					"-lpython3.14t",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSP.debug.ConjureDSPExtension;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.MichaelJancsy.ConjureDSP.debug$(CD_WORKTREE_SUFFIX).ConjureDSPExtension";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				SKIP_INSTALL = YES;
@@ -1370,6 +1373,7 @@
 		};
 		257911B22F5013850036AAB6 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA60000100WKTCONFIG01 /* Worktree.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -1407,7 +1411,7 @@
 					"-framework",
 					AVFoundation,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSP.debug;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.MichaelJancsy.ConjureDSP.debug$(CD_WORKTREE_SUFFIX)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
@@ -1648,6 +1652,7 @@
 		};
 		25E9311C2F773DC300D36258 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA60000100WKTCONFIG01 /* Worktree.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -1669,7 +1674,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				MARKETING_VERSION = 1.0.14;
-				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSPTerminal;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.MichaelJancsy.ConjureDSPTerminal$(CD_WORKTREE_SUFFIX)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;

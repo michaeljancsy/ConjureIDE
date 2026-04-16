@@ -515,10 +515,7 @@ class TerminalAppServer {
 
                 let srcStdlib = pythonSource.appendingPathComponent("lib/python3.14t")
                 let dstStdlib = dstLib.appendingPathComponent("python3.14t")
-                if fm.fileExists(atPath: dstStdlib.path) {
-                    try fm.removeItem(at: dstStdlib)
-                }
-                try fm.copyItem(at: srcStdlib, to: dstStdlib)
+                try provisionPythonStdlib(from: srcStdlib, to: dstStdlib)
 
                 writeProvenanceMarker(at: runtimeURL, provenance: provenance)
                 log.info("Shared Python runtime installed from \(provenance, privacy: .public) at \(runtimeURL.path, privacy: .public)")
@@ -623,6 +620,67 @@ class TerminalAppServer {
     private nonisolated static func writeProvenanceMarker(at directory: URL, provenance: String) {
         let markerFile = directory.appendingPathComponent(".source")
         try? provenance.write(to: markerFile, atomically: true, encoding: .utf8)
+    }
+
+    /// Provision Python's standard library non-destructively:
+    /// - Everything other than `site-packages` is fully replaced from source
+    ///   (clean stdlib upgrades — e.g. when a new Python ships new os.py).
+    /// - `site-packages` is merge-copied: entries present in source replace
+    ///   their destination counterparts (bundled numpy/scipy/conjuredsp get
+    ///   cleanly updated), but destination entries NOT present in source are
+    ///   preserved (user-installed packages like `librosa` survive re-provisioning).
+    ///
+    /// Trade-off: stale `*-dist-info` directories for bundled packages may
+    ///   accumulate across version bumps (e.g. `numpy-2.4.4.dist-info` stays
+    ///   alongside `numpy-2.5.0.dist-info`). Acceptable vs the alternative of
+    ///   losing user packages on every source switch.
+    nonisolated static func provisionPythonStdlib(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+
+        // Step 1: Remove destination-only stdlib entries so stale modules from a
+        // previous Python version don't leak through. site-packages is preserved
+        // here and handled below via merge semantics.
+        let dstExisting = (try? fm.contentsOfDirectory(
+            at: destination, includingPropertiesForKeys: nil, options: []
+        )) ?? []
+        for dstEntry in dstExisting where dstEntry.lastPathComponent != "site-packages" {
+            try fm.removeItem(at: dstEntry)
+        }
+
+        // Step 2: Copy stdlib entries from source; merge site-packages.
+        let srcEntries = try fm.contentsOfDirectory(
+            at: source, includingPropertiesForKeys: nil, options: []
+        )
+        for srcEntry in srcEntries {
+            let name = srcEntry.lastPathComponent
+            let dstEntry = destination.appendingPathComponent(name)
+
+            if name == "site-packages" {
+                try mergeSitePackages(from: srcEntry, to: dstEntry)
+            } else {
+                try fm.copyItem(at: srcEntry, to: dstEntry)
+            }
+        }
+    }
+
+    /// Merge-copy semantics for site-packages: source entries fully replace
+    /// their destination counterparts, destination-only entries are untouched.
+    /// Used by `provisionPythonStdlib`; exposed for testing.
+    nonisolated static func mergeSitePackages(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+
+        let srcEntries = try fm.contentsOfDirectory(
+            at: source, includingPropertiesForKeys: nil, options: []
+        )
+        for srcEntry in srcEntries {
+            let dstEntry = destination.appendingPathComponent(srcEntry.lastPathComponent)
+            if fm.fileExists(atPath: dstEntry.path) {
+                try fm.removeItem(at: dstEntry)
+            }
+            try fm.copyItem(at: srcEntry, to: dstEntry)
+        }
     }
 
     nonisolated static func provisionRustToolchainIfNeeded() {
