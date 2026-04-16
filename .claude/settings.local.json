@@ -95,7 +95,9 @@
       "Bash(rsync -a \"/Users/michaeljancsy/Library/Developer/Xcode/DerivedData/BearBoneExportAUTemplate-cgfusdcjjylygiewcvliqaawsdbg/Build/Products/Release/BearBoneExportAUTemplate.app/\" \"/Users/michaeljancsy/Library/Mobile Documents/com~apple~CloudDocs/Code Projects/BearBone/BearBoneExportAUTemplate/build/Build/Products/Release/BearBoneExportAUTemplate.app/\")",
       "Bash(plutil -p \"/Users/michaeljancsy/Library/Developer/Xcode/DerivedData/BearBone-emptvjjtgmextxbxzhacvxriiubx/Build/Products/Debug/BearBone.app/Contents/PlugIns/BearBoneExtension.appex/Contents/Info.plist\")",
       "Bash(git checkout -b export-phase3-ui)",
-      "Bash(git add BearBone.xcodeproj/project.pbxproj BearBone/BearBoneApp.swift BearBone/ContentView.swift BearBone/Model/PendingExportHandler.swift BearBoneExtension/BearBoneExtension.entitlements BearBoneExtension/Common/Audio Unit/BearBoneExtensionAudioUnit.swift BearBoneExtension/Common/UI/AudioUnitViewController.swift BearBoneExtension/Export/ExportManager.swift BearBoneExtension/UI/BearBoneExtensionMainView.swift BearBoneExtension/UI/PresetToolbar.swift BearBoneExtension/UI/ExportPopover.swift BearBoneTests/ExportManager.swift BearBoneTests/ExportTests.swift backlog.md docs/export-au-plan.md)"
+      "Bash(git add BearBone.xcodeproj/project.pbxproj BearBone/BearBoneApp.swift BearBone/ContentView.swift BearBone/Model/PendingExportHandler.swift BearBoneExtension/BearBoneExtension.entitlements BearBoneExtension/Common/Audio Unit/BearBoneExtensionAudioUnit.swift BearBoneExtension/Common/UI/AudioUnitViewController.swift BearBoneExtension/Export/ExportManager.swift BearBoneExtension/UI/BearBoneExtensionMainView.swift BearBoneExtension/UI/PresetToolbar.swift BearBoneExtension/UI/ExportPopover.swift BearBoneTests/ExportManager.swift BearBoneTests/ExportTests.swift backlog.md docs/export-au-plan.md)",
+      "Bash(git restore:*)",
+      "Bash(rm -f .claude/Worktree.xcconfig .claude/Worktree.local.xcconfig scripts/setup-worktree-identity.sh)"
     ]
   }
 }

@@ -62,11 +62,61 @@ final class LanguageDownloader {
     /// (e.g. re-copy Python from the new source into the shared PythonRuntime).
     var onModuleChanged: ((_ moduleName: String) -> Void)?
 
+    /// URLSession used for tarball downloads. Configured with a per-request
+    /// timeout (no data for 90s → fail) and a resource timeout (20 minutes
+    /// of total download → fail). Without these, a dead endpoint would hang
+    /// forever and the Extension-side 15-minute poll timeout was the only
+    /// thing that could unwedge it.
+    private lazy var downloadSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 90
+        config.timeoutIntervalForResource = 20 * 60
+        config.waitsForConnectivity = false
+        return URLSession(configuration: config)
+    }()
+
     init(appGroupURL: URL) {
         self.appGroupURL = appGroupURL
         self.modulesDirURL = appGroupURL.appendingPathComponent(LanguageModuleIPC.modulesDirectory)
         try? FileManager.default.createDirectory(at: modulesDirURL, withIntermediateDirectories: true)
         log.info("LanguageDownloader ready — modules dir = \(self.modulesDirURL.path, privacy: .public)")
+        discardStaleRequestsOnStartup()
+    }
+
+    // MARK: - Startup cleanup
+
+    /// If a request file exists at startup, its worker is by definition gone
+    /// (we just started). Discard it and write a failure result so the
+    /// Extension side can surface a clear "cancelled — Terminal restarted"
+    /// message instead of waiting for its own 15-minute poll timeout.
+    private func discardStaleRequestsOnStartup() {
+        let installRequestURL = appGroupURL.appendingPathComponent(LanguageModuleIPC.installRequestFile)
+        if let data = try? Data(contentsOf: installRequestURL),
+           let request = try? JSONDecoder().decode(LanguageInstallRequest.self, from: data) {
+            try? FileManager.default.removeItem(at: installRequestURL)
+            writeResult(LanguageInstallResult(
+                requestId: request.requestId,
+                moduleName: request.moduleName,
+                success: false,
+                error: "Cancelled — ConjureDSP Terminal restarted while the download was in progress.",
+                timestamp: Date().timeIntervalSince1970
+            ))
+            log.info("Discarded stale install request for \(request.moduleName, privacy: .public)")
+        }
+        let uninstallRequestURL = appGroupURL.appendingPathComponent(LanguageModuleIPC.uninstallRequestFile)
+        if let data = try? Data(contentsOf: uninstallRequestURL),
+           let request = try? JSONDecoder().decode(LanguageUninstallRequest.self, from: data) {
+            try? FileManager.default.removeItem(at: uninstallRequestURL)
+            writeResult(LanguageInstallResult(
+                requestId: request.requestId,
+                moduleName: request.moduleName,
+                success: false,
+                error: "Cancelled — ConjureDSP Terminal restarted.",
+                timestamp: Date().timeIntervalSince1970
+            ))
+            log.info("Discarded stale uninstall request for \(request.moduleName, privacy: .public)")
+        }
+        clearProgress()
     }
 
     // MARK: - Poll entry point
@@ -222,7 +272,7 @@ final class LanguageDownloader {
     // MARK: - Download (with progress)
 
     private func download(from url: URL, progressLabel: String) async throws -> URL {
-        let (tempURL, response) = try await URLSession.shared.download(from: url)
+        let (tempURL, response) = try await downloadSession.download(from: url)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             try? FileManager.default.removeItem(at: tempURL)
             throw LanguageDownloaderError.downloadFailed(http.statusCode)

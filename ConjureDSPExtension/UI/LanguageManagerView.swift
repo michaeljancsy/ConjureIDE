@@ -208,6 +208,13 @@ struct LanguageManagerView: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
+            if manager.isInstalling {
+                Button("Cancel") {
+                    manager.cancelCurrentOperation()
+                }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("languageManagerCancelButton")
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

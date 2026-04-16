@@ -182,6 +182,52 @@ final class LanguageModuleManager {
         }
     }
 
+    // MARK: - Cancel
+
+    /// Abandon the in-flight install or uninstall from the UI's point of view.
+    /// Deletes the request file if the companion app hasn't picked it up yet;
+    /// if it has, the companion's URLSession timeout will eventually fail the
+    /// download (we just stop caring about the result).
+    func cancelCurrentOperation() {
+        guard isInstalling else { return }
+
+        let container = Self.containerURL()
+        // Clear any pending request files — if Terminal hasn't picked them up
+        // yet, this prevents the download from starting at all.
+        let installReqURL = container.appendingPathComponent(LanguageModuleIPC.installRequestFile)
+        let uninstallReqURL = container.appendingPathComponent(LanguageModuleIPC.uninstallRequestFile)
+        try? FileManager.default.removeItem(at: installReqURL)
+        try? FileManager.default.removeItem(at: uninstallReqURL)
+
+        // Also clear any stale result the companion may have already dropped
+        // for this (now-abandoned) request, so it doesn't confuse a future op.
+        let resultURL = container.appendingPathComponent(LanguageModuleIPC.installResultFile)
+        try? FileManager.default.removeItem(at: resultURL)
+
+        let cancelledName = pendingModuleName
+
+        resultPollTimer?.invalidate()
+        resultPollTimer = nil
+        pendingRequestId = nil
+        pendingModuleName = nil
+        pendingIsUninstall = false
+        pollStartTime = nil
+        isInstalling = false
+        lastError = nil
+        installStatusMessage = cancelledName.map { "Cancelled \($0)." } ?? "Cancelled."
+
+        log.info("User cancelled language module operation")
+
+        // Auto-clear the status line after a few seconds so the footer returns
+        // to the normal disk-summary.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            if self.installStatusMessage?.hasPrefix("Cancelled") == true {
+                self.installStatusMessage = nil
+            }
+        }
+    }
+
     // MARK: - Result polling
 
     private func startPollingForResult() {
