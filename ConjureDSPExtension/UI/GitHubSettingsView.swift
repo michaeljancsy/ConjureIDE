@@ -1,47 +1,41 @@
 import SwiftUI
 
-/// Settings view for GitHub PAT and repo connection/creation.
-struct GitHubSettingsView: View {
+/// Full settings surface for the git-backed preset library. Three sections:
+///
+///   1. Commit messages — pick `alwaysPrompt` vs `alwaysTimestamp`.
+///   2. Personal Access Token — Keychain-backed, only used for pushing.
+///   3. Remote sync — set/clear an origin URL, push manually.
+///
+/// Kept in `GitHubSettingsView.swift` for backward compatibility with the
+/// existing toolbar popover site, but the type is `RemoteSyncSettingsView`.
+struct RemoteSyncSettingsView: View {
     @ObservedObject var gitHubService: GitHubService
-    let presetManager: PresetManager
+    @Bindable var gitCoordinator: PresetGitCoordinator
     let onDone: () -> Void
 
     @State private var tokenInput = ""
     @State private var showToken = false
-    @State private var repoInput = ""
-    @State private var newRepoName = "conjuredsp-presets"
-    @State private var newRepoPrivate = true
-    @State private var showConnectFlow = false
-    @State private var showCreateFlow = false
-    @State private var showMigrationPrompt = false
-    @State private var isCreating = false
-    @State private var isMigrating = false
-    @State private var isConnecting = false
+
+    @State private var remoteURLInput = ""
     @State private var statusMessage: String?
     @State private var errorMessage: String?
-
-    private var userPresetCount: Int {
-        presetManager.presets.filter(\.isUser).count
-    }
+    @State private var isWorking = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("GitHub Settings")
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Preset Sync")
                 .font(.headline)
 
-            // Token section
+            commitMessageSection
+
+            Divider()
+
             tokenSection
 
             Divider()
 
-            // Repo section
-            if gitHubService.hasPersonalRepo {
-                connectedRepoSection
-            } else {
-                disconnectedRepoSection
-            }
+            remoteSection
 
-            // Status messages
             if let msg = statusMessage {
                 Label(msg, systemImage: "checkmark.circle.fill")
                     .font(.caption)
@@ -52,37 +46,65 @@ struct GitHubSettingsView: View {
                     .font(.caption)
                     .foregroundColor(.red)
             }
+
+            HStack {
+                Spacer()
+                Button("Done", action: onDone)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
-            if let existing = gitHubService.token {
-                tokenInput = existing
-            }
-        }
-        .alert("Upload Existing Presets?", isPresented: $showMigrationPrompt) {
-            Button("Upload All") { migratePresets() }
-            Button("Skip") { finishConnect() }
-        } message: {
-            Text("You have \(userPresetCount) local preset(s). Upload them to your repo so they sync across machines?")
+            tokenInput = gitHubService.token ?? ""
+            remoteURLInput = gitCoordinator.remoteURL ?? ""
         }
     }
 
-    // MARK: - Token Section
+    // MARK: - Commit messages
 
+    @ViewBuilder
+    private var commitMessageSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Commit messages")
+                .font(.subheadline.bold())
+
+            Picker("", selection: $gitCoordinator.mode) {
+                ForEach(CommitMessageMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+
+            HStack {
+                Button("Reset to default") {
+                    gitCoordinator.resetModeToDefault()
+                    statusMessage = "Reset to \"\(CommitMessageMode.defaultMode.displayName)\""
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+                Spacer()
+            }
+        }
+    }
+
+    // MARK: - Token
+
+    @ViewBuilder
     private var tokenSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Personal Access Token")
                 .font(.subheadline.bold())
+            Text("Only used when pushing to a remote. Local commits work without a token.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             HStack {
                 if showToken {
-                    TextField("ghp_\u{2026}", text: $tokenInput)
+                    TextField("ghp_...", text: $tokenInput)
                         .textFieldStyle(.roundedBorder)
-                        .accessibilityIdentifier("githubTokenField")
                 } else {
-                    SecureField("ghp_\u{2026}", text: $tokenInput)
+                    SecureField("ghp_...", text: $tokenInput)
                         .textFieldStyle(.roundedBorder)
-                        .accessibilityIdentifier("githubTokenField")
                 }
                 Button(action: { showToken.toggle() }) {
                     Image(systemName: showToken ? "eye.slash" : "eye")
@@ -90,288 +112,160 @@ struct GitHubSettingsView: View {
                 .buttonStyle(.borderless)
             }
 
-            Text("Create at GitHub \u{2192} Settings \u{2192} Developer settings \u{2192} Fine-grained tokens. Needs \"Contents\" read/write + \"Administration\" for repo creation.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
             HStack {
-                Spacer()
-                if gitHubService.hasToken {
-                    Button("Clear") {
-                        gitHubService.setToken(nil)
-                        tokenInput = ""
-                    }
-                    .foregroundColor(.red)
+                Button("Save") {
+                    gitHubService.setToken(tokenInput)
+                    statusMessage = "Token saved"
+                    errorMessage = nil
                 }
-                Button("Save Token") {
-                    let trimmed = tokenInput.trimmingCharacters(in: .whitespaces)
-                    gitHubService.setToken(trimmed.isEmpty ? nil : trimmed)
+                .disabled(tokenInput.isEmpty || tokenInput == (gitHubService.token ?? ""))
+
+                Button("Clear") {
+                    gitHubService.setToken(nil)
+                    tokenInput = ""
+                    statusMessage = "Token cleared"
+                    errorMessage = nil
                 }
-                .accessibilityIdentifier("saveTokenButton")
+                .disabled(!gitHubService.hasToken && tokenInput.isEmpty)
             }
         }
     }
 
-    // MARK: - Connected Repo
+    // MARK: - Remote sync
 
-    private var connectedRepoSection: some View {
+    @ViewBuilder
+    private var remoteSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Preset Repo")
+            Text("Remote sync")
                 .font(.subheadline.bold())
 
-            HStack {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-                Text("\(gitHubService.personalRepoOwner)/\(gitHubService.personalRepoName)")
-                    .font(.system(size: 13, design: .monospaced))
-            }
-
-            Text("Saves, edits, and deletes sync automatically to this repo.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            if let date = gitHubService.personalSync.lastSyncDate {
-                Text("Last synced \(date, style: .relative) ago")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            if gitHubService.personalSync.hasPendingChanges {
-                Label("Unsynced changes", systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundColor(.orange)
-            }
-
-            HStack {
-                Button("Sync Now") {
-                    gitHubService.syncIfConnected(presetManager: presetManager)
-                }
-                .disabled(gitHubService.personalSync.isSyncing)
-
-                Spacer()
-
-                Button("Disconnect") {
-                    gitHubService.disconnect(presetManager: presetManager)
-                    statusMessage = nil
-                }
-                .foregroundColor(.red)
-            }
-        }
-    }
-
-    // MARK: - Disconnected Repo
-
-    private var disconnectedRepoSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Preset Repo")
-                .font(.subheadline.bold())
-
-            Text("Connect a GitHub repo to sync presets across machines.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            if showConnectFlow {
-                connectExistingFlow
-            } else if showCreateFlow {
-                createNewFlow
+            if let remote = gitCoordinator.remoteURL, !remote.isEmpty {
+                connectedRemote(remote)
             } else {
-                HStack(spacing: 12) {
-                    Button("Connect Existing") {
-                        showConnectFlow = true
-                        showCreateFlow = false
-                    }
-                    .disabled(!gitHubService.hasToken)
-                    .accessibilityIdentifier("connectExistingRepoButton")
-
-                    Button("Create New Repo") {
-                        showCreateFlow = true
-                        showConnectFlow = false
-                    }
-                    .disabled(!gitHubService.hasToken)
-                    .accessibilityIdentifier("createNewRepoButton")
-                }
-
-                if !gitHubService.hasToken {
-                    Text("Save a GitHub token first.")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                }
+                disconnectedRemote
             }
         }
     }
 
-    // MARK: - Connect Existing Flow
+    @ViewBuilder
+    private func connectedRemote(_ remote: String) -> some View {
+        Text(shortenedRemote(remote))
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
 
-    private var connectExistingFlow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField("owner/repo or GitHub URL", text: $repoInput)
-                .textFieldStyle(.roundedBorder)
+        pushStateLabel
 
-            HStack {
-                Button("Cancel") {
-                    showConnectFlow = false
+        HStack {
+            Button("Push now") {
+                Task {
+                    isWorking = true
                     errorMessage = nil
+                    let result = await gitCoordinator.pushIfRemoteConfigured()
+                    isWorking = false
+                    switch result {
+                    case .success:
+                        statusMessage = "Pushed"
+                    case .failure(let e):
+                        errorMessage = e.localizedDescription
+                    }
                 }
-                Spacer()
-                Button("Connect") { connectRepo() }
-                    .disabled(repoInput.trimmingCharacters(in: .whitespaces).isEmpty || isConnecting)
             }
+            .disabled(isWorking || !gitHubService.hasToken)
 
-            if isConnecting {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text("Connecting\u{2026}")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+            Button("Clear remote") {
+                Task {
+                    isWorking = true
+                    errorMessage = nil
+                    let result = await gitCoordinator.clearRemote()
+                    isWorking = false
+                    remoteURLInput = ""
+                    switch result {
+                    case .success:
+                        statusMessage = "Remote cleared"
+                    case .failure(let e):
+                        errorMessage = e.localizedDescription
+                    }
                 }
             }
+            .disabled(isWorking)
+
+            if isWorking { ProgressView().controlSize(.small) }
         }
-    }
 
-    // MARK: - Create New Flow
-
-    private var createNewFlow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField("Repo name", text: $newRepoName)
-                .textFieldStyle(.roundedBorder)
-
-            Toggle("Private repo", isOn: $newRepoPrivate)
+        if !gitHubService.hasToken {
+            Text("Add a Personal Access Token above to enable push.")
                 .font(.caption)
+                .foregroundColor(.orange)
+        }
+    }
 
-            HStack {
-                Button("Cancel") {
-                    showCreateFlow = false
+    @ViewBuilder
+    private var disconnectedRemote: some View {
+        Text("No remote configured. Your presets are committed locally only.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+        TextField("https://github.com/you/conjuredsp-presets.git", text: $remoteURLInput)
+            .textFieldStyle(.roundedBorder)
+
+        HStack {
+            Button("Set remote") {
+                Task {
+                    isWorking = true
                     errorMessage = nil
+                    let result = await gitCoordinator.setRemote(url: remoteURLInput)
+                    isWorking = false
+                    switch result {
+                    case .success:
+                        statusMessage = "Remote set"
+                    case .failure(let e):
+                        errorMessage = e.localizedDescription
+                    }
                 }
-                Spacer()
-                Button("Create") { createRepo() }
-                    .disabled(newRepoName.isEmpty || isCreating)
             }
+            .disabled(remoteURLInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isWorking)
 
-            if isCreating {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text("Creating repo\u{2026}")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
+            if isWorking { ProgressView().controlSize(.small) }
         }
     }
 
-    // MARK: - Actions
-
-    /// Parse "owner/repo" from various input formats:
-    /// - `owner/repo`
-    /// - `https://github.com/owner/repo`
-    /// - `https://github.com/owner/repo/...` (with trailing path)
-    /// - `github.com/owner/repo`
-    private func parseRepoInput(_ input: String) -> (owner: String, repo: String)? {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Try as URL first
-        if trimmed.contains("github.com") {
-            // Normalize: add scheme if missing so URL parsing works
-            let urlString = trimmed.hasPrefix("http") ? trimmed : "https://\(trimmed)"
-            if let url = URL(string: urlString) {
-                let parts = url.pathComponents.filter { $0 != "/" }
-                if parts.count >= 2 {
-                    return (parts[0], parts[1])
-                }
+    @ViewBuilder
+    private var pushStateLabel: some View {
+        switch gitCoordinator.lastPushState {
+        case .idle:
+            Text("Never pushed")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .pushing:
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.small)
+                Text("Pushing\u{2026}")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-        }
-
-        // Try as "owner/repo"
-        let parts = trimmed.split(separator: "/", maxSplits: 1)
-        if parts.count == 2 {
-            let owner = String(parts[0])
-            let repo = String(parts[1])
-            if !owner.isEmpty && !repo.isEmpty {
-                return (owner, repo)
-            }
-        }
-
-        return nil
-    }
-
-    private func connectRepo() {
-        guard let (owner, repo) = parseRepoInput(repoInput) else {
-            errorMessage = "Enter owner/repo or a GitHub URL"
-            return
-        }
-        isConnecting = true
-        errorMessage = nil
-
-        Task {
-            do {
-                try await gitHubService.validateRepo(owner: owner, repo: repo)
-                gitHubService.personalRepoOwner = owner
-                gitHubService.personalRepoName = repo
-                Analytics.track(.githubRepoConnect, properties: [
-                    "type": "existing",
-                    "owner": owner,
-                ])
-                showConnectFlow = false
-                isConnecting = false
-
-                if userPresetCount > 0 {
-                    showMigrationPrompt = true
-                } else {
-                    finishConnect()
-                }
-            } catch {
-                errorMessage = error.localizedDescription
-                isConnecting = false
-            }
+        case .ok(let date):
+            Text("Last push: \(date, style: .relative) ago")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .failed(let msg):
+            Text("Push failed: \(msg)")
+                .font(.caption)
+                .foregroundColor(.red)
+                .lineLimit(2)
         }
     }
 
-    private func createRepo() {
-        isCreating = true
-        errorMessage = nil
+    // MARK: - Helpers
 
-        Task {
-            do {
-                try await gitHubService.createPresetRepo(
-                    name: newRepoName,
-                    isPrivate: newRepoPrivate,
-                    presetManager: presetManager
-                )
-                Analytics.track(.githubRepoConnect, properties: [
-                    "type": "new",
-                    "owner": gitHubService.personalRepoOwner,
-                ])
-                showCreateFlow = false
-                isCreating = false
-                statusMessage = "Created \(gitHubService.personalRepoOwner)/\(gitHubService.personalRepoName)"
-
-                if userPresetCount > 0 {
-                    showMigrationPrompt = true
-                } else {
-                    finishConnect()
-                }
-            } catch {
-                errorMessage = error.localizedDescription
-                isCreating = false
-            }
-        }
-    }
-
-    private func migratePresets() {
-        isMigrating = true
-        Task {
-            do {
-                let count = try await gitHubService.migrateUserPresetsToRepo(presetManager: presetManager)
-                statusMessage = "Uploaded \(count) preset(s) to repo"
-            } catch {
-                errorMessage = "Migration failed: \(error.localizedDescription)"
-            }
-            isMigrating = false
-            finishConnect()
-        }
-    }
-
-    private func finishConnect() {
-        gitHubService.syncIfConnected(presetManager: presetManager)
+    /// Trim the scheme + token + .git suffix off a remote URL for display.
+    private func shortenedRemote(_ url: String) -> String {
+        var s = url
+        if let range = s.range(of: "://") { s = String(s[range.upperBound...]) }
+        // Strip basic-auth "user:token@" if present
+        if let at = s.firstIndex(of: "@") { s = String(s[s.index(after: at)...]) }
+        if s.hasSuffix(".git") { s = String(s.dropLast(".git".count)) }
+        return s
     }
 }

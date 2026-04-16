@@ -6,7 +6,6 @@ struct PresetBrowserView: View {
     let presets: [Preset]
     let currentPreset: Preset?
     let isModified: Bool
-    let hasRepoPresets: Bool
     let onSelectPreset: (Preset) -> Void
     let onImportURL: () -> Void
     let onDismiss: () -> Void
@@ -20,7 +19,6 @@ struct PresetBrowserView: View {
     enum SourceFilter: String, CaseIterable, Hashable {
         case factory = "Factory"
         case user = "User"
-        case repo = "Repo"
     }
 
     // MARK: - Column widths
@@ -38,7 +36,6 @@ struct PresetBrowserView: View {
             switch preset.source {
             case .factory: sourceMatch = selectedSources.contains(.factory)
             case .user: sourceMatch = selectedSources.contains(.user)
-            case .repo: sourceMatch = selectedSources.contains(.repo)
             }
             guard sourceMatch else { return false }
 
@@ -226,9 +223,7 @@ struct PresetBrowserView: View {
             ColumnFilterMenu(
                 label: "Source",
                 isFiltered: {
-                    let visibleSources: Set<SourceFilter> = hasRepoPresets
-                        ? [.factory, .user, .repo]
-                        : [.factory, .user]
+                    let visibleSources: Set<SourceFilter> = [.factory, .user]
                     return !visibleSources.isSubset(of: selectedSources)
                 }()
             ) {
@@ -247,17 +242,6 @@ struct PresetBrowserView: View {
                         Spacer()
                         if selectedSources.contains(.user) {
                             Image(systemName: "checkmark")
-                        }
-                    }
-                }
-                if hasRepoPresets {
-                    Button(action: { toggleSource(.repo) }) {
-                        HStack {
-                            Text("Repo")
-                            Spacer()
-                            if selectedSources.contains(.repo) {
-                                Image(systemName: "checkmark")
-                            }
                         }
                     }
                 }
@@ -348,7 +332,6 @@ struct PresetBrowserView: View {
         switch preset.source {
         case .factory: return "Factory"
         case .user: return "User"
-        case .repo: return "Repo"
         }
     }
 

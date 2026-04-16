@@ -27,15 +27,15 @@ enum PresetCategory: String, CaseIterable, Hashable, Identifiable {
     }
 }
 
-/// A named DSP script preset — bundled (factory), local (user), or synced from a GitHub repo.
+/// A named DSP script preset — either bundled (factory) or user-authored (user).
+/// User presets live inside a git repo under the App Group's `Presets/` directory.
 struct Preset: Identifiable, Hashable {
     enum Source: Hashable {
         case factory(resourceName: String)
         case user(url: URL)
-        case repo(url: URL)
     }
 
-    /// Unique key: "factory:Passthrough", "user:My Filter.py", or "repo:My Filter.py"
+    /// Unique key: "factory:Passthrough" or "user:My Filter.py"
     let id: String
     let name: String
     let source: Source
@@ -51,14 +51,15 @@ struct Preset: Identifiable, Hashable {
         return false
     }
 
-    var isRepo: Bool {
-        if case .repo = source { return true }
-        return false
-    }
-
     var isUser: Bool {
         if case .user = source { return true }
         return false
+    }
+
+    /// On-disk URL for mutable presets (nil for factory).
+    var fileURL: URL? {
+        if case .user(let url) = source { return url }
+        return nil
     }
 
     /// File extension for this preset's language.

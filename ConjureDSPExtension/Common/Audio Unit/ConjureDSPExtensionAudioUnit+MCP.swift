@@ -247,7 +247,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         }
         let pm = presetManager
         do {
-            let preset = try pm.saveUserPreset(name: name, source: source, language: currentScriptLanguage)
+            let preset = try pm.savePreset(name: name, source: source, language: currentScriptLanguage)
             return (jsonStr(["success": true, "name": preset.name]), false)
         } catch {
             return (jsonStr(["error": "Failed to save preset: \(error.localizedDescription)"]), true)

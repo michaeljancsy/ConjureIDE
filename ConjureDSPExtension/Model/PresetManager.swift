@@ -7,8 +7,8 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "P
 /// Manages discovery, loading, saving, and deletion of DSP script presets.
 ///
 /// Factory presets are read from the extension bundle (read-only).
-/// User presets are stored as .py/.rs files in the App Group container under Presets/.
-/// Repo presets are cached locally under RepoPresets/ and synced to GitHub.
+/// User presets are stored as .py/.rs files in the App Group container
+/// under `Presets/`, which is a git repository managed by PresetGitCoordinator.
 @MainActor
 class PresetManager: ObservableObject {
     @Published private(set) var presets: [Preset] = []
@@ -18,42 +18,26 @@ class PresetManager: ObservableObject {
     /// The script source at the time the current preset was loaded, for modification detection.
     private(set) var loadedSource: String?
 
-    /// Called after a repo preset is saved. GitHubService hooks into this to trigger background push.
-    var onRepoPresetSaved: ((String, String, ScriptLanguage) -> Void)?
-
-    /// Called after a repo preset is deleted. GitHubService hooks into this to trigger background delete.
-    var onRepoPresetDeleted: ((String, ScriptLanguage) -> Void)?
-
-    /// Called after a repo preset is renamed. Parameters: (oldName, newName, source, language).
-    var onRepoPresetRenamed: ((String, String, String, ScriptLanguage) -> Void)?
-
     private let extensionBundle: Bundle
-    let userPresetsURL: URL
-    let repoPresetsURL: URL
+    let presetsURL: URL
     private let fileManager = FileManager.default
 
     init(extensionBundle: Bundle) {
         self.extensionBundle = extensionBundle
 
         let baseDir = AppGroupContainer.url
-        self.userPresetsURL = baseDir.appendingPathComponent("Presets", isDirectory: true)
-        self.repoPresetsURL = baseDir.appendingPathComponent("RepoPresets", isDirectory: true)
+        self.presetsURL = baseDir.appendingPathComponent("Presets", isDirectory: true)
 
-        ensureDirectory(userPresetsURL)
-        ensureDirectory(repoPresetsURL)
+        ensureDirectory(presetsURL)
         refreshPresets()
     }
 
-    /// Testable initializer that accepts explicit preset URLs.
-    init(extensionBundle: Bundle, userPresetsURL: URL, repoPresetsURL: URL? = nil) {
+    /// Testable initializer that accepts an explicit preset URL.
+    init(extensionBundle: Bundle, presetsURL: URL) {
         self.extensionBundle = extensionBundle
-        self.userPresetsURL = userPresetsURL
-        self.repoPresetsURL = repoPresetsURL ?? userPresetsURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("RepoPresets", isDirectory: true)
+        self.presetsURL = presetsURL
 
-        ensureDirectory(userPresetsURL)
-        ensureDirectory(self.repoPresetsURL)
+        ensureDirectory(presetsURL)
         refreshPresets()
     }
 
@@ -89,16 +73,13 @@ class PresetManager: ObservableObject {
             ))
         }
 
-        // Repo presets from local cache
-        result.append(contentsOf: discoverPresets(in: repoPresetsURL, prefix: "repo"))
-
         // User presets from disk
-        result.append(contentsOf: discoverPresets(in: userPresetsURL, prefix: "user"))
+        result.append(contentsOf: discoverPresets(in: presetsURL))
 
         presets = result
     }
 
-    private func discoverPresets(in directory: URL, prefix: String) -> [Preset] {
+    private func discoverPresets(in directory: URL) -> [Preset] {
         guard let files = try? fileManager.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil,
@@ -113,11 +94,10 @@ class PresetManager: ObservableObject {
             let name = url.deletingPathExtension().lastPathComponent
             let ext = url.pathExtension
             let language: ScriptLanguage = ext == "rs" ? .rust : .python
-            let source: Preset.Source = prefix == "repo" ? .repo(url: url) : .user(url: url)
             return Preset(
-                id: "\(prefix):\(name).\(ext)",
+                id: "user:\(name).\(ext)",
                 name: name,
-                source: source,
+                source: .user(url: url),
                 factoryPresetNumber: nil,
                 language: language,
                 category: .other
@@ -136,7 +116,7 @@ class PresetManager: ObservableObject {
                 return nil
             }
             return try? String(contentsOf: url, encoding: .utf8)
-        case .user(let url), .repo(let url):
+        case .user(let url):
             return try? String(contentsOf: url, encoding: .utf8)
         }
     }
@@ -157,17 +137,17 @@ class PresetManager: ObservableObject {
         isModified = (newSource != loaded)
     }
 
-    // MARK: - Save (User Presets)
+    // MARK: - Save
 
     /// Save source as a new or overwritten user preset. Returns the resulting Preset.
     @discardableResult
-    func saveUserPreset(name: String, source: String, language: ScriptLanguage = .python) throws -> Preset {
+    func savePreset(name: String, source: String, language: ScriptLanguage = .python) throws -> Preset {
         let sanitized = sanitizeFilename(name)
         guard !sanitized.isEmpty else {
             throw PresetManagerError.invalidName
         }
         let ext = language == .rust ? "rs" : "py"
-        let url = userPresetsURL.appendingPathComponent("\(sanitized).\(ext)")
+        let url = presetsURL.appendingPathComponent("\(sanitized).\(ext)")
         try source.write(to: url, atomically: true, encoding: .utf8)
         log.info("Saved user preset: \(sanitized).\(ext, privacy: .public)")
 
@@ -179,33 +159,9 @@ class PresetManager: ObservableObject {
         return preset
     }
 
-    // MARK: - Save (Repo Presets)
-
-    /// Save source as a repo preset (locally cached + triggers background sync).
-    @discardableResult
-    func saveRepoPreset(name: String, source: String, language: ScriptLanguage = .python) throws -> Preset {
-        let sanitized = sanitizeFilename(name)
-        guard !sanitized.isEmpty else {
-            throw PresetManagerError.invalidName
-        }
-        let ext = language == .rust ? "rs" : "py"
-        let url = repoPresetsURL.appendingPathComponent("\(sanitized).\(ext)")
-        try source.write(to: url, atomically: true, encoding: .utf8)
-        log.info("Saved repo preset: \(sanitized).\(ext, privacy: .public)")
-
-        refreshPresets()
-
-        guard let preset = presets.first(where: { $0.id == "repo:\(sanitized).\(ext)" }) else {
-            throw PresetManagerError.saveFailed
-        }
-
-        onRepoPresetSaved?(sanitized, source, language)
-        return preset
-    }
-
     // MARK: - Delete
 
-    /// Delete a user or repo preset. Factory presets cannot be deleted.
+    /// Delete a user preset. Factory presets cannot be deleted.
     func deletePreset(_ preset: Preset) throws {
         switch preset.source {
         case .factory:
@@ -214,10 +170,6 @@ class PresetManager: ObservableObject {
         case .user(let url):
             try fileManager.removeItem(at: url)
             log.info("Deleted user preset: \(preset.name, privacy: .public)")
-        case .repo(let url):
-            try fileManager.removeItem(at: url)
-            log.info("Deleted repo preset: \(preset.name, privacy: .public)")
-            onRepoPresetDeleted?(preset.name, preset.language)
         }
 
         refreshPresets()
@@ -229,15 +181,14 @@ class PresetManager: ObservableObject {
         }
     }
 
-    /// Delete a user preset. Factory presets cannot be deleted.
-    /// Kept for backward compatibility — delegates to `deletePreset(_:)`.
+    /// Backward-compat alias.
     func deleteUserPreset(_ preset: Preset) throws {
         try deletePreset(preset)
     }
 
     // MARK: - Rename
 
-    /// Rename a user or repo preset. Factory presets cannot be renamed.
+    /// Rename a user preset. Factory presets cannot be renamed.
     /// Returns the renamed preset with updated identity.
     @discardableResult
     func renamePreset(_ preset: Preset, to newName: String) throws -> Preset {
@@ -259,16 +210,11 @@ class PresetManager: ObservableObject {
         }
 
         let oldURL: URL
-        let prefix: String
         switch preset.source {
         case .factory:
             throw PresetManagerError.renameFailed
         case .user(let url):
             oldURL = url
-            prefix = "user"
-        case .repo(let url):
-            oldURL = url
-            prefix = "repo"
         }
 
         let ext = preset.fileExtension
@@ -276,16 +222,9 @@ class PresetManager: ObservableObject {
         try fileManager.moveItem(at: oldURL, to: newURL)
         log.info("Renamed preset: \(preset.name, privacy: .public) → \(sanitized, privacy: .public)")
 
-        // For repo presets, trigger background rename on GitHub
-        if case .repo = preset.source {
-            if let source = try? String(contentsOf: newURL, encoding: .utf8) {
-                onRepoPresetRenamed?(preset.name, sanitized, source, preset.language)
-            }
-        }
-
         refreshPresets()
 
-        let newID = "\(prefix):\(sanitized).\(ext)"
+        let newID = "user:\(sanitized).\(ext)"
         guard let renamedPreset = presets.first(where: { $0.id == newID }) else {
             throw PresetManagerError.renameFailed
         }
@@ -296,29 +235,6 @@ class PresetManager: ObservableObject {
         }
 
         return renamedPreset
-    }
-
-    // MARK: - Migration
-
-    /// Move a user preset to the repo cache. Returns the new repo Preset.
-    /// Set `triggerSync: false` when the caller has already pushed to GitHub (e.g. during migration).
-    @discardableResult
-    func migrateUserPresetToRepo(_ preset: Preset, triggerSync: Bool = true) throws -> Preset {
-        guard case .user(let sourceURL) = preset.source else {
-            throw PresetManagerError.saveFailed
-        }
-        let destURL = repoPresetsURL.appendingPathComponent(sourceURL.lastPathComponent)
-        try fileManager.moveItem(at: sourceURL, to: destURL)
-        log.info("Migrated preset to repo: \(preset.name, privacy: .public)")
-
-        if triggerSync, let source = try? String(contentsOf: destURL, encoding: .utf8) {
-            onRepoPresetSaved?(preset.name, source, preset.language)
-        }
-
-        refreshPresets()
-
-        let ext = preset.fileExtension
-        return presets.first(where: { $0.id == "repo:\(preset.name).\(ext)" }) ?? preset
     }
 
     // MARK: - Name Helpers
@@ -334,7 +250,7 @@ class PresetManager: ObservableObject {
         return "\(baseName) \(UUID().uuidString.prefix(4))"
     }
 
-    /// Check whether a user or repo preset with this name already exists.
+    /// Check whether a user preset with this name already exists.
     func userPresetExists(name: String) -> Bool {
         let sanitized = sanitizeFilename(name)
         return presets.contains { !$0.isFactory && $0.name == sanitized }
