@@ -5,6 +5,12 @@ import WebKit
 
 private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExtension", category: "CustomUI")
 
+extension Notification.Name {
+    /// Posted by the preset toolbar's "Reload UI" button. Any live
+    /// `CustomUIWebView` observes this and reloads its current page.
+    static let reloadCustomUI = Notification.Name("com.MichaelJancsy.ConjureDSP.reloadCustomUI")
+}
+
 /// Renders a preset bundle's `ui/index.html` in a WKWebView and bridges it to
 /// the plugin's parameter tree.
 ///
@@ -68,7 +74,9 @@ struct CustomUIWebView: NSViewRepresentable {
         context.coordinator.webView = webView
         context.coordinator.parameterState = parameterState
         context.coordinator.captureManager = captureManager
+        context.coordinator.audioFPS = bundle.manifest.resolvedFPS
         context.coordinator.subscribe(to: parameterState)
+        context.coordinator.observeWindowAndReload()
 
         let entryPath = bundle.manifest.uiEntryHTMLPath
         if let url = URL(string: "\(Self.bundleScheme)://preset/\(entryPath)") {
@@ -173,6 +181,23 @@ struct CustomUIWebView: NSViewRepresentable {
         /// subscriber.
         var audioFrameCancellable: AnyCancellable?
 
+        /// Target rate (Hz) for forwarding audio frames to JS. Sourced
+        /// from the bundle's `manifest.ui.fps`; defaults to 30. Frames
+        /// that arrive sooner than `1/fps` after the last forwarded one
+        /// are dropped before JSON encode + evaluateJavaScript.
+        var audioFPS: Int = 30
+        private var lastForwardTime: CFTimeInterval = 0
+
+        /// True when any subscriber asked for FFT bins in the frame payload.
+        /// When false we strip `fftIn` / `fftOut` to keep JSON small.
+        private var includeFFT: Bool = false
+
+        /// Cached visibility of the webview's NSWindow. When the plugin
+        /// window is occluded (another app covers it, DAW collapses the
+        /// plugin panel, etc.) we unregister the audio consumer so capture
+        /// itself stops — no point computing RMS nobody will see.
+        private var isWindowVisible: Bool = true
+
         /// Debounce cell for the hot-reload trigger. FSEventStream already
         /// coalesces bursts with its latency parameter, but the pending
         /// work item lets us coalesce further (e.g. a write + a rename
@@ -215,6 +240,30 @@ struct CustomUIWebView: NSViewRepresentable {
             // Short extra debounce on top of FSEventStream's latency, so a
             // save + touch + rename sequence collapses into one reload.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+        }
+
+        // MARK: Window + manual reload observation
+
+        /// Hook up two main-thread observers:
+        /// 1. `NSWindow.didChangeOcclusionStateNotification` — pause audio
+        ///    capture when the plugin's window isn't visible.
+        /// 2. `.reloadCustomUI` — toolbar "Reload UI" button asks the
+        ///    webview to reload its page, bypassing the file-watcher.
+        func observeWindowAndReload() {
+            NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)
+                .compactMap { $0.object as? NSWindow }
+                .sink { [weak self] window in
+                    guard let self, self.webView?.window === window else { return }
+                    self.handleWindowOcclusionChange(visible: window.occlusionState.contains(.visible))
+                }
+                .store(in: &cancellables)
+
+            NotificationCenter.default.publisher(for: .reloadCustomUI)
+                .sink { [weak self] _ in
+                    guard let self, let webView = self.webView else { return }
+                    self.scheduleReload(webView: webView)
+                }
+                .store(in: &cancellables)
         }
 
         // MARK: Combine subscription to parameter values
@@ -334,6 +383,15 @@ struct CustomUIWebView: NSViewRepresentable {
                 log.info("[preset-ui] \(text, privacy: .public)")
 
             case "subscribeAudioFrames":
+                // JS may (re-)post with `{ fft: true }` to request FFT bins.
+                // Absence means RMS/peak only. This is idempotent — re-
+                // subscribing with a different flag just updates state.
+                if let body = message.body as? [String: Any],
+                   let fft = body["fft"] as? Bool {
+                    includeFFT = fft
+                } else {
+                    includeFFT = false
+                }
                 startAudioFrameForwarding()
 
             case "unsubscribeAudioFrames":
@@ -346,21 +404,35 @@ struct CustomUIWebView: NSViewRepresentable {
 
         // MARK: Audio frame forwarding
 
+        /// Whether audio capture should be actively running right now.
+        /// Combines "JS has at least one onFrame subscriber" with
+        /// "our window is visible" — if either is false, the consumer
+        /// is deregistered and the display-link stops.
+        private var shouldCaptureAudio: Bool {
+            audioFrameCancellable != nil && isWindowVisible
+        }
+
+        private func syncCaptureState() {
+            captureManager?.setConsumer(id: audioConsumerID, active: shouldCaptureAudio)
+        }
+
         private func startAudioFrameForwarding() {
-            guard audioFrameCancellable == nil else { return }
-            guard let captureManager else { return }
-            captureManager.setConsumer(id: audioConsumerID, active: true)
-            audioFrameCancellable = captureManager.audioFramePublisher
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] frame in
-                    self?.forwardAudioFrame(frame)
-                }
+            if audioFrameCancellable == nil, let captureManager {
+                audioFrameCancellable = captureManager.audioFramePublisher
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] frame in
+                        self?.forwardAudioFrame(frame)
+                    }
+            }
+            lastForwardTime = 0  // allow the first frame through immediately
+            syncCaptureState()
         }
 
         private func stopAudioFrameForwarding() {
             audioFrameCancellable?.cancel()
             audioFrameCancellable = nil
-            captureManager?.setConsumer(id: audioConsumerID, active: false)
+            includeFFT = false
+            syncCaptureState()
         }
 
         /// Track in-flight evaluateJavaScript invocations so audio frames
@@ -369,23 +441,37 @@ struct CustomUIWebView: NSViewRepresentable {
         private var framesInFlight = 0
 
         private func forwardAudioFrame(_ frame: AudioFrame) {
-            guard isReady, let webView else { return }
+            guard isReady, let webView, isWindowVisible else { return }
+            // fps gate — throttle against the audio tick's timestamp so the
+            // target rate is honored even when the display link fires at
+            // 120 Hz (ProMotion) or higher.
+            let minInterval = 1.0 / Double(max(audioFPS, 1))
+            if lastForwardTime > 0,
+               frame.timestamp - lastForwardTime < minInterval - 0.001 {
+                return
+            }
+            lastForwardTime = frame.timestamp
+
             // Bound the outstanding JS work — dropping frames is fine for
             // a UI animation pipeline.
             if framesInFlight > 1 { return }
 
-            // RMS/peak only by default. FFT arrays (2 × halfN floats per
-            // tick) add ~8 KB of JSON and would significantly inflate the
-            // main-thread JSON-encode cost; they're available via the
-            // existing spectrogram pipeline today, and will gain an opt-in
-            // subscription flag in a follow-up.
-            let payload: [String: Any] = [
+            var payload: [String: Any] = [
                 "rmsIn": frame.rmsIn,
                 "rmsOut": frame.rmsOut,
                 "peakIn": frame.peakIn,
                 "peakOut": frame.peakOut,
                 "t": frame.timestamp,
             ]
+            // FFT bins are opt-in via `audio.onFrame(cb, { fft: true })`.
+            // 2 × halfN floats (~8 KB per tick) would otherwise dominate
+            // the main-thread JSON-encode cost and provide no benefit to
+            // UIs that only want RMS/peak.
+            if includeFFT {
+                if let fft = frame.fftOutDB { payload["fftOut"] = fft }
+                if let fft = frame.fftInDB { payload["fftIn"] = fft }
+            }
+
             guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
                   let json = String(data: data, encoding: .utf8) else { return }
 
@@ -394,6 +480,17 @@ struct CustomUIWebView: NSViewRepresentable {
             webView.evaluateJavaScript(js) { [weak self] _, _ in
                 self?.framesInFlight = max(0, (self?.framesInFlight ?? 1) - 1)
             }
+        }
+
+        // MARK: Window visibility
+
+        /// Called when the webview's NSWindow changes occlusion state. Pauses
+        /// audio capture and frame forwarding when the window is hidden.
+        fileprivate func handleWindowOcclusionChange(visible: Bool) {
+            guard isWindowVisible != visible else { return }
+            isWindowVisible = visible
+            syncCaptureState()
+            log.info("Custom UI window visibility: \(visible, privacy: .public)")
         }
 
         // MARK: WKNavigationDelegate
@@ -462,113 +559,6 @@ extension ConjureDSPExtensionAudioUnit.ParamMetadata {
     }
 }
 
-// MARK: - Bundle asset scheme handler
-
-/// Serves files from a preset bundle's `ui/` directory into a WKWebView's
-/// WebContent process via a custom URL scheme.
-///
-/// WebContent is a separate process with its own sandbox that does NOT
-/// inherit the appex's App Group entitlement. Loading files directly from
-/// `~/Library/Group Containers/...` via `loadFileURL` triggers
-/// `kTCCServiceSystemPolicyAppData` prompts ("ConjureDSP would like to
-/// access data from other apps"). By routing requests through
-/// `WKURLSchemeHandler` — which runs in the appex process — we read the
-/// files with the appex's entitlements and stream bytes to WebContent,
-/// avoiding the TCC gate entirely.
-///
-/// URL format: `conjuredsp-preset://preset/<relative-path-inside-bundle>`
-/// e.g. `conjuredsp-preset://preset/ui/index.html`.
-final class BundleAssetSchemeHandler: NSObject, WKURLSchemeHandler {
-    /// The bundle root (e.g. `.../RepoPresets/MyBundle.cdp`). All served
-    /// paths are resolved relative to and constrained to this directory.
-    let rootURL: URL
-
-    init(rootURL: URL) {
-        self.rootURL = rootURL.standardizedFileURL
-    }
-
-    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
-        guard let requestURL = urlSchemeTask.request.url else {
-            urlSchemeTask.didFailWithError(Self.error(.badURL, "missing request URL"))
-            return
-        }
-
-        // Strip scheme + host; resolve path relative to rootURL.
-        let relativePath = requestURL.path.hasPrefix("/")
-            ? String(requestURL.path.dropFirst())
-            : requestURL.path
-        let candidate = rootURL.appendingPathComponent(relativePath).standardizedFileURL
-
-        // Sandbox: candidate must stay inside rootURL.
-        guard candidate.path.hasPrefix(rootURL.path) else {
-            log.error("Scheme handler rejected out-of-bundle request: \(requestURL.path, privacy: .public)")
-            urlSchemeTask.didFailWithError(Self.error(.unsupportedURL, "outside bundle"))
-            return
-        }
-
-        guard FileManager.default.isReadableFile(atPath: candidate.path) else {
-            urlSchemeTask.didFailWithError(Self.error(.fileDoesNotExist, candidate.path))
-            return
-        }
-
-        let data: Data
-        do {
-            data = try Data(contentsOf: candidate)
-        } catch {
-            urlSchemeTask.didFailWithError(error)
-            return
-        }
-
-        let mime = Self.mimeType(for: candidate.pathExtension.lowercased())
-        let headers: [String: String] = [
-            "Content-Type": mime,
-            "Content-Length": String(data.count),
-            // Tighten what custom UIs can do. Authors may override with their
-            // own <meta http-equiv="Content-Security-Policy"> tag if needed.
-            "Content-Security-Policy": "default-src 'self' 'unsafe-inline' data:; connect-src 'none';",
-        ]
-        let response = HTTPURLResponse(url: requestURL, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)
-            ?? URLResponse(url: requestURL, mimeType: mime, expectedContentLength: data.count, textEncodingName: nil) as URLResponse
-
-        urlSchemeTask.didReceive(response)
-        urlSchemeTask.didReceive(data)
-        urlSchemeTask.didFinish()
-    }
-
-    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
-        // All reads are synchronous; nothing to cancel.
-    }
-
-    // MARK: - Helpers
-
-    private static func error(_ code: URLError.Code, _ description: String) -> NSError {
-        NSError(domain: NSURLErrorDomain, code: code.rawValue, userInfo: [NSLocalizedDescriptionKey: description])
-    }
-
-    private static let mimeTypes: [String: String] = [
-        "html": "text/html; charset=utf-8",
-        "htm": "text/html; charset=utf-8",
-        "js": "application/javascript; charset=utf-8",
-        "mjs": "application/javascript; charset=utf-8",
-        "css": "text/css; charset=utf-8",
-        "json": "application/json; charset=utf-8",
-        "svg": "image/svg+xml",
-        "png": "image/png",
-        "jpg": "image/jpeg",
-        "jpeg": "image/jpeg",
-        "gif": "image/gif",
-        "webp": "image/webp",
-        "ico": "image/x-icon",
-        "woff": "font/woff",
-        "woff2": "font/woff2",
-        "ttf": "font/ttf",
-        "otf": "font/otf",
-        "wasm": "application/wasm",
-        "map": "application/json",
-        "txt": "text/plain; charset=utf-8",
-    ]
-
-    private static func mimeType(for ext: String) -> String {
-        mimeTypes[ext] ?? "application/octet-stream"
-    }
-}
+// Scheme handler lives in `BundleAssetSchemeHandler.swift` — extracted so
+// its pure-function `resolve(requestURL:)` is easy to unit-test without
+// spinning up a WKWebView.

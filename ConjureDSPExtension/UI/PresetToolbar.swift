@@ -108,6 +108,13 @@ struct PresetToolbar: View {
         presetManager.currentPreset?.isBundle ?? false
     }
 
+    /// Whether the current preset is a bundle that currently has a custom
+    /// HTML/JS UI wired up. Drives the "Reload UI" affordance — only useful
+    /// when there's an actual custom UI to reload.
+    private var currentBundleHasCustomUI: Bool {
+        presetManager.currentBundle?.hasCustomUI ?? false
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             // — Preset zone —
@@ -372,6 +379,28 @@ struct PresetToolbar: View {
                     .fixedSize()
                     .toolbarTooltip("Reveal preset bundle in Finder")
                     .accessibilityIdentifier("revealBundleButton")
+                }
+
+                // Manually reload the custom UI. Redundant with the hot-reload
+                // file watcher for most editors, but useful when an editor
+                // writes via a path the FSEventStream doesn't flag (iCloud,
+                // network mounts, some remote-edit tools).
+                if currentBundleHasCustomUI {
+                    Button(action: {
+                        NotificationCenter.default.post(name: .reloadCustomUI, object: nil)
+                    }) {
+                        VStack(alignment: .center, spacing: 1) {
+                            Image(systemName: "arrow.clockwise")
+                                .frame(height: 16)
+                            Text("Reload UI")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .fixedSize()
+                    .toolbarTooltip("Reload custom UI")
+                    .accessibilityIdentifier("reloadCustomUIButton")
                 }
             }
 

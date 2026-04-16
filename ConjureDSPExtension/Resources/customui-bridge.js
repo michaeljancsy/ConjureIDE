@@ -18,15 +18,16 @@
  *   ConjureDSP.ready(cb)                // fires once when initial state has arrived
  *   ConjureDSP.log(...args)             // forwards to the plugin's os_log
  *
- *   ConjureDSP.audio.onFrame(cb)        // fires at display-refresh rate with
- *                                       //   {rmsIn, rmsOut, peakIn, peakOut,
- *                                       //    fftIn?, fftOut?, t}
- *                                       // fftIn/fftOut are arrays of dB bins
- *                                       // (only present on ticks that produced
- *                                       // a new FFT column; keep last value
- *                                       // otherwise). Subscribing the first
- *                                       // callback activates audio capture;
- *                                       // the last offFrame() deactivates it.
+ *   ConjureDSP.audio.onFrame(cb, opts?) // fires at the bundle's manifest.fps
+ *                                       // (default 30 Hz). Frame payload:
+ *                                       //   {rmsIn, rmsOut, peakIn, peakOut, t}
+ *                                       // With opts = { fft: true }, frame also
+ *                                       // includes fftIn/fftOut (arrays of dB
+ *                                       // bins, ~8 KB/tick; opt-in so basic VU
+ *                                       // meters don't pay the encode cost).
+ *                                       // Subscribing the first callback
+ *                                       // activates audio capture; the last
+ *                                       // offFrame() deactivates it.
  *   ConjureDSP.audio.offFrame(cb)       // remove a previously-registered cb
  *
  * Internal (Swift-facing; do not call from preset code):
@@ -47,7 +48,8 @@
     var _paramHandlers = {};       // index (string) -> [callback]
     var _anyHandlers = [];          // [callback(index, value)]
     var _readyHandlers = [];        // [callback] (queued until _init)
-    var _audioHandlers = [];        // [callback(frame)]
+    var _audioHandlers = [];        // [{cb, wantsFft}]
+    var _audioFftOn = false;        // last FFT flag sent to Swift
 
     function postTo(name, payload) {
         try {
@@ -64,6 +66,27 @@
         catch (e) {
             try { postTo('log', '[' + label + '] ' + (e && e.message ? e.message : String(e))); } catch (_) {}
         }
+    }
+
+    // Recompute the audio subscription state based on current handlers.
+    // Posts subscribe/unsubscribe to Swift only when the effective state
+    // changes (empty→non-empty, non-empty→empty, FFT flag flipped).
+    function _syncAudioSubscription() {
+        if (_audioHandlers.length === 0) {
+            if (_audioFftOn || _audioHandlers.length === 0) {
+                postTo('unsubscribeAudioFrames', {});
+                _audioFftOn = false;
+            }
+            return;
+        }
+        var wantsFft = false;
+        for (var i = 0; i < _audioHandlers.length; i++) {
+            if (_audioHandlers[i].wantsFft) { wantsFft = true; break; }
+        }
+        // Always post subscribe on any transition — Swift treats it as
+        // idempotent state sync. Cheap.
+        postTo('subscribeAudioFrames', { fft: wantsFft });
+        _audioFftOn = wantsFft;
     }
 
     var ConjureDSP = {
@@ -94,17 +117,24 @@
         },
 
         audio: {
-            onFrame: function(cb) {
+            // onFrame(cb[, options])
+            //   options.fft = true  -> frames include fftIn/fftOut arrays
+            //                          (halfN floats each, ~8 KB JSON/tick).
+            //   Default RMS/peak-only frames are ~80 bytes.
+            // First subscriber activates capture; last unsubscriber stops it.
+            onFrame: function(cb, options) {
                 if (typeof cb !== 'function') return;
-                var wasEmpty = _audioHandlers.length === 0;
-                _audioHandlers.push(cb);
-                if (wasEmpty) postTo('subscribeAudioFrames', {});
+                _audioHandlers.push({ cb: cb, wantsFft: !!(options && options.fft) });
+                _syncAudioSubscription();
             },
             offFrame: function(cb) {
-                var idx = _audioHandlers.indexOf(cb);
-                if (idx === -1) return;
-                _audioHandlers.splice(idx, 1);
-                if (_audioHandlers.length === 0) postTo('unsubscribeAudioFrames', {});
+                for (var i = 0; i < _audioHandlers.length; i++) {
+                    if (_audioHandlers[i].cb === cb) {
+                        _audioHandlers.splice(i, 1);
+                        _syncAudioSubscription();
+                        return;
+                    }
+                }
             },
         },
 
@@ -160,7 +190,7 @@
     ConjureDSP._audioFrame = function(frame) {
         if (!frame) return;
         for (var i = 0; i < _audioHandlers.length; i++) {
-            safeInvoke(_audioHandlers[i], [frame], 'onFrame');
+            safeInvoke(_audioHandlers[i].cb, [frame], 'onFrame');
         }
     };
 
