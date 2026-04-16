@@ -75,6 +75,7 @@ class TerminalAppServer {
     private let healthCheckThreshold = 3
     private var packageInstaller: PackageInstaller?
     private var crateInstaller: CrateInstaller?
+    private var languageDownloader: LanguageDownloader?
     private var exportFinalizer: ExportFinalizer?
     private var gitWorker: GitWorker?
     private var exportNotificationObserver: NSObjectProtocol?
@@ -107,6 +108,11 @@ class TerminalAppServer {
                 } else {
                     log.warning("Crate installer not available — cargo not found in rustc-dist")
                 }
+
+                // Language module downloader — always succeeds; the App Group
+                // directory is self-provisioned. Phase 1: no modules catalogued yet.
+                self.languageDownloader = LanguageDownloader(appGroupURL: containerURL)
+                log.info("Language downloader ready")
 
                 self.exportFinalizer = ExportFinalizer(
                     appGroupURL: containerURL
@@ -157,6 +163,9 @@ class TerminalAppServer {
                 }
                 if let crateInst = self.crateInstaller {
                     await crateInst.checkForRequests()
+                }
+                if let langDownloader = self.languageDownloader {
+                    await langDownloader.checkForRequests()
                 }
                 if let finalizer = self.exportFinalizer {
                     await finalizer.checkForPendingExports()

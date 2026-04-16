@@ -90,8 +90,10 @@ struct PresetToolbar: View {
     @State private var renameError: String?
     @State private var showingSettings = false
     @State private var showingPackages = false
+    @State private var showingLanguageModules = false
     @State private var packageInstallManager = PackageInstallManager()
     @State private var crateInstallManager = CrateInstallManager()
+    @State private var languageModuleManager = LanguageModuleManager()
     @State private var showingTones = false
     @State private var toneClient = Tone3000Client()
     @State private var toneModelStore = ToneModelStore()
@@ -503,6 +505,28 @@ struct PresetToolbar: View {
                 )
             }
 
+            // Language Modules (optional DSP-language runtimes)
+            Button(action: { showingLanguageModules = true }) {
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: "cube.box")
+                        .frame(height: 16)
+                    Text("Languages")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .buttonStyle(.borderless)
+            .fixedSize()
+            .toolbarTooltip("Language modules")
+            .accessibilityIdentifier("languageModulesButton")
+            .popover(isPresented: $showingLanguageModules) {
+                LanguageManagerView(
+                    manager: languageModuleManager,
+                    onDone: { showingLanguageModules = false },
+                    onModulesChanged: { onRun() }
+                )
+            }
+
             // Tones (NAM models from tone3000)
             Button(action: { showingTones = true }) {
                 VStack(alignment: .center, spacing: 1) {
@@ -583,6 +607,7 @@ struct PresetToolbar: View {
         .onAppear {
             packageInstallManager.onPackagesChanged = { onRun() }
             crateInstallManager.onCratesChanged = { onRun() }
+            languageModuleManager.onModulesChanged = { onRun() }
         }
     }
 

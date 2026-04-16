@@ -23,6 +23,8 @@
 		AA11000600000001MIXPANEL /* Analytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11000700000001MIXPANEL /* Analytics.swift */; };
 		AA22000200000001SHARED /* MCPToolProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22000100000001SHARED /* MCPToolProvider.swift */; };
 		AA22000300000001SHARED /* MCPToolProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22000100000001SHARED /* MCPToolProvider.swift */; };
+		AA5000020000000LANGMOD /* LanguageModuleCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA5000010000000LANGMOD /* LanguageModuleCatalog.swift */; };
+		AA5000030000000LANGMOD /* LanguageModuleCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA5000010000000LANGMOD /* LanguageModuleCatalog.swift */; };
 		AA33000200000001DAEMON /* DaemonStatusChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA33000100000001DAEMON /* DaemonStatusChecker.swift */; };
 		AA33000300000001DAEMON /* DaemonStatusChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA33000100000001DAEMON /* DaemonStatusChecker.swift */; };
 		AA44000200000001MCPINF /* MCPInstanceInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA44000100000001MCPINF /* MCPInstanceInfo.swift */; };
@@ -132,6 +134,7 @@
 		25E931132F773DC300D36258 /* ConjureDSPTerminalUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPTerminalUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA11000700000001MIXPANEL /* Analytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Analytics.swift; path = ConjureDSPExtension/Analytics.swift; sourceTree = "<group>"; };
 		AA22000100000001SHARED /* MCPToolProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPToolProvider.swift; sourceTree = "<group>"; };
+		AA5000010000000LANGMOD /* LanguageModuleCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageModuleCatalog.swift; sourceTree = "<group>"; };
 		AA33000100000001DAEMON /* DaemonStatusChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DaemonStatusChecker.swift; path = ConjureDSPExtension/Terminal/DaemonStatusChecker.swift; sourceTree = "<group>"; };
 		AA44000100000001MCPINF /* MCPInstanceInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MCPInstanceInfo.swift; path = ConjureDSPExtension/Terminal/MCPInstanceInfo.swift; sourceTree = "<group>"; };
 		AABB000100LOGICPRODREF1 /* ConjureDSPLogicTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPLogicTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -337,6 +340,7 @@
 			isa = PBXGroup;
 			children = (
 				AA22000100000001SHARED /* MCPToolProvider.swift */,
+				AA5000010000000LANGMOD /* LanguageModuleCatalog.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -1041,6 +1045,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA22000300000001SHARED /* MCPToolProvider.swift in Sources */,
+				AA5000020000000LANGMOD /* LanguageModuleCatalog.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1055,6 +1060,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA5000030000000LANGMOD /* LanguageModuleCatalog.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
