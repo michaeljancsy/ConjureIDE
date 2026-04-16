@@ -508,8 +508,21 @@ struct ConjureDSPExtensionMainView: View {
         return !current.isFactory && presetManager.isModified
     }
 
+    /// True when the current preset is user-writable (i.e. Cmd-S should
+    /// save-in-place, not open Save As, regardless of modified state).
+    private var hasMutablePreset: Bool {
+        guard let current = presetManager.currentPreset else { return false }
+        return !current.isFactory
+    }
+
     private func handleCmdS() {
-        if canSave {
+        // If a user preset is loaded, Cmd-S saves in place (matches every
+        // text editor's muscle memory: ⌘S means "save the thing I'm editing").
+        // Falling through to Save As would be surprising — and when `canSave`
+        // is false despite a mutable preset being present (e.g. Monaco's text
+        // binding hasn't yet fed back to the SwiftUI state), we'd rather
+        // over-save than re-open the naming dialog.
+        if hasMutablePreset {
             // Cmd-S bypasses the commit-message popover and uses the
             // coordinator's default message (timestamp or "Update <name>"
             // depending on mode). Users who want a custom message click
@@ -517,6 +530,8 @@ struct ConjureDSPExtensionMainView: View {
             let result = onSavePreset(scriptSource, selectedLanguage, nil)
             handleResult(result)
         } else {
+            // Factory preset (or nothing) loaded — the only meaningful action
+            // is to create a new user preset.
             saveAsName = presetManager.currentPreset?.name ?? ""
             showingSaveAs = true
         }
