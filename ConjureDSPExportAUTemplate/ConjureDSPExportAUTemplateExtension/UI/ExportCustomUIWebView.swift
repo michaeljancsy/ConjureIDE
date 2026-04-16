@@ -79,6 +79,12 @@ struct ExportCustomUIWebView: NSViewRepresentable {
 
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
 
+        // Network egress block — same rules as the main extension so a
+        // preset bundle that behaves correctly in-plugin also behaves
+        // correctly after export. Author JS cannot fetch external URLs
+        // regardless of what manifest / CSP the bundle ships with.
+        CustomUIContentBlocker.apply(to: config)
+
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")

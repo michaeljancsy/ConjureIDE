@@ -62,6 +62,14 @@ struct CustomUIWebView: NSViewRepresentable {
 
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
 
+        // Second-layer network block — even if author JS or author
+        // `<meta>` tags relax the CSP header shipped by
+        // BundleAssetSchemeHandler, the compiled WKContentRuleList
+        // drops every request that isn't our custom scheme / data: /
+        // blob:. Fire and forget; initial load uses our scheme so
+        // compile latency doesn't race the first page load.
+        CustomUIContentBlocker.apply(to: config)
+
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
