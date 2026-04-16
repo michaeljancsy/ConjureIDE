@@ -86,6 +86,10 @@ struct ConjureDSPExtensionMainView: View {
     @State private var spectrogramFFTSizeIndex: Int = 2 // default: 2048
     @State private var spectrogramShowNoteNames: Bool = false
     @StateObject private var daemonChecker = DaemonStatusChecker()
+    /// Per-bundle "show custom UI" preference. Drives the toggle in the UI
+    /// area whenever the active bundle ships an HTML/JS UI, and persists
+    /// across sessions so users don't have to re-flip the switch.
+    @StateObject private var customUIPreference = CustomUIPreference()
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("editorTheme") private var selectedTheme: String = "conjuredsp"
 
@@ -208,19 +212,36 @@ struct ConjureDSPExtensionMainView: View {
 
             Divider()
 
-            // Custom HTML/JS UI when the current preset bundle ships a
-            // `ui/index.html`; otherwise the default generated sliders.
-            if let bundle = presetManager.currentBundle, bundle.hasCustomUI {
-                CustomUIWebView(
-                    parameterState: parameterState,
-                    bundle: bundle,
-                    theme: colorScheme,
-                    captureManager: captureManager
-                )
-                .frame(minHeight: CGFloat(bundle.manifest.ui?.height ?? 220))
-                .id(bundle.uiIndexURL)
+            // Custom HTML/JS UI when the current preset bundle ships one AND
+            // the user hasn't opted back to stock sliders. Everything else
+            // (no bundle, no ui/, toggle flipped off) falls through to the
+            // generated slider panel.
+            let activeBundle = presetManager.currentBundle
+            let hasCustom = activeBundle?.hasCustomUI ?? false
+            let useCustom = hasCustom && customUIPreference.showCustomUI
+
+            if useCustom, let bundle = activeBundle {
+                VStack(spacing: 0) {
+                    customUIToggleBar(showingCustom: true)
+                    CustomUIWebView(
+                        parameterState: parameterState,
+                        bundle: bundle,
+                        theme: colorScheme,
+                        captureManager: captureManager
+                    )
+                    .frame(minHeight: CGFloat(bundle.manifest.ui?.height ?? 220))
+                    .id(bundle.uiIndexURL)
+                }
             } else {
-                ParameterSlidersView(parameterState: parameterState)
+                VStack(spacing: 0) {
+                    // Only show the toggle when a custom UI is actually
+                    // available. With no custom UI, the toggle row would
+                    // just be dead space.
+                    if hasCustom {
+                        customUIToggleBar(showingCustom: false)
+                    }
+                    ParameterSlidersView(parameterState: parameterState)
+                }
             }
 
             Divider()
@@ -451,7 +472,15 @@ struct ConjureDSPExtensionMainView: View {
             captureManager.setConsumer(id: "spectrogram", active: newValue)
             Analytics.track(.spectrogramToggle, properties: ["opened": newValue])
         }
+        .onChange(of: presetManager.currentBundle?.name) { _, newName in
+            // Bind the toggle's persisted preference to whatever bundle
+            // is currently loaded. Switching presets re-reads the stored
+            // choice for the new bundle so users see their last
+            // selection for THIS preset, not the previous one's.
+            customUIPreference.bundleKey = newName
+        }
         .onAppear {
+            customUIPreference.bundleKey = presetManager.currentBundle?.name
             scriptSource = defaultScriptSource
             lastRunSource = defaultScriptSource
             selectedLanguage = defaultLanguage
@@ -516,6 +545,31 @@ struct ConjureDSPExtensionMainView: View {
     private var canSave: Bool {
         guard let current = presetManager.currentPreset else { return false }
         return !current.isFactory && presetManager.isModified
+    }
+
+    /// Small row that sits above the parameter panel whenever the active
+    /// bundle ships a custom HTML/JS UI. Lets the user choose between that
+    /// and the stock slider layout without leaving the main view. The
+    /// choice is per-bundle and persisted (see CustomUIPreference).
+    @ViewBuilder
+    private func customUIToggleBar(showingCustom: Bool) -> some View {
+        HStack(spacing: 6) {
+            Spacer()
+            Image(systemName: showingCustom ? "paintpalette" : "slider.horizontal.3")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(showingCustom ? "Custom UI" : "Stock Sliders")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle("", isOn: $customUIPreference.showCustomUI)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .help("Switch between the preset's custom HTML/JS UI and the stock slider layout.")
+                .accessibilityIdentifier("customUIToggle")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
     }
 
     private func handleCmdS() {
