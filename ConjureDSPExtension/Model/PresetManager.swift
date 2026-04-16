@@ -32,6 +32,21 @@ class PresetManager: ObservableObject {
     /// Called after a repo preset is renamed. Parameters: (oldName, newName, source, language).
     var onRepoPresetRenamed: ((String, String, String, ScriptLanguage) -> Void)?
 
+    /// Called after a repo bundle is saved (new or updated). GitHubService
+    /// hooks into this to push the whole `<name>.cdp/` directory tree to
+    /// `bundles/<name>/` in the remote repo. The URL points at the local
+    /// bundle root so the sync code can walk the directory.
+    var onRepoBundleSaved: ((String, URL) -> Void)?
+
+    /// Called after a repo bundle is deleted. Argument is the bundle's
+    /// sanitized name (same as the directory stem without `.cdp`).
+    var onRepoBundleDeleted: ((String) -> Void)?
+
+    /// Called after a repo bundle is renamed. Arguments: (oldName, newName,
+    /// newBundleURL). The sync layer uses this to push the new directory
+    /// and delete the old one under `bundles/<oldName>/`.
+    var onRepoBundleRenamed: ((String, String, URL) -> Void)?
+
     private let extensionBundle: Bundle
     let userPresetsURL: URL
     let repoPresetsURL: URL
@@ -231,10 +246,18 @@ class PresetManager: ObservableObject {
         case .user(let url), .userBundle(let url):
             try fileManager.removeItem(at: url)
             log.info("Deleted user preset: \(preset.name, privacy: .public)")
-        case .repo(let url), .repoBundle(let url):
+        case .repo(let url):
             try fileManager.removeItem(at: url)
             log.info("Deleted repo preset: \(preset.name, privacy: .public)")
             onRepoPresetDeleted?(preset.name, preset.language)
+        case .repoBundle(let url):
+            try fileManager.removeItem(at: url)
+            log.info("Deleted repo bundle: \(preset.name, privacy: .public)")
+            // Bundles go through a separate delete callback so the sync
+            // layer can enumerate + remove every file under `bundles/<name>/`
+            // on the remote, instead of single-file removal.
+            let sanitized = sanitizeFilename(preset.name)
+            onRepoBundleDeleted?(sanitized)
         }
 
         refreshPresets()
@@ -305,14 +328,20 @@ class PresetManager: ObservableObject {
         try fileManager.moveItem(at: oldURL, to: newURL)
         log.info("Renamed preset: \(preset.name, privacy: .public) → \(sanitized, privacy: .public)")
 
-        // For repo presets, trigger background rename on GitHub. Bundle repo
-        // sync is handled in a separate callback path (not wired in v1 of the
-        // bundle feature); fall back to the single-file callback for legacy
-        // `.repo` presets only.
-        if case .repo = preset.source {
+        // For repo presets, trigger background rename on GitHub. Legacy
+        // single-file presets go through the source-carrying callback;
+        // bundles go through a directory-level callback so the sync code
+        // can push the whole `bundles/<newName>/` tree and delete
+        // `bundles/<oldName>/`.
+        switch preset.source {
+        case .repo:
             if let source = try? String(contentsOf: newURL, encoding: .utf8) {
                 onRepoPresetRenamed?(preset.name, sanitized, source, preset.language)
             }
+        case .repoBundle:
+            onRepoBundleRenamed?(preset.name, sanitized, newURL)
+        default:
+            break
         }
 
         refreshPresets()
@@ -358,11 +387,12 @@ class PresetManager: ObservableObject {
         try fileManager.moveItem(at: sourceURL, to: destURL)
         log.info("Migrated preset to repo: \(preset.name, privacy: .public)")
 
-        if triggerSync, !isBundle, let source = try? String(contentsOf: destURL, encoding: .utf8) {
-            // Legacy single-file callback path. Bundle repo sync is handled
-            // by PersonalRepoSync directly via filesystem enumeration (not
-            // wired for bundles in v1).
-            onRepoPresetSaved?(preset.name, source, preset.language)
+        if triggerSync {
+            if isBundle {
+                onRepoBundleSaved?(sanitizeFilename(preset.name), destURL)
+            } else if let source = try? String(contentsOf: destURL, encoding: .utf8) {
+                onRepoPresetSaved?(preset.name, source, preset.language)
+            }
         }
 
         refreshPresets()
@@ -401,9 +431,9 @@ class PresetManager: ObservableObject {
         return preset
     }
 
-    /// Save a preset as a bundle in the repo cache. Bundle-aware GitHub sync
-    /// is a separate follow-up (the single-file `onRepoPresetSaved` callback
-    /// is not fired for bundles), so repo bundles are local-only until then.
+    /// Save a preset as a bundle in the repo cache. Fires
+    /// `onRepoBundleSaved(sanitizedName, bundleURL)` so GitHubService can
+    /// push the directory tree to `bundles/<name>/` on the remote.
     @discardableResult
     func saveRepoBundle(
         name: String,
@@ -416,6 +446,10 @@ class PresetManager: ObservableObject {
         guard let preset = presets.first(where: { $0.id == "repo:bundle:\(sanitized)" }) else {
             throw PresetManagerError.saveFailed
         }
+        let bundleURL = repoPresetsURL.appendingPathComponent(
+            "\(sanitized).\(PresetBundle.bundleExtension)", isDirectory: true
+        )
+        onRepoBundleSaved?(sanitized, bundleURL)
         return preset
     }
 

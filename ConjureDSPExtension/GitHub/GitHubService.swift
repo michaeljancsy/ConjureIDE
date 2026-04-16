@@ -60,6 +60,18 @@ final class GitHubService: ObservableObject {
         presetManager.onRepoPresetRenamed = { [weak self] oldName, newName, source, language in
             self?.handleRepoPresetRenamed(oldName: oldName, newName: newName, source: source, language: language)
         }
+
+        // Bundle-aware callbacks — push/delete/rename the whole
+        // `bundles/<name>/` tree on the remote instead of a single file.
+        presetManager.onRepoBundleSaved = { [weak self] name, bundleURL in
+            self?.handleRepoBundleSaved(name: name, bundleURL: bundleURL)
+        }
+        presetManager.onRepoBundleDeleted = { [weak self] name in
+            self?.handleRepoBundleDeleted(name: name)
+        }
+        presetManager.onRepoBundleRenamed = { [weak self] oldName, newName, newBundleURL in
+            self?.handleRepoBundleRenamed(oldName: oldName, newName: newName, newBundleURL: newBundleURL)
+        }
     }
 
     private func handleRepoPresetSaved(name: String, source: String, language: ScriptLanguage) {
@@ -102,6 +114,32 @@ final class GitHubService: ObservableObject {
             owner: personalRepoOwner,
             repo: personalRepoName,
             token: token
+        )
+    }
+
+    // MARK: Bundle handlers (Phase A′)
+
+    private func handleRepoBundleSaved(name: String, bundleURL: URL) {
+        guard hasPersonalRepo, let token else { return }
+        personalSync.backgroundPushBundle(
+            bundleName: name, bundleURL: bundleURL,
+            owner: personalRepoOwner, repo: personalRepoName, token: token
+        )
+    }
+
+    private func handleRepoBundleDeleted(name: String) {
+        guard hasPersonalRepo, let token else { return }
+        personalSync.backgroundDeleteBundle(
+            bundleName: name,
+            owner: personalRepoOwner, repo: personalRepoName, token: token
+        )
+    }
+
+    private func handleRepoBundleRenamed(oldName: String, newName: String, newBundleURL: URL) {
+        guard hasPersonalRepo, let token else { return }
+        personalSync.backgroundRenameBundle(
+            oldName: oldName, newName: newName, newBundleURL: newBundleURL,
+            owner: personalRepoOwner, repo: personalRepoName, token: token
         )
     }
 

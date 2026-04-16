@@ -80,6 +80,36 @@ struct GitHubCommitResponse: Codable {
     }
 }
 
+// MARK: - Git Tree API
+
+/// Minimal shape of `GET /repos/{owner}/{repo}` — we only need the default
+/// branch to query the tree API with a known ref.
+struct GitHubRepoInfo: Codable {
+    let defaultBranch: String
+    enum CodingKeys: String, CodingKey {
+        case defaultBranch = "default_branch"
+    }
+}
+
+/// Response from `GET /repos/{owner}/{repo}/git/trees/{ref}?recursive=1`.
+/// `truncated == true` means GitHub capped the response (>100k entries or
+/// >7MB). We check for it and warn — preset repos will never hit this.
+struct GitHubTreeResponse: Codable {
+    let sha: String
+    let tree: [GitHubTreeFile]
+    let truncated: Bool?
+}
+
+/// One entry in a git tree — either a blob (file) or a tree (directory).
+/// The sync code filters to blobs only.
+struct GitHubTreeFile: Codable {
+    let path: String
+    let sha: String
+    /// `"blob"` for files, `"tree"` for directories.
+    let type: String
+    let size: Int?
+}
+
 struct CreateRepoResponse: Codable {
     let name: String
     let fullName: String

@@ -442,6 +442,89 @@ struct PresetManagerTests {
 
     /// Renaming a repo *bundle* does NOT fire the legacy callback — bundle
     /// GitHub sync is handled separately.
+    @Test @MainActor func saveRepoBundleFiresBundleSavedCallback() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PresetManagerTests_\(UUID().uuidString)", isDirectory: true)
+        let repoDir = tempDir.appendingPathComponent("RepoPresets", isDirectory: true)
+        let manager = PresetManager(
+            extensionBundle: try Self.extensionBundle,
+            userPresetsURL: tempDir,
+            repoPresetsURL: repoDir
+        )
+        defer { Self.cleanup(tempDir) }
+
+        var firedName: String?
+        var firedURL: URL?
+        manager.onRepoBundleSaved = { name, url in
+            firedName = name
+            firedURL = url
+        }
+
+        try manager.saveRepoBundle(name: "BundleA", source: "# x\n")
+
+        #expect(firedName == "BundleA")
+        #expect(firedURL?.lastPathComponent == "BundleA.cdp")
+        // URL points at a real bundle directory on disk.
+        var isDir: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: firedURL?.path ?? "", isDirectory: &isDir))
+        #expect(isDir.boolValue)
+    }
+
+    @Test @MainActor func deleteRepoBundleFiresBundleDeletedCallbackNotLegacy() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PresetManagerTests_\(UUID().uuidString)", isDirectory: true)
+        let repoDir = tempDir.appendingPathComponent("RepoPresets", isDirectory: true)
+        let manager = PresetManager(
+            extensionBundle: try Self.extensionBundle,
+            userPresetsURL: tempDir,
+            repoPresetsURL: repoDir
+        )
+        defer { Self.cleanup(tempDir) }
+
+        try manager.saveRepoBundle(name: "ToDelete", source: "# x\n")
+
+        var bundleDeletedName: String?
+        var legacyFired = false
+        manager.onRepoBundleDeleted = { bundleDeletedName = $0 }
+        manager.onRepoPresetDeleted = { _, _ in legacyFired = true }
+
+        let preset = manager.presets.first { $0.name == "ToDelete" && $0.isRepo }!
+        try manager.deletePreset(preset)
+
+        #expect(bundleDeletedName == "ToDelete")
+        #expect(legacyFired == false)
+    }
+
+    @Test @MainActor func renameRepoBundleFiresBundleRenamedCallback() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PresetManagerTests_\(UUID().uuidString)", isDirectory: true)
+        let repoDir = tempDir.appendingPathComponent("RepoPresets", isDirectory: true)
+        let manager = PresetManager(
+            extensionBundle: try Self.extensionBundle,
+            userPresetsURL: tempDir,
+            repoPresetsURL: repoDir
+        )
+        defer { Self.cleanup(tempDir) }
+
+        try manager.saveRepoBundle(name: "OldName", source: "# x\n")
+
+        var firedOld: String?
+        var firedNew: String?
+        var firedURL: URL?
+        manager.onRepoBundleRenamed = { old, new, url in
+            firedOld = old
+            firedNew = new
+            firedURL = url
+        }
+
+        let preset = manager.presets.first { $0.name == "OldName" && $0.isRepo }!
+        _ = try manager.renamePreset(preset, to: "NewName")
+
+        #expect(firedOld == "OldName")
+        #expect(firedNew == "NewName")
+        #expect(firedURL?.lastPathComponent == "NewName.cdp")
+    }
+
     @Test @MainActor func renameRepoBundleDoesNotFireLegacyCallback() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("PresetManagerTests_\(UUID().uuidString)", isDirectory: true)

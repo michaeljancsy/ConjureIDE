@@ -204,6 +204,43 @@ final class GitHubClient: Sendable {
         return try decode(CreateRepoResponse.self, from: data)
     }
 
+    /// Recursively list every blob in the repo's default branch, optionally
+    /// filtered to those whose path starts with `pathPrefix`. One API call
+    /// returns the whole tree — much cheaper than walking the Contents API
+    /// directory by directory when pulling bundle directories.
+    ///
+    /// Uses the default branch reported by `GET /repos/{owner}/{repo}` so we
+    /// don't assume `main` vs `master`. Returns paths verbatim (slash-
+    /// separated, no leading slash).
+    func listTreeFiles(
+        owner: String, repo: String,
+        pathPrefix: String = "",
+        token: String
+    ) async throws -> [GitHubTreeFile] {
+        // 1. Resolve the default branch
+        let repoURL = apiURL(path: "/repos/\(owner)/\(repo)")
+        let repoRequest = apiRequest(url: repoURL, method: "GET", token: token)
+        let (repoData, _) = try await perform(repoRequest)
+        let repoInfo = try decode(GitHubRepoInfo.self, from: repoData)
+        let branch = repoInfo.defaultBranch
+
+        // 2. Fetch the tree recursively. `?recursive=1` returns every blob
+        // under the branch's root commit in one shot. For large repos
+        // GitHub may set `truncated: true` — unlikely for a preset repo,
+        // but we log it if it happens.
+        let treeURL = apiURL(path: "/repos/\(owner)/\(repo)/git/trees/\(branch)?recursive=1")
+        let treeRequest = apiRequest(url: treeURL, method: "GET", token: token)
+        let (treeData, _) = try await perform(treeRequest)
+        let tree = try decode(GitHubTreeResponse.self, from: treeData)
+        if tree.truncated == true {
+            log.warning("Tree response truncated for \(owner)/\(repo) — preset list may be incomplete")
+        }
+        return tree.tree.filter { entry in
+            entry.type == "blob" &&
+                (pathPrefix.isEmpty || entry.path == pathPrefix || entry.path.hasPrefix("\(pathPrefix)/"))
+        }
+    }
+
     /// Delete a file from a repo. Requires the file's current SHA.
     func deleteFile(owner: String, repo: String, path: String, sha: String, message: String, token: String) async throws {
         let url = apiURL(path: "/repos/\(owner)/\(repo)/contents/\(path)")

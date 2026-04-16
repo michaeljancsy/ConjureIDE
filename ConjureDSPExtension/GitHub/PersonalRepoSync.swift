@@ -151,6 +151,14 @@ class PersonalRepoSync: ObservableObject {
             }
         }
 
+        // Pull any remote bundles that don't exist locally yet. This runs
+        // after the single-file sync above so the two don't race on
+        // `refreshPresets()`. Failures are logged rather than surfaced —
+        // the existing file-level sync result remains authoritative.
+        await pullBundlesOnConnect(
+            owner: owner, repo: repo, token: token, presetManager: presetManager
+        )
+
         presetManager.refreshPresets()
         lastSyncDate = Date()
         hasPendingChanges = false
@@ -425,6 +433,227 @@ class PersonalRepoSync: ObservableObject {
         pendingConflicts = []
         hasPendingChanges = false
         error = nil
+    }
+
+    // MARK: - Bundle sync (Phase A′)
+
+    /// Remote prefix under which bundles live. The per-language `python/` and
+    /// `rust/` directories continue to hold legacy single-file presets — they
+    /// never contain directories, and sync logic for them is unchanged.
+    private static let remoteBundlesPrefix = "bundles"
+
+    /// Enumerate every file inside a local bundle directory, yielding each
+    /// file's on-disk URL plus its relative path inside the bundle
+    /// (e.g. "manifest.json", "process.py", "ui/index.html"). Hidden files
+    /// and macOS metadata junk (`.DS_Store`, `._*`) are filtered out.
+    nonisolated private static func enumerateBundleFiles(at bundleURL: URL) -> [(URL, String)] {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: bundleURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        var results: [(URL, String)] = []
+        for case let url as URL in enumerator {
+            let isRegular = (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) ?? false
+            guard isRegular else { continue }
+            if url.lastPathComponent.hasPrefix("._") || url.lastPathComponent == ".DS_Store" { continue }
+            // Relative path inside the bundle — what GitHub will see as the
+            // sub-path after `bundles/<name>/`.
+            let relative = String(url.path.dropFirst(bundleURL.path.count + 1))
+            results.append((url, relative))
+        }
+        return results
+    }
+
+    /// Push every file in a local bundle up to `bundles/<name>/` on the
+    /// remote. Uses cached SHAs where present (so repeated saves of the same
+    /// unchanged file skip the network round-trip); computes git blob SHAs
+    /// locally and compares against the cache before writing.
+    func backgroundPushBundle(
+        bundleName: String,
+        bundleURL: URL,
+        owner: String,
+        repo: String,
+        token: String
+    ) {
+        let remoteBundlePrefix = "\(Self.remoteBundlesPrefix)/\(bundleName)"
+        let files = Self.enumerateBundleFiles(at: bundleURL)
+
+        Task.detached { [client, log] in
+            var pushed = 0
+            var skipped = 0
+            for (fileURL, relative) in files {
+                let remotePath = "\(remoteBundlePrefix)/\(relative)"
+                guard let data = try? Data(contentsOf: fileURL),
+                      let content = String(data: data, encoding: .utf8) else {
+                    // Skip binary files that can't round-trip through
+                    // String — GitHub's contents API requires base64 for
+                    // those, which the client doesn't expose today. Images
+                    // in ui/assets typically fit in this bucket. Follow-up.
+                    log.warning("Skipping non-UTF8 bundle file: \(relative, privacy: .public)")
+                    continue
+                }
+                let localSHA = Self.gitBlobSHA(for: content)
+                let remoteSHA = await MainActor.run { self.remoteSHAs[remotePath] }
+                if let remoteSHA, remoteSHA == localSHA {
+                    skipped += 1
+                    continue
+                }
+                do {
+                    let response = try await client.putFile(
+                        owner: owner, repo: repo, path: remotePath,
+                        content: content,
+                        message: "Update \(bundleName)/\(relative)",
+                        sha: remoteSHA, token: token
+                    )
+                    await MainActor.run { self.remoteSHAs[remotePath] = response.content.sha }
+                    pushed += 1
+                } catch {
+                    log.error("Bundle push \(remotePath, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                    await MainActor.run { self.hasPendingChanges = true }
+                }
+            }
+            log.info("Bundle push: \(bundleName, privacy: .public) pushed=\(pushed), skipped=\(skipped)")
+            await MainActor.run { self.hasPendingChanges = false }
+        }
+    }
+
+    /// Delete every remote file under `bundles/<name>/`. Uses the Tree API
+    /// to enumerate files in a single call (so large bundles don't hit the
+    /// contents API N times just to discover SHAs).
+    func backgroundDeleteBundle(
+        bundleName: String,
+        owner: String,
+        repo: String,
+        token: String
+    ) {
+        let remoteBundlePrefix = "\(Self.remoteBundlesPrefix)/\(bundleName)"
+
+        Task.detached { [client, log] in
+            // Enumerate current remote state via Tree API. If the endpoint
+            // returns nothing (bundle never made it remotely), drop the
+            // cached entries locally and return quietly.
+            let remoteFiles = (try? await client.listTreeFiles(
+                owner: owner, repo: repo, pathPrefix: remoteBundlePrefix, token: token
+            )) ?? []
+
+            for file in remoteFiles {
+                let sha = file.sha
+                do {
+                    try await client.deleteFile(
+                        owner: owner, repo: repo, path: file.path,
+                        sha: sha, message: "Delete \(file.path)", token: token
+                    )
+                    await MainActor.run { self.remoteSHAs.removeValue(forKey: file.path) }
+                } catch {
+                    log.error("Bundle delete \(file.path, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+            // Belt-and-suspenders: also clear any locally-cached SHAs under
+            // the prefix (covers files that existed locally but never made
+            // it to the remote).
+            await MainActor.run {
+                for key in self.remoteSHAs.keys where key.hasPrefix("\(remoteBundlePrefix)/") {
+                    self.remoteSHAs.removeValue(forKey: key)
+                }
+            }
+            log.info("Bundle delete: \(bundleName, privacy: .public) removed \(remoteFiles.count) files")
+        }
+    }
+
+    /// Rename a bundle on the remote: push the new name's contents first,
+    /// then delete the old prefix. Same safety property as the single-file
+    /// rename — if the push fails, the old directory remains intact.
+    func backgroundRenameBundle(
+        oldName: String,
+        newName: String,
+        newBundleURL: URL,
+        owner: String,
+        repo: String,
+        token: String
+    ) {
+        // Push first; the push helper is idempotent and safe to run
+        // unconditionally.
+        backgroundPushBundle(
+            bundleName: newName, bundleURL: newBundleURL,
+            owner: owner, repo: repo, token: token
+        )
+        // Then cascade-delete the old prefix. This schedules a second task
+        // that races with the push above, which is fine — they operate on
+        // disjoint remote paths.
+        backgroundDeleteBundle(
+            bundleName: oldName,
+            owner: owner, repo: repo, token: token
+        )
+    }
+
+    /// Pull any bundles that exist under `bundles/` remotely but not in
+    /// `repoPresetsURL` locally. Conflict detection for bundles is scoped
+    /// out for the first pass — if both sides have a `bundles/<name>/`, the
+    /// local one wins and a follow-up sync re-pushes.
+    func pullBundlesOnConnect(
+        owner: String,
+        repo: String,
+        token: String,
+        presetManager: PresetManager
+    ) async {
+        // One Tree API call gets every file under `bundles/`.
+        let files: [GitHubTreeFile]
+        do {
+            files = try await client.listTreeFiles(
+                owner: owner, repo: repo,
+                pathPrefix: Self.remoteBundlesPrefix, token: token
+            )
+        } catch {
+            log.warning("Tree fetch for bundles/ failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        if files.isEmpty { return }
+
+        // Group files by their immediate `bundles/<name>/` bucket.
+        var filesByBundle: [String: [GitHubTreeFile]] = [:]
+        for file in files {
+            let parts = file.path.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: false)
+            guard parts.count >= 3, parts[0] == Self.remoteBundlesPrefix else { continue }
+            filesByBundle[String(parts[1]), default: []].append(file)
+        }
+
+        let fm = FileManager.default
+        for (bundleName, bundleFiles) in filesByBundle {
+            let localBundleURL = presetManager.repoPresetsURL.appendingPathComponent(
+                "\(bundleName).\(PresetBundle.bundleExtension)", isDirectory: true
+            )
+            if fm.fileExists(atPath: localBundleURL.path) {
+                // Local wins in v1. Still populate remoteSHAs so later
+                // pushes don't re-upload unchanged files.
+                for file in bundleFiles {
+                    remoteSHAs[file.path] = file.sha
+                }
+                continue
+            }
+            do {
+                try fm.createDirectory(at: localBundleURL, withIntermediateDirectories: true)
+                for file in bundleFiles {
+                    let relative = String(file.path.dropFirst(
+                        "\(Self.remoteBundlesPrefix)/\(bundleName)/".count
+                    ))
+                    let content = try await client.fetchFileContent(
+                        owner: owner, repo: repo, path: file.path, token: token
+                    )
+                    let destURL = localBundleURL.appendingPathComponent(relative)
+                    try fm.createDirectory(
+                        at: destURL.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    try content.write(to: destURL, atomically: true, encoding: .utf8)
+                    remoteSHAs[file.path] = file.sha
+                }
+                log.info("Pulled bundle: \(bundleName, privacy: .public) with \(bundleFiles.count) files")
+            } catch {
+                log.error("Bundle pull \(bundleName, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     // MARK: - Helpers
