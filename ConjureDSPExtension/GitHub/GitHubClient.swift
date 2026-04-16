@@ -163,7 +163,47 @@ final class GitHubClient: Sendable {
         return text
     }
 
-    /// Create or update a file in a repo. For updates, provide the file's current SHA.
+    /// Fetch a file's raw bytes. Safe for binary payloads (PNG, WOFF, etc.)
+    /// where `fetchFileContent`'s UTF-8 decode would throw. Uses the same
+    /// `raw+json` accept header so GitHub returns the file unframed.
+    func fetchFileData(owner: String, repo: String, path: String, token: String) async throws -> Data {
+        let url = apiURL(path: "/repos/\(owner)/\(repo)/contents/\(path)")
+        var request = apiRequest(url: url, method: "GET", token: token)
+        request.setValue("application/vnd.github.raw+json", forHTTPHeaderField: "Accept")
+        let (data, _) = try await perform(request)
+        return data
+    }
+
+    /// Create or update a file in a repo from raw bytes. Same wire format
+    /// as `putFile` (base64-encoded content) but doesn't require the caller
+    /// to have already decoded the file as UTF-8. Used by bundle sync for
+    /// `ui/assets/` images, fonts, and any other non-text payload.
+    func putFileData(
+        owner: String,
+        repo: String,
+        path: String,
+        data: Data,
+        message: String,
+        sha: String? = nil,
+        token: String
+    ) async throws -> GitHubCommitResponse {
+        let url = apiURL(path: "/repos/\(owner)/\(repo)/contents/\(path)")
+        var body: [String: Any] = [
+            "message": message,
+            "content": data.base64EncodedString(),
+        ]
+        if let sha {
+            body["sha"] = sha
+        }
+        var request = apiRequest(url: url, method: "PUT", token: token)
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (responseData, _) = try await perform(request)
+        return try decode(GitHubCommitResponse.self, from: responseData)
+    }
+
+    /// Create or update a text file. Thin wrapper over `putFileData` that
+    /// UTF-8-encodes the string for you. Existing call sites expecting
+    /// string content keep working unchanged.
     func putFile(
         owner: String,
         repo: String,
@@ -173,18 +213,11 @@ final class GitHubClient: Sendable {
         sha: String? = nil,
         token: String
     ) async throws -> GitHubCommitResponse {
-        let url = apiURL(path: "/repos/\(owner)/\(repo)/contents/\(path)")
-        var body: [String: Any] = [
-            "message": message,
-            "content": Data(content.utf8).base64EncodedString(),
-        ]
-        if let sha {
-            body["sha"] = sha
-        }
-        var request = apiRequest(url: url, method: "PUT", token: token)
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, _) = try await perform(request)
-        return try decode(GitHubCommitResponse.self, from: data)
+        try await putFileData(
+            owner: owner, repo: repo, path: path,
+            data: Data(content.utf8),
+            message: message, sha: sha, token: token
+        )
     }
 
     // MARK: - Repo Management

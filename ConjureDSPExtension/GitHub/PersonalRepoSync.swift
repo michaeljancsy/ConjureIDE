@@ -485,25 +485,25 @@ class PersonalRepoSync: ObservableObject {
             var skipped = 0
             for (fileURL, relative) in files {
                 let remotePath = "\(remoteBundlePrefix)/\(relative)"
-                guard let data = try? Data(contentsOf: fileURL),
-                      let content = String(data: data, encoding: .utf8) else {
-                    // Skip binary files that can't round-trip through
-                    // String — GitHub's contents API requires base64 for
-                    // those, which the client doesn't expose today. Images
-                    // in ui/assets typically fit in this bucket. Follow-up.
-                    log.warning("Skipping non-UTF8 bundle file: \(relative, privacy: .public)")
+                guard let data = try? Data(contentsOf: fileURL) else {
+                    log.warning("Bundle file unreadable, skipping: \(relative, privacy: .public)")
                     continue
                 }
-                let localSHA = Self.gitBlobSHA(for: content)
+                // Local git-blob SHA for change detection. Works identically
+                // for text and binary since it SHA1's the raw bytes.
+                let localSHA = Self.gitBlobSHA(forData: data)
                 let remoteSHA = await MainActor.run { self.remoteSHAs[remotePath] }
                 if let remoteSHA, remoteSHA == localSHA {
                     skipped += 1
                     continue
                 }
                 do {
-                    let response = try await client.putFile(
+                    // Data-based putFile so binary assets (PNG, WOFF, …) in
+                    // ui/assets survive the round-trip. Text files use the
+                    // same path — the client base64-encodes in both cases.
+                    let response = try await client.putFileData(
                         owner: owner, repo: repo, path: remotePath,
-                        content: content,
+                        data: data,
                         message: "Update \(bundleName)/\(relative)",
                         sha: remoteSHA, token: token
                     )
@@ -638,7 +638,11 @@ class PersonalRepoSync: ObservableObject {
                     let relative = String(file.path.dropFirst(
                         "\(Self.remoteBundlesPrefix)/\(bundleName)/".count
                     ))
-                    let content = try await client.fetchFileContent(
+                    // Data-based fetch handles both text and binary payloads.
+                    // Previous string-based fetch would throw on PNG/WOFF
+                    // assets because the UTF-8 decode in fetchFileContent
+                    // rejects non-text bytes.
+                    let data = try await client.fetchFileData(
                         owner: owner, repo: repo, path: file.path, token: token
                     )
                     let destURL = localBundleURL.appendingPathComponent(relative)
@@ -646,7 +650,7 @@ class PersonalRepoSync: ObservableObject {
                         at: destURL.deletingLastPathComponent(),
                         withIntermediateDirectories: true
                     )
-                    try content.write(to: destURL, atomically: true, encoding: .utf8)
+                    try data.write(to: destURL, options: .atomic)
                     remoteSHAs[file.path] = file.sha
                 }
                 log.info("Pulled bundle: \(bundleName, privacy: .public) with \(bundleFiles.count) files")
@@ -661,12 +665,17 @@ class PersonalRepoSync: ObservableObject {
     /// Compute the git blob SHA1 for a string: SHA1("blob <size>\0<content>").
     /// This matches the SHA that GitHub reports for file contents.
     nonisolated static func gitBlobSHA(for content: String) -> String {
-        let data = Data(content.utf8)
+        gitBlobSHA(forData: Data(content.utf8))
+    }
+
+    /// Compute the git blob SHA1 for raw bytes. Same format as the string
+    /// variant — git SHAs the raw content prefixed with `blob <byte-count>\0`
+    /// regardless of whether the content is text or binary, so this handles
+    /// images/fonts in `ui/assets/` identically.
+    nonisolated static func gitBlobSHA(forData data: Data) -> String {
         let header = "blob \(data.count)\0"
         var blob = Data(header.utf8)
         blob.append(data)
-
-        // CC_SHA1 via CommonCrypto (available on all Apple platforms)
         var digest = [UInt8](repeating: 0, count: 20)
         blob.withUnsafeBytes { buffer in
             _ = CC_SHA1(buffer.baseAddress, CC_LONG(buffer.count), &digest)
