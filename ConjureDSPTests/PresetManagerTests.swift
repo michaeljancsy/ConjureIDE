@@ -31,7 +31,7 @@ struct PresetManagerTests {
             .appendingPathComponent("PresetManagerTests_\(UUID().uuidString)", isDirectory: true)
         let manager = PresetManager(
             extensionBundle: try extensionBundle,
-            userPresetsURL: tempDir
+            presetsURL: tempDir
         )
         return (manager, tempDir)
     }
@@ -112,7 +112,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
-        let preset = try manager.saveUserPreset(name: "My Effect", source: script)
+        let preset = try manager.savePreset(name: "My Effect", source: script)
 
         #expect(preset.name == "My Effect")
         #expect(!preset.isFactory)
@@ -127,7 +127,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let script = "fn process() {}\n"
-        let preset = try manager.saveUserPreset(name: "My Rust Effect", source: script, language: .rust)
+        let preset = try manager.savePreset(name: "My Rust Effect", source: script, language: .rust)
 
         #expect(preset.name == "My Rust Effect")
         #expect(preset.language == .rust)
@@ -142,7 +142,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
-        try manager.saveUserPreset(name: "Test Preset", source: script)
+        try manager.savePreset(name: "Test Preset", source: script)
 
         let userPresets = manager.presets.filter { !$0.isFactory }
         #expect(userPresets.count == 1)
@@ -154,7 +154,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let script = "pass\n"
-        let preset = try manager.saveUserPreset(name: "To Delete", source: script)
+        let preset = try manager.savePreset(name: "To Delete", source: script)
         #expect(manager.presets.contains(where: { $0.id == preset.id }))
 
         try manager.deleteUserPreset(preset)
@@ -165,7 +165,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let preset = try manager.saveUserPreset(name: "Active", source: "pass\n")
+        let preset = try manager.savePreset(name: "Active", source: "pass\n")
         manager.setCurrentPreset(preset, source: "pass\n")
         #expect(manager.currentPreset?.id == preset.id)
 
@@ -178,8 +178,8 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        try manager.saveUserPreset(name: "Evolving", source: "# version 1\n")
-        try manager.saveUserPreset(name: "Evolving", source: "# version 2\n")
+        try manager.savePreset(name: "Evolving", source: "# version 1\n")
+        try manager.savePreset(name: "Evolving", source: "# version 2\n")
 
         let userPresets = manager.presets.filter { !$0.isFactory && $0.name == "Evolving" }
         #expect(userPresets.count == 1, "Should have exactly one preset named 'Evolving'")
@@ -195,7 +195,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let source = "# original\n"
-        let preset = try manager.saveUserPreset(name: "Track Me", source: source)
+        let preset = try manager.savePreset(name: "Track Me", source: source)
         manager.setCurrentPreset(preset, source: source)
 
         #expect(manager.isModified == false)
@@ -230,7 +230,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        try manager.saveUserPreset(name: "Conflict", source: "pass\n")
+        try manager.savePreset(name: "Conflict", source: "pass\n")
         let name = manager.uniqueName(baseName: "Conflict")
         #expect(name == "Conflict 2")
     }
@@ -239,8 +239,8 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        try manager.saveUserPreset(name: "Effect", source: "pass\n")
-        try manager.saveUserPreset(name: "Effect 2", source: "pass\n")
+        try manager.savePreset(name: "Effect", source: "pass\n")
+        try manager.savePreset(name: "Effect 2", source: "pass\n")
         let name = manager.uniqueName(baseName: "Effect")
         #expect(name == "Effect 3")
     }
@@ -260,7 +260,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         #expect(throws: PresetManagerError.self) {
-            try manager.saveUserPreset(name: "   ", source: "pass\n")
+            try manager.savePreset(name: "   ", source: "pass\n")
         }
     }
 
@@ -269,7 +269,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         #expect(!manager.userPresetExists(name: "Nope"))
-        try manager.saveUserPreset(name: "Exists", source: "pass\n")
+        try manager.savePreset(name: "Exists", source: "pass\n")
         #expect(manager.userPresetExists(name: "Exists"))
     }
 
@@ -346,7 +346,7 @@ struct PresetManagerTests {
 
         let _ = PresetManager(
             extensionBundle: try Self.extensionBundle,
-            userPresetsURL: tempDir
+            presetsURL: tempDir
         )
 
         #expect(FileManager.default.fileExists(atPath: tempDir.path),
@@ -360,7 +360,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         // Save a user preset with the same name as a factory preset
-        try manager.saveUserPreset(name: "Tremolo (Python)", source: "# user tremolo\n")
+        try manager.savePreset(name: "Tremolo (Python)", source: "# user tremolo\n")
 
         let tremolos = manager.presets.filter { $0.name == "Tremolo (Python)" }
         #expect(tremolos.count == 2, "Should have both factory and user 'Tremolo (Python)'")
@@ -390,7 +390,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
-        try manager.saveUserPreset(name: "Alpha", source: script)
+        try manager.savePreset(name: "Alpha", source: script)
 
         let renamed = try manager.renamePreset(
             manager.presets.first(where: { $0.name == "Alpha" && !$0.isFactory })!,
@@ -404,34 +404,23 @@ struct PresetManagerTests {
         #expect(manager.loadSource(for: renamed) == script)
     }
 
-    @Test @MainActor func renameRepoPreset() throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PresetManagerTests_\(UUID().uuidString)", isDirectory: true)
-        let repoDir = tempDir.appendingPathComponent("RepoPresets", isDirectory: true)
-        let manager = PresetManager(
-            extensionBundle: try Self.extensionBundle,
-            userPresetsURL: tempDir,
-            repoPresetsURL: repoDir
-        )
+    @Test @MainActor func renameFiresOnPresetWrittenCallback() throws {
+        let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let script = "# repo script\n"
-        try manager.saveRepoPreset(name: "RepoAlpha", source: script)
+        try manager.savePreset(name: "Alpha", source: "# alpha\n")
 
-        var callbackArgs: (oldName: String, newName: String, source: String, language: ScriptLanguage)?
-        manager.onRepoPresetRenamed = { oldName, newName, source, language in
-            callbackArgs = (oldName, newName, source, language)
+        var callbackArgs: (preset: Preset, oldName: String?)?
+        manager.onPresetWritten = { preset, oldName in
+            callbackArgs = (preset, oldName)
         }
 
-        let preset = manager.presets.first(where: { $0.name == "RepoAlpha" && $0.isRepo })!
-        let renamed = try manager.renamePreset(preset, to: "RepoBeta")
+        let preset = manager.presets.first(where: { $0.name == "Alpha" && !$0.isFactory })!
+        let renamed = try manager.renamePreset(preset, to: "Beta")
 
-        #expect(renamed.name == "RepoBeta")
-        #expect(renamed.id == "repo:RepoBeta.py")
-        #expect(callbackArgs?.oldName == "RepoAlpha")
-        #expect(callbackArgs?.newName == "RepoBeta")
-        #expect(callbackArgs?.source == script)
-        #expect(callbackArgs?.language == .python)
+        #expect(renamed.name == "Beta")
+        #expect(callbackArgs?.preset.name == "Beta")
+        #expect(callbackArgs?.oldName == "Alpha")
     }
 
     @Test @MainActor func renameCurrentPresetUpdatesCurrent() throws {
@@ -439,7 +428,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let script = "# active preset\n"
-        let preset = try manager.saveUserPreset(name: "Current", source: script)
+        let preset = try manager.savePreset(name: "Current", source: script)
         manager.setCurrentPreset(preset, source: script)
         manager.scriptDidChange(to: "# edited\n")
         #expect(manager.isModified == true)
@@ -456,7 +445,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let preset = try manager.saveUserPreset(name: "Same", source: "pass\n")
+        let preset = try manager.savePreset(name: "Same", source: "pass\n")
         let result = try manager.renamePreset(preset, to: "Same")
 
         #expect(result.id == preset.id)
@@ -477,7 +466,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let preset = try manager.saveUserPreset(name: "Valid", source: "pass\n")
+        let preset = try manager.savePreset(name: "Valid", source: "pass\n")
         #expect(throws: PresetManagerError.self) {
             try manager.renamePreset(preset, to: "   ")
         }
@@ -487,8 +476,8 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        try manager.saveUserPreset(name: "Existing", source: "pass\n")
-        let preset = try manager.saveUserPreset(name: "ToRename", source: "pass\n")
+        try manager.savePreset(name: "Existing", source: "pass\n")
+        let preset = try manager.savePreset(name: "ToRename", source: "pass\n")
 
         #expect(throws: PresetManagerError.self) {
             try manager.renamePreset(preset, to: "Existing")
@@ -499,7 +488,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let preset = try manager.saveUserPreset(name: "RustEffect", source: "fn process() {}\n", language: .rust)
+        let preset = try manager.savePreset(name: "RustEffect", source: "fn process() {}\n", language: .rust)
         let renamed = try manager.renamePreset(preset, to: "RenamedRust")
 
         #expect(renamed.language == .rust)
@@ -511,8 +500,8 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let presetA = try manager.saveUserPreset(name: "A", source: "# a\n")
-        let presetB = try manager.saveUserPreset(name: "B", source: "# b\n")
+        let presetA = try manager.savePreset(name: "A", source: "# a\n")
+        let presetB = try manager.savePreset(name: "B", source: "# b\n")
         manager.setCurrentPreset(presetA, source: "# a\n")
 
         try manager.renamePreset(presetB, to: "C")

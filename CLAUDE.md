@@ -126,8 +126,22 @@ An in-plugin terminal running Claude Code CLI via a companion app architecture. 
 
 Setup: `scripts/setup-xterm.sh` downloads xterm.js to `Resources/terminal/xterm/` (gitignored).
 
-### GitHub Integration
-**PersonalRepoSync** for two-way sync with a user's private preset repository (PAT-based). Repos are validated via a `conjuredsp.json` marker file. Auto-syncs preset saves/deletes via callbacks into PresetManager.
+### Git-backed preset library
+The user presets directory (`<AppGroup>/Presets/`) is a real git repository, initialized on first launch. Every explicit Save / Save As / Delete / Rename triggers a commit. Users can optionally configure a GitHub (or any HTTPS) remote URL, and pushes fire automatically after commits (2 s trailing-edge debounce) or via a "Push now" button.
+
+Architecture:
+- **`ConjureDSPExtension/Git/PresetGitCoordinator.swift`** — `@Observable @MainActor` orchestrator. Owns the commit-message preference (`alwaysPrompt` vs `alwaysTimestamp`, backed by UserDefaults) and the remote URL. Entry points: `initIfNeeded()`, `recordSave/Delete/Rename`, `setRemote/clearRemote`, `pushIfRemoteConfigured()`.
+- **`ConjureDSPExtension/Git/GitQueueClient.swift`** — thin async transport that writes a JSON request into `<AppGroup>/git-queue/requests/` and polls `<AppGroup>/git-queue/results/` for the matching response. 15 s timeout for most ops, 60 s for push.
+- **`ConjureDSPExtension/Git/GitRequest.swift`** — shared JSON shapes for the queue (the terminal has an equivalent copy inline in `GitWorker.swift`, same pattern as `PackageInstallManager` ↔ `PackageInstaller`).
+- **`ConjureDSPTerminal/GitWorker.swift`** — shells out to system `git` (resolved via `xcrun -f git` → `/usr/bin/git` → `which git`). Supports `initIfNeeded`, `commit`, `status`, `setRemote`, `removeRemote`, `push`, `remoteInfo`. Runs on the terminal's existing 500 ms reconcile loop alongside `PackageInstaller`/`CrateInstaller`/`ExportFinalizer`.
+
+Push auth: the extension's Keychain-backed PAT is passed via a short-lived 0600 token file in the App Group container; the worker consumes it via an inline git credential helper (`!f() { echo username=x-access-token; echo "password=$(cat $tokenFile)"; }; f`) and unlinks it immediately after spawning git. Backlog item tracks switching to a stdin `GIT_ASKPASS` pipe for belt-and-suspenders.
+
+Commit-message UX: `SaveAsPopover` shows an inline "Commit message" field when mode is `.alwaysPrompt`, pre-filled with `Add <name>`. The Save toolbar button opens `SaveMessagePopover` with `Update <name>` pre-filled. Either popover has a "Don't ask again — always use timestamp" link that flips the preference. Settings (`RemoteSyncSettingsView`) exposes a radio picker + "Reset to default".
+
+Fail-open: if the terminal is down when a save happens, the request queues on disk and drains whenever the terminal next comes up. The preset file still saves locally. Push failures surface inline in Settings with a "Push failed: …" badge.
+
+`GitHubService` is now minimal — just Keychain-backed PAT + remote URL persistence. `GitHubURLResolver` is a small helper for the "Import from URL" popover (GitHub web URL → raw URL rewrite + fetch); unrelated to preset history.
 
 ### Spectrogram Visualization
 Lock-free ring buffers (written by audio thread, read by UI) feed FFT computation via Accelerate/vDSP on the main thread (CADisplayLink-synced). Supports 4 modes: input, output, difference, and normalized difference. Log and linear frequency scales with diverging colormaps for difference modes.
@@ -150,11 +164,13 @@ ConjureDSPExtension/         The AU plugin itself
   Audio/                     AudioCaptureManager — reads ring buffers for spectrogram FFT
   Compilation/               RustCompiler (bundled rustc → WASM), ScriptCompiler, ScriptLanguage (auto-detect), WasmCache (SHA256)
   Export/                    ExportManager (standalone AUv3 pipeline), ExportRegistry, SubtypeGenerator
-  GitHub/                    GitHubService, GitHubClient, PersonalRepoSync, GitHubModels
+  Git/                       PresetGitCoordinator, GitQueueClient, GitRequest — orchestrates git-backed preset history
+  GitHub/                    GitHubService (PAT + remote URL), GitHubURLResolver (URL import helper)
   Model/                     SubscriptionManager (token verification + server refresh), SubscriptionAPI (server comms), Preset, PresetManager
   Parameters/                Parameter addresses (Swift enum)
   UI/                        MonacoEditorView, SpectrogramView, TerminalView,
-                             PresetBrowserView, ParameterSlidersView, GitHubSettingsView, ExportPopover, and more
+                             PresetBrowserView, ParameterSlidersView, RemoteSyncSettingsView (in GitHubSettingsView.swift),
+                             SaveAsPopover, SaveMessagePopover, ExportPopover, and more
   Resources/                 Factory presets (.py + .wasm), process.py, monaco/ (gitignored)
   Common/Audio Unit/         ConjureDSPExtensionAudioUnit.swift — AUAudioUnit subclass + render block
   Common/UI/                 AudioUnitViewController
@@ -163,6 +179,10 @@ ConjureDSPTerminal/          Companion app — runs Claude Code CLI outside sand
   ConjureDSPTerminalApp.swift  App entry point, TerminalAppServer (lifecycle, health checks)
   PTYManager.swift           forkpty + execve for Claude Code, MCP config writing
   WebSocketServer.swift      NWListener WebSocket relay (PTY I/O → xterm.js)
+  GitWorker.swift            Shells out to system git for the preset-library repo (init, commit, status, push, remote)
+  PackageInstaller.swift     uv-backed Python package install/uninstall
+  CrateInstaller.swift       cargo-backed Rust crate compile to wasm32-wasip1 rlib
+  ExportFinalizer.swift      Finishes standalone AUv3 exports (signing, LaunchServices registration)
 ConjureDSPHelper/            Deprecated stub target (replaced by ConjureDSPTerminal)
 ConjureDSPExportAUTemplate/  Standalone export AU template project
   ConjureDSPExportAUTemplate/          Host app for template

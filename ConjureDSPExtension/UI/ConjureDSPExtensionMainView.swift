@@ -45,10 +45,12 @@ struct ConjureDSPExtensionMainView: View {
     // reads isLicensed and demoSecondsRemaining directly in this view's body.
     @ObservedObject var subscriptionManager: SubscriptionManager
     var gitHubService: GitHubService
+    @Bindable var gitCoordinator: PresetGitCoordinator
     var onRun: (String) async -> ScriptSaveResult
     var onSelectPreset: (Preset) async -> ScriptSaveResult
-    var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
-    var onSaveAsPreset: (String, String, ScriptLanguage) -> ScriptSaveResult
+    /// commitMessage is optional — nil means "use the coordinator's default"
+    var onSavePreset: (_ source: String, _ language: ScriptLanguage, _ commitMessage: String?) -> ScriptSaveResult
+    var onSaveAsPreset: (_ name: String, _ source: String, _ language: ScriptLanguage, _ commitMessage: String?) -> ScriptSaveResult
     var onDeletePreset: () -> Void
     var onRenamePreset: (String) -> String?
     var onNew: (ScriptLanguage) -> ScriptSaveResult
@@ -116,6 +118,7 @@ struct ConjureDSPExtensionMainView: View {
                 presetManager: presetManager,
                 subscriptionManager: subscriptionManager,
                 gitHubService: gitHubService,
+                gitCoordinator: gitCoordinator,
                 isCompiling: isCompiling,
                 hasUnrunChanges: scriptSource != lastRunSource,
                 selectedLanguage: selectedLanguage,
@@ -141,12 +144,12 @@ struct ConjureDSPExtensionMainView: View {
                         handleResult(result)
                     }
                 },
-                onSave: {
-                    let result = onSavePreset(scriptSource, selectedLanguage)
+                onSave: { commitMessage in
+                    let result = onSavePreset(scriptSource, selectedLanguage, commitMessage)
                     handleResult(result)
                 },
-                onSaveAs: { name in
-                    let result = onSaveAsPreset(name, scriptSource, selectedLanguage)
+                onSaveAs: { name, commitMessage in
+                    let result = onSaveAsPreset(name, scriptSource, selectedLanguage, commitMessage)
                     handleResult(result)
                 },
                 onDelete: {
@@ -507,7 +510,11 @@ struct ConjureDSPExtensionMainView: View {
 
     private func handleCmdS() {
         if canSave {
-            let result = onSavePreset(scriptSource, selectedLanguage)
+            // Cmd-S bypasses the commit-message popover and uses the
+            // coordinator's default message (timestamp or "Update <name>"
+            // depending on mode). Users who want a custom message click
+            // the toolbar Save button.
+            let result = onSavePreset(scriptSource, selectedLanguage, nil)
             handleResult(result)
         } else {
             saveAsName = presetManager.currentPreset?.name ?? ""

@@ -3,7 +3,7 @@ import SwiftUI
 /// Import a preset from any HTTPS URL (GitHub raw, Gist raw, etc.).
 struct ImportURLPopover: View {
     let presetManager: PresetManager
-    let client: GitHubClient
+    let resolver: GitHubURLResolver
     let onImported: (Preset) -> Void
     let onCancel: () -> Void
 
@@ -107,7 +107,7 @@ struct ImportURLPopover: View {
         previewSource = nil
 
         // Catch known non-file URLs before fetching
-        if let validationError = GitHubClient.validateImportURL(url) {
+        if let validationError = GitHubURLResolver.validateURL(url) {
             error = validationError
             return
         }
@@ -116,7 +116,7 @@ struct ImportURLPopover: View {
 
         Task {
             do {
-                let (source, responseURL) = try await client.fetchURLWithResponseURL(url)
+                let (source, responseURL) = try await resolver.fetchWithResponseURL(url)
                 let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 if trimmed.hasPrefix("<!doctype") || trimmed.hasPrefix("<html") {
                     self.error = "URL returned a web page. Link to a .py or .rs file."
@@ -143,7 +143,7 @@ struct ImportURLPopover: View {
         guard let source = previewSource, !detectedName.isEmpty else { return }
         let name = presetManager.uniqueName(baseName: detectedName)
         do {
-            let preset = try presetManager.saveUserPreset(
+            let preset = try presetManager.savePreset(
                 name: name,
                 source: source,
                 language: detectedLanguage

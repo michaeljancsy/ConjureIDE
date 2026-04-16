@@ -52,6 +52,7 @@ struct PresetToolbar: View {
     @ObservedObject var presetManager: PresetManager
     @ObservedObject var subscriptionManager: SubscriptionManager
     @ObservedObject var gitHubService: GitHubService
+    @Bindable var gitCoordinator: PresetGitCoordinator
     var isCompiling: Bool = false
     var hasUnrunChanges: Bool = false
     var selectedLanguage: ScriptLanguage
@@ -60,8 +61,10 @@ struct PresetToolbar: View {
     @Binding var showNewScriptDialog: Bool
     var onSelectPreset: (Preset) -> Void
     var onRun: () -> Void
-    var onSave: () -> Void
-    var onSaveAs: (String) -> Void
+    /// Overwrite-save with an optional user-supplied commit message. nil means use default.
+    var onSave: (_ commitMessage: String?) -> Void
+    /// Save As with an optional user-supplied commit message. nil means use default.
+    var onSaveAs: (_ name: String, _ commitMessage: String?) -> Void
     var onDelete: () -> Void
     var onRename: (String) -> String?
     var onNew: (ScriptLanguage) -> Void
@@ -83,6 +86,7 @@ struct PresetToolbar: View {
     @State private var renameName = ""
     @State private var renameError: String?
     @State private var showingSettings = false
+    @State private var showingSaveMessage = false
     @State private var showingPackages = false
     @State private var packageInstallManager = PackageInstallManager()
     @State private var crateInstallManager = CrateInstallManager()
@@ -97,7 +101,7 @@ struct PresetToolbar: View {
 
     private var currentIsMutable: Bool {
         guard let current = presetManager.currentPreset else { return false }
-        return current.isUser || current.isRepo
+        return current.isUser
     }
 
     var body: some View {
@@ -126,7 +130,6 @@ struct PresetToolbar: View {
                     presets: presetManager.presets,
                     currentPreset: presetManager.currentPreset,
                     isModified: presetManager.isModified,
-                    hasRepoPresets: presetManager.presets.contains(where: \.isRepo),
                     onSelectPreset: { preset in
                         showingPresetBrowser = false
                         onSelectPreset(preset)
@@ -189,9 +192,19 @@ struct PresetToolbar: View {
             .toolbarTooltip(bypassed ? "Bypass ON — click to enable processing" : "Bypass processing (A/B compare)")
             .accessibilityIdentifier("bypassButton")
 
-            // Save (overwrite current user preset)
+            // Save (overwrite current user preset). In alwaysPrompt mode,
+            // show a small popover to collect a commit message first. In
+            // alwaysTimestamp mode, fire the save immediately with a nil
+            // message (the coordinator substitutes a timestamp).
             if currentIsMutable {
-                Button(action: { onSave() }) {
+                Button(action: {
+                    switch gitCoordinator.mode {
+                    case .alwaysPrompt:
+                        showingSaveMessage = true
+                    case .alwaysTimestamp:
+                        onSave(nil)
+                    }
+                }) {
                     VStack(alignment: .center, spacing: 1) {
                         Image(systemName: "square.and.arrow.down")
                             .frame(height: 16)
@@ -205,6 +218,22 @@ struct PresetToolbar: View {
                 .disabled(!presetManager.isModified)
                 .toolbarTooltip("Save (\u{2318}S)")
                 .accessibilityIdentifier("savePresetButton")
+                .popover(isPresented: $showingSaveMessage) {
+                    let name = presetManager.currentPreset?.name ?? ""
+                    SaveMessagePopover(
+                        defaultMessage: "Update \(name)",
+                        onSave: { message in
+                            showingSaveMessage = false
+                            onSave(message)
+                        },
+                        onDontAskAgain: {
+                            gitCoordinator.mode = .alwaysTimestamp
+                            showingSaveMessage = false
+                            onSave(nil)
+                        },
+                        onCancel: { showingSaveMessage = false }
+                    )
+                }
             }
 
             // Save As
@@ -228,9 +257,14 @@ struct PresetToolbar: View {
                 SaveAsPopover(
                     name: $saveAsName,
                     existingNames: Set(presetManager.presets.filter { !$0.isFactory }.map(\.name)),
-                    onSave: { name in
+                    commitMessageMode: gitCoordinator.mode,
+                    defaultCommitMessagePrefix: "Add",
+                    onSave: { name, commitMessage in
                         showingSaveAs = false
-                        onSaveAs(name)
+                        onSaveAs(name, commitMessage)
+                    },
+                    onDontAskAgain: {
+                        gitCoordinator.mode = .alwaysTimestamp
                     },
                     onCancel: { showingSaveAs = false }
                 )
@@ -335,11 +369,7 @@ struct PresetToolbar: View {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    if presetManager.currentPreset?.isRepo == true {
-                        Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This will also remove it from your GitHub repo.")
-                    } else {
-                        Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This cannot be undone.")
-                    }
+                    Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This cannot be undone (but it will remain in the preset git history).")
                 }
             }
 
@@ -385,45 +415,9 @@ struct PresetToolbar: View {
                 )
             }
 
-            // Sync presets with personal repo
-            if gitHubService.hasPersonalRepo && gitHubService.hasToken {
-                Button(action: { showingSync = true }) {
-                    VStack(alignment: .center, spacing: 1) {
-                        Group {
-                            if gitHubService.personalSync.isSyncing {
-                                ProgressView().controlSize(.small)
-                            } else {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .overlay(alignment: .topTrailing) {
-                                        if gitHubService.personalSync.hasPendingChanges
-                                            || !gitHubService.personalSync.pendingConflicts.isEmpty {
-                                            Circle()
-                                                .fill(.orange)
-                                                .frame(width: 6, height: 6)
-                                                .offset(x: 3, y: -3)
-                                        }
-                                    }
-                            }
-                        }
-                        .frame(height: 16)
-                        Text("Sync")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .buttonStyle(.borderless)
-                .fixedSize()
-                .disabled(gitHubService.personalSync.isSyncing)
-                .toolbarTooltip("Sync with GitHub")
-                .accessibilityIdentifier("syncButton")
-                .popover(isPresented: $showingSync) {
-                    SyncStatusView(
-                        gitHubService: gitHubService,
-                        presetManager: presetManager,
-                        onPresetInstalled: { preset in onSelectPreset(preset) }
-                    )
-                }
-            }
+            // Git push/sync status button will be wired up in Checkpoint 4
+            // when RemoteSyncSettingsView + PresetGitCoordinator are fully
+            // surfaced. For now the toolbar has no sync affordance.
 
             // Claude Code terminal toggle
             Button(action: { showChat.toggle() }) {
@@ -552,9 +546,9 @@ struct PresetToolbar: View {
                 VStack(alignment: .leading, spacing: 16) {
                     SubscriptionSettingsView(subscriptionManager: subscriptionManager)
                     Divider()
-                    GitHubSettingsView(
+                    RemoteSyncSettingsView(
                         gitHubService: gitHubService,
-                        presetManager: presetManager,
+                        gitCoordinator: gitCoordinator,
                         onDone: { showingSettings = false }
                     )
                     Divider()
@@ -563,7 +557,7 @@ struct PresetToolbar: View {
                     ThirdPartyLicensesView()
                 }
                 .padding()
-                .frame(width: 360)
+                .frame(width: 400)
             }
         }
         .font(.system(size: 14))
@@ -575,7 +569,7 @@ struct PresetToolbar: View {
         .popover(isPresented: $showingImportURL) {
             ImportURLPopover(
                 presetManager: presetManager,
-                client: gitHubService.client,
+                resolver: GitHubURLResolver(),
                 onImported: { preset in
                     showingImportURL = false
                     onSelectPreset(preset)
