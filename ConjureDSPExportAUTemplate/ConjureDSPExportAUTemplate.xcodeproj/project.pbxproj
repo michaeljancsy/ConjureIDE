@@ -7,28 +7,29 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		00CBB4BC5D9E9695ED1C921F /* BundleAssetSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CE42CBD0384F0355E8EDDBF /* BundleAssetSchemeHandler.swift */; };
 		0C13E7E0026ACB052453ABB3 /* RuntimeConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 816594364DE02D78D14F7BB4 /* RuntimeConfig.swift */; };
 		0D9C4515754F04D20386C994 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 565409BB4FD167D792DA5952 /* main.swift */; };
 		14DB4C245B276123DE07E433 /* ExportAUMainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 875F4246898833ED52454440 /* ExportAUMainView.swift */; };
 		18B7CB8D84E15910B03C264A /* ConjureDSPExportAUTemplateExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AB589E0DB6CD48CE28492400 /* ConjureDSPExportAUTemplateExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		3E832C87D136A08503A51D34 /* customui-bridge.js in Resources */ = {isa = PBXBuildFile; fileRef = 367F72A4E23E8307CAFE7BEF /* customui-bridge.js */; };
 		46F5AC1F81BFB7E285950B9D /* InfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F59F6B98A1E2B91412F4BDD3 /* InfoView.swift */; };
+		565C001632FF534FD548D5DC /* ExportDebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1C66D700918AA8178CB7E0 /* ExportDebugLog.swift */; };
 		6D42863AE4B6C193BF7E4AFD /* ExportAUAudioUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30A24F58FB803BF3DAF9A8F5 /* ExportAUAudioUnit.swift */; };
+		7AFEE261152F30E33EF046AD /* ExportDebugLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E8C8C3F9C5D2BBE0354D69 /* ExportDebugLogTests.swift */; };
+		7E67640EA29E1F68B42F0640 /* RenderStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2DD0EEE93540428912EBBAA /* RenderStats.swift */; };
 		8D4FF6CC2046A46FFDB9E200 /* ExportAUTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC07F89451DB3644FB06CC88 /* ExportAUTests.swift */; };
+		A14B5CC87855695B03814B4C /* RenderStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3C95F6B62BBB83E18DBE82 /* RenderStatsTests.swift */; };
 		A29373D99BEA97B250FB4780 /* PythonRuntimeErrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E49F55FDC52279BA4C1413D /* PythonRuntimeErrorView.swift */; };
 		A6CF38D2BBBA00717EA074F0 /* runtime-config.json in Resources */ = {isa = PBXBuildFile; fileRef = A1CF678FE3C420F5D4082090 /* runtime-config.json */; };
 		B7B1F7BD4EB0180FB813B06B /* AUInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 542F5B9D60DD44AC42CC55B1 /* AUInfo.swift */; };
 		BE4533861577852904A2D1FB /* preset.wasm in Resources */ = {isa = PBXBuildFile; fileRef = AAF307076D7D9827CCDB0919 /* preset.wasm */; };
 		C03A9B32512712F10F94C0A4 /* ExportAUViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8A47F30AB5BF457FF5172D3 /* ExportAUViewController.swift */; };
+		D54CB9C061A9F9FC02098C2A /* ExportCustomUIWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59B984FB5E98E97C85D5FC2C /* ExportCustomUIWebView.swift */; };
 		DB7A021004CD992B38DC57E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C5C4014EECF6736C801F11F1 /* Assets.xcassets */; };
 		EE76E29920556A4CA0FE0677 /* ConjureDSPExportAUTemplateApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA37F9DDE8F4685805FE21A2 /* ConjureDSPExportAUTemplateApp.swift */; };
+		F44C19B8AFFA7046B7AB6D96 /* DebugPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A74C94E3DFA8BCAF47364D /* DebugPaneView.swift */; };
 		F8147023DF5F5A1DCFEED0A0 /* ExportParameterState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F670DED792DF6234B24ECBF3 /* ExportParameterState.swift */; };
-		7A6926C2EF1F4EFAA7853237 /* ExportDebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F76A44BD766243BBAFA31D81 /* ExportDebugLog.swift */; };
-		567DCFB7839643608244D220 /* RenderStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54CD658BF7CC45538000342A /* RenderStats.swift */; };
-		6DFEA98FE514405FB2BB9A3F /* ExportDebugLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3852CC6A8D5148D99C3232ED /* ExportDebugLogTests.swift */; };
-		10B021B8EA1B4805B9869114 /* RenderStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4ADDECA339D43D88A6E92A6 /* RenderStatsTests.swift */; };
-		8D3DC97F788343D4A3DBECF8 /* ExportDebugLog.swift in Sources (tests) */ = {isa = PBXBuildFile; fileRef = F76A44BD766243BBAFA31D81 /* ExportDebugLog.swift */; };
-		18B85700FE424BB7A509D19F /* RenderStats.swift in Sources (tests) */ = {isa = PBXBuildFile; fileRef = 54CD658BF7CC45538000342A /* RenderStats.swift */; };
-		C11D2B8DABDA42E8A29E9F3A /* DebugPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7353B5B42B1545348F82A91E /* DebugPaneView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -63,31 +64,34 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		03413FD1AE782DCF776B1D1E /* ExportRenderStatsAtomics.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ExportRenderStatsAtomics.h; sourceTree = "<group>"; };
+		0F1C66D700918AA8178CB7E0 /* ExportDebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportDebugLog.swift; sourceTree = "<group>"; };
 		30A24F58FB803BF3DAF9A8F5 /* ExportAUAudioUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUAudioUnit.swift; sourceTree = "<group>"; };
+		367F72A4E23E8307CAFE7BEF /* customui-bridge.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "customui-bridge.js"; sourceTree = "<group>"; };
 		378569BA407A2D3987A57D4E /* ConjureDSPExportAUTemplate.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ConjureDSPExportAUTemplate.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3D0743F894065733FC9BD356 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		4E49F55FDC52279BA4C1413D /* PythonRuntimeErrorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonRuntimeErrorView.swift; sourceTree = "<group>"; };
 		542F5B9D60DD44AC42CC55B1 /* AUInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AUInfo.swift; sourceTree = "<group>"; };
 		565409BB4FD167D792DA5952 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		59B984FB5E98E97C85D5FC2C /* ExportCustomUIWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportCustomUIWebView.swift; sourceTree = "<group>"; };
+		75E8C8C3F9C5D2BBE0354D69 /* ExportDebugLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportDebugLogTests.swift; sourceTree = "<group>"; };
+		7B3C95F6B62BBB83E18DBE82 /* RenderStatsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderStatsTests.swift; sourceTree = "<group>"; };
 		7C548D4D797761AE5CDAE6E1 /* ExportAUBridgingHeader.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ExportAUBridgingHeader.h; sourceTree = "<group>"; };
 		816594364DE02D78D14F7BB4 /* RuntimeConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeConfig.swift; sourceTree = "<group>"; };
 		875F4246898833ED52454440 /* ExportAUMainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUMainView.swift; sourceTree = "<group>"; };
+		8CE42CBD0384F0355E8EDDBF /* BundleAssetSchemeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleAssetSchemeHandler.swift; sourceTree = "<group>"; };
 		A1CF678FE3C420F5D4082090 /* runtime-config.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "runtime-config.json"; sourceTree = "<group>"; };
 		A8A47F30AB5BF457FF5172D3 /* ExportAUViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUViewController.swift; sourceTree = "<group>"; };
 		AAF307076D7D9827CCDB0919 /* preset.wasm */ = {isa = PBXFileReference; path = preset.wasm; sourceTree = "<group>"; };
 		AB589E0DB6CD48CE28492400 /* ConjureDSPExportAUTemplateExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConjureDSPExportAUTemplateExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C2DD0EEE93540428912EBBAA /* RenderStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderStats.swift; sourceTree = "<group>"; };
 		C5C4014EECF6736C801F11F1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		DA365B8ECCC58A6AF6B06B8D /* ConjureDSPExportAUTemplateTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPExportAUTemplateTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E1A74C94E3DFA8BCAF47364D /* DebugPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugPaneView.swift; sourceTree = "<group>"; };
 		F59F6B98A1E2B91412F4BDD3 /* InfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfoView.swift; sourceTree = "<group>"; };
 		F670DED792DF6234B24ECBF3 /* ExportParameterState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportParameterState.swift; sourceTree = "<group>"; };
 		FA37F9DDE8F4685805FE21A2 /* ConjureDSPExportAUTemplateApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConjureDSPExportAUTemplateApp.swift; sourceTree = "<group>"; };
 		FC07F89451DB3644FB06CC88 /* ExportAUTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUTests.swift; sourceTree = "<group>"; };
-		56D6AD52554E4653B19E6158 /* ExportRenderStatsAtomics.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ExportRenderStatsAtomics.h; sourceTree = "<group>"; };
-		F76A44BD766243BBAFA31D81 /* ExportDebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportDebugLog.swift; sourceTree = "<group>"; };
-		54CD658BF7CC45538000342A /* RenderStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderStats.swift; sourceTree = "<group>"; };
-		3852CC6A8D5148D99C3232ED /* ExportDebugLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportDebugLogTests.swift; sourceTree = "<group>"; };
-		E4ADDECA339D43D88A6E92A6 /* RenderStatsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderStatsTests.swift; sourceTree = "<group>"; };
-		7353B5B42B1545348F82A91E /* DebugPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugPaneView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -124,11 +128,13 @@
 		6925FE69FEFE605B4CA247AF /* UI */ = {
 			isa = PBXGroup;
 			children = (
+				8CE42CBD0384F0355E8EDDBF /* BundleAssetSchemeHandler.swift */,
+				E1A74C94E3DFA8BCAF47364D /* DebugPaneView.swift */,
 				875F4246898833ED52454440 /* ExportAUMainView.swift */,
 				A8A47F30AB5BF457FF5172D3 /* ExportAUViewController.swift */,
+				59B984FB5E98E97C85D5FC2C /* ExportCustomUIWebView.swift */,
 				F670DED792DF6234B24ECBF3 /* ExportParameterState.swift */,
 				4E49F55FDC52279BA4C1413D /* PythonRuntimeErrorView.swift */,
-				7353B5B42B1545348F82A91E /* DebugPaneView.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -137,9 +143,9 @@
 			isa = PBXGroup;
 			children = (
 				7C548D4D797761AE5CDAE6E1 /* ExportAUBridgingHeader.h */,
-				56D6AD52554E4653B19E6158 /* ExportRenderStatsAtomics.h */,
-				F76A44BD766243BBAFA31D81 /* ExportDebugLog.swift */,
-				54CD658BF7CC45538000342A /* RenderStats.swift */,
+				0F1C66D700918AA8178CB7E0 /* ExportDebugLog.swift */,
+				03413FD1AE782DCF776B1D1E /* ExportRenderStatsAtomics.h */,
+				C2DD0EEE93540428912EBBAA /* RenderStats.swift */,
 			);
 			path = Common;
 			sourceTree = "<group>";
@@ -147,6 +153,7 @@
 		C37484854BF7A8A4061F26F1 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				367F72A4E23E8307CAFE7BEF /* customui-bridge.js */,
 				AAF307076D7D9827CCDB0919 /* preset.wasm */,
 				A1CF678FE3C420F5D4082090 /* runtime-config.json */,
 			);
@@ -188,8 +195,8 @@
 			isa = PBXGroup;
 			children = (
 				FC07F89451DB3644FB06CC88 /* ExportAUTests.swift */,
-				3852CC6A8D5148D99C3232ED /* ExportDebugLogTests.swift */,
-				E4ADDECA339D43D88A6E92A6 /* RenderStatsTests.swift */,
+				75E8C8C3F9C5D2BBE0354D69 /* ExportDebugLogTests.swift */,
+				7B3C95F6B62BBB83E18DBE82 /* RenderStatsTests.swift */,
 			);
 			path = ConjureDSPExportAUTemplateTests;
 			sourceTree = "<group>";
@@ -312,6 +319,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3E832C87D136A08503A51D34 /* customui-bridge.js in Resources */,
 				BE4533861577852904A2D1FB /* preset.wasm in Resources */,
 				A6CF38D2BBBA00717EA074F0 /* runtime-config.json in Resources */,
 			);
@@ -356,7 +364,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "FRAMEWORKS_DIR=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\nmkdir -p \"${FRAMEWORKS_DIR}\"\n\nPYTHON_LIB=\"${SRCROOT}/../rust/python-dist/lib/libpython3.14t.dylib\"\nif [ -f \"${PYTHON_LIB}\" ]; then\n    cp \"${PYTHON_LIB}\" \"${FRAMEWORKS_DIR}/\"\n    if [ -n \"${EXPANDED_CODE_SIGN_IDENTITY}\" ]; then\n        codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \\\n            \"${FRAMEWORKS_DIR}/libpython3.14t.dylib\"\n    fi\nelse\n    echo \"warning: libpython3.14t.dylib not found at ${PYTHON_LIB}\" >&2\nfi\n";
+			shellScript = "set -euo pipefail\n# Mirrors the main extension's Copy Python Dylib phase — separate\n# copy-skip from always-verify-then-resign so a silent first-time\n# codesign failure can't leave an unsigned dylib in the appex.\n# Hardened runtime rejects unsigned dylibs, and the resulting\n# Py_Initialize abort produces exit 1 with no crash report.\nFRAMEWORKS_DIR=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\nSRC_DYLIB=\"${SRCROOT}/../rust/python-dist/lib/libpython3.14t.dylib\"\nDST_DYLIB=\"${FRAMEWORKS_DIR}/libpython3.14t.dylib\"\nmkdir -p \"${FRAMEWORKS_DIR}\"\nif [ ! -f \"${SRC_DYLIB}\" ]; then\n    echo \"warning: libpython3.14t.dylib not found at ${SRC_DYLIB}\" >&2\n    exit 0\nfi\nif [ ! -f \"${DST_DYLIB}\" ] || [ \"${SRC_DYLIB}\" -nt \"${DST_DYLIB}\" ]; then\n    cp \"${SRC_DYLIB}\" \"${DST_DYLIB}\"\nfi\nif [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n    if ! codesign --verify --strict \"${DST_DYLIB}\" 2>/dev/null; then\n        codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \\\n            --options runtime --timestamp \"${DST_DYLIB}\"\n    fi\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -365,15 +373,17 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				00CBB4BC5D9E9695ED1C921F /* BundleAssetSchemeHandler.swift in Sources */,
+				F44C19B8AFFA7046B7AB6D96 /* DebugPaneView.swift in Sources */,
 				6D42863AE4B6C193BF7E4AFD /* ExportAUAudioUnit.swift in Sources */,
 				14DB4C245B276123DE07E433 /* ExportAUMainView.swift in Sources */,
 				C03A9B32512712F10F94C0A4 /* ExportAUViewController.swift in Sources */,
+				D54CB9C061A9F9FC02098C2A /* ExportCustomUIWebView.swift in Sources */,
+				565C001632FF534FD548D5DC /* ExportDebugLog.swift in Sources */,
 				F8147023DF5F5A1DCFEED0A0 /* ExportParameterState.swift in Sources */,
 				A29373D99BEA97B250FB4780 /* PythonRuntimeErrorView.swift in Sources */,
+				7E67640EA29E1F68B42F0640 /* RenderStats.swift in Sources */,
 				0C13E7E0026ACB052453ABB3 /* RuntimeConfig.swift in Sources */,
-				7A6926C2EF1F4EFAA7853237 /* ExportDebugLog.swift in Sources */,
-				567DCFB7839643608244D220 /* RenderStats.swift in Sources */,
-				C11D2B8DABDA42E8A29E9F3A /* DebugPaneView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -382,10 +392,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				8D4FF6CC2046A46FFDB9E200 /* ExportAUTests.swift in Sources */,
-				6DFEA98FE514405FB2BB9A3F /* ExportDebugLogTests.swift in Sources */,
-				10B021B8EA1B4805B9869114 /* RenderStatsTests.swift in Sources */,
-				8D3DC97F788343D4A3DBECF8 /* ExportDebugLog.swift in Sources (tests) */,
-				18B85700FE424BB7A509D19F /* RenderStats.swift in Sources (tests) */,
+				7AFEE261152F30E33EF046AD /* ExportDebugLogTests.swift in Sources */,
+				A14B5CC87855695B03814B4C /* RenderStatsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -588,8 +596,6 @@
 				OTHER_LDFLAGS = (
 					"-lconjure_dsp",
 					"-lpython3.14t",
-					"-framework",
-					Accelerate,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.ConjureDSP-user.ConjureDSPExportAUTemplateTests";
 				SDKROOT = macosx;
@@ -619,8 +625,6 @@
 				OTHER_LDFLAGS = (
 					"-lconjure_dsp",
 					"-lpython3.14t",
-					"-framework",
-					Accelerate,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.ConjureDSP-user.ConjureDSPExportAUTemplateTests";
 				SDKROOT = macosx;

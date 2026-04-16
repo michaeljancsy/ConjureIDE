@@ -56,6 +56,32 @@ struct ExportParamMetadata: Codable {
     }
 }
 
+/// UI block mirrored from the preset bundle's `manifest.json` when the preset
+/// shipped a custom HTML/JS UI. When `entryHTML` resolves to a real file inside
+/// the exported AU's Resources, the view controller renders that page instead
+/// of the generic slider view.
+struct RuntimeUIConfig: Codable {
+    /// Relative path from the AU's `Resources/ui/` to the entry HTML.
+    /// Defaults to `"index.html"` when omitted.
+    let entryHTML: String?
+    /// Preferred UI width in points (informational — the AU picks an actual
+    /// size in `preferredContentSize`).
+    let width: Int?
+    /// Preferred UI height in points.
+    let height: Int?
+    /// Audio-frame forwarding rate the author requested (15 or 30). Not wired
+    /// in the export template today — RMS/FFT frames are main-extension-only.
+    let fps: Int?
+    /// Whether the preset opted into audio frame delivery.
+    let audioFrames: Bool?
+
+    /// Entry relative to `Resources/ui/`, with a safe default.
+    var resolvedEntryHTML: String {
+        let raw = entryHTML?.trimmingCharacters(in: .whitespaces) ?? ""
+        return raw.isEmpty ? "index.html" : raw
+    }
+}
+
 /// Metadata for an exported ConjureDSP preset, read from runtime-config.json in the AU bundle.
 struct RuntimeConfig: Codable {
     let version: Int
@@ -74,12 +100,31 @@ struct RuntimeConfig: Codable {
     /// Filename of an embedded NAM model (e.g., "model.nam").
     /// When present, the AU loads this from its bundle Resources and injects it.
     let namModelFile: String?
+    /// True when the exporter copied a preset bundle's `ui/` directory into
+    /// this AU's Resources. The view controller still verifies the entry HTML
+    /// exists before switching away from the generic slider view.
+    let hasCustomUI: Bool?
+    /// Custom UI configuration copied from the source preset's manifest.
+    let ui: RuntimeUIConfig?
 
     /// Load from the given bundle's Resources.
     static func load(from bundle: Bundle) -> RuntimeConfig? {
         guard let url = bundle.url(forResource: "runtime-config", withExtension: "json"),
               let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(RuntimeConfig.self, from: data)
+    }
+
+    /// Resolve the custom UI entry HTML inside `bundle.resourceURL/ui/`, or
+    /// `nil` if the preset didn't ship a custom UI or the file is missing.
+    /// The view controller uses this as the sole gate for choosing custom
+    /// UI over the generic slider view.
+    func customUIEntryURL(in bundle: Bundle) -> URL? {
+        guard hasCustomUI == true,
+              let resourcesURL = bundle.resourceURL else { return nil }
+        let uiDir = resourcesURL.appendingPathComponent("ui", isDirectory: true)
+        let entry = ui?.resolvedEntryHTML ?? "index.html"
+        let entryURL = uiDir.appendingPathComponent(entry)
+        return FileManager.default.fileExists(atPath: entryURL.path) ? entryURL : nil
     }
 
     /// Effective parameter count (defaults to 8).

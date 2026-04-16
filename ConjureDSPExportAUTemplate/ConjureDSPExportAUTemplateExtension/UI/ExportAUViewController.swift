@@ -13,6 +13,13 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
     private var parameterState: ExportParameterState?
     private var errorPollTimer: Timer?
     private var paramCount: Int = 8
+    /// Resolved entry HTML for a custom UI (when the preset shipped one).
+    /// Null means the AU falls back to the generic slider layout. Cached at
+    /// `configureSwiftUIView` time so `computeSize` doesn't re-stat the FS.
+    private var customUIEntryURL: URL?
+    /// Preferred height the preset's manifest asked for. Only honored when
+    /// `customUIEntryURL` resolved to a real file.
+    private var customUIHeight: Int?
 
     private static let viewWidth: CGFloat = 500
 
@@ -28,11 +35,21 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
     private func computeSize(showDebug: Bool, showError: Bool) -> NSSize {
         // Header (title + gear): ~45pt
         // Divider: 1pt
-        // Each param row: ~28pt
         // Footer (Made with ConjureDSP): ~30pt
-        var height: CGFloat = 45 + 1 + CGFloat(paramCount) * 28 + 30
-        // Padding/spacing between sections
-        height += 24
+        // Padding/spacing between sections: ~24pt
+        let chromeHeight: CGFloat = 45 + 1 + 30 + 24
+
+        // Body region: either the preset's custom UI (manifest-declared
+        // height, or a sensible default) or the generic slider stack
+        // (~28pt per row).
+        let bodyHeight: CGFloat
+        if customUIEntryURL != nil {
+            bodyHeight = CGFloat(customUIHeight ?? 320)
+        } else {
+            bodyHeight = CGFloat(paramCount) * 28
+        }
+
+        var height = chromeHeight + bodyHeight
 
         if showError {
             // Error banner: header line + scrollable text area + padding
@@ -97,9 +114,16 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
         }
 
         self.paramCount = config?.effectiveParamCount ?? 8
+        // Resolve the custom UI once per view setup so the SwiftUI body
+        // stays pure and doesn't re-stat the filesystem on every render.
+        // If either hasCustomUI is false or ui/index.html is missing from
+        // Resources, the view falls back to generic sliders.
+        self.customUIEntryURL = config?.customUIEntryURL(in: bundle)
+        self.customUIHeight = config?.ui?.height
         let content = ExportAUMainView(
             parameterState: ps,
             config: config,
+            customUIEntryURL: self.customUIEntryURL,
             pythonRuntimeMissing: au.pythonRuntimeMissing,
             loadError: au.loadError,
             onLayoutChange: { [weak self] showDebug, showError in

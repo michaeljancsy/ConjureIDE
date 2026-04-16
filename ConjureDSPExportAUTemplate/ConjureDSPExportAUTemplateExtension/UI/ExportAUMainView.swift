@@ -8,11 +8,15 @@ import SwiftUI
 struct ExportAUMainView: View {
     @ObservedObject var parameterState: ExportParameterState
     let config: RuntimeConfig?
+    /// URL to the custom UI entry HTML when the preset shipped one. Resolved
+    /// by `RuntimeConfig.customUIEntryURL(in:)` and null otherwise.
+    let customUIEntryURL: URL?
     let pythonRuntimeMissing: Bool
     var loadError: String? = nil
     /// Called when layout-relevant state changes (debug pane, error visibility)
     /// so the view controller can resize the AU window via `preferredContentSize`.
     var onLayoutChange: ((_ showDebug: Bool, _ hasError: Bool) -> Void)? = nil
+    @Environment(\.colorScheme) private var colorScheme
     @State private var errorCopied = false
     @State private var showDebugPane = false
 
@@ -54,16 +58,31 @@ struct ExportAUMainView: View {
 
                 Divider()
 
-                VStack(spacing: 4) {
-                    ForEach(0..<parameterState.paramCount, id: \.self) { index in
-                        ExportParamSliderRow(
-                            label: config?.paramLabel(at: index) ?? "Param \(index + 1)",
-                            value: parameterState.binding(for: index),
-                            metadata: parameterState.metadata(for: index)
-                        )
+                // Custom UI if the exporter copied one in — otherwise, the
+                // existing generic slider layout. Parameter state + debug
+                // pane + error banner wrap both paths identically so DAW
+                // automation, stats, and error reporting behave the same
+                // regardless of whether a preset shipped a custom UI.
+                if let entryURL = customUIEntryURL {
+                    ExportCustomUIWebView(
+                        parameterState: parameterState,
+                        uiDirectoryURL: entryURL.deletingLastPathComponent(),
+                        entryHTMLPath: entryURL.lastPathComponent,
+                        theme: colorScheme
+                    )
+                    .frame(minHeight: CGFloat(config?.ui?.height ?? 220))
+                } else {
+                    VStack(spacing: 4) {
+                        ForEach(0..<parameterState.paramCount, id: \.self) { index in
+                            ExportParamSliderRow(
+                                label: config?.paramLabel(at: index) ?? "Param \(index + 1)",
+                                value: parameterState.binding(for: index),
+                                metadata: parameterState.metadata(for: index)
+                            )
+                        }
                     }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
 
                 // Below the fixed parameter area: show either the debug pane
                 // (which includes errors in its log) or the error banner.

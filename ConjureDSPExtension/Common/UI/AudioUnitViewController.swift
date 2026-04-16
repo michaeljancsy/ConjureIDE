@@ -546,6 +546,33 @@ pub extern "C" fn process(
             let exportDir = appGroupURL.appendingPathComponent("PendingExports")
             try? FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
 
+            // When the active preset is a bundle with a present custom UI,
+            // tell the exporter to carry it forward. `hasCustomUI` already
+            // verifies the manifest declares a ui block AND `ui/index.html`
+            // exists on disk, so there's no need to stat again here.
+            let customUIPayload: ExportManager.CustomUIPayload? = {
+                guard let bundle = au.presetManager.currentBundle,
+                      bundle.hasCustomUI,
+                      let uiDir = bundle.uiDirectoryURL else { return nil }
+                let uiMeta = bundle.manifest.ui
+                // `uiEntryHTMLPath` is bundle-root-relative ("ui/index.html").
+                // The exporter copies the bundle's `ui/` directory verbatim
+                // into `.appex/Contents/Resources/ui/`, so we only need the
+                // path relative to that directory — strip the leading "ui/".
+                let entryHTML: String = {
+                    let p = bundle.manifest.uiEntryHTMLPath
+                    return p.hasPrefix("ui/") ? String(p.dropFirst(3)) : p
+                }()
+                return ExportManager.CustomUIPayload(
+                    directory: uiDir,
+                    entryHTML: entryHTML,
+                    width: uiMeta?.width,
+                    height: uiMeta?.height,
+                    fps: bundle.manifest.resolvedFPS,
+                    audioFrames: bundle.manifest.audioFramesEnabled
+                )
+            }()
+
             do {
                 let exportManager = ExportManager()
                 let appURL = try exportManager.exportPreset(
@@ -558,7 +585,8 @@ pub extern "C" fn process(
                     skipSigning: true,
                     paramNames: au.currentParamNames,
                     paramMetadata: au.currentParamMetadata,
-                    latencySamples: au._latencySamples
+                    latencySamples: au._latencySamples,
+                    customUI: customUIPayload
                 )
                 log.info("Staged preset '\(name, privacy: .public)' to App Group at \(appURL.path, privacy: .public)")
 
