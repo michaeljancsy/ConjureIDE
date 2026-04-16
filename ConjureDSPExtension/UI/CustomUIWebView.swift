@@ -70,6 +70,20 @@ struct CustomUIWebView: NSViewRepresentable {
             log.error("Could not form custom UI URL for entry \(entryPath, privacy: .public)")
         }
 
+        // Hot-reload: watch the bundle's ui/ directory for edits. On change,
+        // coalesce bursts (e.g. editor atomic rename -> two events) and
+        // reload the webview. Parameter state survives because the bridge
+        // re-sends it on the next `ready` signal.
+        if let uiDir = bundle.uiDirectoryURL {
+            let watcher = BundleFileWatcher(path: uiDir.path)
+            watcher.onChange = { [weak webView, weak coordinator = context.coordinator] in
+                guard let webView, let coordinator else { return }
+                coordinator.scheduleReload(webView: webView)
+            }
+            watcher.start(on: .main, latency: 0.2)
+            context.coordinator.fileWatcher = watcher
+        }
+
         return webView
     }
 
@@ -97,6 +111,10 @@ struct CustomUIWebView: NSViewRepresentable {
         controller.removeScriptMessageHandler(forName: "paramSet")
         controller.removeScriptMessageHandler(forName: "ready")
         controller.removeScriptMessageHandler(forName: "log")
+        coordinator.fileWatcher?.stop()
+        coordinator.fileWatcher = nil
+        coordinator.pendingReload?.cancel()
+        coordinator.pendingReload = nil
         coordinator.cancellables.removeAll()
         coordinator.webView = nil
     }
@@ -128,6 +146,16 @@ struct CustomUIWebView: NSViewRepresentable {
         /// Retained so the scheme handler isn't torn down before WKWebView is.
         var schemeHandler: BundleAssetSchemeHandler?
 
+        /// Watches the bundle's `ui/` directory for edits and triggers a
+        /// debounced reload of the webview.
+        var fileWatcher: BundleFileWatcher?
+
+        /// Debounce cell for the hot-reload trigger. FSEventStream already
+        /// coalesces bursts with its latency parameter, but the pending
+        /// work item lets us coalesce further (e.g. a write + a rename
+        /// right after) and collapse them into a single webView.reload().
+        var pendingReload: DispatchWorkItem?
+
         var isReady = false
         var lastTheme: String
         var cancellables = Set<AnyCancellable>()
@@ -145,6 +173,25 @@ struct CustomUIWebView: NSViewRepresentable {
 
         init(theme: String) {
             self.lastTheme = theme
+        }
+
+        // MARK: Hot reload
+
+        /// Debounce-and-reload the webview. Called when the file watcher
+        /// detects changes under the bundle's `ui/` directory.
+        func scheduleReload(webView: WKWebView) {
+            pendingReload?.cancel()
+            let work = DispatchWorkItem { [weak self, weak webView] in
+                guard let self, let webView else { return }
+                log.info("Custom UI hot reload")
+                self.isReady = false
+                self.pendingReload = nil
+                webView.reload()
+            }
+            pendingReload = work
+            // Short extra debounce on top of FSEventStream's latency, so a
+            // save + touch + rename sequence collapses into one reload.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
         }
 
         // MARK: Combine subscription to parameter values

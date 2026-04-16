@@ -100,6 +100,14 @@ struct PresetToolbar: View {
         return current.isUser || current.isRepo
     }
 
+    /// Whether the current preset is stored as a bundle directory (and so
+    /// has a meaningful "reveal the folder" affordance). Legacy single-file
+    /// presets can be revealed too via Finder, but revealing a directory is
+    /// much more useful for authoring custom UIs.
+    private var currentIsBundle: Bool {
+        presetManager.currentPreset?.isBundle ?? false
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             // — Preset zone —
@@ -340,6 +348,30 @@ struct PresetToolbar: View {
                     } else {
                         Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This cannot be undone.")
                     }
+                }
+
+                // Reveal the preset's bundle directory in Finder, so authors
+                // can drop in/edit `ui/index.html` in an external editor.
+                // Only shown for bundle presets — legacy single-file presets
+                // don't benefit as much from revealing.
+                if currentIsBundle {
+                    Button(action: {
+                        if let url = presetManager.currentPreset?.bundleURL {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                        }
+                    }) {
+                        VStack(alignment: .center, spacing: 1) {
+                            Image(systemName: "folder")
+                                .frame(height: 16)
+                            Text("Reveal")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .fixedSize()
+                    .toolbarTooltip("Reveal preset bundle in Finder")
+                    .accessibilityIdentifier("revealBundleButton")
                 }
             }
 
