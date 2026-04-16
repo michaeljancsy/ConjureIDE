@@ -112,6 +112,17 @@ class TerminalAppServer {
                 // Language module downloader — always succeeds; the App Group
                 // directory is self-provisioned. Phase 1: no modules catalogued yet.
                 self.languageDownloader = LanguageDownloader(appGroupURL: containerURL)
+                self.languageDownloader?.onModuleChanged = { moduleName in
+                    // Re-provision runtime-dependent state when the relevant
+                    // module changes. For Python, this means re-copying into
+                    // the shared PythonRuntime directory so the AU picks up
+                    // the new source on its next script load.
+                    if moduleName == "python" {
+                        DispatchQueue.global(qos: .utility).async {
+                            Self.installPythonRuntimeIfNeeded()
+                        }
+                    }
+                }
                 log.info("Language downloader ready")
 
                 self.exportFinalizer = ExportFinalizer(
@@ -432,23 +443,59 @@ class TerminalAppServer {
 
     // MARK: - Python/UV/Rust provisioning
 
+    /// Resolve the Python-runtime source. Prefers a user-installed language
+    /// module at `<modulesRoot>/python/` over the bundled `python-dist`.
+    /// Returns (source URL, provenance token) where the token is used as the
+    /// `.source` marker so a source switch triggers re-provisioning.
+    ///
+    /// Parameters default to production paths but can be overridden in tests.
+    /// - `bundledBuildVersion` is threaded through so tests don't depend on
+    ///   `Bundle.main` infoDictionary access.
+    nonisolated static func resolvePythonSource(
+        modulesRoot: URL = AppGroupContainer.url.appendingPathComponent(LanguageModuleIPC.modulesDirectory),
+        bundledSource: URL? = Bundle.main.resourceURL?.appendingPathComponent("python-dist"),
+        bundledBuildVersion: String = appBuildVersion
+    ) -> (url: URL, provenance: String)? {
+        let fm = FileManager.default
+
+        // Preferred: user-installed Python language module.
+        let moduleDir = modulesRoot.appendingPathComponent("python")
+        let moduleManifest = moduleDir.appendingPathComponent(LanguageModuleIPC.manifestFile)
+        if fm.fileExists(atPath: moduleManifest.path),
+           let data = try? Data(contentsOf: moduleManifest),
+           let manifest = try? JSONDecoder().decode(InstalledLanguageModuleManifest.self, from: data),
+           fm.fileExists(atPath: moduleDir.appendingPathComponent("bin/python3").path) {
+            return (moduleDir, "module:\(manifest.version)")
+        }
+
+        // Fallback: bundled python-dist shipped with the Terminal app.
+        if let bundled = bundledSource,
+           fm.fileExists(atPath: bundled.path) {
+            return (bundled, "bundled:\(bundledBuildVersion)")
+        }
+
+        return nil
+    }
+
     nonisolated static func installPythonRuntimeIfNeeded() {
         let runtimeURL = pythonRuntimeURL
 
-        guard let bundledPythonDist = Bundle.main.resourceURL?.appendingPathComponent("python-dist"),
-              FileManager.default.fileExists(atPath: bundledPythonDist.path) else {
-            log.error("Bundled python-dist not found in Terminal app bundle")
-            SentryHelper.capture("Bundled python-dist not found", level: .error, category: "terminal.python")
+        guard let source = resolvePythonSource() else {
+            log.error("No Python source available (neither language module nor bundled python-dist)")
+            SentryHelper.capture("No Python source available", level: .error, category: "terminal.python")
             return
         }
 
-        if isProvisionedCurrent(at: runtimeURL) {
-            log.info("Shared Python runtime already installed and current at \(runtimeURL.path, privacy: .public)")
+        let pythonSource = source.url
+        let provenance = source.provenance
+
+        if isProvisionedCurrent(at: runtimeURL, provenance: provenance) {
+            log.info("Shared Python runtime already installed from \(provenance, privacy: .public) at \(runtimeURL.path, privacy: .public)")
         } else {
             do {
                 let fm = FileManager.default
 
-                let srcBin = bundledPythonDist.appendingPathComponent("bin/python3")
+                let srcBin = pythonSource.appendingPathComponent("bin/python3")
                 let dstBin = runtimeURL.appendingPathComponent("bin")
                 try fm.createDirectory(at: dstBin, withIntermediateDirectories: true)
                 let dstPython = dstBin.appendingPathComponent("python3")
@@ -457,7 +504,7 @@ class TerminalAppServer {
                 }
                 try fm.copyItem(at: srcBin, to: dstPython)
 
-                let srcDylib = bundledPythonDist.appendingPathComponent("lib/libpython3.14t.dylib")
+                let srcDylib = pythonSource.appendingPathComponent("lib/libpython3.14t.dylib")
                 let dstLib = runtimeURL.appendingPathComponent("lib")
                 try fm.createDirectory(at: dstLib, withIntermediateDirectories: true)
                 let dstDylib = dstLib.appendingPathComponent("libpython3.14t.dylib")
@@ -466,15 +513,15 @@ class TerminalAppServer {
                 }
                 try fm.copyItem(at: srcDylib, to: dstDylib)
 
-                let srcStdlib = bundledPythonDist.appendingPathComponent("lib/python3.14t")
+                let srcStdlib = pythonSource.appendingPathComponent("lib/python3.14t")
                 let dstStdlib = dstLib.appendingPathComponent("python3.14t")
                 if fm.fileExists(atPath: dstStdlib.path) {
                     try fm.removeItem(at: dstStdlib)
                 }
                 try fm.copyItem(at: srcStdlib, to: dstStdlib)
 
-                writeVersionMarker(at: runtimeURL)
-                log.info("Shared Python runtime installed at \(runtimeURL.path, privacy: .public)")
+                writeProvenanceMarker(at: runtimeURL, provenance: provenance)
+                log.info("Shared Python runtime installed from \(provenance, privacy: .public) at \(runtimeURL.path, privacy: .public)")
                 migrateUserPackages(to: dstStdlib.appendingPathComponent("site-packages"))
             } catch {
                 log.error("Failed to install shared Python runtime: \(error.localizedDescription, privacy: .public)")
@@ -482,7 +529,7 @@ class TerminalAppServer {
             }
         }
 
-        updateConjureDSPPackage(bundledPythonDist: bundledPythonDist, runtimeURL: runtimeURL)
+        updateConjureDSPPackage(bundledPythonDist: pythonSource, runtimeURL: runtimeURL)
     }
 
     nonisolated private static func updateConjureDSPPackage(bundledPythonDist: URL, runtimeURL: URL) {
@@ -560,6 +607,22 @@ class TerminalAppServer {
     private nonisolated static func writeVersionMarker(at directory: URL) {
         let versionFile = directory.appendingPathComponent(".version")
         try? appBuildVersion.write(to: versionFile, atomically: true, encoding: .utf8)
+    }
+
+    /// Provenance-aware variant used by the Python runtime so a switch
+    /// between the bundled source and a user-installed language module
+    /// triggers re-provisioning. The marker file is `.source` (separate
+    /// from `.version` so bundled→module transitions don't collide with
+    /// app-build-number changes).
+    private nonisolated static func isProvisionedCurrent(at directory: URL, provenance: String) -> Bool {
+        let markerFile = directory.appendingPathComponent(".source")
+        guard let stored = try? String(contentsOf: markerFile, encoding: .utf8) else { return false }
+        return stored.trimmingCharacters(in: .whitespacesAndNewlines) == provenance
+    }
+
+    private nonisolated static func writeProvenanceMarker(at directory: URL, provenance: String) {
+        let markerFile = directory.appendingPathComponent(".source")
+        try? provenance.write(to: markerFile, atomically: true, encoding: .utf8)
     }
 
     nonisolated static func provisionRustToolchainIfNeeded() {

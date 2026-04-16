@@ -57,6 +57,11 @@ final class LanguageDownloader {
         return false
     }
 
+    /// Invoked after a successful install or uninstall with the module name.
+    /// The companion-app uses this to re-provision runtime-dependent state
+    /// (e.g. re-copy Python from the new source into the shared PythonRuntime).
+    var onModuleChanged: ((_ moduleName: String) -> Void)?
+
     init(appGroupURL: URL) {
         self.appGroupURL = appGroupURL
         self.modulesDirURL = appGroupURL.appendingPathComponent(LanguageModuleIPC.modulesDirectory)
@@ -95,6 +100,7 @@ final class LanguageDownloader {
                 error: nil,
                 timestamp: Date().timeIntervalSince1970
             ))
+            onModuleChanged?(request.moduleName)
             log.info("Install succeeded: \(request.moduleName, privacy: .public)")
         } catch {
             writeResult(LanguageInstallResult(
@@ -199,6 +205,7 @@ final class LanguageDownloader {
                 error: nil,
                 timestamp: Date().timeIntervalSince1970
             ))
+            onModuleChanged?(request.moduleName)
             log.info("Uninstalled \(request.moduleName, privacy: .public)")
         } catch {
             writeResult(LanguageInstallResult(
