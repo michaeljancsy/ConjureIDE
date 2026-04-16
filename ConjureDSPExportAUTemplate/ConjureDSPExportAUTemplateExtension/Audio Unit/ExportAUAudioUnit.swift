@@ -16,6 +16,13 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     // Rust DSP kernel (opaque pointer)
     private var kernel: DSPKernelRef!
 
+    /// Kernel handle for out-of-class consumers (e.g. the custom-UI audio
+    /// capture manager, which flips capture on/off and reads the ring
+    /// buffers). Non-optional from the view controller's perspective —
+    /// `kernel` is created before super.init returns, so by the time the
+    /// view appears it's always set.
+    var kernelRef: DSPKernelRef? { kernel }
+
     // Runtime configuration loaded from bundle
     private var config: RuntimeConfig?
 

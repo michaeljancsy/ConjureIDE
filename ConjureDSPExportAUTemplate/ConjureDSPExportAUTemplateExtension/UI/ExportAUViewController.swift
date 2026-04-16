@@ -20,6 +20,11 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
     /// Preferred height the preset's manifest asked for. Only honored when
     /// `customUIEntryURL` resolved to a real file.
     private var customUIHeight: Int?
+    /// Audio capture pipeline for the custom UI. Owned by the view
+    /// controller (not the view) so it survives DAW-driven view
+    /// re-creation. Created lazily on first view setup since we need
+    /// the kernel handle from the AU.
+    private var captureManager: ExportAudioCaptureManager?
 
     private static let viewWidth: CGFloat = 500
 
@@ -120,10 +125,24 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
         // Resources, the view falls back to generic sliders.
         self.customUIEntryURL = config?.customUIEntryURL(in: bundle)
         self.customUIHeight = config?.ui?.height
+
+        // Stand up the capture manager for custom UIs that subscribe to
+        // audio.onFrame. Kernel handle comes from the AU; host NSView is
+        // this controller's view so the display link has a render target.
+        // Only instantiated when we're actually showing a custom UI —
+        // there's no point spinning it up for the generic slider path.
+        if self.customUIEntryURL != nil {
+            let mgr = self.captureManager ?? ExportAudioCaptureManager()
+            mgr.kernel = au.kernelRef
+            mgr.hostView = self.view
+            self.captureManager = mgr
+        }
+
         let content = ExportAUMainView(
             parameterState: ps,
             config: config,
             customUIEntryURL: self.customUIEntryURL,
+            captureManager: self.captureManager,
             pythonRuntimeMissing: au.pythonRuntimeMissing,
             loadError: au.loadError,
             onLayoutChange: { [weak self] showDebug, showError in

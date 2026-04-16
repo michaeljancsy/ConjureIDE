@@ -11,6 +11,9 @@ struct ExportAUMainView: View {
     /// URL to the custom UI entry HTML when the preset shipped one. Resolved
     /// by `RuntimeConfig.customUIEntryURL(in:)` and null otherwise.
     let customUIEntryURL: URL?
+    /// Capture manager forwarded to the custom UI webview. Nil when the
+    /// preset has no custom UI (generic slider path — no capture needed).
+    let captureManager: ExportAudioCaptureManager?
     let pythonRuntimeMissing: Bool
     var loadError: String? = nil
     /// Called when layout-relevant state changes (debug pane, error visibility)
@@ -63,12 +66,13 @@ struct ExportAUMainView: View {
                 // pane + error banner wrap both paths identically so DAW
                 // automation, stats, and error reporting behave the same
                 // regardless of whether a preset shipped a custom UI.
-                if let entryURL = customUIEntryURL {
+                if let entryURL = customUIEntryURL, let captureManager {
                     ExportCustomUIWebView(
                         parameterState: parameterState,
                         uiDirectoryURL: entryURL.deletingLastPathComponent(),
                         entryHTMLPath: entryURL.lastPathComponent,
-                        theme: colorScheme
+                        theme: colorScheme,
+                        captureManager: captureManager
                     )
                     .frame(minHeight: CGFloat(config?.ui?.height ?? 220))
                 } else {

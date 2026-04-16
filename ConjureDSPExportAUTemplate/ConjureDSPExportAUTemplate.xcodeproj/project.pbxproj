@@ -12,6 +12,7 @@
 		0D9C4515754F04D20386C994 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 565409BB4FD167D792DA5952 /* main.swift */; };
 		14DB4C245B276123DE07E433 /* ExportAUMainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 875F4246898833ED52454440 /* ExportAUMainView.swift */; };
 		18B7CB8D84E15910B03C264A /* ConjureDSPExportAUTemplateExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AB589E0DB6CD48CE28492400 /* ConjureDSPExportAUTemplateExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		2A30E9A8134BF73FF8999150 /* ExportAudioCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C62BFE22414EC624E226EE75 /* ExportAudioCaptureManager.swift */; };
 		3E832C87D136A08503A51D34 /* customui-bridge.js in Resources */ = {isa = PBXBuildFile; fileRef = 367F72A4E23E8307CAFE7BEF /* customui-bridge.js */; };
 		46F5AC1F81BFB7E285950B9D /* InfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F59F6B98A1E2B91412F4BDD3 /* InfoView.swift */; };
 		565C001632FF534FD548D5DC /* ExportDebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F1C66D700918AA8178CB7E0 /* ExportDebugLog.swift */; };
@@ -86,6 +87,7 @@
 		AB589E0DB6CD48CE28492400 /* ConjureDSPExportAUTemplateExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConjureDSPExportAUTemplateExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C2DD0EEE93540428912EBBAA /* RenderStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderStats.swift; sourceTree = "<group>"; };
 		C5C4014EECF6736C801F11F1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C62BFE22414EC624E226EE75 /* ExportAudioCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAudioCaptureManager.swift; sourceTree = "<group>"; };
 		DA365B8ECCC58A6AF6B06B8D /* ConjureDSPExportAUTemplateTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPExportAUTemplateTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E1A74C94E3DFA8BCAF47364D /* DebugPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugPaneView.swift; sourceTree = "<group>"; };
 		F59F6B98A1E2B91412F4BDD3 /* InfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfoView.swift; sourceTree = "<group>"; };
@@ -164,6 +166,7 @@
 			isa = PBXGroup;
 			children = (
 				30A24F58FB803BF3DAF9A8F5 /* ExportAUAudioUnit.swift */,
+				C62BFE22414EC624E226EE75 /* ExportAudioCaptureManager.swift */,
 			);
 			path = "Audio Unit";
 			sourceTree = "<group>";
@@ -378,6 +381,7 @@
 				6D42863AE4B6C193BF7E4AFD /* ExportAUAudioUnit.swift in Sources */,
 				14DB4C245B276123DE07E433 /* ExportAUMainView.swift in Sources */,
 				C03A9B32512712F10F94C0A4 /* ExportAUViewController.swift in Sources */,
+				2A30E9A8134BF73FF8999150 /* ExportAudioCaptureManager.swift in Sources */,
 				D54CB9C061A9F9FC02098C2A /* ExportCustomUIWebView.swift in Sources */,
 				565C001632FF534FD548D5DC /* ExportDebugLog.swift in Sources */,
 				F8147023DF5F5A1DCFEED0A0 /* ExportParameterState.swift in Sources */,

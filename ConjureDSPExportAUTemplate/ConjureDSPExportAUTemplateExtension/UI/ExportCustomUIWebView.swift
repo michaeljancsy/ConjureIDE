@@ -13,9 +13,9 @@
 //    - no audio frame capture (not present in the template kernel)
 //
 //  The JS bridge (`customui-bridge.js`) is identical to the main extension's,
-//  so preset UIs that subscribe to `ConjureDSP.audio.onFrame(...)` don't
-//  crash — `subscribeAudioFrames` messages land in Swift and are ignored,
-//  and no frames are ever posted back.
+//  so preset UIs that subscribe to `ConjureDSP.audio.onFrame(...)` receive
+//  frames here too — driven by ExportAudioCaptureManager reading the same
+//  kernel ring buffers the main extension's capture pipeline uses.
 //
 
 import Combine
@@ -34,6 +34,12 @@ struct ExportCustomUIWebView: NSViewRepresentable {
     /// `uiDirectoryURL`; served as `conjuredsp-preset://preset/ui/<path>`.
     let entryHTMLPath: String
     var theme: ColorScheme
+    /// Audio capture pipeline — source of per-tick RMS/peak (and optional
+    /// FFT) frames forwarded to `window.ConjureDSP.audio.onFrame(...)`.
+    /// Lifetime is tied to the AU; the view controller owns the instance
+    /// and passes it down so multiple webview re-creations share capture
+    /// state.
+    var captureManager: ExportAudioCaptureManager
 
     fileprivate static let bundleScheme = "conjuredsp-preset"
 
@@ -84,7 +90,9 @@ struct ExportCustomUIWebView: NSViewRepresentable {
 
         context.coordinator.webView = webView
         context.coordinator.parameterState = parameterState
+        context.coordinator.captureManager = captureManager
         context.coordinator.subscribe(to: parameterState)
+        context.coordinator.observeWindowVisibility()
 
         let entry = entryHTMLPath.hasPrefix("ui/") ? entryHTMLPath : "ui/\(entryHTMLPath)"
         if let url = URL(string: "\(Self.bundleScheme)://preset/\(entry)") {
@@ -117,6 +125,14 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         controller.removeScriptMessageHandler(forName: "log")
         controller.removeScriptMessageHandler(forName: "subscribeAudioFrames")
         controller.removeScriptMessageHandler(forName: "unsubscribeAudioFrames")
+        // Drop the audio consumer registration so the capture manager's
+        // display link stops when this webview goes away. Without this,
+        // a DAW that re-creates the view tears down one webview and
+        // spins up another while capture keeps ticking against a dead
+        // JS bridge.
+        coordinator.audioFrameCancellable?.cancel()
+        coordinator.audioFrameCancellable = nil
+        coordinator.captureManager?.setConsumer(id: coordinator.audioConsumerID, active: false)
         coordinator.cancellables.removeAll()
         coordinator.webView = nil
     }
@@ -144,9 +160,34 @@ struct ExportCustomUIWebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         weak var webView: WKWebView?
         weak var parameterState: ExportParameterState?
+        weak var captureManager: ExportAudioCaptureManager?
 
         /// Retained so the scheme handler isn't torn down before WKWebView is.
         var schemeHandler: BundleAssetSchemeHandler?
+
+        /// Stable id for registering against the capture manager's consumer
+        /// set. Per-coordinator so multiple webview instances don't stomp
+        /// on each other's registration.
+        lazy var audioConsumerID: String = "exportCustomUI-\(ObjectIdentifier(self).hashValue)"
+
+        /// Subscription to the capture manager's frame publisher. Non-nil
+        /// only while the JS bridge has at least one onFrame subscriber.
+        var audioFrameCancellable: AnyCancellable?
+
+        /// Last-known visibility of the webview's NSWindow. When hidden
+        /// we drop the consumer (capture stops) so the exported AU
+        /// doesn't burn CPU computing meters the user can't see.
+        private var isWindowVisible: Bool = true
+
+        /// Frame-rate gate — at most one forward every 1/audioFPS seconds.
+        /// Matches the main extension's default cadence so authored UIs
+        /// see the same visual rate in-plugin and exported.
+        private var audioFPS: Int = 30
+        private var lastForwardTime: CFTimeInterval = 0
+
+        /// Bound the outstanding main-thread work — if the previous
+        /// evaluateJavaScript hasn't returned yet, drop the next frame.
+        private var framesInFlight: Int = 0
 
         var isReady = false
         var lastTheme: String
@@ -156,6 +197,94 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         private var suppressNextEchoForIndex: Set<Int> = []
 
         init(theme: String) { self.lastTheme = theme }
+
+        // MARK: Window visibility
+
+        /// Subscribe to `NSWindow.didChangeOcclusionStateNotification` on
+        /// the webview's window and pause audio capture when the plugin
+        /// pane is covered/collapsed. Mirrors the main extension's
+        /// CustomUIWebView.observeWindowAndReload(), minus the reload
+        /// notification (exported UIs are immutable).
+        func observeWindowVisibility() {
+            NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)
+                .compactMap { $0.object as? NSWindow }
+                .sink { [weak self] window in
+                    guard let self, self.webView?.window === window else { return }
+                    self.handleWindowOcclusionChange(visible: window.occlusionState.contains(.visible))
+                }
+                .store(in: &cancellables)
+        }
+
+        fileprivate func handleWindowOcclusionChange(visible: Bool) {
+            guard isWindowVisible != visible else { return }
+            isWindowVisible = visible
+            syncCaptureConsumer()
+        }
+
+        // MARK: Audio frame forwarding
+
+        private var shouldCaptureAudio: Bool {
+            audioFrameCancellable != nil && isWindowVisible
+        }
+
+        private func syncCaptureConsumer() {
+            captureManager?.setConsumer(id: audioConsumerID, active: shouldCaptureAudio)
+        }
+
+        fileprivate func startAudioFrameForwarding(wantsFFT: Bool) {
+            captureManager?.includeFFT = wantsFFT
+            if audioFrameCancellable == nil, let manager = captureManager {
+                audioFrameCancellable = manager.audioFramePublisher
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] frame in
+                        self?.forwardAudioFrame(frame, includeFFT: wantsFFT)
+                    }
+            }
+            lastForwardTime = 0
+            syncCaptureConsumer()
+        }
+
+        fileprivate func stopAudioFrameForwarding() {
+            audioFrameCancellable?.cancel()
+            audioFrameCancellable = nil
+            captureManager?.includeFFT = false
+            syncCaptureConsumer()
+        }
+
+        private func forwardAudioFrame(_ frame: AudioFrame, includeFFT: Bool) {
+            guard isReady, let webView, isWindowVisible else { return }
+            // fps gate against the tick timestamp — honor target rate even
+            // on ProMotion displays where the display link can fire 120Hz+.
+            let minInterval = 1.0 / Double(max(audioFPS, 1))
+            if lastForwardTime > 0,
+               frame.timestamp - lastForwardTime < minInterval - 0.001 {
+                return
+            }
+            lastForwardTime = frame.timestamp
+
+            if framesInFlight > 1 { return }
+
+            var payload: [String: Any] = [
+                "rmsIn": frame.rmsIn,
+                "rmsOut": frame.rmsOut,
+                "peakIn": frame.peakIn,
+                "peakOut": frame.peakOut,
+                "t": frame.timestamp,
+            ]
+            if includeFFT {
+                if let fft = frame.fftOutDB { payload["fftOut"] = fft }
+                if let fft = frame.fftInDB { payload["fftIn"] = fft }
+            }
+
+            guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+                  let json = String(data: data, encoding: .utf8) else { return }
+
+            framesInFlight += 1
+            let js = "window.ConjureDSP && window.ConjureDSP._audioFrame(\(json))"
+            webView.evaluateJavaScript(js) { [weak self] _, _ in
+                self?.framesInFlight = max(0, (self?.framesInFlight ?? 1) - 1)
+            }
+        }
 
         // MARK: Combine subscription
 
@@ -249,10 +378,19 @@ struct ExportCustomUIWebView: NSViewRepresentable {
                 let text = (message.body as? String) ?? String(describing: message.body)
                 log.info("[preset-ui] \(text, privacy: .public)")
 
-            case "subscribeAudioFrames", "unsubscribeAudioFrames":
-                // Accepted but not wired — the exported AU template doesn't
-                // carry the main extension's audio capture pipeline.
-                break
+            case "subscribeAudioFrames":
+                // JS passes `{ fft: true }` to opt into FFT bins; absence
+                // means RMS/peak-only frames. Idempotent — re-subscribing
+                // with a different flag just updates capture state.
+                var wantsFFT = false
+                if let body = message.body as? [String: Any],
+                   let fft = body["fft"] as? Bool {
+                    wantsFFT = fft
+                }
+                startAudioFrameForwarding(wantsFFT: wantsFFT)
+
+            case "unsubscribeAudioFrames":
+                stopAudioFrameForwarding()
 
             default:
                 break
