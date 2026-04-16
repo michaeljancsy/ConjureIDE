@@ -89,6 +89,21 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 let result = self.mcpListTones()
                 completion(result.0, result.1)
             }
+        case "get_bundle_info":
+            Task { @MainActor in
+                let result = self.mcpGetBundleInfo()
+                completion(result.0, result.1)
+            }
+        case "read_bundle_file":
+            Task { @MainActor in
+                let result = self.mcpReadBundleFile(input: input)
+                completion(result.0, result.1)
+            }
+        case "write_bundle_file":
+            Task { @MainActor in
+                let result = self.mcpWriteBundleFile(input: input)
+                completion(result.0, result.1)
+            }
         default:
             completion(jsonStr(["error": "Unknown tool: \(name)"]), true)
         }
@@ -228,9 +243,17 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     private func mcpListPresetsImpl() -> (String, Bool) {
         let pm = presetManager
         let presetList = pm.presets.map { preset -> [String: Any] in
-            [
+            // Surface bundle-ness + custom-UI status so Claude Code can
+            // pick the right preset to edit when the user asks for
+            // "the one with the custom UI". loadBundle is cached for
+            // factory presets so this doesn't re-parse the manifest
+            // every time list_presets runs.
+            let bundle = pm.loadBundle(for: preset)
+            return [
                 "name": preset.name,
                 "is_factory": preset.isFactory,
+                "is_bundle": preset.isBundle || preset.isFactory,
+                "has_custom_ui": bundle?.hasCustomUI ?? false,
                 "language": preset.language.rawValue,
             ]
         }
@@ -245,13 +268,158 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         guard let source = scriptSource else {
             return (jsonStr(["error": "No script loaded to save"]), true)
         }
+        let scaffoldUI = (input["scaffold_ui"] as? Bool) ?? false
         let pm = presetManager
         do {
-            let preset = try pm.saveUserBundle(name: name, source: source, language: currentScriptLanguage)
-            return (jsonStr(["success": true, "name": preset.name]), false)
+            let preset = try pm.saveUserBundle(
+                name: name, source: source,
+                language: currentScriptLanguage,
+                scaffoldUI: scaffoldUI
+            )
+            var response: [String: Any] = ["success": true, "name": preset.name]
+            if scaffoldUI {
+                response["scaffolded_ui"] = true
+                response["note"] = "Starter ui/index.html written. Edit it via write_bundle_file to customize the custom HTML/JS UI."
+            }
+            return (jsonStr(response), false)
         } catch {
             return (jsonStr(["error": "Failed to save preset: \(error.localizedDescription)"]), true)
         }
+    }
+
+    // MARK: - Bundle tools
+
+    /// Return everything Claude Code needs to reason about the current
+    /// preset bundle: whether it's a bundle at all, whether it ships a
+    /// custom UI, the manifest's UI block, and the list of editable
+    /// text files inside. Binary assets (PNG/WOFF) don't appear in the
+    /// file list because write_bundle_file takes UTF-8 only.
+    @MainActor
+    private func mcpGetBundleInfo() -> (String, Bool) {
+        guard let preset = presetManager.currentPreset,
+              let bundle = presetManager.loadBundle(for: preset) else {
+            // Legacy single-file presets have no bundle view — surface
+            // that explicitly rather than returning an error.
+            return (jsonStr(["bundle": NSNull()]), false)
+        }
+
+        let entries = BundleFilePickerEntries.entries(for: bundle)
+        let files: [[String: Any]] = entries.map { entry in
+            var dict: [String: Any] = [
+                "path": entry.relativePath,
+                "kind": entry.kind.rawValue,
+            ]
+            dict["language_id"] = entry.monacoLanguageID
+            return dict
+        }
+
+        var uiInfo: [String: Any] = [:]
+        if let ui = bundle.manifest.ui {
+            uiInfo["entryHTML"] = ui.entryHTML ?? "ui/index.html"
+            if let w = ui.width { uiInfo["width"] = w }
+            if let h = ui.height { uiInfo["height"] = h }
+            if let fps = ui.fps { uiInfo["fps"] = fps }
+            uiInfo["audioFrames"] = ui.audioFrames ?? false
+        }
+
+        var bundleInfo: [String: Any] = [
+            "name": bundle.name,
+            "root_path": bundle.rootURL.path,
+            "language": bundle.language.rawValue,
+            "has_custom_ui": bundle.hasCustomUI,
+            "is_factory": preset.isFactory,
+            "editable": !preset.isFactory, // factory bundles live in read-only Resources
+            "files": files,
+        ]
+        if !uiInfo.isEmpty { bundleInfo["ui"] = uiInfo }
+
+        return (jsonStr(["bundle": bundleInfo]), false)
+    }
+
+    /// Safely resolve a caller-supplied relative path against the current
+    /// bundle's root. Rejects absolute paths, `..` escapes, and any path
+    /// whose resolved location falls outside the bundle. Returns the
+    /// resolved URL on success, or a user-facing error message on failure
+    /// (the URL slot is nil then).
+    @MainActor
+    private func resolveBundleFilePath(
+        _ input: [String: Any]
+    ) -> (bundle: PresetBundle?, url: URL?, error: String?) {
+        guard let preset = presetManager.currentPreset,
+              let bundle = presetManager.loadBundle(for: preset) else {
+            return (nil, nil, "No bundle loaded. Current preset is not a bundle.")
+        }
+        guard let raw = input["path"] as? String, !raw.isEmpty else {
+            return (bundle, nil, "Missing required parameter: path")
+        }
+        if raw.hasPrefix("/") {
+            return (bundle, nil, "path must be relative to the bundle root; absolute paths are not allowed.")
+        }
+        let candidate = bundle.rootURL.appendingPathComponent(raw).standardizedFileURL
+        let rootStandardized = bundle.rootURL.standardizedFileURL
+        guard candidate.path.hasPrefix(rootStandardized.path + "/") || candidate.path == rootStandardized.path else {
+            return (bundle, nil, "path escapes the bundle root (got '\(raw)').")
+        }
+        return (bundle, candidate, nil)
+    }
+
+    @MainActor
+    private func mcpReadBundleFile(input: [String: Any]) -> (String, Bool) {
+        let resolved = resolveBundleFilePath(input)
+        if let error = resolved.error {
+            return (jsonStr(["error": error]), true)
+        }
+        guard let url = resolved.url else {
+            return (jsonStr(["error": "Could not resolve bundle file URL."]), true)
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return (jsonStr(["error": "File not found: \(input["path"] ?? "")"]), true)
+        }
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
+            return (jsonStr(["error": "File is not UTF-8 text. Binary bundle assets (images, fonts) aren't readable through this tool."]), true)
+        }
+        return (jsonStr(["path": input["path"] ?? "", "content": content]), false)
+    }
+
+    @MainActor
+    private func mcpWriteBundleFile(input: [String: Any]) -> (String, Bool) {
+        let resolved = resolveBundleFilePath(input)
+        if let error = resolved.error {
+            return (jsonStr(["error": error]), true)
+        }
+        guard let url = resolved.url else {
+            return (jsonStr(["error": "Could not resolve bundle file URL."]), true)
+        }
+        guard let content = input["content"] as? String else {
+            return (jsonStr(["error": "Missing required parameter: content"]), true)
+        }
+        guard let preset = presetManager.currentPreset else {
+            return (jsonStr(["error": "No current preset."]), true)
+        }
+        if preset.isFactory {
+            return (jsonStr(["error": "Factory presets are read-only. Save the preset with save_preset first to create an editable user bundle."]), true)
+        }
+        do {
+            // Parent dirs may not exist yet — e.g. first write to
+            // ui/assets/style.css in a bundle that only had ui/.
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try content.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            return (jsonStr(["error": "Write failed: \(error.localizedDescription)"]), true)
+        }
+        // Manifest edits can flip hasCustomUI on or off; refresh so the
+        // in-plugin UI toggle state tracks the new state.
+        if url.lastPathComponent == PresetManifest.filename {
+            presetManager.refreshPresets()
+        }
+        return (jsonStr([
+            "success": true,
+            "path": input["path"] ?? "",
+            "bytes_written": content.utf8.count,
+        ]), false)
     }
 
     @MainActor

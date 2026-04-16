@@ -153,13 +153,42 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "save_preset",
-            description: "Save the currently loaded script as a user preset.",
+            description: "Save the currently loaded script as a user preset bundle (.cdp directory). Pass scaffold_ui=true to also drop in a starter ui/index.html that binds one slider per parameter — gives the user a working custom HTML/JS UI to build on.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "name": PropertySchema(type: "string", description: "Name for the preset.")
+                    "name": PropertySchema(type: "string", description: "Name for the preset."),
+                    "scaffold_ui": PropertySchema(type: "boolean", description: "When true, creates ui/index.html alongside the script so the preset ships with a custom HTML/JS UI. Default: false."),
                 ],
                 required: ["name"]
+            )
+        ),
+        ToolDefinition(
+            name: "get_bundle_info",
+            description: "Introspect the currently-loaded preset bundle. Returns the bundle's name and root path, whether it ships a custom HTML/JS UI, the manifest's UI block (width/height/fps/audioFrames), and every editable text file inside (path + kind). Use before read_bundle_file / write_bundle_file to discover what's editable. Returns bundle=null when the active preset is legacy single-file (pre-bundle).",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
+        ToolDefinition(
+            name: "read_bundle_file",
+            description: "Read any text file inside the current preset bundle — e.g. 'process.py', 'manifest.json', 'ui/index.html', 'ui/assets/style.css'. Relative paths only; absolute paths are rejected. Factory bundles are readable; user/repo bundles are also readable. Use get_bundle_info first to discover paths.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "path": PropertySchema(type: "string", description: "Path relative to the bundle root (e.g. 'ui/index.html')."),
+                ],
+                required: ["path"]
+            )
+        ),
+        ToolDefinition(
+            name: "write_bundle_file",
+            description: "Write a text file inside the current preset bundle. Use to author the custom HTML/JS UI: set manifest.json's 'ui' block, write ui/index.html, add ui/assets/style.css. The plugin's file watcher picks up the change and hot-reloads the custom UI within ~300ms. Writes are rejected for factory presets (read-only resources in the app bundle). The DSP script itself (manifest.entry) is writable but the DAW won't pick up the new code until compile_and_run runs it — for DSP edits, prefer compile_and_run which also re-loads the kernel.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "path": PropertySchema(type: "string", description: "Path relative to the bundle root (e.g. 'ui/index.html')."),
+                    "content": PropertySchema(type: "string", description: "UTF-8 text to write. Overwrites any existing file at that path. Parent directories are created automatically."),
+                ],
+                required: ["path", "content"]
             )
         ),
         ToolDefinition(
