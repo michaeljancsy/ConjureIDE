@@ -115,16 +115,22 @@ struct PresetComparisonTests {
             .appendingPathComponent("ConjureDSPExtension.appex/Contents/Resources")
         guard let resourcesPath else { return [] }
 
+        // Factory bundles live under `Resources/presets/` after the flat
+        // `preset_*.py|.rs` → `preset_*.cdp/` migration.
+        let presetsPath = resourcesPath.appendingPathComponent("presets")
         let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(atPath: resourcesPath.path) else { return [] }
+        guard let files = try? fm.contentsOfDirectory(atPath: presetsPath.path) else { return [] }
 
+        // Factory presets live in `preset_<name>.cdp` / `preset_<name>_rust.cdp`
+        // bundle directories. Each bundle has its own manifest + process
+        // script; the stem (without `.cdp`) is what callers pass in.
         let pythonNames = Set(files
-            .filter { $0.hasPrefix("preset_") && $0.hasSuffix(".py") }
-            .map { String($0.dropFirst("preset_".count).dropLast(".py".count)) })
+            .filter { $0.hasPrefix("preset_") && $0.hasSuffix(".cdp") && !$0.hasSuffix("_rust.cdp") }
+            .map { String($0.dropFirst("preset_".count).dropLast(".cdp".count)) })
 
         let rustNames = Set(files
-            .filter { $0.hasPrefix("preset_") && $0.hasSuffix("_rust.rs") }
-            .map { String($0.dropFirst("preset_".count).dropLast("_rust.rs".count)) })
+            .filter { $0.hasPrefix("preset_") && $0.hasSuffix("_rust.cdp") }
+            .map { String($0.dropFirst("preset_".count).dropLast("_rust.cdp".count)) })
 
         // Exclude presets that require external resources (e.g., NAM tones)
         let excluded: Set<String> = ["nam"]
@@ -251,7 +257,12 @@ struct PresetComparisonTests {
         dsp_kernel_set_max_frames(kernel, UInt32(chunkSize))
 
         let resourcesURL = try extensionResourcesURL
-        let presetURL = resourcesURL.appendingPathComponent("preset_\(presetName).py")
+        // Factory Python presets ship as `.cdp` bundles; read the entry
+        // script declared in the bundle's manifest. The `process.py`
+        // filename is the convention for every factory bundle today.
+        let presetURL = resourcesURL
+            .appendingPathComponent("preset_\(presetName).cdp")
+            .appendingPathComponent("process.py")
         let source = try String(contentsOf: presetURL, encoding: .utf8)
 
         let tempFile = FileManager.default.temporaryDirectory
@@ -294,7 +305,9 @@ struct PresetComparisonTests {
         dsp_kernel_set_max_frames(kernel, UInt32(chunkSize))
 
         let resourcesURL = try extensionResourcesURL
-        let presetURL = resourcesURL.appendingPathComponent("preset_\(presetName)_rust.rs")
+        let presetURL = resourcesURL
+            .appendingPathComponent("preset_\(presetName)_rust.cdp")
+            .appendingPathComponent("process.rs")
         let source = try String(contentsOf: presetURL, encoding: .utf8)
         let wasmBytes = try compileToWasm(source: source)
 

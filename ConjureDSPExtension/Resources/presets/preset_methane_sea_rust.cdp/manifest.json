@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "entry": "process.rs",
+  "language": "rust"
+}

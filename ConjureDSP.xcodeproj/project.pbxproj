@@ -173,6 +173,9 @@
 			exceptions = (
 				257911A92F5013850036AAB6 /* Exceptions for "ConjureDSPExtension" folder in "ConjureDSPExtension" target */,
 			);
+			explicitFolders = (
+				"Resources/presets",
+			);
 			path = ConjureDSPExtension;
 			sourceTree = "<group>";
 		};

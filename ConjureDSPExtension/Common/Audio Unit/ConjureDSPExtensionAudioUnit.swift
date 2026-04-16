@@ -1156,11 +1156,18 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 			guard let entry = FactoryPresetRegistry.entries.first(where: { $0.number == preset.number }) else { return }
 
-			let ext = entry.language == .rust ? "rs" : "py"
+			// Factory presets ship as `.cdp` bundles under the extension's
+			// Resources. Resolve the bundle dir, then read the entry script
+			// named in `manifest.entry` (mirrors the user/repo bundle path).
 			let bundle = Bundle(for: type(of: self))
-			guard let url = bundle.url(forResource: entry.resourceName, withExtension: ext),
-				  let source = try? String(contentsOf: url, encoding: .utf8) else {
-				pluginLog.error("Factory preset script not found: \(entry.resourceName).\(ext, privacy: .public)")
+			guard let bundleURL = bundle.url(
+				forResource: entry.resourceName,
+				withExtension: PresetBundle.bundleExtension,
+				subdirectory: "presets"
+			),
+				  let presetBundle = PresetBundle.load(from: bundleURL),
+				  let source = try? presetBundle.readSource() else {
+				pluginLog.error("Factory bundle script not found: \(entry.resourceName, privacy: .public)")
 				return
 			}
 

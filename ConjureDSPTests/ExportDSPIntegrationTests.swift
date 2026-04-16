@@ -241,7 +241,7 @@ struct ExportDSPIntegrationTests {
 
         // 1. Read and compile Rust passthrough preset
         let resourcesURL = try Self.extensionResourcesURL
-        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_passthrough_rust.rs"), encoding: .utf8)
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_passthrough_rust.cdp/process.rs"), encoding: .utf8)
         let wasmData = try Self.compileToWasm(source: source)
 
         // 2. Export
@@ -301,7 +301,7 @@ struct ExportDSPIntegrationTests {
 
         // 1. Read Python passthrough preset
         let resourcesURL = try Self.extensionResourcesURL
-        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_passthrough.py"), encoding: .utf8)
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_passthrough.cdp/process.py"), encoding: .utf8)
 
         // 2. Export
         let registry = ExportRegistry(registryURL: registryURL)
@@ -364,7 +364,7 @@ struct ExportDSPIntegrationTests {
 
         // 1. Read and compile Rust gainpan preset (has rich params)
         let resourcesURL = try Self.extensionResourcesURL
-        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_gainpan_rust.rs"), encoding: .utf8)
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_gainpan_rust.cdp/process.rs"), encoding: .utf8)
         let wasmData = try Self.compileToWasm(source: source)
 
         // 2. Export with param metadata
@@ -641,7 +641,7 @@ struct ExportDSPIntegrationTests {
     func namLstmPresetProducesCorrectAudio() throws {
         // 1. Compile NAM preset source to WASM
         let resourcesURL = try Self.extensionResourcesURL
-        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam_rust.rs"), encoding: .utf8)
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_nam_rust.cdp/process.rs"), encoding: .utf8)
         let wasmData = try Self.compileToWasm(source: source)
 
         // 2. Create kernel and load WASM
@@ -707,7 +707,7 @@ struct ExportDSPIntegrationTests {
     func namWavenetPresetProducesCorrectAudio() throws {
         // 1. Compile NAM preset source to WASM
         let resourcesURL = try Self.extensionResourcesURL
-        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam_rust.rs"), encoding: .utf8)
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_nam_rust.cdp/process.rs"), encoding: .utf8)
         let wasmData = try Self.compileToWasm(source: source)
 
         // 2. Create kernel and load WASM
@@ -788,7 +788,7 @@ struct ExportDSPIntegrationTests {
         // 1. Read Python NAM preset and replace the default tone3000 URL with a real absolute path
         let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/lstm_tiny.nam")
         let resourcesURL = try Self.extensionResourcesURL
-        var source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam.py"), encoding: .utf8)
+        var source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_nam.cdp/process.py"), encoding: .utf8)
         source = source.replacingOccurrences(of: "tone3000://19/56", with: namURL.path)
         #expect(source.contains(namURL.path), "Source should contain absolute NAM path after substitution")
 
@@ -850,7 +850,7 @@ struct ExportDSPIntegrationTests {
         // 1. Read Rust NAM preset and replace the default tone3000 URL with a real absolute path
         let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/lstm_tiny.nam")
         let resourcesURL = try Self.extensionResourcesURL
-        var source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam_rust.rs"), encoding: .utf8)
+        var source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_nam_rust.cdp/process.rs"), encoding: .utf8)
         source = source.replacingOccurrences(of: "tone3000://19/56", with: namURL.path)
         #expect(source.contains(namURL.path), "Source should contain absolute NAM path after substitution")
 

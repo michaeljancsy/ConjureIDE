@@ -186,11 +186,16 @@ class PresetManager: ObservableObject {
     func loadSource(for preset: Preset) -> String? {
         switch preset.source {
         case .factory(let resourceName):
-            guard let url = extensionBundle.url(forResource: resourceName, withExtension: preset.fileExtension) else {
-                log.error("Factory preset resource not found: \(resourceName).\(preset.fileExtension, privacy: .public)")
+            // Factory presets ship as `.cdp` bundle directories inside the
+            // extension's Resources. Load the bundle and read its entry
+            // script. This path replaced the flat `preset_*.{py,rs}` layout
+            // when factory presets were converted to bundles so the editor
+            // can treat them identically to user/repo bundles.
+            guard let bundle = factoryBundle(for: resourceName) else {
+                log.error("Factory bundle not found for \(resourceName, privacy: .public)")
                 return nil
             }
-            return try? String(contentsOf: url, encoding: .utf8)
+            return try? bundle.readSource()
         case .user(let url), .repo(let url):
             return try? String(contentsOf: url, encoding: .utf8)
         case .userBundle(let url), .repoBundle(let url):
@@ -203,12 +208,40 @@ class PresetManager: ObservableObject {
     }
 
     /// Load the parsed bundle view for a preset, or nil if the preset is not
-    /// a bundle. Useful for UI code that needs the manifest or `ui/index.html`
-    /// URL.
+    /// a bundle. Factory presets also return a bundle now (they ship as
+    /// `.cdp` directories in the extension's Resources) so the UI layer can
+    /// treat factory and user/repo bundles uniformly — both have a
+    /// manifest, both can opt into a custom HTML/JS UI.
     func loadBundle(for preset: Preset) -> PresetBundle? {
+        if case .factory(let resourceName) = preset.source {
+            return factoryBundle(for: resourceName)
+        }
         guard let url = preset.bundleURL else { return nil }
         return PresetBundle.load(from: url)
     }
+
+    /// Resolve a factory preset's `.cdp` bundle inside the extension's
+    /// Resources. Cached on first hit because Bundle URL lookup isn't
+    /// cheap and factory presets are loaded repeatedly (cycling in the
+    /// browser, DAW preset list queries, etc.).
+    private func factoryBundle(for resourceName: String) -> PresetBundle? {
+        if let cached = factoryBundleCache[resourceName] { return cached }
+        // Factory bundles live under `Resources/presets/` — checked into the
+        // repo as `.cdp/` directories and shipped verbatim by Xcode via the
+        // synchronized group's `explicitFolders = ("Resources/presets")`.
+        // Without the `subdirectory:` arg, Bundle.url won't find them.
+        guard let bundleURL = extensionBundle.url(
+            forResource: resourceName,
+            withExtension: PresetBundle.bundleExtension,
+            subdirectory: "presets"
+        ) else { return nil }
+        guard let bundle = PresetBundle.load(from: bundleURL) else { return nil }
+        factoryBundleCache[resourceName] = bundle
+        return bundle
+    }
+
+    /// Memoized factory-bundle lookups keyed by `resourceName`.
+    private var factoryBundleCache: [String: PresetBundle] = [:]
 
     /// Mark a preset as the currently active one and record its source for modification detection.
     func setCurrentPreset(_ preset: Preset?, source: String?) {
