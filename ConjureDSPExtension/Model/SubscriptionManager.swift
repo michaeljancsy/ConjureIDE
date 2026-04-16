@@ -38,14 +38,24 @@ enum SubscriptionStatus: UInt8, CaseIterable {
 
 @MainActor
 class SubscriptionManager: ObservableObject {
-    @Published private(set) var status: SubscriptionStatus = .noSubscription
+    @Published private(set) var status: SubscriptionStatus = .noSubscription {
+        didSet { refreshAnalyticsMode() }
+    }
     @Published private(set) var demoSecondsRemaining: Double = 60.0
     @Published private(set) var email: String?
 
     /// Whether this build is currently running in Beta mode (BETA_BUILD flag set
     /// and the 7-day window from the build date has not elapsed). Beta mode
     /// grants full access without a license but reverts to Demo after the window.
-    @Published private(set) var isBetaActive: Bool = false
+    @Published private(set) var isBetaActive: Bool = false {
+        didSet { refreshAnalyticsMode() }
+    }
+
+    /// Push the current licensed/beta state into Mixpanel as a super property so
+    /// every subsequent event is tagged with the effective build mode.
+    private func refreshAnalyticsMode() {
+        Analytics.updateMode(licensed: status.isLicensed, betaActive: isBetaActive)
+    }
 
     /// Unix timestamp of the build (from Info.plist BuildID). Used by Beta mode
     /// to compute how much of the 7-day Beta window remains. Set by the host
