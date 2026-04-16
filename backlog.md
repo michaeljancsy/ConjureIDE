@@ -4,6 +4,7 @@
 
 - Python package management: global `user-packages/` directory, package manager UI in AU extension, companion app installer via `uv`. Design at `docs/per-preset-package-requirements.md`. Remaining: vendored exports.
 - Rust crate package management: crates.io search + install UI, companion app compiles crates to wasm32-wasip1 rlibs via bundled cargo, RustCompiler links user crates via `--extern` flags, WasmCache invalidates on dependency changes. Remaining: manual testing end-to-end with real crates.
+- HTML/JS custom preset UIs (amorph-style): directory-bundle preset format with optional `ui/index.html` that replaces the default parameter sliders. Plan at `~/.claude/plans/adaptive-bouncing-stallman.md`. Phase A landed: `PresetManifest` + `PresetBundle`, all save paths (Save button, MCP `save_preset`, import-URL) now produce bundles via `saveUserBundle` / `saveRepoBundle`; manifest always advertises `ui/index.html` so authors activate a custom UI by creating that file in any editor. Legacy single-file presets still load for backward compat. No conversion feature (would become dead code). 47 tests pass. Remaining: PersonalRepoSync bundle sync, `CustomUIWebView` + `window.ConjureDSP` bridge, audio-frame publisher (RMS/FFT/waveform), hot reload + preset-browser Reveal/Reload menu, Export AU support.
 
 ## To Do
 

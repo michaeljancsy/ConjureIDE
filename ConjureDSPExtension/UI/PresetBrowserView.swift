@@ -37,8 +37,8 @@ struct PresetBrowserView: View {
             let sourceMatch: Bool
             switch preset.source {
             case .factory: sourceMatch = selectedSources.contains(.factory)
-            case .user: sourceMatch = selectedSources.contains(.user)
-            case .repo: sourceMatch = selectedSources.contains(.repo)
+            case .user, .userBundle: sourceMatch = selectedSources.contains(.user)
+            case .repo, .repoBundle: sourceMatch = selectedSources.contains(.repo)
             }
             guard sourceMatch else { return false }
 
@@ -347,8 +347,8 @@ struct PresetBrowserView: View {
     private func sourceLabel(for preset: Preset) -> String {
         switch preset.source {
         case .factory: return "Factory"
-        case .user: return "User"
-        case .repo: return "Repo"
+        case .user, .userBundle: return "User"
+        case .repo, .repoBundle: return "Repo"
         }
     }
 

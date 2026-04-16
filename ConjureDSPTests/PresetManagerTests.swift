@@ -112,7 +112,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
-        let preset = try manager.saveUserPreset(name: "My Effect", source: script)
+        let preset = try manager.saveUserBundle(name: "My Effect", source: script)
 
         #expect(preset.name == "My Effect")
         #expect(!preset.isFactory)
@@ -127,7 +127,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let script = "fn process() {}\n"
-        let preset = try manager.saveUserPreset(name: "My Rust Effect", source: script, language: .rust)
+        let preset = try manager.saveUserBundle(name: "My Rust Effect", source: script, language: .rust)
 
         #expect(preset.name == "My Rust Effect")
         #expect(preset.language == .rust)
@@ -142,7 +142,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
-        try manager.saveUserPreset(name: "Test Preset", source: script)
+        try manager.saveUserBundle(name: "Test Preset", source: script)
 
         let userPresets = manager.presets.filter { !$0.isFactory }
         #expect(userPresets.count == 1)
@@ -154,7 +154,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let script = "pass\n"
-        let preset = try manager.saveUserPreset(name: "To Delete", source: script)
+        let preset = try manager.saveUserBundle(name: "To Delete", source: script)
         #expect(manager.presets.contains(where: { $0.id == preset.id }))
 
         try manager.deleteUserPreset(preset)
@@ -165,7 +165,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let preset = try manager.saveUserPreset(name: "Active", source: "pass\n")
+        let preset = try manager.saveUserBundle(name: "Active", source: "pass\n")
         manager.setCurrentPreset(preset, source: "pass\n")
         #expect(manager.currentPreset?.id == preset.id)
 
@@ -178,8 +178,8 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        try manager.saveUserPreset(name: "Evolving", source: "# version 1\n")
-        try manager.saveUserPreset(name: "Evolving", source: "# version 2\n")
+        try manager.saveUserBundle(name: "Evolving", source: "# version 1\n")
+        try manager.saveUserBundle(name: "Evolving", source: "# version 2\n")
 
         let userPresets = manager.presets.filter { !$0.isFactory && $0.name == "Evolving" }
         #expect(userPresets.count == 1, "Should have exactly one preset named 'Evolving'")
@@ -195,7 +195,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let source = "# original\n"
-        let preset = try manager.saveUserPreset(name: "Track Me", source: source)
+        let preset = try manager.saveUserBundle(name: "Track Me", source: source)
         manager.setCurrentPreset(preset, source: source)
 
         #expect(manager.isModified == false)
@@ -230,7 +230,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        try manager.saveUserPreset(name: "Conflict", source: "pass\n")
+        try manager.saveUserBundle(name: "Conflict", source: "pass\n")
         let name = manager.uniqueName(baseName: "Conflict")
         #expect(name == "Conflict 2")
     }
@@ -239,8 +239,8 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        try manager.saveUserPreset(name: "Effect", source: "pass\n")
-        try manager.saveUserPreset(name: "Effect 2", source: "pass\n")
+        try manager.saveUserBundle(name: "Effect", source: "pass\n")
+        try manager.saveUserBundle(name: "Effect 2", source: "pass\n")
         let name = manager.uniqueName(baseName: "Effect")
         #expect(name == "Effect 3")
     }
@@ -260,7 +260,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         #expect(throws: PresetManagerError.self) {
-            try manager.saveUserPreset(name: "   ", source: "pass\n")
+            try manager.saveUserBundle(name: "   ", source: "pass\n")
         }
     }
 
@@ -269,7 +269,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         #expect(!manager.userPresetExists(name: "Nope"))
-        try manager.saveUserPreset(name: "Exists", source: "pass\n")
+        try manager.saveUserBundle(name: "Exists", source: "pass\n")
         #expect(manager.userPresetExists(name: "Exists"))
     }
 
@@ -360,7 +360,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         // Save a user preset with the same name as a factory preset
-        try manager.saveUserPreset(name: "Tremolo (Python)", source: "# user tremolo\n")
+        try manager.saveUserBundle(name: "Tremolo (Python)", source: "# user tremolo\n")
 
         let tremolos = manager.presets.filter { $0.name == "Tremolo (Python)" }
         #expect(tremolos.count == 2, "Should have both factory and user 'Tremolo (Python)'")
@@ -390,7 +390,7 @@ struct PresetManagerTests {
         defer { Self.cleanup(tempDir) }
 
         let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
-        try manager.saveUserPreset(name: "Alpha", source: script)
+        try manager.saveUserBundle(name: "Alpha", source: script)
 
         let renamed = try manager.renamePreset(
             manager.presets.first(where: { $0.name == "Alpha" && !$0.isFactory })!,
@@ -398,13 +398,16 @@ struct PresetManagerTests {
         )
 
         #expect(renamed.name == "Beta")
-        #expect(renamed.id == "user:Beta.py")
+        #expect(renamed.id == "user:bundle:Beta")
         #expect(!manager.presets.contains(where: { $0.name == "Alpha" && !$0.isFactory }))
         #expect(manager.presets.contains(where: { $0.name == "Beta" && !$0.isFactory }))
         #expect(manager.loadSource(for: renamed) == script)
     }
 
-    @Test @MainActor func renameRepoPreset() throws {
+    /// Renaming a legacy single-file repo preset still fires
+    /// `onRepoPresetRenamed`, preserving backward compat for users with
+    /// pre-bundle repo caches. Bundle repo sync is a separate Phase A'.
+    @Test @MainActor func renameLegacyRepoPresetFiresCallback() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("PresetManagerTests_\(UUID().uuidString)", isDirectory: true)
         let repoDir = tempDir.appendingPathComponent("RepoPresets", isDirectory: true)
@@ -415,8 +418,11 @@ struct PresetManagerTests {
         )
         defer { Self.cleanup(tempDir) }
 
+        // Write a legacy single-file repo preset directly to disk.
         let script = "# repo script\n"
-        try manager.saveRepoPreset(name: "RepoAlpha", source: script)
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        try script.write(to: repoDir.appendingPathComponent("RepoAlpha.py"), atomically: true, encoding: .utf8)
+        manager.refreshPresets()
 
         var callbackArgs: (oldName: String, newName: String, source: String, language: ScriptLanguage)?
         manager.onRepoPresetRenamed = { oldName, newName, source, language in
@@ -434,12 +440,37 @@ struct PresetManagerTests {
         #expect(callbackArgs?.language == .python)
     }
 
+    /// Renaming a repo *bundle* does NOT fire the legacy callback — bundle
+    /// GitHub sync is handled separately.
+    @Test @MainActor func renameRepoBundleDoesNotFireLegacyCallback() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PresetManagerTests_\(UUID().uuidString)", isDirectory: true)
+        let repoDir = tempDir.appendingPathComponent("RepoPresets", isDirectory: true)
+        let manager = PresetManager(
+            extensionBundle: try Self.extensionBundle,
+            userPresetsURL: tempDir,
+            repoPresetsURL: repoDir
+        )
+        defer { Self.cleanup(tempDir) }
+
+        try manager.saveRepoBundle(name: "RepoAlpha", source: "# s\n")
+
+        var callbackFired = false
+        manager.onRepoPresetRenamed = { _, _, _, _ in callbackFired = true }
+
+        let preset = manager.presets.first(where: { $0.name == "RepoAlpha" && $0.isRepo })!
+        let renamed = try manager.renamePreset(preset, to: "RepoBeta")
+
+        #expect(renamed.id == "repo:bundle:RepoBeta")
+        #expect(callbackFired == false)
+    }
+
     @Test @MainActor func renameCurrentPresetUpdatesCurrent() throws {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
         let script = "# active preset\n"
-        let preset = try manager.saveUserPreset(name: "Current", source: script)
+        let preset = try manager.saveUserBundle(name: "Current", source: script)
         manager.setCurrentPreset(preset, source: script)
         manager.scriptDidChange(to: "# edited\n")
         #expect(manager.isModified == true)
@@ -456,7 +487,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let preset = try manager.saveUserPreset(name: "Same", source: "pass\n")
+        let preset = try manager.saveUserBundle(name: "Same", source: "pass\n")
         let result = try manager.renamePreset(preset, to: "Same")
 
         #expect(result.id == preset.id)
@@ -477,7 +508,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let preset = try manager.saveUserPreset(name: "Valid", source: "pass\n")
+        let preset = try manager.saveUserBundle(name: "Valid", source: "pass\n")
         #expect(throws: PresetManagerError.self) {
             try manager.renamePreset(preset, to: "   ")
         }
@@ -487,8 +518,8 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        try manager.saveUserPreset(name: "Existing", source: "pass\n")
-        let preset = try manager.saveUserPreset(name: "ToRename", source: "pass\n")
+        try manager.saveUserBundle(name: "Existing", source: "pass\n")
+        let preset = try manager.saveUserBundle(name: "ToRename", source: "pass\n")
 
         #expect(throws: PresetManagerError.self) {
             try manager.renamePreset(preset, to: "Existing")
@@ -499,11 +530,11 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let preset = try manager.saveUserPreset(name: "RustEffect", source: "fn process() {}\n", language: .rust)
+        let preset = try manager.saveUserBundle(name: "RustEffect", source: "fn process() {}\n", language: .rust)
         let renamed = try manager.renamePreset(preset, to: "RenamedRust")
 
         #expect(renamed.language == .rust)
-        #expect(renamed.id == "user:RenamedRust.rs")
+        #expect(renamed.id == "user:bundle:RenamedRust")
         #expect(manager.loadSource(for: renamed) == "fn process() {}\n")
     }
 
@@ -511,13 +542,196 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let presetA = try manager.saveUserPreset(name: "A", source: "# a\n")
-        let presetB = try manager.saveUserPreset(name: "B", source: "# b\n")
+        let presetA = try manager.saveUserBundle(name: "A", source: "# a\n")
+        let presetB = try manager.saveUserBundle(name: "B", source: "# b\n")
         manager.setCurrentPreset(presetA, source: "# a\n")
 
         try manager.renamePreset(presetB, to: "C")
 
         #expect(manager.currentPreset?.id == presetA.id)
         #expect(manager.currentPreset?.name == "A")
+    }
+
+    // MARK: - Bundle Presets
+
+    @Test @MainActor func saveUserBundleCreatesDirectoryWithManifest() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let script = "# bundle preset\n"
+        let preset = try manager.saveUserBundle(name: "My Bundle", source: script, language: .python)
+
+        #expect(preset.isBundle)
+        #expect(preset.isUser)
+        #expect(preset.id == "user:bundle:My Bundle")
+        #expect(preset.language == .python)
+
+        let bundleURL = tempDir.appendingPathComponent("My Bundle.cdp", isDirectory: true)
+        let fm = FileManager.default
+        #expect(fm.fileExists(atPath: bundleURL.path))
+        #expect(fm.fileExists(atPath: bundleURL.appendingPathComponent("manifest.json").path))
+        #expect(fm.fileExists(atPath: bundleURL.appendingPathComponent("process.py").path))
+        // Default save does NOT scaffold ui/index.html.
+        #expect(!fm.fileExists(atPath: bundleURL.appendingPathComponent("ui/index.html").path))
+    }
+
+    @Test @MainActor func saveUserBundleScaffoldsUIWhenRequested() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        try manager.saveUserBundle(name: "WithUI", source: "# x\n", scaffoldUI: true)
+
+        let bundleURL = tempDir.appendingPathComponent("WithUI.cdp", isDirectory: true)
+        let htmlURL = bundleURL.appendingPathComponent("ui/index.html")
+        #expect(FileManager.default.fileExists(atPath: htmlURL.path))
+        // Scaffolded HTML contains the bridge API the starter template uses.
+        let html = try String(contentsOf: htmlURL, encoding: .utf8)
+        #expect(html.contains("window.ConjureDSP"))
+    }
+
+    @Test @MainActor func bundleWithManifestUIBlockButNoHTMLIsNotCustomUI() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        // Default save: manifest has `ui` block, but no ui/index.html written.
+        let preset = try manager.saveUserBundle(name: "Pending", source: "# x\n")
+        let bundle = manager.loadBundle(for: preset)
+        #expect(bundle != nil)
+        #expect(bundle?.manifest.ui != nil) // block present
+        #expect(bundle?.hasCustomUI == false) // but no HTML exists yet
+    }
+
+    @Test @MainActor func discoverPresetsIncludesBundles() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        try manager.saveUserBundle(name: "First", source: "# 1\n")
+        try manager.saveUserBundle(name: "Second", source: "# 2\n", language: .rust)
+
+        let userBundles = manager.presets.filter { $0.isUser && $0.isBundle }
+        #expect(userBundles.count == 2)
+        #expect(userBundles.contains { $0.name == "First" && $0.language == .python })
+        #expect(userBundles.contains { $0.name == "Second" && $0.language == .rust })
+    }
+
+    @Test @MainActor func loadSourceReadsBundleEntryScript() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let script = "# the real source\n"
+        let preset = try manager.saveUserBundle(name: "HasSource", source: script)
+        let read = manager.loadSource(for: preset)
+
+        #expect(read == script)
+    }
+
+    @Test @MainActor func setCurrentBundlePopulatesCurrentBundle() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let script = "# cur\n"
+        let preset = try manager.saveUserBundle(name: "Current", source: script, scaffoldUI: true)
+        manager.setCurrentPreset(preset, source: script)
+
+        let bundle = manager.currentBundle
+        #expect(bundle != nil)
+        #expect(bundle?.hasCustomUI == true)
+        #expect(bundle?.uiIndexURL?.lastPathComponent == "index.html")
+    }
+
+    @Test @MainActor func setCurrentLegacyPresetClearsCurrentBundle() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let bundle = try manager.saveUserBundle(name: "B", source: "# b\n")
+        manager.setCurrentPreset(bundle, source: "# b\n")
+        #expect(manager.currentBundle != nil)
+
+        // Switch to a legacy single-file preset written directly to disk.
+        try "# l\n".write(to: tempDir.appendingPathComponent("L.py"), atomically: true, encoding: .utf8)
+        manager.refreshPresets()
+        let legacy = manager.presets.first { $0.name == "L" && !$0.isBundle }!
+        manager.setCurrentPreset(legacy, source: "# l\n")
+        #expect(manager.currentBundle == nil)
+    }
+
+    @Test @MainActor func deleteBundleRemovesDirectoryAndEntry() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.saveUserBundle(name: "Doomed", source: "# x\n")
+        let bundleURL = tempDir.appendingPathComponent("Doomed.cdp", isDirectory: true)
+        #expect(FileManager.default.fileExists(atPath: bundleURL.path))
+
+        try manager.deletePreset(preset)
+
+        #expect(!FileManager.default.fileExists(atPath: bundleURL.path))
+        #expect(!manager.presets.contains { $0.id == preset.id })
+    }
+
+    @Test @MainActor func renameBundlePreservesCdpSuffix() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.saveUserBundle(name: "Before", source: "# s\n")
+        let renamed = try manager.renamePreset(preset, to: "After")
+
+        #expect(renamed.name == "After")
+        #expect(renamed.id == "user:bundle:After")
+        let newURL = tempDir.appendingPathComponent("After.cdp", isDirectory: true)
+        #expect(FileManager.default.fileExists(atPath: newURL.path))
+        #expect(!FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("Before.cdp").path))
+    }
+
+    @Test @MainActor func malformedBundleIsSkippedDuringDiscovery() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        // Create a directory with a manifest pointing to a missing entry script
+        let badBundle = tempDir.appendingPathComponent("Broken.cdp", isDirectory: true)
+        try FileManager.default.createDirectory(at: badBundle, withIntermediateDirectories: true)
+        let badManifest = #"{"schemaVersion":1,"entry":"missing.py"}"#
+        try badManifest.write(to: badBundle.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+
+        manager.refreshPresets()
+
+        #expect(!manager.presets.contains { $0.name == "Broken" })
+    }
+
+    @Test @MainActor func legacyAndBundlePresetsCoexist() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        // Legacy single-file preset written directly to disk (simulates a
+        // user upgrading from a pre-bundle install).
+        try "# l\n".write(to: tempDir.appendingPathComponent("Legacy.py"), atomically: true, encoding: .utf8)
+        // New-style bundle saved via the API.
+        try manager.saveUserBundle(name: "Bundled", source: "# b\n")
+        manager.refreshPresets()
+
+        let users = manager.presets.filter(\.isUser)
+        #expect(users.count == 2)
+        #expect(users.contains { $0.name == "Legacy" && !$0.isBundle })
+        #expect(users.contains { $0.name == "Bundled" && $0.isBundle })
+    }
+
+    @Test @MainActor func bundleWithoutUIBlockHasNoCustomUI() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        // Build a bundle manually with UI disabled
+        let bundleURL = tempDir.appendingPathComponent("NoUI.cdp", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundleURL, withIntermediateDirectories: true)
+        let manifest = PresetBundle.defaultManifest(language: .python, includeUI: false)
+        try manifest.jsonData().write(to: bundleURL.appendingPathComponent("manifest.json"))
+        try "# x\n".write(to: bundleURL.appendingPathComponent("process.py"), atomically: true, encoding: .utf8)
+
+        manager.refreshPresets()
+        let preset = manager.presets.first { $0.name == "NoUI" }
+        #expect(preset != nil)
+
+        let bundle = manager.loadBundle(for: preset!)
+        #expect(bundle != nil)
+        #expect(bundle?.hasCustomUI == false)
     }
 }

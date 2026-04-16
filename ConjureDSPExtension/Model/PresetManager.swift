@@ -15,6 +15,11 @@ class PresetManager: ObservableObject {
     @Published var currentPreset: Preset?
     @Published var isModified: Bool = false
 
+    /// Parsed bundle view of `currentPreset` when it is a bundle preset. Nil
+    /// for factory and legacy single-file presets. Published so the UI can
+    /// observe and decide between custom HTML/JS UI and the default sliders.
+    @Published private(set) var currentBundle: PresetBundle?
+
     /// The script source at the time the current preset was loaded, for modification detection.
     private(set) var loadedSource: String?
 
@@ -99,30 +104,65 @@ class PresetManager: ObservableObject {
     }
 
     private func discoverPresets(in directory: URL, prefix: String) -> [Preset] {
-        guard let files = try? fileManager.contentsOfDirectory(
+        guard let entries = try? fileManager.contentsOfDirectory(
             at: directory,
-            includingPropertiesForKeys: nil,
+            includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
 
-        let scriptFiles = files
+        var result: [Preset] = []
+
+        // Directories containing manifest.json → bundle presets.
+        let bundleDirs = entries.filter { url in
+            var isDir: ObjCBool = false
+            guard fileManager.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else { return false }
+            return PresetBundle.looksLikeBundle(at: url)
+        }.sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
+
+        for url in bundleDirs {
+            guard let bundle = PresetBundle.load(from: url) else {
+                log.warning("Skipping malformed bundle at \(url.path, privacy: .public)")
+                continue
+            }
+            let name = bundle.name
+            let source: Preset.Source = prefix == "repo" ? .repoBundle(url: url) : .userBundle(url: url)
+            let category: PresetCategory = {
+                guard let raw = bundle.manifest.meta?.category else { return .other }
+                return PresetCategory(rawValue: raw.lowercased()) ?? .other
+            }()
+            result.append(Preset(
+                id: "\(prefix):bundle:\(name)",
+                name: name,
+                source: source,
+                factoryPresetNumber: nil,
+                language: bundle.language,
+                category: category,
+                descriptionText: bundle.manifest.meta?.description,
+                author: bundle.manifest.meta?.author
+            ))
+        }
+
+        // Top-level `.py` / `.rs` files → legacy single-file presets.
+        let scriptFiles = entries
             .filter { Self.supportedExtensions.contains($0.pathExtension) }
             .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
 
-        return scriptFiles.map { url in
+        for url in scriptFiles {
             let name = url.deletingPathExtension().lastPathComponent
             let ext = url.pathExtension
             let language: ScriptLanguage = ext == "rs" ? .rust : .python
             let source: Preset.Source = prefix == "repo" ? .repo(url: url) : .user(url: url)
-            return Preset(
+            result.append(Preset(
                 id: "\(prefix):\(name).\(ext)",
                 name: name,
                 source: source,
                 factoryPresetNumber: nil,
                 language: language,
                 category: .other
-            )
+            ))
         }
+
+        return result
     }
 
     // MARK: - Load
@@ -138,7 +178,21 @@ class PresetManager: ObservableObject {
             return try? String(contentsOf: url, encoding: .utf8)
         case .user(let url), .repo(let url):
             return try? String(contentsOf: url, encoding: .utf8)
+        case .userBundle(let url), .repoBundle(let url):
+            guard let bundle = PresetBundle.load(from: url) else {
+                log.error("Bundle preset failed to load at \(url.path, privacy: .public)")
+                return nil
+            }
+            return try? bundle.readSource()
         }
+    }
+
+    /// Load the parsed bundle view for a preset, or nil if the preset is not
+    /// a bundle. Useful for UI code that needs the manifest or `ui/index.html`
+    /// URL.
+    func loadBundle(for preset: Preset) -> PresetBundle? {
+        guard let url = preset.bundleURL else { return nil }
+        return PresetBundle.load(from: url)
     }
 
     /// Mark a preset as the currently active one and record its source for modification detection.
@@ -146,6 +200,7 @@ class PresetManager: ObservableObject {
         currentPreset = preset
         loadedSource = source
         isModified = false
+        currentBundle = preset.flatMap { loadBundle(for: $0) }
     }
 
     /// Call when the user edits the script to update the modified flag.
@@ -157,64 +212,26 @@ class PresetManager: ObservableObject {
         isModified = (newSource != loaded)
     }
 
-    // MARK: - Save (User Presets)
-
-    /// Save source as a new or overwritten user preset. Returns the resulting Preset.
-    @discardableResult
-    func saveUserPreset(name: String, source: String, language: ScriptLanguage = .python) throws -> Preset {
-        let sanitized = sanitizeFilename(name)
-        guard !sanitized.isEmpty else {
-            throw PresetManagerError.invalidName
-        }
-        let ext = language == .rust ? "rs" : "py"
-        let url = userPresetsURL.appendingPathComponent("\(sanitized).\(ext)")
-        try source.write(to: url, atomically: true, encoding: .utf8)
-        log.info("Saved user preset: \(sanitized).\(ext, privacy: .public)")
-
-        refreshPresets()
-
-        guard let preset = presets.first(where: { $0.id == "user:\(sanitized).\(ext)" }) else {
-            throw PresetManagerError.saveFailed
-        }
-        return preset
-    }
-
-    // MARK: - Save (Repo Presets)
-
-    /// Save source as a repo preset (locally cached + triggers background sync).
-    @discardableResult
-    func saveRepoPreset(name: String, source: String, language: ScriptLanguage = .python) throws -> Preset {
-        let sanitized = sanitizeFilename(name)
-        guard !sanitized.isEmpty else {
-            throw PresetManagerError.invalidName
-        }
-        let ext = language == .rust ? "rs" : "py"
-        let url = repoPresetsURL.appendingPathComponent("\(sanitized).\(ext)")
-        try source.write(to: url, atomically: true, encoding: .utf8)
-        log.info("Saved repo preset: \(sanitized).\(ext, privacy: .public)")
-
-        refreshPresets()
-
-        guard let preset = presets.first(where: { $0.id == "repo:\(sanitized).\(ext)" }) else {
-            throw PresetManagerError.saveFailed
-        }
-
-        onRepoPresetSaved?(sanitized, source, language)
-        return preset
-    }
+    // NOTE: Single-file `saveUserPreset` / `saveRepoPreset` were removed when
+    // the preset format moved to directory bundles. Legacy single-file presets
+    // still LOAD (via `discoverPresets`) for backward compatibility with
+    // pre-bundle user data, but all new saves go through `saveUserBundle` /
+    // `saveRepoBundle` below.
 
     // MARK: - Delete
 
     /// Delete a user or repo preset. Factory presets cannot be deleted.
+    /// Bundles are removed as a whole directory; `FileManager.removeItem` handles
+    /// both files and directories.
     func deletePreset(_ preset: Preset) throws {
         switch preset.source {
         case .factory:
             log.warning("Attempted to delete factory preset: \(preset.name, privacy: .public)")
             return
-        case .user(let url):
+        case .user(let url), .userBundle(let url):
             try fileManager.removeItem(at: url)
             log.info("Deleted user preset: \(preset.name, privacy: .public)")
-        case .repo(let url):
+        case .repo(let url), .repoBundle(let url):
             try fileManager.removeItem(at: url)
             log.info("Deleted repo preset: \(preset.name, privacy: .public)")
             onRepoPresetDeleted?(preset.name, preset.language)
@@ -224,6 +241,7 @@ class PresetManager: ObservableObject {
 
         if currentPreset?.id == preset.id {
             currentPreset = nil
+            currentBundle = nil
             loadedSource = nil
             isModified = false
         }
@@ -260,23 +278,37 @@ class PresetManager: ObservableObject {
 
         let oldURL: URL
         let prefix: String
+        let isBundle: Bool
         switch preset.source {
         case .factory:
             throw PresetManagerError.renameFailed
         case .user(let url):
-            oldURL = url
-            prefix = "user"
+            oldURL = url; prefix = "user"; isBundle = false
         case .repo(let url):
-            oldURL = url
-            prefix = "repo"
+            oldURL = url; prefix = "repo"; isBundle = false
+        case .userBundle(let url):
+            oldURL = url; prefix = "user"; isBundle = true
+        case .repoBundle(let url):
+            oldURL = url; prefix = "repo"; isBundle = true
         }
 
-        let ext = preset.fileExtension
-        let newURL = oldURL.deletingLastPathComponent().appendingPathComponent("\(sanitized).\(ext)")
+        let newURL: URL
+        if isBundle {
+            // Preserve the `.cdp` suffix if the bundle dir used one.
+            let oldLast = oldURL.lastPathComponent
+            let suffix = oldLast.hasSuffix(".\(PresetBundle.bundleExtension)") ? ".\(PresetBundle.bundleExtension)" : ""
+            newURL = oldURL.deletingLastPathComponent().appendingPathComponent("\(sanitized)\(suffix)")
+        } else {
+            let ext = preset.fileExtension
+            newURL = oldURL.deletingLastPathComponent().appendingPathComponent("\(sanitized).\(ext)")
+        }
         try fileManager.moveItem(at: oldURL, to: newURL)
         log.info("Renamed preset: \(preset.name, privacy: .public) → \(sanitized, privacy: .public)")
 
-        // For repo presets, trigger background rename on GitHub
+        // For repo presets, trigger background rename on GitHub. Bundle repo
+        // sync is handled in a separate callback path (not wired in v1 of the
+        // bundle feature); fall back to the single-file callback for legacy
+        // `.repo` presets only.
         if case .repo = preset.source {
             if let source = try? String(contentsOf: newURL, encoding: .utf8) {
                 onRepoPresetRenamed?(preset.name, sanitized, source, preset.language)
@@ -285,14 +317,22 @@ class PresetManager: ObservableObject {
 
         refreshPresets()
 
-        let newID = "\(prefix):\(sanitized).\(ext)"
+        let newID: String
+        if isBundle {
+            newID = "\(prefix):bundle:\(sanitized)"
+        } else {
+            newID = "\(prefix):\(sanitized).\(preset.fileExtension)"
+        }
         guard let renamedPreset = presets.first(where: { $0.id == newID }) else {
             throw PresetManagerError.renameFailed
         }
 
-        // Update current preset reference if it was the renamed one
+        // Update current preset reference if it was the renamed one. Don't
+        // route through `setCurrentPreset` — that resets `isModified` and
+        // `loadedSource`, which should survive a rename.
         if currentPreset?.id == preset.id {
             currentPreset = renamedPreset
+            currentBundle = loadBundle(for: renamedPreset)
         }
 
         return renamedPreset
@@ -304,22 +344,122 @@ class PresetManager: ObservableObject {
     /// Set `triggerSync: false` when the caller has already pushed to GitHub (e.g. during migration).
     @discardableResult
     func migrateUserPresetToRepo(_ preset: Preset, triggerSync: Bool = true) throws -> Preset {
-        guard case .user(let sourceURL) = preset.source else {
+        let sourceURL: URL
+        let isBundle: Bool
+        switch preset.source {
+        case .user(let url):
+            sourceURL = url; isBundle = false
+        case .userBundle(let url):
+            sourceURL = url; isBundle = true
+        default:
             throw PresetManagerError.saveFailed
         }
         let destURL = repoPresetsURL.appendingPathComponent(sourceURL.lastPathComponent)
         try fileManager.moveItem(at: sourceURL, to: destURL)
         log.info("Migrated preset to repo: \(preset.name, privacy: .public)")
 
-        if triggerSync, let source = try? String(contentsOf: destURL, encoding: .utf8) {
+        if triggerSync, !isBundle, let source = try? String(contentsOf: destURL, encoding: .utf8) {
+            // Legacy single-file callback path. Bundle repo sync is handled
+            // by PersonalRepoSync directly via filesystem enumeration (not
+            // wired for bundles in v1).
             onRepoPresetSaved?(preset.name, source, preset.language)
         }
 
         refreshPresets()
 
-        let ext = preset.fileExtension
-        return presets.first(where: { $0.id == "repo:\(preset.name).\(ext)" }) ?? preset
+        let expectedID = isBundle
+            ? "repo:bundle:\(preset.name)"
+            : "repo:\(preset.name).\(preset.fileExtension)"
+        return presets.first(where: { $0.id == expectedID }) ?? preset
     }
+
+    // MARK: - Bundle creation
+
+    /// Save a preset as a bundle directory. Creates
+    /// `<rootDir>/<name>.cdp/` containing `manifest.json` (with a `ui` block
+    /// advertising `ui/index.html`) and the entry script. Overwrites any
+    /// existing bundle at the same location.
+    ///
+    /// The `ui` block is always written so that authors can activate a custom
+    /// UI later by dropping an `ui/index.html` file into the bundle — the
+    /// plugin picks it up on next load without any further manifest edits.
+    ///
+    /// `scaffoldUI: true` additionally writes a starter `ui/index.html` that
+    /// binds `window.ConjureDSP.parameters` to one slider per parameter.
+    @discardableResult
+    func saveUserBundle(
+        name: String,
+        source: String,
+        language: ScriptLanguage = .python,
+        scaffoldUI: Bool = false
+    ) throws -> Preset {
+        try writeBundle(rootDir: userPresetsURL, name: name, source: source, language: language, scaffoldUI: scaffoldUI)
+        let sanitized = sanitizeFilename(name)
+        guard let preset = presets.first(where: { $0.id == "user:bundle:\(sanitized)" }) else {
+            throw PresetManagerError.saveFailed
+        }
+        return preset
+    }
+
+    /// Save a preset as a bundle in the repo cache. Bundle-aware GitHub sync
+    /// is a separate follow-up (the single-file `onRepoPresetSaved` callback
+    /// is not fired for bundles), so repo bundles are local-only until then.
+    @discardableResult
+    func saveRepoBundle(
+        name: String,
+        source: String,
+        language: ScriptLanguage = .python,
+        scaffoldUI: Bool = false
+    ) throws -> Preset {
+        try writeBundle(rootDir: repoPresetsURL, name: name, source: source, language: language, scaffoldUI: scaffoldUI)
+        let sanitized = sanitizeFilename(name)
+        guard let preset = presets.first(where: { $0.id == "repo:bundle:\(sanitized)" }) else {
+            throw PresetManagerError.saveFailed
+        }
+        return preset
+    }
+
+    /// Internal helper: write a bundle directory at `rootDir/<name>.cdp/`.
+    private func writeBundle(
+        rootDir: URL,
+        name: String,
+        source: String,
+        language: ScriptLanguage,
+        scaffoldUI: Bool
+    ) throws {
+        let sanitized = sanitizeFilename(name)
+        guard !sanitized.isEmpty else { throw PresetManagerError.invalidName }
+
+        let bundleURL = rootDir.appendingPathComponent("\(sanitized).\(PresetBundle.bundleExtension)", isDirectory: true)
+
+        // Fresh directory — remove any stale bundle at the same path.
+        if fileManager.fileExists(atPath: bundleURL.path) {
+            try fileManager.removeItem(at: bundleURL)
+        }
+        try fileManager.createDirectory(at: bundleURL, withIntermediateDirectories: true)
+
+        // Always include the `ui` manifest block; whether a UI actually
+        // renders is decided by the presence of `ui/index.html`.
+        let manifest = PresetBundle.defaultManifest(language: language, includeUI: true)
+        try manifest.jsonData().write(to: bundleURL.appendingPathComponent(PresetManifest.filename))
+
+        let scriptURL = bundleURL.appendingPathComponent(manifest.entry)
+        try source.write(to: scriptURL, atomically: true, encoding: .utf8)
+
+        if scaffoldUI {
+            let uiDir = bundleURL.appendingPathComponent("ui", isDirectory: true)
+            try fileManager.createDirectory(at: uiDir, withIntermediateDirectories: true)
+            try PresetBundle.starterIndexHTML().write(
+                to: uiDir.appendingPathComponent("index.html"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        log.info("Saved bundle: \(bundleURL.path, privacy: .public)")
+        refreshPresets()
+    }
+
 
     // MARK: - Name Helpers
 

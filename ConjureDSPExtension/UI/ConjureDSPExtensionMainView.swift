@@ -208,7 +208,19 @@ struct ConjureDSPExtensionMainView: View {
 
             Divider()
 
-            ParameterSlidersView(parameterState: parameterState)
+            // Custom HTML/JS UI when the current preset bundle ships a
+            // `ui/index.html`; otherwise the default generated sliders.
+            if let bundle = presetManager.currentBundle, bundle.hasCustomUI {
+                CustomUIWebView(
+                    parameterState: parameterState,
+                    bundle: bundle,
+                    theme: colorScheme
+                )
+                .frame(minHeight: CGFloat(bundle.manifest.ui?.height ?? 220))
+                .id(bundle.uiIndexURL)
+            } else {
+                ParameterSlidersView(parameterState: parameterState)
+            }
 
             Divider()
 

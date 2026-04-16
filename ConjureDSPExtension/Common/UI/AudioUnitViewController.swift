@@ -409,9 +409,9 @@ pub extern "C" fn process(
             do {
                 let saved: Preset
                 if current.isRepo {
-                    saved = try pm.saveRepoPreset(name: current.name, source: source, language: language)
+                    saved = try pm.saveRepoBundle(name: current.name, source: source, language: language)
                 } else {
-                    saved = try pm.saveUserPreset(name: current.name, source: source, language: language)
+                    saved = try pm.saveUserBundle(name: current.name, source: source, language: language)
                 }
                 Analytics.track(.presetSave, properties: [
                     "preset_name": current.name,
@@ -442,9 +442,9 @@ pub extern "C" fn process(
             do {
                 let saved: Preset
                 if let gh, gh.hasPersonalRepo, gh.hasToken {
-                    saved = try pm.saveRepoPreset(name: name, source: source, language: language)
+                    saved = try pm.saveRepoBundle(name: name, source: source, language: language)
                 } else {
-                    saved = try pm.saveUserPreset(name: name, source: source, language: language)
+                    saved = try pm.saveUserBundle(name: name, source: source, language: language)
                 }
                 Analytics.track(.presetSave, properties: [
                     "preset_name": name,

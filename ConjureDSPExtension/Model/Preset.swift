@@ -30,9 +30,16 @@ enum PresetCategory: String, CaseIterable, Hashable, Identifiable {
 /// A named DSP script preset — bundled (factory), local (user), or synced from a GitHub repo.
 struct Preset: Identifiable, Hashable {
     enum Source: Hashable {
+        /// Factory preset shipped in the extension bundle as a single resource file.
         case factory(resourceName: String)
+        /// Legacy single-file user preset (`.py` / `.rs`).
         case user(url: URL)
+        /// Legacy single-file repo-synced preset.
         case repo(url: URL)
+        /// User preset packaged as a bundle directory (contains `manifest.json`).
+        case userBundle(url: URL)
+        /// Repo-synced preset packaged as a bundle directory.
+        case repoBundle(url: URL)
     }
 
     /// Unique key: "factory:Passthrough", "user:My Filter.py", or "repo:My Filter.py"
@@ -52,13 +59,34 @@ struct Preset: Identifiable, Hashable {
     }
 
     var isRepo: Bool {
-        if case .repo = source { return true }
-        return false
+        switch source {
+        case .repo, .repoBundle: return true
+        default: return false
+        }
     }
 
     var isUser: Bool {
-        if case .user = source { return true }
-        return false
+        switch source {
+        case .user, .userBundle: return true
+        default: return false
+        }
+    }
+
+    /// True when this preset is stored as a bundle directory rather than a
+    /// single file.
+    var isBundle: Bool {
+        switch source {
+        case .userBundle, .repoBundle: return true
+        default: return false
+        }
+    }
+
+    /// The bundle's root directory URL, if this preset is a bundle.
+    var bundleURL: URL? {
+        switch source {
+        case .userBundle(let url), .repoBundle(let url): return url
+        default: return nil
+        }
     }
 
     /// File extension for this preset's language.

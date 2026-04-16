@@ -143,7 +143,7 @@ struct ImportURLPopover: View {
         guard let source = previewSource, !detectedName.isEmpty else { return }
         let name = presetManager.uniqueName(baseName: detectedName)
         do {
-            let preset = try presetManager.saveUserPreset(
+            let preset = try presetManager.saveUserBundle(
                 name: name,
                 source: source,
                 language: detectedLanguage
