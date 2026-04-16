@@ -21,12 +21,39 @@ class PersonalRepoSync: ObservableObject {
     /// Conflicts detected during sync that need user resolution.
     @Published var pendingConflicts: [SyncConflict] = []
 
+    /// Bundle-level divergences detected on connect. Surface separately from
+    /// single-file conflicts because bundles are a whole directory and the
+    /// keep-local/keep-remote semantics replace the entire tree instead of
+    /// a single blob's content.
+    @Published var pendingBundleConflicts: [BundleConflict] = []
+
     struct SyncConflict: Identifiable {
         let id = UUID()
         let filename: String
         let language: ScriptLanguage
         let localSource: String
         let remoteSource: String
+    }
+
+    /// Divergence between a local bundle directory and its `bundles/<name>/`
+    /// tree on the remote. Listed files are those that differ — added,
+    /// removed, or content-mismatched. `remoteFiles` is retained so
+    /// keep-remote can fetch + write the whole tree without a second Tree
+    /// API call.
+    struct BundleConflict: Identifiable {
+        let id = UUID()
+        let bundleName: String
+        let localBundleURL: URL
+        /// Per-file divergence summary. Empty means the bundles match and
+        /// no conflict should have been raised.
+        let differingPaths: [DifferingPath]
+        let remoteFiles: [GitHubTreeFile]
+
+        struct DifferingPath: Equatable {
+            let relativePath: String
+            let kind: Kind
+            enum Kind { case localOnly, remoteOnly, contentDiffers }
+        }
     }
 
     enum ConflictResolution {
@@ -427,10 +454,131 @@ class PersonalRepoSync: ObservableObject {
         }
     }
 
+    /// Compare a local bundle directory against the remote tree entries
+    /// under `bundles/<bundleName>/`. Returns an entry for every path that
+    /// differs (local-only, remote-only, or content-differs). Empty return
+    /// means the bundles are in sync; no conflict should surface.
+    nonisolated private static func diffBundle(
+        localBundleURL: URL,
+        bundleName: String,
+        remoteFiles: [GitHubTreeFile]
+    ) -> [BundleConflict.DifferingPath] {
+        let localFiles = enumerateBundleFiles(at: localBundleURL)
+        let localByRelative = Dictionary(uniqueKeysWithValues: localFiles.map { ($0.1, $0.0) })
+
+        let remotePrefix = "\(remoteBundlesPrefix)/\(bundleName)/"
+        var remoteByRelative: [String: GitHubTreeFile] = [:]
+        for file in remoteFiles where file.path.hasPrefix(remotePrefix) {
+            remoteByRelative[String(file.path.dropFirst(remotePrefix.count))] = file
+        }
+
+        var diffs: [BundleConflict.DifferingPath] = []
+        let allKeys = Set(localByRelative.keys).union(remoteByRelative.keys)
+        for key in allKeys.sorted() {
+            switch (localByRelative[key], remoteByRelative[key]) {
+            case let (local?, remote?):
+                guard let data = try? Data(contentsOf: local) else {
+                    // Unreadable locally — treat as a diff so the user sees it.
+                    diffs.append(BundleConflict.DifferingPath(relativePath: key, kind: .contentDiffers))
+                    continue
+                }
+                let localSHA = gitBlobSHA(forData: data)
+                if localSHA != remote.sha {
+                    diffs.append(BundleConflict.DifferingPath(relativePath: key, kind: .contentDiffers))
+                }
+            case (.some, .none):
+                diffs.append(BundleConflict.DifferingPath(relativePath: key, kind: .localOnly))
+            case (.none, .some):
+                diffs.append(BundleConflict.DifferingPath(relativePath: key, kind: .remoteOnly))
+            case (.none, .none):
+                break // unreachable by construction
+            }
+        }
+        return diffs
+    }
+
+    /// Resolve a bundle-level conflict. `keepLocal` re-pushes every file in
+    /// the local bundle (overwriting the remote) and deletes remote-only
+    /// paths so the trees line up. `keepRemote` deletes the local bundle
+    /// directory, then re-downloads the remote tree.
+    func resolveBundleConflict(
+        _ conflict: BundleConflict,
+        resolution: ConflictResolution,
+        owner: String,
+        repo: String,
+        token: String,
+        presetManager: PresetManager
+    ) async {
+        let remotePrefix = "\(Self.remoteBundlesPrefix)/\(conflict.bundleName)"
+
+        switch resolution {
+        case .keepLocal:
+            // Push every local file. Then for each remote-only path, fetch
+            // its SHA from the conflict and delete it so the remote tree
+            // matches local.
+            backgroundPushBundle(
+                bundleName: conflict.bundleName,
+                bundleURL: conflict.localBundleURL,
+                owner: owner, repo: repo, token: token
+            )
+            let toDelete = conflict.differingPaths.filter { $0.kind == .remoteOnly }
+            let remoteByRelative = Dictionary(uniqueKeysWithValues:
+                conflict.remoteFiles
+                    .filter { $0.path.hasPrefix("\(remotePrefix)/") }
+                    .map { (String($0.path.dropFirst(remotePrefix.count + 1)), $0.sha) }
+            )
+            for diff in toDelete {
+                guard let sha = remoteByRelative[diff.relativePath] else { continue }
+                do {
+                    try await client.deleteFile(
+                        owner: owner, repo: repo,
+                        path: "\(remotePrefix)/\(diff.relativePath)",
+                        sha: sha,
+                        message: "Remove \(conflict.bundleName)/\(diff.relativePath) (keep-local resolve)",
+                        token: token
+                    )
+                    remoteSHAs.removeValue(forKey: "\(remotePrefix)/\(diff.relativePath)")
+                } catch {
+                    log.error("Bundle conflict cleanup failed for \(diff.relativePath, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
+            }
+
+        case .keepRemote:
+            // Blow away the local bundle directory so the pull writes a
+            // clean tree. Any files the user added locally are lost — that
+            // was the contract they picked.
+            try? FileManager.default.removeItem(at: conflict.localBundleURL)
+            do {
+                try FileManager.default.createDirectory(
+                    at: conflict.localBundleURL, withIntermediateDirectories: true
+                )
+                for file in conflict.remoteFiles where file.path.hasPrefix("\(remotePrefix)/") {
+                    let relative = String(file.path.dropFirst(remotePrefix.count + 1))
+                    let data = try await client.fetchFileData(
+                        owner: owner, repo: repo, path: file.path, token: token
+                    )
+                    let destURL = conflict.localBundleURL.appendingPathComponent(relative)
+                    try FileManager.default.createDirectory(
+                        at: destURL.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    try data.write(to: destURL, options: .atomic)
+                    remoteSHAs[file.path] = file.sha
+                }
+            } catch {
+                log.error("Bundle conflict keep-remote failed for \(conflict.bundleName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        pendingBundleConflicts.removeAll { $0.id == conflict.id }
+        presetManager.refreshPresets()
+    }
+
     /// Clear all cached sync state (called on disconnect).
     func reset() {
         remoteSHAs = [:]
         pendingConflicts = []
+        pendingBundleConflicts = []
         hasPendingChanges = false
         error = nil
     }
@@ -625,10 +773,27 @@ class PersonalRepoSync: ObservableObject {
                 "\(bundleName).\(PresetBundle.bundleExtension)", isDirectory: true
             )
             if fm.fileExists(atPath: localBundleURL.path) {
-                // Local wins in v1. Still populate remoteSHAs so later
-                // pushes don't re-upload unchanged files.
+                // Both sides have the bundle. Compare by SHA — if every
+                // file agrees, seed remoteSHAs and move on; otherwise
+                // surface a conflict for the user to resolve.
+                let diffs = Self.diffBundle(
+                    localBundleURL: localBundleURL,
+                    bundleName: bundleName,
+                    remoteFiles: bundleFiles
+                )
+                // Always seed SHAs so a later keep-local push skips
+                // unchanged blobs.
                 for file in bundleFiles {
                     remoteSHAs[file.path] = file.sha
+                }
+                if !diffs.isEmpty {
+                    pendingBundleConflicts.append(BundleConflict(
+                        bundleName: bundleName,
+                        localBundleURL: localBundleURL,
+                        differingPaths: diffs,
+                        remoteFiles: bundleFiles
+                    ))
+                    log.info("Bundle conflict detected: \(bundleName, privacy: .public) (\(diffs.count) paths differ)")
                 }
                 continue
             }
