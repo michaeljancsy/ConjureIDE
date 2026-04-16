@@ -18,10 +18,22 @@
  *   ConjureDSP.ready(cb)                // fires once when initial state has arrived
  *   ConjureDSP.log(...args)             // forwards to the plugin's os_log
  *
+ *   ConjureDSP.audio.onFrame(cb)        // fires at display-refresh rate with
+ *                                       //   {rmsIn, rmsOut, peakIn, peakOut,
+ *                                       //    fftIn?, fftOut?, t}
+ *                                       // fftIn/fftOut are arrays of dB bins
+ *                                       // (only present on ticks that produced
+ *                                       // a new FFT column; keep last value
+ *                                       // otherwise). Subscribing the first
+ *                                       // callback activates audio capture;
+ *                                       // the last offFrame() deactivates it.
+ *   ConjureDSP.audio.offFrame(cb)       // remove a previously-registered cb
+ *
  * Internal (Swift-facing; do not call from preset code):
  *   ConjureDSP._init(state)             // initial {metadata, values, theme}
  *   ConjureDSP._paramUpdate(i, v)       // DAW automation / MIDI / host change
  *   ConjureDSP._setTheme(theme)         // theme flip from OS/app
+ *   ConjureDSP._audioFrame(frame)       // audio tick from capture manager
  */
 
 (function() {
@@ -35,6 +47,7 @@
     var _paramHandlers = {};       // index (string) -> [callback]
     var _anyHandlers = [];          // [callback(index, value)]
     var _readyHandlers = [];        // [callback] (queued until _init)
+    var _audioHandlers = [];        // [callback(frame)]
 
     function postTo(name, payload) {
         try {
@@ -77,6 +90,21 @@
             },
             onAnyChange: function(cb) {
                 if (typeof cb === 'function') _anyHandlers.push(cb);
+            },
+        },
+
+        audio: {
+            onFrame: function(cb) {
+                if (typeof cb !== 'function') return;
+                var wasEmpty = _audioHandlers.length === 0;
+                _audioHandlers.push(cb);
+                if (wasEmpty) postTo('subscribeAudioFrames', {});
+            },
+            offFrame: function(cb) {
+                var idx = _audioHandlers.indexOf(cb);
+                if (idx === -1) return;
+                _audioHandlers.splice(idx, 1);
+                if (_audioHandlers.length === 0) postTo('unsubscribeAudioFrames', {});
             },
         },
 
@@ -127,6 +155,13 @@
         try {
             window.dispatchEvent(new CustomEvent('themechange', { detail: { theme: theme } }));
         } catch (_) {}
+    };
+
+    ConjureDSP._audioFrame = function(frame) {
+        if (!frame) return;
+        for (var i = 0; i < _audioHandlers.length; i++) {
+            safeInvoke(_audioHandlers[i], [frame], 'onFrame');
+        }
     };
 
     // Forward uncaught JS errors to the plugin log so author-side bugs are

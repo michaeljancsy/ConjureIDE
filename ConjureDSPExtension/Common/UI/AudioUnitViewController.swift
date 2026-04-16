@@ -149,7 +149,8 @@ pub extern "C" fn process(
 
 	deinit {
         runtimePollTimer?.invalidate()
-        captureManager?.isActive = false
+        captureManager?.setConsumer(id: "spectrogram", active: false)
+        captureManager?.setConsumer(id: "customUI", active: false)
         processProfiler?.stop()
         memoryMonitor?.stop()
         terminalServer?.stop()

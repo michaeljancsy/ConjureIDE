@@ -11,6 +11,26 @@ import AppKit
 import Combine
 import QuartzCore
 
+// MARK: - Custom UI audio frames
+
+/// A tick-synchronous snapshot of audio activity, published to custom HTML/JS
+/// UIs via `window.ConjureDSP.audio.onFrame(...)`. Emitted by
+/// `AudioCaptureManager` once per display-link tick whenever at least one
+/// consumer is active.
+///
+/// `fftInDB` / `fftOutDB` are included only on ticks that produced a new FFT
+/// column (limited by the 50% hop size); on ticks without new FFT data the
+/// arrays are nil and subscribers should keep their last value.
+struct AudioFrame {
+    let rmsIn: Float
+    let rmsOut: Float
+    let peakIn: Float
+    let peakOut: Float
+    let fftInDB: [Float]?
+    let fftOutDB: [Float]?
+    let timestamp: CFTimeInterval
+}
+
 // MARK: - ColumnRingBuffer
 
 /// Pre-allocated contiguous ring buffer for FFT magnitude columns.
@@ -171,14 +191,36 @@ final class AudioCaptureManager: ObservableObject {
 
     // MARK: - State
 
-    /// When true, reads from ring buffers and computes FFT.
-    /// Setting to false stops the display link and disables capture in the kernel.
-    var isActive: Bool = false {
-        didSet {
-            guard isActive != oldValue else { return }
-            updateCaptureState()
-        }
+    /// True when at least one consumer (spectrogram panel, custom UI frame
+    /// subscriber, etc.) has registered interest. Computed from `consumers`.
+    private(set) var isActive: Bool = false
+
+    /// Ref-counted set of active consumers, keyed by a stable opaque id. A
+    /// consumer registers itself when it starts needing audio data and
+    /// unregisters when it no longer does. The display link + kernel capture
+    /// flag is gated on this set being non-empty.
+    private var consumers: Set<String> = []
+
+    /// Register or unregister a consumer. Idempotent per-id. Toggling the
+    /// overall set between empty and non-empty starts/stops the display link
+    /// and flips the kernel capture flag.
+    ///
+    /// `id` should be a stable string: `"spectrogram"` for the spectrogram
+    /// panel; a per-webview unique string (e.g. ObjectIdentifier hex) for
+    /// custom-UI audio-frame subscriptions.
+    func setConsumer(id: String, active: Bool) {
+        let wasActive = !consumers.isEmpty
+        if active { consumers.insert(id) } else { consumers.remove(id) }
+        let isActiveNow = !consumers.isEmpty
+        guard wasActive != isActiveNow else { return }
+        isActive = isActiveNow
+        updateCaptureState()
     }
+
+    /// Per-tick audio frames for custom-UI visualisations. Only emits while
+    /// capture is active; subscribing alone doesn't activate capture — call
+    /// `setConsumer(id:active:)` for that.
+    let audioFramePublisher = PassthroughSubject<AudioFrame, Never>()
 
     /// Reference to the Rust DSP kernel (set once after AU creation).
     var kernel: DSPKernelRef? {
@@ -368,6 +410,21 @@ final class AudioCaptureManager: ObservableObject {
             UInt32(Self.maxReadSamples)
         ))
 
+        // RMS + peak from this tick's samples, for AudioFrame consumers.
+        // Zero-cost when no custom UI is subscribed (we skip emit below).
+        var rmsIn: Float = 0
+        var rmsOut: Float = 0
+        var peakIn: Float = 0
+        var peakOut: Float = 0
+        if inputCount > 0 {
+            vDSP_rmsqv(inputReadBuffer, 1, &rmsIn, vDSP_Length(inputCount))
+            vDSP_maxmgv(inputReadBuffer, 1, &peakIn, vDSP_Length(inputCount))
+        }
+        if outputCount > 0 {
+            vDSP_rmsqv(outputReadBuffer, 1, &rmsOut, vDSP_Length(outputCount))
+            vDSP_maxmgv(outputReadBuffer, 1, &peakOut, vDSP_Length(outputCount))
+        }
+
         if inputCount > 0 {
             inputAccumulator.append(contentsOf: inputReadBuffer[0..<inputCount])
         }
@@ -408,6 +465,21 @@ final class AudioCaptureManager: ObservableObject {
         if producedColumns {
             updateCounter &+= 1
         }
+
+        // Emit a frame for custom-UI subscribers. FFT arrays only ride along
+        // on ticks that produced a new column; otherwise nil. `send` on a
+        // subject with no observers is a cheap no-op, so there's no gate.
+        let fftIn: [Float]? = producedColumns ? fftInputScratch : nil
+        let fftOut: [Float]? = producedColumns ? fftOutputScratch : nil
+        audioFramePublisher.send(AudioFrame(
+            rmsIn: rmsIn,
+            rmsOut: rmsOut,
+            peakIn: peakIn,
+            peakOut: peakOut,
+            fftInDB: fftIn,
+            fftOutDB: fftOut,
+            timestamp: CACurrentMediaTime()
+        ))
     }
 
     // MARK: - FFT Computation

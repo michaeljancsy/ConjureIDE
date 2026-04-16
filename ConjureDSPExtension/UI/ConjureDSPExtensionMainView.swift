@@ -214,7 +214,8 @@ struct ConjureDSPExtensionMainView: View {
                 CustomUIWebView(
                     parameterState: parameterState,
                     bundle: bundle,
-                    theme: colorScheme
+                    theme: colorScheme,
+                    captureManager: captureManager
                 )
                 .frame(minHeight: CGFloat(bundle.manifest.ui?.height ?? 220))
                 .id(bundle.uiIndexURL)
@@ -447,7 +448,7 @@ struct ConjureDSPExtensionMainView: View {
             Analytics.track(.terminalToggle, properties: ["opened": newValue])
         }
         .onChange(of: showSpectrogram) { _, newValue in
-            captureManager.isActive = newValue
+            captureManager.setConsumer(id: "spectrogram", active: newValue)
             Analytics.track(.spectrogramToggle, properties: ["opened": newValue])
         }
         .onAppear {

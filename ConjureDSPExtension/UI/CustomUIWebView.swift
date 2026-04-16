@@ -16,6 +16,11 @@ struct CustomUIWebView: NSViewRepresentable {
     @ObservedObject var parameterState: ParameterState
     let bundle: PresetBundle
     var theme: ColorScheme
+    /// Source of per-tick audio frames (RMS/peak/FFT). Custom UIs opt in via
+    /// `window.ConjureDSP.audio.onFrame(...)`; the subscription flips a
+    /// consumer on `AudioCaptureManager` so capture runs even with the
+    /// spectrogram hidden.
+    var captureManager: AudioCaptureManager
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -46,6 +51,8 @@ struct CustomUIWebView: NSViewRepresentable {
         contentController.add(context.coordinator, name: "paramSet")
         contentController.add(context.coordinator, name: "ready")
         contentController.add(context.coordinator, name: "log")
+        contentController.add(context.coordinator, name: "subscribeAudioFrames")
+        contentController.add(context.coordinator, name: "unsubscribeAudioFrames")
 
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
 
@@ -60,6 +67,7 @@ struct CustomUIWebView: NSViewRepresentable {
 
         context.coordinator.webView = webView
         context.coordinator.parameterState = parameterState
+        context.coordinator.captureManager = captureManager
         context.coordinator.subscribe(to: parameterState)
 
         let entryPath = bundle.manifest.uiEntryHTMLPath
@@ -111,10 +119,15 @@ struct CustomUIWebView: NSViewRepresentable {
         controller.removeScriptMessageHandler(forName: "paramSet")
         controller.removeScriptMessageHandler(forName: "ready")
         controller.removeScriptMessageHandler(forName: "log")
+        controller.removeScriptMessageHandler(forName: "subscribeAudioFrames")
+        controller.removeScriptMessageHandler(forName: "unsubscribeAudioFrames")
         coordinator.fileWatcher?.stop()
         coordinator.fileWatcher = nil
         coordinator.pendingReload?.cancel()
         coordinator.pendingReload = nil
+        coordinator.audioFrameCancellable?.cancel()
+        coordinator.audioFrameCancellable = nil
+        coordinator.captureManager?.setConsumer(id: coordinator.audioConsumerID, active: false)
         coordinator.cancellables.removeAll()
         coordinator.webView = nil
     }
@@ -142,6 +155,7 @@ struct CustomUIWebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         weak var webView: WKWebView?
         weak var parameterState: ParameterState?
+        weak var captureManager: AudioCaptureManager?
 
         /// Retained so the scheme handler isn't torn down before WKWebView is.
         var schemeHandler: BundleAssetSchemeHandler?
@@ -149,6 +163,15 @@ struct CustomUIWebView: NSViewRepresentable {
         /// Watches the bundle's `ui/` directory for edits and triggers a
         /// debounced reload of the webview.
         var fileWatcher: BundleFileWatcher?
+
+        /// Stable id for this coordinator when registering as an audio
+        /// consumer on `AudioCaptureManager`. Lets us ref-count properly
+        /// when multiple custom UIs subscribe in the same session.
+        lazy var audioConsumerID: String = "customUI-\(ObjectIdentifier(self).hashValue)"
+
+        /// Active only while the JS bridge has at least one `onFrame`
+        /// subscriber.
+        var audioFrameCancellable: AnyCancellable?
 
         /// Debounce cell for the hot-reload trigger. FSEventStream already
         /// coalesces bursts with its latency parameter, but the pending
@@ -310,8 +333,66 @@ struct CustomUIWebView: NSViewRepresentable {
                 let text = (message.body as? String) ?? String(describing: message.body)
                 log.info("[preset-ui] \(text, privacy: .public)")
 
+            case "subscribeAudioFrames":
+                startAudioFrameForwarding()
+
+            case "unsubscribeAudioFrames":
+                stopAudioFrameForwarding()
+
             default:
                 break
+            }
+        }
+
+        // MARK: Audio frame forwarding
+
+        private func startAudioFrameForwarding() {
+            guard audioFrameCancellable == nil else { return }
+            guard let captureManager else { return }
+            captureManager.setConsumer(id: audioConsumerID, active: true)
+            audioFrameCancellable = captureManager.audioFramePublisher
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] frame in
+                    self?.forwardAudioFrame(frame)
+                }
+        }
+
+        private func stopAudioFrameForwarding() {
+            audioFrameCancellable?.cancel()
+            audioFrameCancellable = nil
+            captureManager?.setConsumer(id: audioConsumerID, active: false)
+        }
+
+        /// Track in-flight evaluateJavaScript invocations so audio frames
+        /// don't queue up behind a slow main thread. If a frame can't be
+        /// delivered synchronously (script still running), we just drop it.
+        private var framesInFlight = 0
+
+        private func forwardAudioFrame(_ frame: AudioFrame) {
+            guard isReady, let webView else { return }
+            // Bound the outstanding JS work — dropping frames is fine for
+            // a UI animation pipeline.
+            if framesInFlight > 1 { return }
+
+            // RMS/peak only by default. FFT arrays (2 × halfN floats per
+            // tick) add ~8 KB of JSON and would significantly inflate the
+            // main-thread JSON-encode cost; they're available via the
+            // existing spectrogram pipeline today, and will gain an opt-in
+            // subscription flag in a follow-up.
+            let payload: [String: Any] = [
+                "rmsIn": frame.rmsIn,
+                "rmsOut": frame.rmsOut,
+                "peakIn": frame.peakIn,
+                "peakOut": frame.peakOut,
+                "t": frame.timestamp,
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+                  let json = String(data: data, encoding: .utf8) else { return }
+
+            framesInFlight += 1
+            let js = "window.ConjureDSP && window.ConjureDSP._audioFrame(\(json))"
+            webView.evaluateJavaScript(js) { [weak self] _, _ in
+                self?.framesInFlight = max(0, (self?.framesInFlight ?? 1) - 1)
             }
         }
 
