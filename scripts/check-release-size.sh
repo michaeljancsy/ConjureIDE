@@ -10,16 +10,16 @@
 # The budget should ratchet down as bundled runtimes are stripped and moved
 # to on-demand language modules:
 #
-#   Baseline now (rustc stripped, Python still bundled):  ~800 MB
-#   After Python strip + strip-on-install:                ~300 MB
-#   Plan target (fully modular, base only):               150 MB
+#   Baseline at Phase 3 (rustc stripped, Python still bundled):  ~800 MB
+#   After Python strip (current):                                ~230 MB
+#   Plan target (fully modular, base only):                      150 MB
 #
 # The default below is intentionally set just above the current measured size
 # so any accidental reintroduction of a bundled runtime trips the guard.
 
 set -euo pipefail
 
-DEFAULT_MAX_MB=850
+DEFAULT_MAX_MB=260
 
 if [ $# -lt 1 ]; then
     echo "usage: $0 <path-to-.app> [max_mb]" >&2
