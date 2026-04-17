@@ -36,13 +36,26 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
         NSSize(width: 800, height: 900)
     }
 
-    /// Compute the ideal window height based on content.
+    /// Compute the ideal window height based on content. Values here are
+    /// conservative upper bounds — underestimating causes the title/gear to
+    /// clip at the top or "Made with ConjureDSP" to disappear at the bottom
+    /// when the DAW honors `preferredContentSize`. The earlier 45/30 values
+    /// were short by ~15pt because they didn't account for SwiftUI's
+    /// implicit spacing + `.padding(.top, 12)` / `.padding(.bottom, 8)` in
+    /// the main view.
     private func computeSize(showDebug: Bool, showError: Bool) -> NSSize {
-        // Header (title + gear): ~45pt
-        // Divider: 1pt
-        // Footer (Made with ConjureDSP): ~30pt
-        // Padding/spacing between sections: ~24pt
-        let chromeHeight: CGFloat = 45 + 1 + 30 + 24
+        // Header = top padding (12) + title/gear row (~28 headline leading) +
+        // VStack gap (12) before the divider.
+        let headerHeight: CGFloat = 12 + 28 + 12
+        // Divider itself.
+        let dividerHeight: CGFloat = 1
+        // Footer = VStack gap before footer (12) + caption2 line (~18) +
+        // bottom padding (8). Plus ~4pt safety so Ableton's rounding doesn't
+        // shave the last pixel.
+        let footerHeight: CGFloat = 12 + 18 + 8 + 4
+        // Gaps surrounding the body region (divider↔body↔footer/debug).
+        let bodyGaps: CGFloat = 12 + 12
+        let chromeHeight = headerHeight + dividerHeight + footerHeight + bodyGaps
 
         // Body region: either the preset's custom UI (manifest-declared
         // height, or a sensible default) or the generic slider stack
@@ -57,13 +70,17 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
         var height = chromeHeight + bodyHeight
 
         if showError {
-            // Error banner: header line + scrollable text area + padding
-            height += 160
+            // Error banner: divider + header line + scrollable text area +
+            // padding + VStack gap.
+            height += 180
         }
 
         if showDebug {
-            // Debug pane: header + scrollable content
-            height += 350
+            // Debug pane: divider + header + scrollable content + padding.
+            // DebugPaneView's inner minHeight is 100; give ~320 total so the
+            // Plugin Info + stats + log sections each get readable space
+            // without aggressive scrolling.
+            height += 360
         }
 
         // Enforce minimum
