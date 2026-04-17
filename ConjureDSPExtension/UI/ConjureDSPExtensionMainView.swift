@@ -762,48 +762,47 @@ struct ConjureDSPExtensionMainView: View {
         }
     }
 
-    /// Monaco editor, parameterized by whichever file the picker currently
-    /// has open. Splitting this out keeps the view body readable and lets
-    /// us `.id(...)` the webview so switching files hard-resets Monaco
-    /// state (e.g. scroll position, language mode) rather than having it
-    /// smear across files.
+    /// Monaco editor. A single WKWebView for the life of the main view —
+    /// switching bundle files routes through `bridge.setContent` /
+    /// `bridge.setLanguage` inside MonacoEditorView's updateNSView, which
+    /// swaps the buffer in the existing Monaco instance instead of
+    /// re-booting a fresh webview.
+    ///
+    /// Before this, `.id("bundleFile:\(alt.id)")` forced a full webview
+    /// teardown + re-init on every click — Monaco took ~100–500ms to
+    /// reload from disk and the transparent webview flashed while it
+    /// booted. Reusing the instance is both faster and flicker-free.
     @ViewBuilder
     private func bundleEditor(editable: Bool) -> some View {
-        if let alt = editingBundleFile {
-            MonacoEditorView(
-                text: altFileSourceBinding,
-                theme: resolvedTheme,
-                language: selectedLanguage,
-                languageIDOverride: alt.monacoLanguageID,
-                isEditable: editable,
-                markers: [],
-                snippetToInsert: .constant(nil),
-                flashToken: nil
-            )
-            .id("bundleFile:\(alt.id)")
-        } else {
-            MonacoEditorView(
-                text: $scriptSource,
-                theme: resolvedTheme,
-                language: selectedLanguage,
-                isEditable: editable,
-                markers: editorMarkers,
-                snippetToInsert: .constant(nil),
-                flashToken: mcpFlashToken
-            )
-        }
+        MonacoEditorView(
+            text: unifiedEditorBinding,
+            theme: resolvedTheme,
+            language: selectedLanguage,
+            languageIDOverride: editingBundleFile?.monacoLanguageID,
+            isEditable: editable,
+            // Markers + the MCP flash animation only make sense for the
+            // DSP entry script — on a ui/** file or manifest.json those
+            // decorations would be meaningless.
+            markers: editingBundleFile == nil ? editorMarkers : [],
+            snippetToInsert: .constant(nil),
+            flashToken: editingBundleFile == nil ? mcpFlashToken : nil
+        )
     }
 
-    /// Debounced-write binding for alt-file edits. Writes to disk 400ms
-    /// after the last keystroke; the bundle file watcher + custom-UI
-    /// hot-reload pick up the change and refresh the webview
-    /// automatically, so there's no explicit "save" button here.
-    private var altFileSourceBinding: Binding<String> {
+    /// Single binding that routes read/write to whichever file is currently
+    /// open in the editor. The entry script uses `scriptSource` (so the Run
+    /// button keeps meaning); every other bundle file uses `altFileSource`
+    /// plus the debounced disk-write path.
+    private var unifiedEditorBinding: Binding<String> {
         Binding<String>(
-            get: { altFileSource },
+            get: { editingBundleFile != nil ? altFileSource : scriptSource },
             set: { newValue in
-                altFileSource = newValue
-                scheduleAltFileSave()
+                if editingBundleFile != nil {
+                    altFileSource = newValue
+                    scheduleAltFileSave()
+                } else {
+                    scriptSource = newValue
+                }
             }
         )
     }
