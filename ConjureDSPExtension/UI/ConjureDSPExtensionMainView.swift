@@ -877,6 +877,26 @@ struct ConjureDSPExtensionMainView: View {
                     .labelsHidden()
                     .help("Switch between the preset's custom HTML/JS UI and the slider layout.")
                     .accessibilityIdentifier("customUIToggle")
+            } else if bundle == nil {
+                // Scratchpad (post-New, pre-Save-As) MUST be checked before
+                // `editable` — with currentPreset == nil, isCurrentBundleEditable
+                // returns true and this would otherwise fall into the
+                // "+ Add Custom UI" branch, which fails because there's no
+                // bundle on disk to scaffold into.
+                Button(action: {
+                    saveAsName = presetManager.currentPreset?.name ?? ""
+                    showingSaveAs = true
+                }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "square.and.arrow.down.on.square")
+                            .font(.caption2)
+                        Text("Save As to enable Custom UI")
+                            .font(.caption)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .help("Custom HTML/JS UIs live inside a preset bundle. Save this script as a preset (Custom UI option in the Save As popover) to get a starter ui/index.html.")
+                .accessibilityIdentifier("scratchpadSaveAsForCustomUIButton")
             } else if editable {
                 // User bundle without a UI yet. The CTA replaces the toggle
                 // — clicking drops a starter `ui/index.html` into the
@@ -893,26 +913,6 @@ struct ConjureDSPExtensionMainView: View {
                 .disabled(isAddingCustomUI)
                 .help("Drop a starter ui/index.html into this preset. You can edit it inside ConjureDSP or in any external editor.")
                 .accessibilityIdentifier("addCustomUIButton")
-            } else if bundle == nil {
-                // Scratchpad (post-New, pre-Save-As). There's nothing on
-                // disk yet to add a UI to, so we can't scaffold inline —
-                // but we can at least signpost the path: Save As → pick
-                // Custom UI in the segmented control → new bundle ships
-                // with a starter UI.
-                Button(action: {
-                    saveAsName = presetManager.currentPreset?.name ?? ""
-                    showingSaveAs = true
-                }) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "square.and.arrow.down.on.square")
-                            .font(.caption2)
-                        Text("Save As to enable Custom UI")
-                            .font(.caption)
-                    }
-                }
-                .buttonStyle(.borderless)
-                .help("Custom HTML/JS UIs live inside a preset bundle. Save this script as a preset (Custom UI option in the Save As popover) to get a starter ui/index.html.")
-                .accessibilityIdentifier("scratchpadSaveAsForCustomUIButton")
             }
             // Factory bundle without a UI → label only, no CTA. Users branch
             // via the toolbar's Save As (same as they always have).
