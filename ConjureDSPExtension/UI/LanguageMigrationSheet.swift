@@ -27,6 +27,9 @@ struct LanguageMigrationSheet: View {
     @State private var wantsRust: Bool = true
     @State private var isLoadingCatalog: Bool = false
     @State private var didAttemptInstall: Bool = false
+    /// Modules the user selected when they clicked Install that haven't yet
+    /// been kicked off. Popped front-to-back as each finishes.
+    @State private var installQueue: [String] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -37,6 +40,17 @@ struct LanguageMigrationSheet: View {
             Spacer(minLength: 0)
             Divider()
             footer
+        }
+        .onChange(of: manager.isInstalling) { _, nowInstalling in
+            // When the current install finishes, start the next queued one.
+            // Also refresh `installedModules` so row states flip to "Installed".
+            if !nowInstalling {
+                manager.refreshInstalledModules()
+                if !installQueue.isEmpty {
+                    let next = installQueue.removeFirst()
+                    manager.requestInstall(moduleName: next)
+                }
+            }
         }
         .padding(20)
         .frame(width: 480, height: 420)
@@ -94,15 +108,32 @@ struct LanguageMigrationSheet: View {
     }
 
     private func row(name: String, title: String, blurb: String, bound: Binding<Bool>) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        let installed = isInstalled(name)
+        let installing = manager.isInstalling && manager.installStatusMessage?.contains(name) == true
+        return HStack(alignment: .top, spacing: 10) {
+            // Checkbox is disabled once the module is installed — the user
+            // can't uncheck a successful install from here. Still disabled
+            // if the catalog didn't load for this module.
             Toggle("", isOn: bound)
                 .labelsHidden()
                 .toggleStyle(.checkbox)
-                .disabled(catalogSizeMB(for: name) == nil)
+                .disabled(catalogSizeMB(for: name) == nil || installed)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(title).font(.headline)
-                    if let mb = catalogSizeMB(for: name) {
+                    if installed {
+                        Label("Installed", systemImage: "checkmark.circle.fill")
+                            .labelStyle(.titleAndIcon)
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.green)
+                    } else if installing {
+                        HStack(spacing: 4) {
+                            ProgressView().scaleEffect(0.45).frame(width: 12, height: 12)
+                            Text("Installing…")
+                                .font(.caption.monospacedDigit())
+                                .foregroundColor(.secondary)
+                        }
+                    } else if let mb = catalogSizeMB(for: name) {
                         Text("(\(mb) MB)")
                             .font(.caption.monospacedDigit())
                             .foregroundColor(.secondary)
@@ -124,6 +155,10 @@ struct LanguageMigrationSheet: View {
         }
     }
 
+    private func isInstalled(_ name: String) -> Bool {
+        manager.installedModules.contains { $0.name == name }
+    }
+
     private var footer: some View {
         HStack {
             if manager.isInstalling, let status = manager.installStatusMessage {
@@ -131,6 +166,10 @@ struct LanguageMigrationSheet: View {
                     ProgressView().scaleEffect(0.5).frame(width: 14, height: 14)
                     Text(status).font(.caption.monospacedDigit()).foregroundColor(.secondary)
                 }
+            } else if selectedInstallsComplete {
+                Label("All set.", systemImage: "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.green)
             } else if let err = manager.lastError {
                 Text(err)
                     .font(.caption)
@@ -143,15 +182,15 @@ struct LanguageMigrationSheet: View {
                 .disabled(manager.isInstalling)
                 .accessibilityIdentifier("languageMigrationSkipButton")
 
-            Button(didAttemptInstall ? "Done" : "Install Selected") {
-                if didAttemptInstall {
+            Button(selectedInstallsComplete || didAttemptInstall && !anySelected ? "Done" : "Install Selected") {
+                if selectedInstallsComplete || didAttemptInstall {
                     onDismiss()
                 } else {
                     startInstall()
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(manager.isInstalling || !anySelected)
+            .disabled(manager.isInstalling || (!selectedInstallsComplete && !anySelected))
             .accessibilityIdentifier("languageMigrationInstallButton")
         }
     }
@@ -184,13 +223,27 @@ struct LanguageMigrationSheet: View {
 
     private func startInstall() {
         didAttemptInstall = true
-        // Install sequentially: Python first (bigger and more commonly needed),
-        // then Rust. The manager rejects overlapping requests, so chain them
-        // via an observer on installStatusMessage.
-        if wantsPython, catalogSizeMB(for: "python") != nil {
-            manager.requestInstall(moduleName: "python")
-        } else if wantsRust, catalogSizeMB(for: "rustc") != nil {
-            manager.requestInstall(moduleName: "rustc")
+        // Queue every selected-and-available module. The onChange observer on
+        // `manager.isInstalling` pops the next item off as each finishes, so
+        // we end up doing them sequentially without trying to fire two
+        // requestInstall calls concurrently (the manager rejects those).
+        var queue: [String] = []
+        if wantsPython, catalogSizeMB(for: "python") != nil, !isInstalled("python") {
+            queue.append("python")
         }
+        if wantsRust, catalogSizeMB(for: "rustc") != nil, !isInstalled("rustc") {
+            queue.append("rustc")
+        }
+        guard let first = queue.first else { return }
+        installQueue = Array(queue.dropFirst())
+        manager.requestInstall(moduleName: first)
+    }
+
+    /// True once every module the user requested has successfully installed.
+    private var selectedInstallsComplete: Bool {
+        guard didAttemptInstall else { return false }
+        if wantsPython, catalogSizeMB(for: "python") != nil, !isInstalled("python") { return false }
+        if wantsRust, catalogSizeMB(for: "rustc") != nil, !isInstalled("rustc") { return false }
+        return true
     }
 }
