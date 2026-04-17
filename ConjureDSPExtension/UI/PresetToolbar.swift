@@ -59,12 +59,14 @@ struct PresetToolbar: View {
     @Binding var showSpectrogram: Bool
     @Binding var showChat: Bool
     @Binding var showNewScriptDialog: Bool
+    @Binding var showFileBrowser: Bool
     var onSelectPreset: (Preset) -> Void
     var onRun: () -> Void
     /// Overwrite-save with an optional user-supplied commit message. nil means use default.
     var onSave: (_ commitMessage: String?) -> Void
-    /// Save As with an optional user-supplied commit message. nil means use default.
-    var onSaveAs: (_ name: String, _ commitMessage: String?) -> Void
+    /// Save As with an optional user-supplied commit message (nil = use
+    /// default) and whether the new bundle should scaffold a custom UI.
+    var onSaveAs: (_ name: String, _ commitMessage: String?, _ includeCustomUI: Bool) -> Void
     var onDelete: () -> Void
     var onRename: (String) -> String?
     var onNew: (ScriptLanguage) -> Void
@@ -148,6 +150,14 @@ struct PresetToolbar: View {
                     presets: presetManager.presets,
                     currentPreset: presetManager.currentPreset,
                     isModified: presetManager.isModified,
+                    hasCustomUI: { preset in
+                        // Lightweight — factory bundles are cached on
+                        // PresetManager; user bundles require a cheap
+                        // manifest.json parse. The browser is a
+                        // click-to-open popover, not a per-frame
+                        // surface, so this cost is fine.
+                        presetManager.loadBundle(for: preset)?.hasCustomUI ?? false
+                    },
                     onSelectPreset: { preset in
                         showingPresetBrowser = false
                         onSelectPreset(preset)
@@ -233,7 +243,12 @@ struct PresetToolbar: View {
                 }
                 .buttonStyle(.borderless)
                 .fixedSize()
-                .disabled(!presetManager.isModified)
+                // Enabled when the entry-script buffer differs from disk
+                // OR the debounced writer has landed ui/manifest edits
+                // that haven't been committed yet. Pre-§5 this only
+                // tracked the entry script, which meant editing only
+                // ui/index.html left the Save button disabled.
+                .disabled(!presetManager.hasPendingChanges)
                 .toolbarTooltip("Save (\u{2318}S)")
                 .accessibilityIdentifier("savePresetButton")
                 .popover(isPresented: $showingSaveMessage) {
@@ -277,9 +292,14 @@ struct PresetToolbar: View {
                     existingNames: Set(presetManager.presets.filter { !$0.isFactory }.map(\.name)),
                     commitMessageMode: gitCoordinator.mode,
                     defaultCommitMessagePrefix: "Add",
-                    onSave: { name, commitMessage in
+                    // Default to "match the source": if the user is saving
+                    // as from a preset that ships a custom UI, start with
+                    // Custom UI selected; otherwise Sliders. Save As is
+                    // "copy and modify", not "probably wants a new UI."
+                    defaultIncludeCustomUI: presetManager.currentBundle?.hasCustomUI ?? false,
+                    onSave: { name, commitMessage, includeCustomUI in
                         showingSaveAs = false
-                        onSaveAs(name, commitMessage)
+                        onSaveAs(name, commitMessage, includeCustomUI)
                     },
                     onDontAskAgain: {
                         gitCoordinator.mode = .alwaysTimestamp
@@ -483,6 +503,24 @@ struct PresetToolbar: View {
             // Git push/sync status button will be wired up in Checkpoint 4
             // when RemoteSyncSettingsView + PresetGitCoordinator are fully
             // surfaced. For now the toolbar has no sync affordance.
+
+            // File browser toggle — sidebar with the active bundle's files.
+            // Only meaningful when a bundle is loaded (user or factory).
+            if presetManager.currentBundle != nil {
+                Button(action: { showFileBrowser.toggle() }) {
+                    VStack(alignment: .center, spacing: 1) {
+                        Image(systemName: showFileBrowser ? "sidebar.left" : "sidebar.leading")
+                            .frame(height: 16)
+                        Text("Files")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .fixedSize()
+                .toolbarTooltip(showFileBrowser ? "Hide files sidebar" : "Show files sidebar (\u{21E7}\u{2318}E)")
+                .accessibilityIdentifier("fileBrowserToggleButton")
+            }
 
             // Claude Code terminal toggle
             Button(action: { showChat.toggle() }) {

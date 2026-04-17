@@ -12,13 +12,24 @@ struct SaveAsPopover: View {
     let commitMessageMode: CommitMessageMode
     /// Pre-filled default text for the commit-message field (e.g. "Add <name>").
     let defaultCommitMessagePrefix: String
-    /// Called with the chosen name and an optional commit message (nil means "use default").
-    let onSave: (_ name: String, _ commitMessage: String?) -> Void
+    /// Initial value for the `[ Sliders | Custom UI ]` segmented control.
+    /// Callers typically seed this from the source preset's `hasCustomUI`
+    /// so Save As "copies" the UI mode the user is looking at, not a
+    /// surprising default.
+    let defaultIncludeCustomUI: Bool
+    /// Called with the chosen name, optional commit message (nil = use
+    /// default), and whether to scaffold a starter `ui/index.html` into the
+    /// new bundle.
+    let onSave: (_ name: String, _ commitMessage: String?, _ includeCustomUI: Bool) -> Void
     let onDontAskAgain: () -> Void
     let onCancel: () -> Void
 
     @State private var commitMessage: String = ""
     @State private var userEditedMessage: Bool = false
+    /// Local mirror of `defaultIncludeCustomUI`, seeded in `.onAppear`. Held
+    /// here so switching the segmented control doesn't re-read the default
+    /// every render.
+    @State private var includeCustomUI: Bool = false
 
     private var trimmedName: String {
         name.trimmingCharacters(in: .whitespaces)
@@ -52,6 +63,18 @@ struct SaveAsPopover: View {
                     .font(.caption)
                     .foregroundColor(.orange)
             }
+
+            // Segmented UI picker: slider panel (default for most presets)
+            // vs. a starter custom HTML/JS UI. Pre-seeded from the source
+            // preset's hasCustomUI so duplicating a custom-UI bundle lands
+            // on Custom UI, and plain DSP presets stay on Sliders.
+            Picker("UI", selection: $includeCustomUI) {
+                Text("Sliders").tag(false)
+                Text("Custom UI").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("saveAsUIPicker")
+            .help("Sliders = use the generated parameter panel. Custom UI = add a starter HTML/JS UI you can edit.")
 
             if commitMessageMode == .alwaysPrompt {
                 Divider()
@@ -93,6 +116,9 @@ struct SaveAsPopover: View {
         }
         .padding()
         .frame(minWidth: 280)
+        .onAppear {
+            includeCustomUI = defaultIncludeCustomUI
+        }
     }
 
     private func attemptSave() {
@@ -100,6 +126,6 @@ struct SaveAsPopover: View {
         let trimmedMsg = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         // nil if user didn't enter anything — caller substitutes the default
         let messageParam: String? = trimmedMsg.isEmpty ? nil : trimmedMsg
-        onSave(trimmedName, messageParam)
+        onSave(trimmedName, messageParam, includeCustomUI)
     }
 }

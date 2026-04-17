@@ -50,7 +50,7 @@ struct ConjureDSPExtensionMainView: View {
     var onSelectPreset: (Preset) async -> ScriptSaveResult
     /// commitMessage is optional — nil means "use the coordinator's default"
     var onSavePreset: (_ source: String, _ language: ScriptLanguage, _ commitMessage: String?) -> ScriptSaveResult
-    var onSaveAsPreset: (_ name: String, _ source: String, _ language: ScriptLanguage, _ commitMessage: String?) -> ScriptSaveResult
+    var onSaveAsPreset: (_ name: String, _ source: String, _ language: ScriptLanguage, _ commitMessage: String?, _ includeCustomUI: Bool) -> ScriptSaveResult
     var onDeletePreset: () -> Void
     var onRenamePreset: (String) -> String?
     var onNew: (ScriptLanguage) -> ScriptSaveResult
@@ -107,6 +107,21 @@ struct ConjureDSPExtensionMainView: View {
     /// rescheduled on every keystroke so we don't fsync on each
     /// character.
     @State private var altFileSaveTask: Task<Void, Never>? = nil
+    /// Debounce flag for "+ Add Custom UI" — disables the button while the
+    /// scaffold is being written + committed so a double-click doesn't
+    /// produce two commits.
+    @State private var isAddingCustomUI: Bool = false
+    /// Set on each successful debounced alt-file write so the file picker
+    /// bar can briefly flash a "Saved to disk" label. Disk-write feedback,
+    /// NOT commit feedback — commit is a separate, explicit action.
+    @State private var lastDiskSaveAt: Date? = nil
+    /// Whether the bundle-file sidebar is visible. Defaults to collapsed so
+    /// DSP-only authors who never touch `ui/` don't lose real estate; the
+    /// toolbar's Files button + ⇧⌘E flip it open.
+    @AppStorage("bundleFileBrowser.shown") private var showFileBrowser: Bool = false
+    /// Width of the bundle-file sidebar when visible. Persisted so resizes
+    /// stick across sessions.
+    @AppStorage("bundleFileBrowser.width") private var fileBrowserWidth: Double = 180
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("editorTheme") private var selectedTheme: String = "conjuredsp"
 
@@ -144,6 +159,7 @@ struct ConjureDSPExtensionMainView: View {
                 showSpectrogram: $showSpectrogram,
                 showChat: $showChat,
                 showNewScriptDialog: $showNewScriptDialog,
+                showFileBrowser: $showFileBrowser,
                 onSelectPreset: { preset in
                     Task {
                         isCompiling = true
@@ -167,8 +183,8 @@ struct ConjureDSPExtensionMainView: View {
                     let result = onSavePreset(scriptSource, selectedLanguage, commitMessage)
                     handleResult(result)
                 },
-                onSaveAs: { name, commitMessage in
-                    let result = onSaveAsPreset(name, scriptSource, selectedLanguage, commitMessage)
+                onSaveAs: { name, commitMessage, includeCustomUI in
+                    let result = onSaveAsPreset(name, scriptSource, selectedLanguage, commitMessage, includeCustomUI)
                     handleResult(result)
                 },
                 onDelete: {
@@ -231,17 +247,24 @@ struct ConjureDSPExtensionMainView: View {
 
             Divider()
 
-            // Custom HTML/JS UI when the current preset bundle ships one AND
-            // the user hasn't opted back to stock sliders. Everything else
-            // (no bundle, no ui/, toggle flipped off) falls through to the
-            // generated slider panel.
+            // UI area: the custom HTML/JS UI (when a bundle ships one and the
+            // toggle is set to it) or the generated slider panel. The toggle
+            // bar above advertises both modes and — for user bundles without
+            // a custom UI yet — surfaces the "+ Add Custom UI" CTA so adding
+            // one is a single click instead of a hidden filesystem dance.
             let activeBundle = presetManager.currentBundle
             let hasCustom = activeBundle?.hasCustomUI ?? false
             let useCustom = hasCustom && customUIPreference.showCustomUI
 
-            if useCustom, let bundle = activeBundle {
-                VStack(spacing: 0) {
-                    customUIToggleBar(showingCustom: true)
+            VStack(spacing: 0) {
+                // Bar is always visible when a bundle is loaded (factory or
+                // user). Without a bundle we skip it entirely — there's
+                // nothing meaningful to toggle or customize.
+                if activeBundle != nil {
+                    customUIToggleBar(showingCustom: useCustom)
+                }
+
+                if useCustom, let bundle = activeBundle {
                     CustomUIWebView(
                         parameterState: parameterState,
                         bundle: bundle,
@@ -250,15 +273,7 @@ struct ConjureDSPExtensionMainView: View {
                     )
                     .frame(minHeight: CGFloat(bundle.manifest.ui?.height ?? 220))
                     .id(bundle.uiIndexURL)
-                }
-            } else {
-                VStack(spacing: 0) {
-                    // Only show the toggle when a custom UI is actually
-                    // available. With no custom UI, the toggle row would
-                    // just be dead space.
-                    if hasCustom {
-                        customUIToggleBar(showingCustom: false)
-                    }
+                } else {
                     ParameterSlidersView(parameterState: parameterState)
                 }
             }
@@ -337,6 +352,57 @@ struct ConjureDSPExtensionMainView: View {
                     )
                     .onHover { hovering in
                         if hovering && showChat {
+                            NSCursor.resizeLeftRight.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+            }
+
+            // File browser sidebar — collapsed by default; the toolbar's
+            // Files button + ⇧⌘E toggle it. When open, sits to the left
+            // of the Monaco editor panel and resizes via its trailing
+            // divider (same pattern as the spectrogram).
+            if showFileBrowser, let bundle = presetManager.currentBundle {
+                BundleFileBrowser(
+                    bundle: bundle,
+                    isEditable: isCurrentBundleEditable,
+                    selectedRelativePath: editingBundleFile?.relativePath
+                        ?? bundle.manifest.entry,
+                    onOpen: { node in openBundleFileNode(node, bundle: bundle) },
+                    onCreateFile: { parent, name, template in
+                        createBundleFile(parent: parent, name: name, template: template, bundle: bundle)
+                    },
+                    onCreateFolder: { parent, name in
+                        createBundleFolder(parent: parent, name: name, bundle: bundle)
+                    },
+                    onRename: { node, newName in
+                        renameBundleEntry(node: node, newName: newName, bundle: bundle)
+                    },
+                    onDelete: { node in
+                        deleteBundleEntry(node: node, bundle: bundle)
+                    },
+                    onDuplicate: { node in
+                        duplicateBundleEntry(node: node, bundle: bundle)
+                    },
+                    onDuplicateBundleAndEdit: { node in
+                        duplicateFactoryBundleAndEdit(sourceNode: node, factoryBundle: bundle)
+                    }
+                )
+                .frame(width: fileBrowserWidth)
+
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.2))
+                    .frame(width: 4)
+                    .contentShape(Rectangle().inset(by: -4))
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                fileBrowserWidth = max(120, min(360, fileBrowserWidth + value.translation.width))
+                            }
+                    )
+                    .onHover { hovering in
+                        if hovering {
                             NSCursor.resizeLeftRight.push()
                         } else {
                             NSCursor.pop()
@@ -562,6 +628,8 @@ struct ConjureDSPExtensionMainView: View {
                     .keyboardShortcut("r", modifiers: .command)
                 Button(action: handleCmdN) { EmptyView() }
                     .keyboardShortcut("n", modifiers: .command)
+                Button(action: handleShiftCmdE) { EmptyView() }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
             }
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
@@ -616,10 +684,37 @@ struct ConjureDSPExtensionMainView: View {
                         .foregroundStyle(.secondary)
                         .help("Factory preset files are read-only. Save As to create an editable copy.")
                 }
+
+                // Brief "Saved to disk" flash after each debounced write.
+                // Intentionally distinct from "Saved" (commit) — commits
+                // happen when the user hits Save / ⌘S / Run, not on every
+                // keystroke. We show this here so authors get feedback that
+                // their hot-reload write actually landed.
+                if let at = lastDiskSaveAt, Date().timeIntervalSince(at) < 1.2 {
+                    Text("Saved to disk")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity)
+                        .accessibilityIdentifier("diskSaveFlash")
+                }
+
                 Spacer()
             }
             .padding(.horizontal, 12)
             .padding(.top, 8)
+            .animation(.easeInOut(duration: 0.25), value: lastDiskSaveAt)
+            .task(id: lastDiskSaveAt) {
+                // Schedule the opacity transition's second half. The flash
+                // should vanish ~1s after the write even if the user stops
+                // typing — otherwise the label persists until the next edit.
+                guard lastDiskSaveAt != nil else { return }
+                try? await Task.sleep(nanoseconds: 1_100_000_000)
+                // Re-check — if a newer write fired during the sleep, the
+                // task is cancelled and a fresh one replaces it.
+                if !Task.isCancelled {
+                    lastDiskSaveAt = nil
+                }
+            }
         }
     }
 
@@ -722,6 +817,11 @@ struct ConjureDSPExtensionMainView: View {
                 errorMessage = "Could not save \(file.relativePath): \(error.localizedDescription)"
                 return
             }
+            // Record the write so the Save button lights up even when
+            // only ui/** or manifest.json has changed (entry-script
+            // modification already flips presetManager.isModified).
+            presetManager.noteDirtyFile(url)
+            lastDiskSaveAt = Date()
             // Manifest edits change which files count as UI etc., so the
             // preset model needs a refresh. Cheap — just re-scans the
             // active bundles on disk.
@@ -731,29 +831,114 @@ struct ConjureDSPExtensionMainView: View {
         }
     }
 
-    /// Small row that sits above the parameter panel whenever the active
-    /// bundle ships a custom HTML/JS UI. Lets the user choose between that
-    /// and the stock slider layout without leaving the main view. The
-    /// choice is per-bundle and persisted (see CustomUIPreference).
+    /// Row that sits above the parameter panel whenever a preset bundle is
+    /// loaded. Doubles as a UI-mode picker *and* the discovery surface for
+    /// custom HTML/JS UIs: user bundles that don't have one yet get a
+    /// `+ Add Custom UI` button in the same slot where the toggle would
+    /// normally live, so adding one is a single click.
+    ///
+    /// States (driven by `currentBundle` + `isCurrentBundleEditable`):
+    ///   - User bundle, no custom UI → label "Sliders" + `[ + Add Custom UI ]`
+    ///   - User bundle, has custom UI → segmented toggle (Custom UI ↔ Sliders)
+    ///   - Factory bundle, no custom UI → label "Sliders" only (branch
+    ///     via the toolbar's Save As)
+    ///   - Factory bundle, has custom UI → segmented toggle (read-only preview)
     @ViewBuilder
     private func customUIToggleBar(showingCustom: Bool) -> some View {
+        let hasCustom = presetManager.currentBundle?.hasCustomUI ?? false
+        let editable = isCurrentBundleEditable
+
         HStack(spacing: 6) {
             Spacer()
             Image(systemName: showingCustom ? "paintpalette" : "slider.horizontal.3")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text(showingCustom ? "Custom UI" : "Stock Sliders")
+            Text(showingCustom ? "Custom UI" : "Sliders")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Toggle("", isOn: $customUIPreference.showCustomUI)
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .labelsHidden()
-                .help("Switch between the preset's custom HTML/JS UI and the stock slider layout.")
-                .accessibilityIdentifier("customUIToggle")
+
+            if hasCustom {
+                // Segmented toggle — same binding as before, just with a
+                // label that reflects the persisted choice. Factory bundles
+                // get the toggle too so users can preview the sliders
+                // version of a factory preset without forking it.
+                Toggle("", isOn: $customUIPreference.showCustomUI)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .help("Switch between the preset's custom HTML/JS UI and the slider layout.")
+                    .accessibilityIdentifier("customUIToggle")
+            } else if editable {
+                // User bundle without a UI yet. The CTA replaces the toggle
+                // — clicking drops a starter `ui/index.html` into the
+                // bundle, commits it, and the bar re-renders as a toggle.
+                Button(action: { addCustomUIToCurrentBundle() }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "plus.circle")
+                            .font(.caption2)
+                        Text("Add Custom UI")
+                            .font(.caption)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(isAddingCustomUI)
+                .help("Drop a starter ui/index.html into this preset. You can edit it inside ConjureDSP or in any external editor.")
+                .accessibilityIdentifier("addCustomUIButton")
+            }
+            // Factory bundle without a UI → label only, no CTA. Users branch
+            // via the toolbar's Save As (same as they always have).
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
+    }
+
+    /// Drop a starter `ui/index.html` into the current user bundle and
+    /// commit it via `PresetGitCoordinator` so the new file lands in
+    /// `git log` like any other preset edit. Reload + refresh happen via
+    /// `refreshPresets()` inside the manager.
+    private func addCustomUIToCurrentBundle() {
+        guard !isAddingCustomUI,
+              let bundle = presetManager.currentBundle,
+              isCurrentBundleEditable else { return }
+
+        isAddingCustomUI = true
+        let scaffoldResult: Result<URL, Error>
+        do {
+            let url = try presetManager.scaffoldCustomUI(for: bundle)
+            scaffoldResult = .success(url)
+        } catch {
+            scaffoldResult = .failure(error)
+        }
+
+        switch scaffoldResult {
+        case .failure(let err):
+            errorMessage = "Could not add custom UI: \(err.localizedDescription)"
+            isAddingCustomUI = false
+        case .success(let indexURL):
+            // Flip the toggle to show the fresh UI immediately — no point
+            // landing on "Sliders" right after the user tapped "Add Custom
+            // UI." The preference is keyed on the bundle name, which just
+            // got re-loaded by refreshPresets().
+            customUIPreference.bundleKey = presetManager.currentBundle?.name
+            customUIPreference.showCustomUI = true
+
+            // Commit the whole bundle root, not just ui/index.html — the
+            // manifest also changed (scaffoldCustomUI writes the `ui` block
+            // if it was missing), and committing the parent directory makes
+            // sure both files land in the same commit.
+            let bundleRoot = bundle.rootURL
+            Task { @MainActor in
+                let result = await gitCoordinator.recordSave(
+                    paths: [bundleRoot],
+                    message: "Add custom UI scaffold"
+                )
+                isAddingCustomUI = false
+                if case .failure(let err) = result {
+                    errorMessage = "Custom UI scaffolded but commit failed: \(err.localizedDescription)"
+                }
+                _ = indexURL // silence unused warning; URL is useful for tests
+            }
+        }
     }
 
     /// True when the current preset is user-writable (i.e. Cmd-S should
@@ -804,6 +989,222 @@ struct ConjureDSPExtensionMainView: View {
 
     private func handleCmdN() {
         showNewScriptDialog = true
+    }
+
+    /// ⇧⌘E toggles the file sidebar.
+    private func handleShiftCmdE() {
+        showFileBrowser.toggle()
+    }
+
+    // MARK: - Bundle file browser handlers
+
+    /// Load `node` into the Monaco editor via the existing `switchEditingFile`
+    /// helper. Binary files are opened in Finder instead — the editor can't
+    /// render them.
+    private func openBundleFileNode(_ node: BundleFileNode, bundle: PresetBundle) {
+        if case .binaryFile = node.kind {
+            NSWorkspace.shared.activateFileViewerSelecting([node.url])
+            return
+        }
+        // Map the tree node to the picker's entry type so the existing
+        // switchEditingFile path handles the buffer swap + Monaco language
+        // mode selection.
+        let entry: BundleFileEntry
+        switch node.kind {
+        case .entryScript:
+            entry = BundleFileEntry(
+                url: node.url,
+                relativePath: node.relativePath,
+                kind: .entryScript
+            )
+        case .manifest:
+            entry = BundleFileEntry(
+                url: node.url,
+                relativePath: node.relativePath,
+                kind: .manifest
+            )
+        default:
+            entry = BundleFileEntry(
+                url: node.url,
+                relativePath: node.relativePath,
+                kind: .uiAsset
+            )
+        }
+        switchEditingFile(to: entry, in: bundle)
+    }
+
+    private func createBundleFile(
+        parent: String, name: String,
+        template: PresetManager.NewFileTemplate,
+        bundle: PresetBundle
+    ) {
+        let relPath = parent.isEmpty ? name : "\(parent)/\(name)"
+        do {
+            let url = try presetManager.createBundleFile(
+                in: bundle, relativePath: relPath, template: template
+            )
+            recordBundleEdit(path: url, message: "Add \(relPath)")
+            // Open the new file immediately — users who just typed a name
+            // expect to land in the editor, not to have to click again.
+            let entry = BundleFileEntry(
+                url: url, relativePath: relPath, kind: .uiAsset
+            )
+            switchEditingFile(to: entry, in: bundle)
+        } catch {
+            errorMessage = "Could not create \(relPath): \(error.localizedDescription)"
+        }
+    }
+
+    private func createBundleFolder(parent: String, name: String, bundle: PresetBundle) {
+        let relPath = parent.isEmpty ? name : "\(parent)/\(name)"
+        do {
+            // Folders with no files don't show up in git, so we drop a
+            // `.gitkeep` sentinel alongside so the commit captures the
+            // intent. Empty folders are a foot-gun otherwise.
+            _ = try presetManager.createBundleFolder(in: bundle, relativePath: relPath)
+            let keep = try presetManager.createBundleFile(
+                in: bundle, relativePath: "\(relPath)/.gitkeep", template: .empty
+            )
+            recordBundleEdit(path: keep, message: "Add \(relPath)/")
+        } catch {
+            errorMessage = "Could not create \(relPath): \(error.localizedDescription)"
+        }
+    }
+
+    private func renameBundleEntry(
+        node: BundleFileNode, newName: String, bundle: PresetBundle
+    ) {
+        // Compute the new relative path by swapping the last component.
+        let parent = (node.relativePath as NSString).deletingLastPathComponent
+        let newRel = parent.isEmpty ? newName : "\(parent)/\(newName)"
+        do {
+            let result = try presetManager.renameBundleFile(
+                in: bundle, from: node.relativePath, to: newRel
+            )
+            // If the Monaco editor had this file open, swap the buffer to
+            // the new URL so the editor doesn't keep pointing at a
+            // file-system path that no longer exists.
+            if editingBundleFile?.url == result.oldURL, let newBundle = presetManager.currentBundle {
+                let entry = BundleFileEntry(
+                    url: result.newURL,
+                    relativePath: newRel,
+                    kind: node.kind == .entryScript ? .entryScript
+                        : node.kind == .manifest ? .manifest
+                        : .uiAsset
+                )
+                switchEditingFile(to: entry, in: newBundle)
+            }
+            let message = "Rename \(node.relativePath) \u{2192} \(newRel)"
+            Task { @MainActor in
+                var paths: [URL] = [result.oldURL, result.newURL]
+                if let m = result.manifestURL { paths.append(m) }
+                _ = await gitCoordinator.recordRename(
+                    oldPath: result.oldURL, newPath: result.newURL, message: message
+                )
+                if result.manifestURL != nil {
+                    // Rename-only commit might miss manifest edits depending
+                    // on how the worker stages paths; explicit save covers it.
+                    _ = await gitCoordinator.recordSave(
+                        paths: paths, message: message
+                    )
+                }
+            }
+        } catch {
+            errorMessage = "Could not rename: \(error.localizedDescription)"
+        }
+    }
+
+    private func deleteBundleEntry(node: BundleFileNode, bundle: PresetBundle) {
+        let removedURL = node.url
+        do {
+            try presetManager.deleteBundleFile(in: bundle, relativePath: node.relativePath)
+            // If Monaco had the removed file open, fall back to the entry
+            // script so the editor doesn't render stale content.
+            if editingBundleFile?.url == removedURL {
+                editingBundleFile = nil
+                if let source = try? String(contentsOf: bundle.entryScriptURL, encoding: .utf8) {
+                    scriptSource = source
+                }
+            }
+            Task { @MainActor in
+                _ = await gitCoordinator.recordDelete(
+                    path: removedURL, message: "Delete \(node.relativePath)"
+                )
+            }
+        } catch {
+            errorMessage = "Could not delete: \(error.localizedDescription)"
+        }
+    }
+
+    private func duplicateBundleEntry(node: BundleFileNode, bundle: PresetBundle) {
+        do {
+            let copyURL = try presetManager.duplicateBundleFile(
+                in: bundle, relativePath: node.relativePath
+            )
+            let rootPath = bundle.rootURL.standardizedFileURL.path
+            let copyPath = copyURL.standardizedFileURL.path
+            let copyRel = copyPath.hasPrefix(rootPath + "/")
+                ? String(copyPath.dropFirst(rootPath.count + 1))
+                : copyURL.lastPathComponent
+            recordBundleEdit(
+                path: copyURL,
+                message: "Duplicate \(node.relativePath) \u{2192} \(copyRel)"
+            )
+        } catch {
+            errorMessage = "Could not duplicate: \(error.localizedDescription)"
+        }
+    }
+
+    private func duplicateFactoryBundleAndEdit(
+        sourceNode: BundleFileNode, factoryBundle: PresetBundle
+    ) {
+        do {
+            let forked = try presetManager.duplicateFactoryBundle(source: factoryBundle)
+            // Commit the forked bundle as one unit so `git log` shows a
+            // single "Duplicate <name> from factory" entry for the whole
+            // copy, not a per-file sequence.
+            Task { @MainActor in
+                _ = await gitCoordinator.recordSave(
+                    paths: [forked.rootURL],
+                    message: "Duplicate \(factoryBundle.name) from factory"
+                )
+            }
+            // Switch the active preset to the fork, then open the
+            // equivalent file. The tree's `relativePath` is preserved
+            // verbatim by the copy, so opening by relative path works.
+            if let preset = presetManager.presets.first(where: { $0.id == "user:\(forked.name)" }) {
+                let source = (try? forked.readSource()) ?? scriptSource
+                presetManager.setCurrentPreset(preset, source: source)
+                scriptSource = source
+                lastRunSource = source
+                selectedLanguage = forked.language
+
+                // Open the equivalent file if it's editable. Binary / entry
+                // / manifest all still land at a sensible starting point.
+                let targetURL = forked.rootURL.appendingPathComponent(sourceNode.relativePath)
+                if FileManager.default.fileExists(atPath: targetURL.path) {
+                    let entry = BundleFileEntry(
+                        url: targetURL,
+                        relativePath: sourceNode.relativePath,
+                        kind: sourceNode.kind == .entryScript ? .entryScript
+                            : sourceNode.kind == .manifest ? .manifest
+                            : .uiAsset
+                    )
+                    switchEditingFile(to: entry, in: forked)
+                }
+            }
+        } catch {
+            errorMessage = "Could not duplicate bundle: \(error.localizedDescription)"
+        }
+    }
+
+    /// Fire-and-forget commit for a single-file bundle mutation. The
+    /// coordinator swallows errors into its own surfaced push-failure state;
+    /// we just need the commit to fire on the main actor.
+    private func recordBundleEdit(path: URL, message: String) {
+        Task { @MainActor in
+            _ = await gitCoordinator.recordSave(paths: [path], message: message)
+        }
     }
 
     private func handleResult(_ result: ScriptSaveResult) {

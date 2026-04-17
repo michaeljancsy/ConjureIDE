@@ -6,6 +6,11 @@ struct PresetBrowserView: View {
     let presets: [Preset]
     let currentPreset: Preset?
     let isModified: Bool
+    /// Returns true iff the given preset's bundle ships a custom HTML/JS UI.
+    /// Surfaced as a small `paintpalette` badge next to the name, so users
+    /// can spot which presets carry a UI without loading each one. Default
+    /// implementation (from callers that don't care) returns false.
+    var hasCustomUI: (Preset) -> Bool = { _ in false }
     let onSelectPreset: (Preset) -> Void
     let onImportURL: () -> Void
     let onDismiss: () -> Void
@@ -285,6 +290,17 @@ struct PresetBrowserView: View {
                         .font(.system(size: 12))
                         .foregroundColor(.primary)
                         .lineLimit(1)
+
+                    // Custom-UI badge — signals that the preset ships an
+                    // HTML/JS UI so users can tell them apart from DSP-only
+                    // presets without loading each one.
+                    if hasCustomUI(preset) {
+                        Image(systemName: "paintpalette")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .help("This preset has a custom HTML/JS UI.")
+                            .accessibilityIdentifier("customUIBadge")
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, 12)

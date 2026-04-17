@@ -432,9 +432,17 @@ pub extern "C" fn process(
 
                 let commitMessage = userCommitMessage ?? gc?.defaultMessage(for: .update(name: saved.name))
                 let commitURL = saved.fileURL
-                let doCommit: (Bool) -> Void = { success in
+                let doCommit: (Bool) -> Void = { [weak pm] success in
                     guard success, let gc, let fileURL = commitURL, let message = commitMessage else { return }
-                    Task { _ = await gc.recordSave(paths: [fileURL], message: message) }
+                    Task { @MainActor in
+                        let result = await gc.recordSave(paths: [fileURL], message: message)
+                        // Clear the dirty set only on commit success —
+                        // otherwise the Save button needs to stay enabled
+                        // so the user can retry.
+                        if case .success = result {
+                            pm?.clearDirtyFiles()
+                        }
+                    }
                 }
 
                 switch language {
@@ -455,12 +463,12 @@ pub extern "C" fn process(
         }
 
         // Save As: create a new user preset, hot-reload, then commit.
-        let onSaveAsPreset: (_ name: String, _ source: String, _ language: ScriptLanguage, _ userCommitMessage: String?) -> ScriptSaveResult = { [weak au, weak pm, weak gc] name, source, language, userCommitMessage in
+        let onSaveAsPreset: (_ name: String, _ source: String, _ language: ScriptLanguage, _ userCommitMessage: String?, _ includeCustomUI: Bool) -> ScriptSaveResult = { [weak au, weak pm, weak gc] name, source, language, userCommitMessage, includeCustomUI in
             guard let au, let pm else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
             do {
-                let saved: Preset = try pm.savePreset(name: name, source: source, language: language)
+                let saved: Preset = try pm.savePreset(name: name, source: source, language: language, scaffoldUI: includeCustomUI)
                 Analytics.track(.presetSave, properties: [
                     "preset_name": name,
                     "is_new": true,

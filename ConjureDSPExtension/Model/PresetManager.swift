@@ -25,6 +25,24 @@ class PresetManager: ObservableObject {
     /// between custom HTML/JS UI and the default slider panel.
     @Published private(set) var currentBundle: PresetBundle?
 
+    /// URLs of bundle files that have been written to disk via the in-plugin
+    /// editor's debounce path (manifest.json, ui/**) but haven't been
+    /// committed yet. Populated by the main view's `scheduleAltFileSave`,
+    /// cleared on explicit Save (commit) or preset switch.
+    ///
+    /// The entry script isn't tracked here — it uses `isModified` (in-memory
+    /// diff against `loadedSource`) because the editor buffer is still
+    /// considered "the truth" until Run/Save; debounced writes to disk
+    /// don't happen for the entry script.
+    @Published private(set) var dirtyFiles: Set<URL> = []
+
+    /// True when *anything* about the current preset has user-visible
+    /// uncommitted state — either the entry-script buffer differs from the
+    /// on-disk loaded source, or the debounced writer has landed ui/manifest
+    /// edits that haven't been committed. Drives the Save button's
+    /// enabled state so editing `ui/index.html` alone is still "savable."
+    var hasPendingChanges: Bool { isModified || !dirtyFiles.isEmpty }
+
     /// The script source at the time the current preset was loaded, for modification detection.
     private(set) var loadedSource: String?
 
@@ -236,6 +254,11 @@ class PresetManager: ObservableObject {
         currentPreset = preset
         loadedSource = source
         isModified = false
+        // Switching presets wipes the dirty set — any uncommitted ui/manifest
+        // edits to the previous bundle are still on disk (they survive in
+        // the working tree), they just stop being tracked as "the current
+        // bundle's pending work."
+        dirtyFiles.removeAll()
         currentBundle = preset.flatMap { loadBundle(for: $0) }
     }
 
@@ -246,6 +269,19 @@ class PresetManager: ObservableObject {
             return
         }
         isModified = (newSource != loaded)
+    }
+
+    /// Record that the debounced editor has written `url` to disk. The main
+    /// view calls this after each successful `scheduleAltFileSave` write so
+    /// the UI can reflect "save available" without requiring a commit.
+    func noteDirtyFile(_ url: URL) {
+        dirtyFiles.insert(url)
+    }
+
+    /// Clear the dirty set — called by the save flow after a successful
+    /// commit so the Save button disables until the next edit.
+    func clearDirtyFiles() {
+        dirtyFiles.removeAll()
     }
 
     // MARK: - Save
@@ -329,6 +365,322 @@ class PresetManager: ObservableObject {
             throw PresetManagerError.saveFailed
         }
         return preset
+    }
+
+    /// Drop a starter `ui/index.html` into an existing user bundle and return
+    /// the URL of the newly-written file.
+    ///
+    /// This is the "+ Add Custom UI" action the main view exposes when a
+    /// bundle doesn't yet ship a custom HTML/JS UI. It doesn't commit —
+    /// callers route the new file through `PresetGitCoordinator.recordSave`
+    /// so the commit appears alongside every other preset mutation in
+    /// `git log`.
+    ///
+    /// Caller must ensure the bundle is writable (`!preset.isFactory`);
+    /// factory bundles throw `PresetManagerError.saveFailed` because their
+    /// Resources directory is read-only under the hardened runtime.
+    @discardableResult
+    func scaffoldCustomUI(for bundle: PresetBundle) throws -> URL {
+        // Factory bundles live inside the extension's Resources, which is
+        // read-only. The caller shouldn't reach here for a factory bundle,
+        // but fail loudly just in case.
+        if !fileManager.isWritableFile(atPath: bundle.rootURL.path) {
+            throw PresetManagerError.saveFailed
+        }
+
+        let uiDir = bundle.rootURL.appendingPathComponent("ui", isDirectory: true)
+        try fileManager.createDirectory(at: uiDir, withIntermediateDirectories: true)
+
+        let indexURL = uiDir.appendingPathComponent("index.html")
+        // Don't clobber — if the user already has a ui/index.html on disk but
+        // the manifest doesn't reference it, preserve their work and just
+        // rewrite the manifest.
+        if !fileManager.fileExists(atPath: indexURL.path) {
+            try PresetBundle.starterIndexHTML().write(
+                to: indexURL, atomically: true, encoding: .utf8
+            )
+        }
+
+        // Make sure the manifest advertises the UI. Without this, the
+        // `PresetBundle.hasCustomUI` check stays false and the toggle never
+        // flips to "available."
+        let manifestURL = bundle.rootURL.appendingPathComponent(PresetManifest.filename)
+        let updatedManifest: PresetManifest = {
+            if bundle.manifest.ui != nil { return bundle.manifest }
+            return PresetManifest(
+                schemaVersion: bundle.manifest.schemaVersion,
+                entry: bundle.manifest.entry,
+                language: bundle.manifest.language,
+                ui: PresetManifest.UI(
+                    entryHTML: "ui/index.html",
+                    width: 520,
+                    height: 260,
+                    fps: 30,
+                    audioFrames: false
+                ),
+                meta: bundle.manifest.meta
+            )
+        }()
+        try updatedManifest.jsonData().write(to: manifestURL)
+
+        refreshPresets()
+        return indexURL
+    }
+
+    // MARK: - Bundle file helpers (used by BundleFileBrowser)
+
+    /// Template for a newly-created bundle file. The browser's New File flow
+    /// picks one based on the filename extension the user typed.
+    enum NewFileTemplate {
+        case blankHTML
+        case blankCSS
+        case blankJS
+        case empty
+
+        var initialContent: String {
+            switch self {
+            case .blankHTML:
+                return "<!DOCTYPE html>\n<html>\n<head>\n  <meta charset=\"utf-8\">\n</head>\n<body>\n</body>\n</html>\n"
+            case .blankCSS:
+                return "/* styles */\n"
+            case .blankJS:
+                return "// script\n"
+            case .empty:
+                return ""
+            }
+        }
+
+        /// Best-match template for a filename. Used by the New File popover so
+        /// typing `styles.css` auto-selects the CSS template.
+        static func match(forFilename name: String) -> NewFileTemplate {
+            let ext = (name as NSString).pathExtension.lowercased()
+            switch ext {
+            case "html", "htm": return .blankHTML
+            case "css":         return .blankCSS
+            case "js", "mjs":   return .blankJS
+            default:            return .empty
+            }
+        }
+    }
+
+    /// Errors raised by the file-browser helpers. Callers surface these via
+    /// `errorMessage` in the main view; the strings are UI-ready.
+    enum BundleFileError: LocalizedError {
+        case notEditable
+        case outsideBundle
+        case alreadyExists
+        case manifestProtected
+        case entryScriptProtected
+        case notFound
+
+        var errorDescription: String? {
+            switch self {
+            case .notEditable: return "This preset bundle is read-only."
+            case .outsideBundle: return "That path is outside the bundle."
+            case .alreadyExists: return "A file or folder already exists at that path."
+            case .manifestProtected: return "manifest.json can't be deleted — it would invalidate the bundle."
+            case .entryScriptProtected: return "The entry script can't be deleted from the file browser — edit it or save-as instead."
+            case .notFound: return "File not found."
+            }
+        }
+    }
+
+    /// Check that `relativePath` stays inside the bundle root. Prevents
+    /// `..` path tricks from the file browser reaching out of the sandbox.
+    private func resolveBundlePath(in bundle: PresetBundle, relativePath: String) throws -> URL {
+        let candidate = bundle.rootURL.appendingPathComponent(relativePath).standardizedFileURL
+        let root = bundle.rootURL.standardizedFileURL
+        guard candidate.path.hasPrefix(root.path) else {
+            throw BundleFileError.outsideBundle
+        }
+        return candidate
+    }
+
+    /// Resolve `bundle.rootURL` to the preset it belongs to and confirm it's
+    /// writable. Factory bundles always throw `notEditable`.
+    private func ensureEditable(_ bundle: PresetBundle) throws {
+        // Factory bundles live in the extension's Resources, which is
+        // read-only under the hardened runtime. Caller shouldn't reach
+        // here for a factory; guard anyway.
+        if !fileManager.isWritableFile(atPath: bundle.rootURL.path) {
+            throw BundleFileError.notEditable
+        }
+    }
+
+    /// Create a new file inside an editable bundle. Intermediate directories
+    /// are created as needed. Returns the resulting URL so the caller can
+    /// open it in the editor and route it through `recordSave`.
+    @discardableResult
+    func createBundleFile(
+        in bundle: PresetBundle,
+        relativePath: String,
+        template: NewFileTemplate = .empty
+    ) throws -> URL {
+        try ensureEditable(bundle)
+        let url = try resolveBundlePath(in: bundle, relativePath: relativePath)
+        guard !fileManager.fileExists(atPath: url.path) else {
+            throw BundleFileError.alreadyExists
+        }
+        try fileManager.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try template.initialContent.write(to: url, atomically: true, encoding: .utf8)
+        refreshPresets()
+        return url
+    }
+
+    /// Create a new empty folder inside an editable bundle.
+    @discardableResult
+    func createBundleFolder(in bundle: PresetBundle, relativePath: String) throws -> URL {
+        try ensureEditable(bundle)
+        let url = try resolveBundlePath(in: bundle, relativePath: relativePath)
+        guard !fileManager.fileExists(atPath: url.path) else {
+            throw BundleFileError.alreadyExists
+        }
+        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+        refreshPresets()
+        return url
+    }
+
+    /// Result of `renameBundleFile`: the two endpoints of the move, plus any
+    /// manifest URL that also had to be rewritten (e.g. when the entry script
+    /// was renamed). Callers pass all three to `gc.recordRename` +
+    /// `recordSave` so the commit captures the full diff.
+    struct RenameResult {
+        let oldURL: URL
+        let newURL: URL
+        /// Present when the rename forced a manifest rewrite. Nil otherwise.
+        let manifestURL: URL?
+    }
+
+    /// Rename a file or directory inside an editable bundle. Keeps the
+    /// manifest in sync: renaming `process.py` → `dsp.py` rewrites
+    /// `manifest.entry`; renaming `ui/index.html` → `ui/main.html` rewrites
+    /// `manifest.ui.entryHTML`. Those coordinated updates happen atomically
+    /// so the bundle stays loadable through the operation.
+    @discardableResult
+    func renameBundleFile(
+        in bundle: PresetBundle,
+        from oldRelPath: String,
+        to newRelPath: String
+    ) throws -> RenameResult {
+        try ensureEditable(bundle)
+        let oldURL = try resolveBundlePath(in: bundle, relativePath: oldRelPath)
+        let newURL = try resolveBundlePath(in: bundle, relativePath: newRelPath)
+
+        guard fileManager.fileExists(atPath: oldURL.path) else {
+            throw BundleFileError.notFound
+        }
+        if oldURL != newURL {
+            guard !fileManager.fileExists(atPath: newURL.path) else {
+                throw BundleFileError.alreadyExists
+            }
+        }
+
+        try fileManager.createDirectory(
+            at: newURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        if oldURL != newURL {
+            try fileManager.moveItem(at: oldURL, to: newURL)
+        }
+
+        // Keep the manifest consistent with the new layout.
+        var manifestURL: URL? = nil
+        let manifestPath = bundle.rootURL.appendingPathComponent(PresetManifest.filename)
+        let trimmedOld = oldRelPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let trimmedNew = newRelPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var manifest = bundle.manifest
+        var manifestChanged = false
+        if manifest.entry == trimmedOld {
+            manifest.entry = trimmedNew
+            manifestChanged = true
+        }
+        if let ui = manifest.ui, ui.entryHTML == trimmedOld {
+            manifest.ui = PresetManifest.UI(
+                entryHTML: trimmedNew,
+                width: ui.width,
+                height: ui.height,
+                fps: ui.fps,
+                audioFrames: ui.audioFrames
+            )
+            manifestChanged = true
+        }
+        if manifestChanged {
+            try manifest.jsonData().write(to: manifestPath)
+            manifestURL = manifestPath
+        }
+
+        refreshPresets()
+        return RenameResult(oldURL: oldURL, newURL: newURL, manifestURL: manifestURL)
+    }
+
+    /// Remove a file from an editable bundle. `manifest.json` and the entry
+    /// script are protected — deleting them would brick the bundle.
+    func deleteBundleFile(in bundle: PresetBundle, relativePath: String) throws {
+        try ensureEditable(bundle)
+        let url = try resolveBundlePath(in: bundle, relativePath: relativePath)
+        let trimmed = relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if trimmed == PresetManifest.filename {
+            throw BundleFileError.manifestProtected
+        }
+        if trimmed == bundle.manifest.entry {
+            throw BundleFileError.entryScriptProtected
+        }
+        guard fileManager.fileExists(atPath: url.path) else {
+            throw BundleFileError.notFound
+        }
+        try fileManager.removeItem(at: url)
+        refreshPresets()
+    }
+
+    /// Duplicate a file inside an editable bundle. The copy's name is the
+    /// source's stem + " 2" (" 3", etc.) to avoid clobbering.
+    @discardableResult
+    func duplicateBundleFile(in bundle: PresetBundle, relativePath: String) throws -> URL {
+        try ensureEditable(bundle)
+        let sourceURL = try resolveBundlePath(in: bundle, relativePath: relativePath)
+        guard fileManager.fileExists(atPath: sourceURL.path) else {
+            throw BundleFileError.notFound
+        }
+
+        let parent = sourceURL.deletingLastPathComponent()
+        let stem = sourceURL.deletingPathExtension().lastPathComponent
+        let ext = sourceURL.pathExtension
+        var copyURL = parent.appendingPathComponent("\(stem) 2\(ext.isEmpty ? "" : ".")\(ext)")
+        var suffix = 2
+        while fileManager.fileExists(atPath: copyURL.path) {
+            suffix += 1
+            copyURL = parent.appendingPathComponent("\(stem) \(suffix)\(ext.isEmpty ? "" : ".")\(ext)")
+        }
+        try fileManager.copyItem(at: sourceURL, to: copyURL)
+        refreshPresets()
+        return copyURL
+    }
+
+    /// Fork a factory bundle into a writable user bundle under `presetsURL`.
+    /// The new name defaults to `"Copy of <factory name>"`, deduped against
+    /// existing user presets. Returns the loaded bundle view so callers can
+    /// set it as the current preset and open the equivalent file in the
+    /// editor.
+    @discardableResult
+    func duplicateFactoryBundle(source: PresetBundle) throws -> PresetBundle {
+        let baseName = uniqueName(baseName: "Copy of \(source.name)")
+        let sanitized = sanitizeFilename(baseName)
+        let destURL = presetsURL.appendingPathComponent(
+            "\(sanitized).\(PresetBundle.bundleExtension)",
+            isDirectory: true
+        )
+        guard !fileManager.fileExists(atPath: destURL.path) else {
+            throw BundleFileError.alreadyExists
+        }
+        try fileManager.copyItem(at: source.rootURL, to: destURL)
+        refreshPresets()
+        guard let forked = PresetBundle.load(from: destURL) else {
+            throw PresetManagerError.saveFailed
+        }
+        return forked
     }
 
     // MARK: - Delete
