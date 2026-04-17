@@ -339,8 +339,22 @@ struct CustomUIWebView: NSViewRepresentable {
         }
 
         private func makeInitPayload(state: ParameterState) -> [String: Any] {
+            // Expose only the parameters the preset actually declared, not
+            // the full 16-slot AU parameter tree. A preset with one `Gain`
+            // param would otherwise report count=16 to JS — starter UIs
+            // (and many author UIs) iterate `parameters.count` and draw
+            // fifteen unused "Param 2" / "Param 3" sliders. Matches export
+            // behavior, which derives count from paramMetadata.
+            let count: Int = {
+                if let md = state.paramMetadata, !md.isEmpty {
+                    return md.count
+                }
+                if let names = state.paramNames, !names.isEmpty {
+                    return (names.keys.max() ?? -1) + 1
+                }
+                return state.values.count
+            }()
             var metadata: [[String: Any]] = []
-            let count = state.values.count
             for i in 0..<count {
                 if let md = state.paramMetadata, i < md.count {
                     metadata.append(md[i].asDictionary())
@@ -356,9 +370,12 @@ struct CustomUIWebView: NSViewRepresentable {
                     ])
                 }
             }
+            // Truncate values to match — otherwise JS sees count=1 but
+            // values array has length 16, which is harmless but misleading.
+            let values = Array(state.values.prefix(count))
             return [
                 "metadata": metadata,
-                "values": state.values,
+                "values": values,
                 "theme": lastTheme,
             ]
         }
