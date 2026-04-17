@@ -248,11 +248,15 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // "the one with the custom UI". loadBundle is cached for
             // factory presets so this doesn't re-parse the manifest
             // every time list_presets runs.
+            // Every preset is a bundle now (factory or user). Surface
+            // `has_custom_ui` so Claude Code can pick the right preset
+            // when a user asks for "the one with the custom UI".
+            // loadBundle is cached for factory presets so this doesn't
+            // re-parse the manifest every time list_presets runs.
             let bundle = pm.loadBundle(for: preset)
             return [
                 "name": preset.name,
                 "is_factory": preset.isFactory,
-                "is_bundle": preset.isBundle || preset.isFactory,
                 "has_custom_ui": bundle?.hasCustomUI ?? false,
                 "language": preset.language.rawValue,
             ]
@@ -271,7 +275,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         let scaffoldUI = (input["scaffold_ui"] as? Bool) ?? false
         let pm = presetManager
         do {
-            let preset = try pm.saveUserBundle(
+            let preset = try pm.savePreset(
                 name: name, source: source,
                 language: currentScriptLanguage,
                 scaffoldUI: scaffoldUI

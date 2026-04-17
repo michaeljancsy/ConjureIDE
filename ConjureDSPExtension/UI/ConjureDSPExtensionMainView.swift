@@ -45,10 +45,12 @@ struct ConjureDSPExtensionMainView: View {
     // reads isLicensed and demoSecondsRemaining directly in this view's body.
     @ObservedObject var subscriptionManager: SubscriptionManager
     var gitHubService: GitHubService
+    @Bindable var gitCoordinator: PresetGitCoordinator
     var onRun: (String) async -> ScriptSaveResult
     var onSelectPreset: (Preset) async -> ScriptSaveResult
-    var onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult
-    var onSaveAsPreset: (String, String, ScriptLanguage) -> ScriptSaveResult
+    /// commitMessage is optional — nil means "use the coordinator's default"
+    var onSavePreset: (_ source: String, _ language: ScriptLanguage, _ commitMessage: String?) -> ScriptSaveResult
+    var onSaveAsPreset: (_ name: String, _ source: String, _ language: ScriptLanguage, _ commitMessage: String?) -> ScriptSaveResult
     var onDeletePreset: () -> Void
     var onRenamePreset: (String) -> String?
     var onNew: (ScriptLanguage) -> ScriptSaveResult
@@ -67,6 +69,7 @@ struct ConjureDSPExtensionMainView: View {
     @State private var warningMessage: String?
     @State private var editorMarkers: [MonacoEditorView.Marker] = []
     @State private var showingSaveAs = false
+    @State private var showingSaveMessage = false
     @State private var saveAsName = ""
     @State private var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
     @State private var showNewScriptDialog: Bool = false
@@ -134,6 +137,7 @@ struct ConjureDSPExtensionMainView: View {
                 presetManager: presetManager,
                 subscriptionManager: subscriptionManager,
                 gitHubService: gitHubService,
+                gitCoordinator: gitCoordinator,
                 isCompiling: isCompiling,
                 hasUnrunChanges: scriptSource != lastRunSource,
                 selectedLanguage: selectedLanguage,
@@ -159,12 +163,12 @@ struct ConjureDSPExtensionMainView: View {
                         handleResult(result)
                     }
                 },
-                onSave: {
-                    let result = onSavePreset(scriptSource, selectedLanguage)
+                onSave: { commitMessage in
+                    let result = onSavePreset(scriptSource, selectedLanguage, commitMessage)
                     handleResult(result)
                 },
-                onSaveAs: { name in
-                    let result = onSaveAsPreset(name, scriptSource, selectedLanguage)
+                onSaveAs: { name, commitMessage in
+                    let result = onSaveAsPreset(name, scriptSource, selectedLanguage, commitMessage)
                     handleResult(result)
                 },
                 onDelete: {
@@ -211,6 +215,7 @@ struct ConjureDSPExtensionMainView: View {
                 onBypassToggle: { setBypass(bypassed) },
                 showingSaveAs: $showingSaveAs,
                 saveAsName: $saveAsName,
+                showingSaveMessage: $showingSaveMessage,
                 onInsertTone: { insertion in
                     Analytics.track(.namToneInsert, properties: [
                         "tone_title": insertion.title,
@@ -570,9 +575,10 @@ struct ConjureDSPExtensionMainView: View {
     }
 
     /// Whether the current bundle lives in a user-writable location. User
-    /// and repo bundles live on disk and can be edited in place. Factory
-    /// bundles live inside the extension's Resources, which are read-only
-    /// under the hardened runtime — the editor is shown but can't save.
+    /// bundles live on disk under the App Group's `Presets/` git repo and
+    /// can be edited in place. Factory bundles live inside the extension's
+    /// Resources, which are read-only under the hardened runtime — the
+    /// editor is shown but can't save.
     private var isCurrentBundleEditable: Bool {
         guard let preset = presetManager.currentPreset else { return true }
         switch preset.source {
@@ -750,11 +756,31 @@ struct ConjureDSPExtensionMainView: View {
         .padding(.vertical, 4)
     }
 
+    /// True when the current preset is user-writable (i.e. Cmd-S should
+    /// save-in-place, not open Save As, regardless of modified state).
+    private var hasMutablePreset: Bool {
+        guard let current = presetManager.currentPreset else { return false }
+        return !current.isFactory
+    }
+
     private func handleCmdS() {
-        if canSave {
-            let result = onSavePreset(scriptSource, selectedLanguage)
-            handleResult(result)
+        // If a user preset is loaded, Cmd-S saves in place. Falling through to
+        // Save As on an already-saved preset would be surprising.
+        if hasMutablePreset {
+            // Respect the commit-message preference. In alwaysPrompt mode,
+            // open the same popover that's anchored to the toolbar Save
+            // button; in alwaysTimestamp mode, save immediately with nil
+            // (the coordinator substitutes a timestamp).
+            switch gitCoordinator.mode {
+            case .alwaysPrompt:
+                showingSaveMessage = true
+            case .alwaysTimestamp:
+                let result = onSavePreset(scriptSource, selectedLanguage, nil)
+                handleResult(result)
+            }
         } else {
+            // Factory preset (or nothing) loaded — the only meaningful action
+            // is to create a new user preset.
             saveAsName = presetManager.currentPreset?.name ?? ""
             showingSaveAs = true
         }

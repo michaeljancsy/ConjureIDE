@@ -147,10 +147,11 @@ MyPreset.cdp/
 
 **Where bundles live:**
 - **Factory:** `ConjureDSPExtension/Resources/presets/preset_<name>.cdp/`. Copied verbatim into the appex via `PBXFileSystemSynchronizedRootGroup.explicitFolders = ("Resources/presets")`. Read-only at runtime (the appex's Resources aren't writable under hardened runtime). When a user wants to modify a factory preset, they Save As to create an editable user bundle.
-- **User:** `<AppGroup>/Presets/<name>.cdp/` — writable, not synced.
-- **Repo:** `<AppGroup>/RepoPresets/<name>.cdp/` — writable, mirrored to the user's GitHub repo under `bundles/<name>/`.
+- **User:** `<AppGroup>/Presets/<name>.cdp/`. The `Presets/` directory is a git repository (see "Git-backed preset library" below); every save writes bundle contents into the repo and fires a commit through `PresetGitCoordinator`.
 
-**Custom UI render path:** when a bundle ships `ui/index.html` AND its manifest declares a `ui` block, `CustomUIWebView` renders the HTML in place of `ParameterSlidersView`. `BundleAssetSchemeHandler` (`WKURLSchemeHandler`) serves bundle files into the WebContent process via `conjuredsp-preset://preset/<path>` to avoid `kTCCServiceSystemPolicyAppData` prompts — WebContent doesn't inherit the appex's App Group entitlement, but the scheme handler runs in the appex process. Path standardization + `hasPrefix(rootURL.path)` enforce sandboxing.
+**Legacy flat-file migration:** on first load, `PresetManager.discoverPresets` wraps any pre-bundle `.py` / `.rs` files sitting in `Presets/` into `.cdp` bundles and deletes the flat file. This is a one-shot migration for users with data from a pre-bundle install; the steady state has zero flat files.
+
+**Custom UI render path:** when a bundle ships `ui/index.html` AND its manifest declares a `ui` block, `CustomUIWebView` renders the HTML in place of `ParameterSlidersView`. `BundleAssetSchemeHandler` (`WKURLSchemeHandler`) serves bundle files into the WebContent process via `conjuredsp-preset://preset/<path>` to avoid `kTCCServiceSystemPolicyAppData` prompts — WebContent doesn't inherit the appex's App Group entitlement, but the scheme handler runs in the appex process. Path standardization + `hasPrefix(rootURL.path)` enforce sandboxing. `CustomUIContentBlocker` applies a compiled `WKContentRuleList` that drops every network request except the custom scheme / `data:` / `blob:`, so malicious preset JS can't exfiltrate.
 
 **JS bridge (`window.ConjureDSP`, injected by `customui-bridge.js` at `.atDocumentStart`):**
 - `apiVersion: 1`
@@ -166,10 +167,26 @@ MyPreset.cdp/
 
 **In-plugin editor multi-file:** Monaco's picker above the editor lists every editable text file in the active bundle — `process.{py,rs}`, `manifest.json`, `ui/**`. Non-script edits debounce-write straight to disk (no Run button required) and the file watcher hot-reloads. Factory bundles are readable but not writable; the picker shows a lock icon.
 
-**Exported AUs carry the UI:** `ExportManager.CustomUIPayload` copies `ui/` into the exported `.appex/Contents/Resources/ui/` and sets `hasCustomUI` + `ui` block in `runtime-config.json`. The export template's `ExportCustomUIWebView` renders it using the same bridge JS. `ExportAudioCaptureManager` (stripped-down `AudioCaptureManager`) feeds `audio.onFrame` subscribers in exported AUs too.
+**Exported AUs carry the UI:** `ExportManager.CustomUIPayload` copies `ui/` into the exported `.appex/Contents/Resources/ui/` and sets `hasCustomUI` + `ui` block in `runtime-config.json`. The export template's `ExportCustomUIWebView` renders it using the same bridge JS. `ExportAudioCaptureManager` (stripped-down `AudioCaptureManager`) feeds `audio.onFrame` subscribers in exported AUs too. The export template has its own `CustomUIContentBlocker` mirror so exported presets inherit the same network-block policy.
 
-### GitHub Integration
-**PersonalRepoSync** for two-way sync with a user's private preset repository (PAT-based). Repos are validated via a `conjuredsp.json` marker file. Auto-syncs preset saves/deletes via callbacks into PresetManager. Bundles mirror to `bundles/<name>/` on the remote via the Tree API (one call to enumerate + fetch SHAs for the whole bundle). Bundle-level conflicts (divergent trees on both sides) surface in `SyncStatusView` with keep-local / keep-remote resolution. Binary `ui/assets` (PNG/WOFF) round-trip via the Data-based `putFileData` / `fetchFileData` paths.
+### Git-backed preset library
+The user presets directory (`<AppGroup>/Presets/`) is a real git repository, initialized on first launch. Every explicit Save / Save As / Delete / Rename triggers a commit. Users can optionally configure a GitHub (or any HTTPS) remote URL, and pushes fire automatically after commits (2 s trailing-edge debounce) or via a "Push now" button.
+
+Architecture:
+- **`ConjureDSPExtension/Git/PresetGitCoordinator.swift`** — `@Observable @MainActor` orchestrator. Owns the commit-message preference (`alwaysPrompt` vs `alwaysTimestamp`, backed by UserDefaults) and the remote URL. Entry points: `initIfNeeded()`, `recordSave/Delete/Rename`, `setRemote/clearRemote`, `pushIfRemoteConfigured()`.
+- **`ConjureDSPExtension/Git/GitQueueClient.swift`** — thin async transport that writes a JSON request into `<AppGroup>/git-queue/requests/` and polls `<AppGroup>/git-queue/results/` for the matching response. 15 s timeout for most ops, 60 s for push.
+- **`ConjureDSPExtension/Git/GitRequest.swift`** — shared JSON shapes for the queue (the terminal has an equivalent copy inline in `GitWorker.swift`, same pattern as `PackageInstallManager` ↔ `PackageInstaller`).
+- **`ConjureDSPTerminal/GitWorker.swift`** — shells out to system `git` (resolved via `xcrun -f git` → `/usr/bin/git` → `which git`). Supports `initIfNeeded`, `commit`, `status`, `setRemote`, `removeRemote`, `push`, `remoteInfo`. Runs on the terminal's existing 500 ms reconcile loop alongside `PackageInstaller`/`CrateInstaller`/`ExportFinalizer`.
+
+Push auth: the extension's Keychain-backed PAT is passed via a short-lived 0600 token file in the App Group container; the worker consumes it via an inline git credential helper (`!f() { echo username=x-access-token; echo "password=$(cat $tokenFile)"; }; f`) and unlinks it immediately after spawning git. Backlog item tracks switching to a stdin `GIT_ASKPASS` pipe for belt-and-suspenders.
+
+Commit-message UX: `SaveAsPopover` shows an inline "Commit message" field when mode is `.alwaysPrompt`, pre-filled with `Add <name>`. The Save toolbar button opens `SaveMessagePopover` with `Update <name>` pre-filled. Either popover has a "Don't ask again — always use timestamp" link that flips the preference. Settings (`RemoteSyncSettingsView`) exposes a radio picker + "Reset to default".
+
+Commits work naturally with bundles: `recordSave` is given the bundle's root URL and git commits every tracked file under the directory. Adding `ui/index.html`, editing `manifest.json`, or dropping a new `ui/assets/style.css` all show up as per-file diffs in `git log`.
+
+Fail-open: if the terminal is down when a save happens, the request queues on disk and drains whenever the terminal next comes up. The preset file still saves locally. Push failures surface inline in Settings with a "Push failed: …" badge.
+
+`GitHubService` is now minimal — just Keychain-backed PAT + remote URL persistence. `GitHubURLResolver` is a small helper for the "Import from URL" popover (GitHub web URL → raw URL rewrite + fetch); unrelated to preset history.
 
 ### Spectrogram Visualization
 Lock-free ring buffers (written by audio thread, read by UI) feed FFT computation via Accelerate/vDSP on the main thread (CADisplayLink-synced). Supports 4 modes: input, output, difference, and normalized difference. Log and linear frequency scales with diverging colormaps for difference modes.
@@ -192,13 +209,16 @@ ConjureDSPExtension/         The AU plugin itself
   Audio/                     AudioCaptureManager — reads ring buffers for spectrogram FFT
   Compilation/               RustCompiler (bundled rustc → WASM), ScriptCompiler, ScriptLanguage (auto-detect), WasmCache (SHA256)
   Export/                    ExportManager (standalone AUv3 pipeline), ExportRegistry, SubtypeGenerator
-  GitHub/                    GitHubService, GitHubClient, PersonalRepoSync, GitHubModels
+  Git/                       PresetGitCoordinator, GitQueueClient, GitRequest — orchestrates git-backed preset history
+  GitHub/                    GitHubService (PAT + remote URL), GitHubURLResolver (URL import helper)
   Model/                     SubscriptionManager (token verification + server refresh), SubscriptionAPI (server comms),
                              Preset, PresetManager, PresetBundle (parsed .cdp view), PresetManifest (Codable)
   Parameters/                Parameter addresses (Swift enum)
   UI/                        MonacoEditorView, SpectrogramView, TerminalView,
-                             PresetBrowserView, ParameterSlidersView, GitHubSettingsView, ExportPopover,
+                             PresetBrowserView, ParameterSlidersView, RemoteSyncSettingsView (in GitHubSettingsView.swift),
+                             SaveAsPopover, SaveMessagePopover, ExportPopover,
                              CustomUIWebView (HTML/JS renderer + param bridge + audio frames),
+                             CustomUIContentBlocker (WKContentRuleList network block),
                              BundleAssetSchemeHandler (WKURLSchemeHandler), BundleFileWatcher (FSEventStream),
                              BundleFilePicker (editable files for Monaco), CustomUIPreference (custom/stock toggle)
   Resources/                 Factory preset bundles (presets/preset_*.cdp/), customui-bridge.js, monaco/ (gitignored)
@@ -209,6 +229,10 @@ ConjureDSPTerminal/          Companion app — runs Claude Code CLI outside sand
   ConjureDSPTerminalApp.swift  App entry point, TerminalAppServer (lifecycle, health checks)
   PTYManager.swift           forkpty + execve for Claude Code, MCP config writing
   WebSocketServer.swift      NWListener WebSocket relay (PTY I/O → xterm.js)
+  GitWorker.swift            Shells out to system git for the preset-library repo (init, commit, status, push, remote)
+  PackageInstaller.swift     uv-backed Python package install/uninstall
+  CrateInstaller.swift       cargo-backed Rust crate compile to wasm32-wasip1 rlib
+  ExportFinalizer.swift      Finishes standalone AUv3 exports (signing, LaunchServices registration)
 ConjureDSPHelper/            Deprecated stub target (replaced by ConjureDSPTerminal)
 ConjureDSPExportAUTemplate/  Standalone export AU template project
   ConjureDSPExportAUTemplate/          Host app for template

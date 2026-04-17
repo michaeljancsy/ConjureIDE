@@ -76,6 +76,7 @@ class TerminalAppServer {
     private var packageInstaller: PackageInstaller?
     private var crateInstaller: CrateInstaller?
     private var exportFinalizer: ExportFinalizer?
+    private var gitWorker: GitWorker?
     private var exportNotificationObserver: NSObjectProtocol?
 
     /// URL of the shared Python runtime in the App Group container.
@@ -111,6 +112,13 @@ class TerminalAppServer {
                     appGroupURL: containerURL
                 )
                 log.info("Export finalizer ready")
+
+                self.gitWorker = GitWorker(appGroupURL: containerURL)
+                if self.gitWorker != nil {
+                    log.info("Git worker ready")
+                } else {
+                    log.warning("Git worker not available — no usable git binary found")
+                }
 
                 self.exportNotificationObserver = DistributedNotificationCenter.default().addObserver(
                     forName: Notification.Name("com.MichaelJancsy.ConjureDSP.pendingExport"),
@@ -152,6 +160,9 @@ class TerminalAppServer {
                 }
                 if let finalizer = self.exportFinalizer {
                     await finalizer.checkForPendingExports()
+                }
+                if let git = self.gitWorker {
+                    await git.checkForRequests()
                 }
 
                 // Health checks every ~3 seconds

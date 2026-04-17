@@ -133,6 +133,7 @@ pub extern "C" fn process(
     private var parameterState: ParameterState?
     private var subscriptionManager: SubscriptionManager?
     private var gitHubService: GitHubService?
+    private var gitCoordinator: PresetGitCoordinator?
     private var terminalServer: TerminalServer?
     /// Unique identifier for this AU instance — used for per-instance terminal discovery.
     private let instanceID = UUID().uuidString
@@ -352,8 +353,18 @@ pub extern "C" fn process(
             gitHubService = GitHubService()
         }
         let gh = gitHubService!
-        gh.wireAutoSync(presetManager: pm)
-        gh.syncIfConnected(presetManager: pm)
+
+        // Presets live inside a git repo under Presets/. The coordinator runs
+        // `initIfNeeded` on first launch, then commits on save/delete/rename.
+        if gitCoordinator == nil {
+            gitCoordinator = PresetGitCoordinator(
+                presetsURL: pm.presetsURL,
+                appGroupURL: appGroupContainerURL,
+                tokenProvider: { [weak gh] in gh?.token }
+            )
+        }
+        let gc = gitCoordinator!
+        Task { await gc.initIfNeeded() }
         lm.verifyTokenWithKernel = { [weak au] token in
             au?.verifyToken(token) ?? SubscriptionStatus.noSubscription.rawValue
         }
@@ -399,8 +410,11 @@ pub extern "C" fn process(
             return result
         }
 
-        // Save: overwrite current user/repo preset + hot-reload
-        let onSavePreset: (String, ScriptLanguage) -> ScriptSaveResult = { [weak au, weak pm] source, language in
+        // Save: overwrite the current user preset, hot-reload, then commit.
+        // `userCommitMessage` comes from the SaveMessagePopover (alwaysPrompt mode)
+        // or is nil (alwaysTimestamp, or empty popover field — coordinator substitutes default).
+        // Commit fires only when the reload/compile succeeded.
+        let onSavePreset: (_ source: String, _ language: ScriptLanguage, _ userCommitMessage: String?) -> ScriptSaveResult = { [weak au, weak pm, weak gc] source, language, userCommitMessage in
             guard let au, let pm else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
@@ -408,26 +422,31 @@ pub extern "C" fn process(
                 return ScriptSaveResult(success: false, error: "No user preset selected", processTimeMs: nil, budgetMs: nil)
             }
             do {
-                let saved: Preset
-                if current.isRepo {
-                    saved = try pm.saveRepoBundle(name: current.name, source: source, language: language)
-                } else {
-                    saved = try pm.saveUserBundle(name: current.name, source: source, language: language)
-                }
+                let saved: Preset = try pm.savePreset(name: current.name, source: source, language: language)
                 Analytics.track(.presetSave, properties: [
                     "preset_name": current.name,
                     "is_new": false,
                     "language": language.rawValue,
                 ])
                 Analytics.flush()
+
+                let commitMessage = userCommitMessage ?? gc?.defaultMessage(for: .update(name: saved.name))
+                let commitURL = saved.fileURL
+                let doCommit: (Bool) -> Void = { success in
+                    guard success, let gc, let fileURL = commitURL, let message = commitMessage else { return }
+                    Task { _ = await gc.recordSave(paths: [fileURL], message: message) }
+                }
+
                 switch language {
                 case .python:
                     let result = au.reloadScript(source: source)
                     pm.setCurrentPreset(saved, source: source)
+                    doCommit(result.success)
                     return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
                 case .rust:
                     au.currentScriptLanguage = .rust
                     pm.setCurrentPreset(saved, source: source)
+                    doCommit(true)
                     return ScriptSaveResult(success: true, error: nil, processTimeMs: nil, budgetMs: nil)
                 }
             } catch {
@@ -435,32 +454,37 @@ pub extern "C" fn process(
             }
         }
 
-        // Save As: create new preset (repo if connected, else user) + hot-reload
-        let onSaveAsPreset: (String, String, ScriptLanguage) -> ScriptSaveResult = { [weak au, weak pm, weak gh] name, source, language in
+        // Save As: create a new user preset, hot-reload, then commit.
+        let onSaveAsPreset: (_ name: String, _ source: String, _ language: ScriptLanguage, _ userCommitMessage: String?) -> ScriptSaveResult = { [weak au, weak pm, weak gc] name, source, language, userCommitMessage in
             guard let au, let pm else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
             do {
-                let saved: Preset
-                if let gh, gh.hasPersonalRepo, gh.hasToken {
-                    saved = try pm.saveRepoBundle(name: name, source: source, language: language)
-                } else {
-                    saved = try pm.saveUserBundle(name: name, source: source, language: language)
-                }
+                let saved: Preset = try pm.savePreset(name: name, source: source, language: language)
                 Analytics.track(.presetSave, properties: [
                     "preset_name": name,
                     "is_new": true,
                     "language": language.rawValue,
                 ])
                 Analytics.flush()
+
+                let commitMessage = userCommitMessage ?? gc?.defaultMessage(for: .add(name: saved.name))
+                let commitURL = saved.fileURL
+                let doCommit: (Bool) -> Void = { success in
+                    guard success, let gc, let fileURL = commitURL, let message = commitMessage else { return }
+                    Task { _ = await gc.recordSave(paths: [fileURL], message: message) }
+                }
+
                 switch language {
                 case .python:
                     let result = au.reloadScript(source: source)
                     pm.setCurrentPreset(saved, source: source)
+                    doCommit(result.success)
                     return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
                 case .rust:
                     au.currentScriptLanguage = .rust
                     pm.setCurrentPreset(saved, source: source)
+                    doCommit(true)
                     return ScriptSaveResult(success: true, error: nil, processTimeMs: nil, budgetMs: nil)
                 }
             } catch {
@@ -468,19 +492,35 @@ pub extern "C" fn process(
             }
         }
 
-        // Delete: remove current user preset
-        let onDeletePreset: () -> Void = { [weak pm] in
+        // Delete: remove current user preset, then commit the removal.
+        let onDeletePreset: () -> Void = { [weak pm, weak gc] in
             guard let pm, let current = pm.currentPreset, !current.isFactory else { return }
-            try? pm.deleteUserPreset(current)
+            guard let fileURL = current.fileURL else { return }
+            let name = current.name
+            do {
+                try pm.deleteUserPreset(current)
+                if let gc {
+                    let message = gc.defaultMessage(for: .delete(name: name))
+                    Task { _ = await gc.recordDelete(path: fileURL, message: message) }
+                }
+            } catch {
+                log.error("Delete failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
 
-        // Rename: rename current user/repo preset, returns error string on failure
-        let onRenamePreset: (String) -> String? = { [weak pm] newName in
+        // Rename: rename current user preset, then commit the move.
+        let onRenamePreset: (String) -> String? = { [weak pm, weak gc] newName in
             guard let pm, let current = pm.currentPreset, !current.isFactory else {
                 return "No preset selected"
             }
+            let oldName = current.name
+            let oldURL = current.fileURL
             do {
-                try pm.renamePreset(current, to: newName)
+                let renamed = try pm.renamePreset(current, to: newName)
+                if let gc, let oldURL, let newURL = renamed.fileURL {
+                    let message = gc.defaultMessage(for: .rename(old: oldName, new: renamed.name))
+                    Task { _ = await gc.recordRename(oldPath: oldURL, newPath: newURL, message: message) }
+                }
                 return nil
             } catch {
                 return error.localizedDescription
@@ -636,6 +676,7 @@ pub extern "C" fn process(
             parameterState: ps,
             subscriptionManager: lm,
             gitHubService: gh,
+            gitCoordinator: gc,
             onRun: onRun,
             onSelectPreset: onSelectPreset,
             onSavePreset: onSavePreset,

@@ -6,7 +6,6 @@ struct PresetBrowserView: View {
     let presets: [Preset]
     let currentPreset: Preset?
     let isModified: Bool
-    let hasRepoPresets: Bool
     let onSelectPreset: (Preset) -> Void
     let onImportURL: () -> Void
     let onDismiss: () -> Void
@@ -20,7 +19,6 @@ struct PresetBrowserView: View {
     enum SourceFilter: String, CaseIterable, Hashable {
         case factory = "Factory"
         case user = "User"
-        case repo = "Repo"
     }
 
     // MARK: - Column widths
@@ -37,8 +35,7 @@ struct PresetBrowserView: View {
             let sourceMatch: Bool
             switch preset.source {
             case .factory: sourceMatch = selectedSources.contains(.factory)
-            case .user, .userBundle: sourceMatch = selectedSources.contains(.user)
-            case .repo, .repoBundle: sourceMatch = selectedSources.contains(.repo)
+            case .user: sourceMatch = selectedSources.contains(.user)
             }
             guard sourceMatch else { return false }
 
@@ -226,9 +223,7 @@ struct PresetBrowserView: View {
             ColumnFilterMenu(
                 label: "Source",
                 isFiltered: {
-                    let visibleSources: Set<SourceFilter> = hasRepoPresets
-                        ? [.factory, .user, .repo]
-                        : [.factory, .user]
+                    let visibleSources: Set<SourceFilter> = [.factory, .user]
                     return !visibleSources.isSubset(of: selectedSources)
                 }()
             ) {
@@ -247,17 +242,6 @@ struct PresetBrowserView: View {
                         Spacer()
                         if selectedSources.contains(.user) {
                             Image(systemName: "checkmark")
-                        }
-                    }
-                }
-                if hasRepoPresets {
-                    Button(action: { toggleSource(.repo) }) {
-                        HStack {
-                            Text("Repo")
-                            Spacer()
-                            if selectedSources.contains(.repo) {
-                                Image(systemName: "checkmark")
-                            }
                         }
                     }
                 }
@@ -347,8 +331,7 @@ struct PresetBrowserView: View {
     private func sourceLabel(for preset: Preset) -> String {
         switch preset.source {
         case .factory: return "Factory"
-        case .user, .userBundle: return "User"
-        case .repo, .repoBundle: return "Repo"
+        case .user: return "User"
         }
     }
 
