@@ -2,14 +2,15 @@
 //  LanguageMigrationSheet.swift
 //  ConjureDSPExtension
 //
-//  First-launch sheet that introduces the on-demand language model and lets
-//  the user install Python / Rust with one click. Shown once per build after
-//  an upgrade so users who had the bundled runtimes in an earlier version
-//  know why they need to download something now.
+//  First-launch welcome sheet. Lets the user pick which DSP-language
+//  runtimes (Python, Rust) to install up front, or skip and do it later
+//  from the Languages panel. Shown once per build when no modules are
+//  installed yet — purely onboarding UX, not a migration from any prior
+//  state.
 //
-//  Trigger policy lives in `LanguageMigrationCoordinator`, which reads the
-//  last-shown build number from UserDefaults and decides whether to present.
-//  The sheet itself is pure UI — host view opens it on a binding.
+//  Trigger policy lives in `LanguageMigrationCoordinator`: it reads the
+//  last-shown build number from UserDefaults and decides whether to
+//  present. The sheet itself is pure UI — host view opens it on a binding.
 //
 
 import SwiftUI
@@ -83,9 +84,9 @@ struct LanguageMigrationSheet: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Languages are now on-demand")
+            Text("Pick your languages")
                 .font(.title2.bold())
-            Text("Install only what you need — your DAW downloads the rest later.")
+            Text("Install the runtimes you'll actually use. Skip the rest.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
         }
@@ -94,9 +95,9 @@ struct LanguageMigrationSheet: View {
     private var explanation: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(
-                "ConjureDSP used to ship every DSP-scripting runtime in the app — that kept the "
-                    + "download large. Starting with this build, runtimes are optional downloads from "
-                    + "the Languages panel. Factory presets still play without any install."
+                "ConjureDSP scripts DSP in Python or Rust. Each language's runtime is an "
+                    + "optional download — install what you need below, or skip and do it later "
+                    + "from the Languages panel. Factory presets keep playing either way."
             )
             .font(.callout)
             .fixedSize(horizontal: false, vertical: true)
