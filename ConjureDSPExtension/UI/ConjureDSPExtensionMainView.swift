@@ -121,6 +121,11 @@ struct ConjureDSPExtensionMainView: View {
     /// bar can briefly flash a "Saved to disk" label. Disk-write feedback,
     /// NOT commit feedback — commit is a separate, explicit action.
     @State private var lastDiskSaveAt: Date? = nil
+    /// Collapse state for the custom-UI webview. Defaults to expanded so
+    /// first-time users see the UI, but authors can collapse it to reclaim
+    /// editor real estate while iterating on the script. Mirrors
+    /// ParameterSlidersView's built-in collapse.
+    @AppStorage("customUI.expanded") private var isCustomUIExpanded: Bool = true
     /// Whether the bundle-file sidebar is visible. Defaults to collapsed so
     /// DSP-only authors who never touch `ui/` don't lose real estate; the
     /// toolbar's Files button + ⇧⌘E flip it open.
@@ -271,15 +276,21 @@ struct ConjureDSPExtensionMainView: View {
                 customUIToggleBar(showingCustom: useCustom)
 
                 if useCustom, let bundle = activeBundle {
-                    CustomUIWebView(
-                        parameterState: parameterState,
-                        bundle: bundle,
-                        theme: colorScheme,
-                        captureManager: captureManager
-                    )
-                    .frame(minHeight: CGFloat(bundle.manifest.ui?.height ?? 220))
-                    .id(bundle.uiIndexURL)
+                    if isCustomUIExpanded {
+                        CustomUIWebView(
+                            parameterState: parameterState,
+                            bundle: bundle,
+                            theme: colorScheme,
+                            captureManager: captureManager
+                        )
+                        .frame(minHeight: CGFloat(bundle.manifest.ui?.height ?? 220))
+                        .id(bundle.uiIndexURL)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
                 } else {
+                    // ParameterSlidersView has its own collapse chevron, so
+                    // no wrapper needed here — the toggle bar + its internal
+                    // header together give users the same two-step control.
                     ParameterSlidersView(parameterState: parameterState)
                 }
             }
@@ -864,6 +875,27 @@ struct ConjureDSPExtensionMainView: View {
         let editable = isCurrentBundleEditable
 
         HStack(spacing: 6) {
+            // Disclosure chevron — only meaningful when the custom UI is
+            // actually rendering below (otherwise the sliders view has its
+            // own collapse header).
+            if showingCustom {
+                Button(action: {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        isCustomUIExpanded.toggle()
+                    }
+                }) {
+                    Image(systemName: "chevron.right")
+                        .rotationEffect(.degrees(isCustomUIExpanded ? 90 : 0))
+                        .animation(.easeOut(duration: 0.15), value: isCustomUIExpanded)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 10)
+                }
+                .buttonStyle(.plain)
+                .help(isCustomUIExpanded ? "Collapse custom UI" : "Expand custom UI")
+                .accessibilityIdentifier("customUICollapseButton")
+            }
+
             Spacer()
             Image(systemName: showingCustom ? "paintpalette" : "slider.horizontal.3")
                 .font(.caption)
