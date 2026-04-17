@@ -257,12 +257,12 @@ struct ConjureDSPExtensionMainView: View {
             let useCustom = hasCustom && customUIPreference.showCustomUI
 
             VStack(spacing: 0) {
-                // Bar is always visible when a bundle is loaded (factory or
-                // user). Without a bundle we skip it entirely — there's
-                // nothing meaningful to toggle or customize.
-                if activeBundle != nil {
-                    customUIToggleBar(showingCustom: useCustom)
-                }
+                // Always render the bar so users in scratchpad (post-New,
+                // pre-Save-As) can still see what UI mode they're in and
+                // find the one-click path to Custom UI. Without this, a
+                // new script looks like "sliders with no toggle anywhere"
+                // and authors have to guess that Save As is the gateway.
+                customUIToggleBar(showingCustom: useCustom)
 
                 if useCustom, let bundle = activeBundle {
                     CustomUIWebView(
@@ -836,13 +836,16 @@ struct ConjureDSPExtensionMainView: View {
         }
     }
 
-    /// Row that sits above the parameter panel whenever a preset bundle is
-    /// loaded. Doubles as a UI-mode picker *and* the discovery surface for
-    /// custom HTML/JS UIs: user bundles that don't have one yet get a
-    /// `+ Add Custom UI` button in the same slot where the toggle would
-    /// normally live, so adding one is a single click.
+    /// Row that sits above the parameter panel. Doubles as a UI-mode picker
+    /// *and* the discovery surface for custom HTML/JS UIs: user bundles
+    /// without a UI yet get a `+ Add Custom UI` button in the same slot
+    /// where the toggle would normally live; post-New scratchpads get a
+    /// `[ Save As to enable Custom UI ]` signpost so the path from
+    /// "fresh script" to "has a UI" is visible instead of implicit.
     ///
     /// States (driven by `currentBundle` + `isCurrentBundleEditable`):
+    ///   - No bundle (scratchpad post-New) → label "Sliders" +
+    ///     `[ Save As to enable Custom UI ]`
     ///   - User bundle, no custom UI → label "Sliders" + `[ + Add Custom UI ]`
     ///   - User bundle, has custom UI → segmented toggle (Custom UI ↔ Sliders)
     ///   - Factory bundle, no custom UI → label "Sliders" only (branch
@@ -850,7 +853,8 @@ struct ConjureDSPExtensionMainView: View {
     ///   - Factory bundle, has custom UI → segmented toggle (read-only preview)
     @ViewBuilder
     private func customUIToggleBar(showingCustom: Bool) -> some View {
-        let hasCustom = presetManager.currentBundle?.hasCustomUI ?? false
+        let bundle = presetManager.currentBundle
+        let hasCustom = bundle?.hasCustomUI ?? false
         let editable = isCurrentBundleEditable
 
         HStack(spacing: 6) {
@@ -889,6 +893,26 @@ struct ConjureDSPExtensionMainView: View {
                 .disabled(isAddingCustomUI)
                 .help("Drop a starter ui/index.html into this preset. You can edit it inside ConjureDSP or in any external editor.")
                 .accessibilityIdentifier("addCustomUIButton")
+            } else if bundle == nil {
+                // Scratchpad (post-New, pre-Save-As). There's nothing on
+                // disk yet to add a UI to, so we can't scaffold inline —
+                // but we can at least signpost the path: Save As → pick
+                // Custom UI in the segmented control → new bundle ships
+                // with a starter UI.
+                Button(action: {
+                    saveAsName = presetManager.currentPreset?.name ?? ""
+                    showingSaveAs = true
+                }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "square.and.arrow.down.on.square")
+                            .font(.caption2)
+                        Text("Save As to enable Custom UI")
+                            .font(.caption)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .help("Custom HTML/JS UIs live inside a preset bundle. Save this script as a preset (Custom UI option in the Save As popover) to get a starter ui/index.html.")
+                .accessibilityIdentifier("scratchpadSaveAsForCustomUIButton")
             }
             // Factory bundle without a UI → label only, no CTA. Users branch
             // via the toolbar's Save As (same as they always have).
