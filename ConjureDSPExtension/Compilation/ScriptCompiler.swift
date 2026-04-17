@@ -18,6 +18,11 @@ enum CompilationError: LocalizedError {
     case targetNotInstalled(String)
     case compilationFailed(String)
     case sandboxRestriction(String)
+    /// Rust source needs compilation but no rustc is available — the user has
+    /// to install the Rust language module from the Languages panel. Distinct
+    /// from `compilerNotFound` so the UI can render it with an actionable
+    /// "Install" CTA and deep-link into the Languages panel.
+    case rustcModuleRequired(String)
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +30,7 @@ enum CompilationError: LocalizedError {
         case .targetNotInstalled(let msg): return msg
         case .compilationFailed(let msg): return msg
         case .sandboxRestriction(let msg): return msg
+        case .rustcModuleRequired(let msg): return msg
         }
     }
 }

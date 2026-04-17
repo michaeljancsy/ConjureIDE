@@ -584,6 +584,13 @@ class TerminalAppServer {
            FileManager.default.fileExists(atPath: bundled.path) {
             return bundled
         }
+        // Phase 3+: user-installed rustc language module. Already lives in
+        // the App Group container, so no provision-to-rustc-dist copy is
+        // needed (provisionRustToolchainIfNeeded short-circuits on this).
+        let module = AppGroupContainer.url.appendingPathComponent("LanguageModules/rustc")
+        if FileManager.default.fileExists(atPath: module.appendingPathComponent("bin/cargo").path) {
+            return module
+        }
         return nil
     }
 
@@ -694,6 +701,15 @@ class TerminalAppServer {
 
         guard let rustcDistSource = findRustcDist() else {
             log.warning("rustc-dist not found — crate management unavailable")
+            return
+        }
+
+        // If the source is already the installed rustc language module, don't
+        // copy it anywhere — it already lives inside the App Group container.
+        // CrateInstaller probes LanguageModules/rustc directly as a fallback.
+        let moduleRustc = AppGroupContainer.url.appendingPathComponent("LanguageModules/rustc")
+        if rustcDistSource.standardizedFileURL == moduleRustc.standardizedFileURL {
+            log.info("Using rustc language module at \(rustcDistSource.path, privacy: .public) — skipping rustc-dist copy")
             return
         }
 

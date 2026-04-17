@@ -71,24 +71,37 @@ final class CrateInstaller {
     init?(appGroupURL: URL) {
         self.appGroupURL = appGroupURL
 
-        // Look for rustc-dist in App Group container (provisioned on startup)
-        let sysroot = appGroupURL.appendingPathComponent("rustc-dist")
-        let cargo = sysroot.appendingPathComponent("bin/cargo").path
-        let rustc = sysroot.appendingPathComponent("bin/rustc").path
+        // Probe in priority order:
+        // 1. Installed rustc language module (Phase 3+) — already sits in the
+        //    App Group, no provisioning needed.
+        // 2. rustc-dist/ — where TerminalAppServer.provisionRustToolchain
+        //    copies the bundled compiler. This is the pre-Phase-3 path and
+        //    stays the default until rustc-dist is actually stripped.
+        let candidates = [
+            appGroupURL.appendingPathComponent("LanguageModules/rustc"),
+            appGroupURL.appendingPathComponent("rustc-dist"),
+        ]
 
-        guard FileManager.default.fileExists(atPath: cargo) else {
-            log.error("cargo not found at \(cargo, privacy: .public)")
+        var matched: URL?
+        for sysroot in candidates {
+            let cargo = sysroot.appendingPathComponent("bin/cargo").path
+            let rustc = sysroot.appendingPathComponent("bin/rustc").path
+            if FileManager.default.fileExists(atPath: cargo),
+               FileManager.default.fileExists(atPath: rustc) {
+                matched = sysroot
+                break
+            }
+        }
+
+        guard let sysroot = matched else {
+            log.error("cargo + rustc not found in LanguageModules/rustc/ or rustc-dist/ under \(appGroupURL.path, privacy: .public)")
             return nil
         }
-        guard FileManager.default.fileExists(atPath: rustc) else {
-            log.error("rustc not found at \(rustc, privacy: .public)")
-            return nil
-        }
 
-        self.cargoPath = cargo
-        self.rustcPath = rustc
+        self.cargoPath = sysroot.appendingPathComponent("bin/cargo").path
+        self.rustcPath = sysroot.appendingPathComponent("bin/rustc").path
         self.sysrootPath = sysroot.path
-        log.info("CrateInstaller ready — cargo=\(cargo, privacy: .public)")
+        log.info("CrateInstaller ready — sysroot=\(sysroot.path, privacy: .public)")
     }
 
     // MARK: - Check for requests

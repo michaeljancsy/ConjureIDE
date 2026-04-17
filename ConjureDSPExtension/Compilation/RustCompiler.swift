@@ -24,6 +24,16 @@ final class RustCompiler: ScriptCompiler {
         guard let rustc = findRustc() else {
             log.error("compile: findRustc returned nil")
             SentryHelper.capture("Rust compiler not found", level: .error, category: "compilation")
+            // Distinguish "user needs to install the rustc language module"
+            // (normal case after Phase 3e strips the bundled compiler) from
+            // "the bundled compiler is broken" (dev-machine misconfiguration).
+            // If there's no bundled rustc in this build, it's a module-required
+            // situation, not a broken install.
+            if bundledRustc() == nil {
+                throw CompilationError.rustcModuleRequired(
+                    "This Rust preset needs the Rust compiler (≈193 MB). "
+                        + "Open the Languages panel and install the Rust module to run it.")
+            }
             throw CompilationError.compilerNotFound(
                 "Rust compiler not found. The bundled compiler may be missing — "
                     + "run scripts/setup-rustc.sh and rebuild.")
