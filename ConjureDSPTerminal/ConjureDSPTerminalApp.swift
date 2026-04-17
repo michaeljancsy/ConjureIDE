@@ -76,6 +76,7 @@ class TerminalAppServer {
     private var packageInstaller: PackageInstaller?
     private var crateInstaller: CrateInstaller?
     private var languageDownloader: LanguageDownloader?
+    private var compileWorker: CompileWorker?
     private var exportFinalizer: ExportFinalizer?
     private var gitWorker: GitWorker?
     private var exportNotificationObserver: NSObjectProtocol?
@@ -124,6 +125,12 @@ class TerminalAppServer {
                     }
                 }
                 log.info("Language downloader ready")
+
+                // Compile worker — proxy for extension-initiated rustc compiles.
+                // Required because the AU extension sandbox forbids exec'ing
+                // rustc out of the App Group path; the Terminal runs it instead.
+                self.compileWorker = CompileWorker(appGroupURL: containerURL)
+                log.info("Compile worker ready")
 
                 self.exportFinalizer = ExportFinalizer(
                     appGroupURL: containerURL
@@ -177,6 +184,9 @@ class TerminalAppServer {
                 }
                 if let langDownloader = self.languageDownloader {
                     await langDownloader.checkForRequests()
+                }
+                if let worker = self.compileWorker {
+                    await worker.checkForRequests()
                 }
                 if let finalizer = self.exportFinalizer {
                     await finalizer.checkForPendingExports()
