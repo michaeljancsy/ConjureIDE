@@ -71,7 +71,7 @@ xcodebuild archive \
     -archivePath "$ARCHIVE_PATH" \
     -destination "generic/platform=macOS" \
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
-    "${BETA_FLAGS[@]}" \
+    ${BETA_FLAGS[@]+"${BETA_FLAGS[@]}"} \
     | tail -1
 
 echo "=== Extracting app from archive ==="
