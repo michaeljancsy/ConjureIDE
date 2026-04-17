@@ -438,6 +438,7 @@
 				AABB00032F5013850036AAB6 /* Copy Python Dylib */,
 				AABB0040000000PYSTDLIB1 /* Copy Python Stdlib for Tests */,
 				AABB00092F5013850036AAB6 /* Copy Rust Compiler */,
+				AABB0030000000FACTWASM /* Build Factory WASM Sidecars */,
 				AABB0010000000MONACO0001 /* Copy Monaco Editor */,
 				AABB0020000000XTERM0001 /* Copy Terminal (xterm.js) */,
 				AABB000B2F5013850036AAB6 /* Copy Export Template */,
@@ -781,6 +782,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "# Copy bundled Rust compiler into the extension bundle for sandbox-safe compilation\nRUSTC_SRC=\"${SRCROOT}/rustc-dist\"\n\nif [ ! -d \"${RUSTC_SRC}\" ]; then\n    # In a git worktree, run the setup script to create symlinks\n    \"${SRCROOT}/scripts/setup-worktree.sh\" >&2 || true\nfi\n\nif [ ! -d \"${RUSTC_SRC}\" ]; then\n    echo \"warning: Bundled Rust compiler not found at ${RUSTC_SRC}. Run scripts/setup-rustc.sh first.\" >&2\n    echo \"warning: Rust compilation will only work with user-installed rustc (not in sandboxed DAWs).\" >&2\n    exit 0\nfi\n\nRUSTC_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/rustc-dist\"\nSTAMP=\"${RUSTC_DST}/.copy-stamp\"\n\n# Skip if Rust compiler AND conjuredsp sources haven't changed since last copy\nif [ -f \"$STAMP\" ] && [ \"${RUSTC_SRC}/bin/rustc\" -ot \"$STAMP\" ]; then\n    RLIB_STALE=0\n    for f in \"${SRCROOT}\"/rust/conjuredsp-rs/src/*.rs; do\n        if [ \"$f\" -nt \"$STAMP\" ]; then\n            RLIB_STALE=1\n            break\n        fi\n    done\n    if [ \"${RLIB_STALE}\" -eq 0 ]; then\n        echo \"note: Rust compiler and conjuredsp unchanged, skipping copy\" >&2\n        exit 0\n    fi\n    echo \"note: conjuredsp sources changed, rebuilding rlib\" >&2\nfi\n\n# Copy the sysroot\nmkdir -p \"${RUSTC_DST}\"\nrsync -aL --delete \"${RUSTC_SRC}/\" \"${RUSTC_DST}/\"\n\n# Code-sign all executables and dylibs\n# rustc needs disable-library-validation to dlopen proc-macro dylibs compiled by cargo\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp --entitlements \"${SRCROOT}/scripts/rustc-entitlements.plist\" \"${RUSTC_DST}/bin/rustc\"\nfind \"${RUSTC_DST}/lib\" -name '*.dylib' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp {} \\;\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/rust-lld\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${RUSTC_DST}/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/wasm-ld\"\n\n# Rebuild conjuredsp rlib if source is newer than compiled rlib\nCONJUREDSP_SRC=\"${SRCROOT}/rust/conjuredsp-rs/src/lib.rs\"\nCONJUREDSP_RLIB=\"${RUSTC_DST}/lib/libconjuredsp.rlib\"\nif [ -f \"${CONJUREDSP_SRC}\" ]; then\n    NEEDS_REBUILD=0\n    if [ ! -f \"${CONJUREDSP_RLIB}\" ]; then\n        NEEDS_REBUILD=1\n    else\n        for f in \"${SRCROOT}\"/rust/conjuredsp-rs/src/*.rs; do\n            if [ \"$f\" -nt \"${CONJUREDSP_RLIB}\" ]; then\n                NEEDS_REBUILD=1\n                break\n            fi\n        done\n    fi\n    if [ \"${NEEDS_REBUILD}\" -eq 1 ]; then\n        echo \"note: Rebuilding conjuredsp rlib\" >&2\n        \"${RUSTC_DST}/bin/rustc\" \\\n            --target wasm32-wasip1 --edition 2021 --crate-type rlib \\\n            --crate-name conjuredsp -C opt-level=2 \\\n            --sysroot \"${RUSTC_DST}\" \\\n            -o \"${CONJUREDSP_RLIB}\" \\\n            \"${CONJUREDSP_SRC}\"\n    fi\nfi\n\ntouch \"$STAMP\"\n";
+		};
+		AABB0030000000FACTWASM /* Build Factory WASM Sidecars */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/build-factory-wasm.sh",
+			);
+			name = "Build Factory WASM Sidecars";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# Pre-compile factory Rust presets to sidecar .wasm files keyed by\n# SHA256(source). The WASM backend can then load these directly, bypassing the\n# bundled rustc. This is what lets Phase 3 move rustc out of the bundle into a\n# downloadable language module without breaking factory-preset playback.\n#\n# The script writes to build/factory-wasm/ in the repo (outside the\n# synchronized Resources group), and this phase rsyncs them into the built\n# bundle's Resources/factory-wasm/.\nset -euo pipefail\n\nif [ ! -x \"${SRCROOT}/rustc-dist/bin/rustc\" ]; then\n    echo \"warning: rustc-dist not set up; skipping factory-wasm build. Factory Rust presets will still work via the live compile path.\" >&2\n    exit 0\nfi\n\n\"${SRCROOT}/scripts/build-factory-wasm.sh\"\n\nSRC_DIR=\"${SRCROOT}/build/factory-wasm\"\nDST_DIR=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/factory-wasm\"\nmkdir -p \"${DST_DIR}\"\nrsync -a --delete \"${SRC_DIR}/\" \"${DST_DIR}/\"\n";
 		};
 		AABB000B2F5013850036AAB6 /* Copy Export Template */ = {
 			isa = PBXShellScriptBuildPhase;

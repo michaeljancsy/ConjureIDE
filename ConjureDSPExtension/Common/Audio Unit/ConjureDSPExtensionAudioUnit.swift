@@ -856,6 +856,24 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			// Parse param names from source (only used if no rich metadata)
 			let sourceParamNames = Self.parseRustParamNames(fromSource: source)
 
+			// Factory WASM sidecar: unmodified factory presets ship pre-compiled
+			// .wasm keyed by SHA256 of source. Loading this path bypasses both
+			// WasmCache and RustCompiler, which means factory Rust presets play
+			// even when the rustc language module isn't installed.
+			if let factoryWasm = FactoryWasmSidecar.wasm(forSource: source) {
+				let result = loadWasm(bytes: factoryWasm)
+				if result.success {
+					currentScriptSource = source
+					currentScriptLanguage = .rust
+					currentWasmBytes = factoryWasm
+					if currentParamMetadata == nil, let names = sourceParamNames {
+						currentParamNames = names
+						paramNamesDidChange.send(names)
+					}
+				}
+				return Self.wasmResultWithWarning(result)
+			}
+
 			// Check cache first (incorporate installed crate versions into cache key)
 			let depsHash = CrateInstallManager.readManifestHash()
 			let cache = WasmCache()
