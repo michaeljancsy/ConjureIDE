@@ -53,7 +53,19 @@ final class LanguageModuleManager {
 
     // MARK: - Init
 
+    /// Override for the App Group container root used by `containerURL()`. Set
+    /// by tests to an isolated temp directory so they don't thrash the real
+    /// shared container or race with a running Terminal. Nil in production.
+    nonisolated(unsafe) static var containerURLOverride: URL?
+
     init() {
+        refreshInstalledModules()
+    }
+
+    /// Testing-only init that pins the App Group container for this
+    /// manager instance. Tests must nil out `containerURLOverride` after use.
+    init(appGroupOverride: URL) {
+        Self.containerURLOverride = appGroupOverride
         refreshInstalledModules()
     }
 
@@ -191,18 +203,7 @@ final class LanguageModuleManager {
     func cancelCurrentOperation() {
         guard isInstalling else { return }
 
-        let container = Self.containerURL()
-        // Clear any pending request files — if Terminal hasn't picked them up
-        // yet, this prevents the download from starting at all.
-        let installReqURL = container.appendingPathComponent(LanguageModuleIPC.installRequestFile)
-        let uninstallReqURL = container.appendingPathComponent(LanguageModuleIPC.uninstallRequestFile)
-        try? FileManager.default.removeItem(at: installReqURL)
-        try? FileManager.default.removeItem(at: uninstallReqURL)
-
-        // Also clear any stale result the companion may have already dropped
-        // for this (now-abandoned) request, so it doesn't confuse a future op.
-        let resultURL = container.appendingPathComponent(LanguageModuleIPC.installResultFile)
-        try? FileManager.default.removeItem(at: resultURL)
+        Self.clearPendingIPCFiles(in: Self.containerURL())
 
         let cancelledName = pendingModuleName
 
@@ -362,7 +363,7 @@ final class LanguageModuleManager {
 
     /// App Group container URL. Nonisolated so backends (off-main) can read it.
     nonisolated static func containerURL() -> URL {
-        AppGroupContainer.url
+        containerURLOverride ?? AppGroupContainer.url
     }
 
     /// Returns the directory for a specific installed module, e.g.
@@ -379,5 +380,22 @@ final class LanguageModuleManager {
         let manifestURL = moduleDirectory(for: name)
             .appendingPathComponent(LanguageModuleIPC.manifestFile)
         return FileManager.default.fileExists(atPath: manifestURL.path)
+    }
+
+    /// Clears pending install/uninstall request files + any stale result file
+    /// for the language-module IPC in the given container. Exposed as a
+    /// nonisolated static so tests can exercise the file-cleanup side of
+    /// `cancelCurrentOperation` without instantiating the @MainActor
+    /// @Observable manager.
+    nonisolated static func clearPendingIPCFiles(in container: URL) {
+        let fm = FileManager.default
+        let files = [
+            LanguageModuleIPC.installRequestFile,
+            LanguageModuleIPC.uninstallRequestFile,
+            LanguageModuleIPC.installResultFile,
+        ]
+        for name in files {
+            try? fm.removeItem(at: container.appendingPathComponent(name))
+        }
     }
 }

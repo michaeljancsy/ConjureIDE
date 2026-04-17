@@ -469,10 +469,14 @@ struct ConjureDSPExtensionMainView: View {
             bypassed = isBypassed()
             daemonChecker.startChecking(instanceID: instanceID, appGroupContainerURL: appGroupContainerURL)
 
-            // First-launch-after-upgrade: introduce the on-demand language model
-            // if the user hasn't seen it yet for this build and hasn't already
-            // installed anything from the Languages panel.
-            if LanguageMigrationCoordinator.shouldShow(currentBuild: currentBuildNumber) {
+            // First launch in a fresh App Group container (no modules installed
+            // yet, no prior "shown" marker): present the welcome sheet so the
+            // user picks which DSP-language runtimes to install up front.
+            if LanguageMigrationCoordinator.shouldShow(
+                currentBuild: currentBuildNumber,
+                defaults: LanguageMigrationCoordinator.defaults,
+                isInstalled: { LanguageModuleManager.isInstalled($0) }
+            ) {
                 showLanguageMigrationSheet = true
             }
 
