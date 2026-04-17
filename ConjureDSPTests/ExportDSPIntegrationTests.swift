@@ -976,6 +976,177 @@ struct ExportDSPIntegrationTests {
             )
         }
     }
+
+    // MARK: - Custom UI
+
+    /// Export a Python preset with a `ui/index.html` attached. Verify the
+    /// exported appex carries the UI files in Resources/ui/ and that
+    /// runtime-config.json has `hasCustomUI: true` plus a `ui` block. This
+    /// is the path that fails when a user exports a custom-UI preset and
+    /// finds a blank webview in their DAW.
+    @Test("Export preset with custom UI: ui/ copied, runtime-config has hasCustomUI + ui block")
+    func exportWithCustomUI() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        // 1. Build a fake bundle UI directory on disk with an index.html + asset.
+        let fm = FileManager.default
+        let fakeBundleUIDir = fm.temporaryDirectory
+            .appendingPathComponent("ExportUITestBundle_\(testId)")
+            .appendingPathComponent("ui", isDirectory: true)
+        try fm.createDirectory(at: fakeBundleUIDir, withIntermediateDirectories: true)
+        defer {
+            try? fm.removeItem(at: fakeBundleUIDir.deletingLastPathComponent())
+        }
+
+        let indexHTML = """
+            <!DOCTYPE html>
+            <html><body><h1>Custom</h1>
+            <script src="ui/assets/bridge.js"></script>
+            </body></html>
+            """
+        try indexHTML.write(
+            to: fakeBundleUIDir.appendingPathComponent("index.html"),
+            atomically: true, encoding: .utf8
+        )
+        let assetsDir = fakeBundleUIDir.appendingPathComponent("assets", isDirectory: true)
+        try fm.createDirectory(at: assetsDir, withIntermediateDirectories: true)
+        try "/* style */".write(
+            to: assetsDir.appendingPathComponent("style.css"),
+            atomically: true, encoding: .utf8
+        )
+
+        // 2. Source script — any simple Python will do; the UI is what we're
+        //    testing.
+        let source = """
+            def process(inputs, outputs, frame_count, sample_rate, params):
+                for ch in range(len(inputs)):
+                    outputs[ch][:frame_count] = inputs[ch][:frame_count]
+            """
+
+        // 3. Export with a CustomUIPayload pointing at the fake ui/ tree.
+        let payload = ExportManager.CustomUIPayload(
+            directory: fakeBundleUIDir,
+            entryHTML: "index.html",
+            width: 520,
+            height: 260,
+            fps: 30,
+            audioFrames: false
+        )
+
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: "ExportTest_CustomUI_\(testId)",
+            source: source,
+            wasmData: nil,
+            language: .python,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true,
+            customUI: payload
+        )
+
+        // 4. Verify ui/ and its contents landed inside the appex.
+        let appexResources = appexResourcesPath(in: appURL)
+        let embeddedUI = appexResources.appendingPathComponent("ui", isDirectory: true)
+        #expect(fm.fileExists(atPath: embeddedUI.path),
+                "Exported appex must contain Resources/ui/ directory")
+
+        let embeddedIndex = embeddedUI.appendingPathComponent("index.html")
+        #expect(fm.fileExists(atPath: embeddedIndex.path),
+                "Exported appex must contain ui/index.html")
+        let embeddedIndexContents = try String(contentsOf: embeddedIndex, encoding: .utf8)
+        #expect(embeddedIndexContents == indexHTML,
+                "Embedded index.html should match source verbatim")
+
+        let embeddedAsset = embeddedUI.appendingPathComponent("assets/style.css")
+        #expect(fm.fileExists(atPath: embeddedAsset.path),
+                "Exported appex must preserve ui/assets/ subtree")
+
+        // 5. Verify runtime-config.json carries the hasCustomUI flag + ui block.
+        let configURL = appexResources.appendingPathComponent("runtime-config.json")
+        let configData = try Data(contentsOf: configURL)
+        guard let configJSON = try JSONSerialization.jsonObject(with: configData) as? [String: Any] else {
+            Issue.record("runtime-config.json could not be parsed as an object")
+            return
+        }
+        #expect(configJSON["hasCustomUI"] as? Bool == true,
+                "runtime-config.json must set hasCustomUI: true — without this the AU falls back to generic sliders")
+        guard let uiBlock = configJSON["ui"] as? [String: Any] else {
+            Issue.record("runtime-config.json missing `ui` block — the export template's RuntimeConfig.customUIEntryURL(in:) will return nil and render generic sliders")
+            return
+        }
+        #expect(uiBlock["entryHTML"] as? String == "index.html")
+        #expect(uiBlock["width"] as? Int == 520)
+        #expect(uiBlock["height"] as? Int == 260)
+        #expect(uiBlock["fps"] as? Int == 30)
+    }
+
+    /// Export without a custom UI must NOT produce a ui/ directory in the
+    /// appex and must NOT set hasCustomUI. Exists to prove the export path
+    /// is only invasive when explicitly opted into.
+    @Test("Export without custom UI leaves runtime-config.hasCustomUI unset and creates no ui/ directory")
+    func exportWithoutCustomUIIsClean() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        let source = """
+            def process(inputs, outputs, frame_count, sample_rate, params):
+                pass
+            """
+
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: "ExportTest_NoCustomUI_\(testId)",
+            source: source,
+            wasmData: nil,
+            language: .python,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true
+        )
+
+        let appexResources = appexResourcesPath(in: appURL)
+        let fm = FileManager.default
+
+        // No ui/ embedded — either the directory doesn't exist, or the
+        // template shipped one and the exporter didn't touch it. A test
+        // that asserts absence of a `ui/index.html` is defensible either
+        // way, since the template shouldn't ship user-facing UI files.
+        let embeddedIndex = appexResources.appendingPathComponent("ui/index.html")
+        #expect(!fm.fileExists(atPath: embeddedIndex.path),
+                "Export without custom UI must not leave ui/index.html in appex")
+
+        let configURL = appexResources.appendingPathComponent("runtime-config.json")
+        let configData = try Data(contentsOf: configURL)
+        guard let configJSON = try JSONSerialization.jsonObject(with: configData) as? [String: Any] else {
+            Issue.record("runtime-config.json could not be parsed")
+            return
+        }
+        let hasCustomUI = configJSON["hasCustomUI"] as? Bool ?? false
+        #expect(!hasCustomUI,
+                "Export without custom UI must NOT set hasCustomUI — otherwise the template switches to the (empty) custom UI path")
+    }
 }
 
 // MARK: - Edge Case Tests
