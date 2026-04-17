@@ -22,35 +22,55 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "L
 /// Used from `ConjureDSPExtensionMainView.onAppear`.
 enum LanguageMigrationCoordinator {
     /// UserDefaults key holding the build number of the last build that
-    /// showed the migration sheet. Shared by host app + extension via
-    /// App Group — the extension is what renders the sheet, but we still
-    /// write under the shared suite so the host app can introspect.
+    /// showed the sheet. Stored in the App Group preferences suite so it
+    /// lives inside `~/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/`
+    /// — nuking the App Group container resets the marker, so a truly
+    /// fresh install re-prompts even if the user had previously dismissed
+    /// the sheet on the same bundle ID.
     static let lastShownBuildKey = "ConjureDSPLanguageMigrationShownForBuild"
 
-    /// Should the sheet appear? True when:
-    /// (1) We haven't already shown it for the current build, AND
-    /// (2) No modules are currently installed (empty LanguageModules/ dir) —
-    ///     if the user already has some installed, they've seen the panel.
+    /// App Group-scoped UserDefaults. Falls back to `.standard` if the
+    /// suite isn't available (shouldn't happen in shipping builds, but
+    /// keeps the sheet usable in unit tests / dev harnesses).
+    private static var defaults: UserDefaults {
+        UserDefaults(suiteName: AppGroupContainer.id) ?? .standard
+    }
+
+    /// Should the sheet appear?
+    ///
+    /// Re-prompt every time the App Group container is fresh: no modules
+    /// installed AND no "shown" marker for this build. That way a user who
+    /// wipes `LanguageModules/` (or reinstalls onto a clean container) gets
+    /// the welcome sheet again, not silence.
     static func shouldShow(currentBuild: String) -> Bool {
-        let defaults = UserDefaults.standard
+        let haveAnyModule = LanguageModuleManager.isInstalled("python")
+            || LanguageModuleManager.isInstalled("rustc")
         let lastShown = defaults.string(forKey: lastShownBuildKey) ?? ""
+
+        // Fresh container — re-prompt regardless of past builds.
+        if !haveAnyModule && lastShown.isEmpty {
+            return true
+        }
+
+        // Already marked for this build → don't pester.
         if lastShown == currentBuild {
             return false
         }
-        if !LanguageModuleManager.isInstalled("python")
-            && !LanguageModuleManager.isInstalled("rustc")
-        {
+
+        // New build number + no modules → show.
+        if !haveAnyModule {
             return true
         }
-        // If at least one module is already installed, the user knows how
-        // the panel works. Mark as shown so we don't pester later.
+
+        // Modules already installed, the user knows the panel. Stamp so
+        // we don't check on every subsequent launch.
         defaults.set(currentBuild, forKey: lastShownBuildKey)
         return false
     }
 
     static func markShown(currentBuild: String) {
-        UserDefaults.standard.set(currentBuild, forKey: lastShownBuildKey)
-        log.info("Marked language migration sheet shown for build \(currentBuild, privacy: .public)")
+        defaults.set(currentBuild, forKey: lastShownBuildKey)
+        log.info("Marked language sheet shown for build \(currentBuild, privacy: .public)")
     }
 }
 
