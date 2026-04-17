@@ -6,6 +6,12 @@
 	<true/>
 	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
 	<true/>
+	<!-- WKWebView's Networking Process requires this even when the webview
+	     only serves content via WKURLSchemeHandler. Without it, WebContent
+	     crashes on launch with "Application does not have permission to
+	     communicate with network resources" and the custom UI renders blank. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
 	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
 	<array>
 		<string>/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/PythonRuntime/</string>
