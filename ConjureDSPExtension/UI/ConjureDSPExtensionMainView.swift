@@ -30,13 +30,19 @@ struct ConjureDSPExtensionMainView: View {
     var defaultLanguage: ScriptLanguage = .python
     var extensionBundle: Bundle
     var scriptSourcePublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.ScriptSourceChange, Never>?
-    // These are NOT @ObservedObject because this view never reads their
-    // @Published properties in its body — it only passes them to child views
-    // or uses them in action callbacks. Child views (StatusBarView,
-    // PresetToolbar, etc.) have their own @ObservedObject declarations.
-    // Observing them here would re-evaluate this entire body on every
-    // publish (processProfiler fires 4x/sec, which caused ~12MB/min growth).
-    var presetManager: PresetManager
+    // captureManager / processProfiler / memoryMonitor are NOT observed
+    // here — they fire at 4Hz+ and re-evaluating this whole body on every
+    // publish caused ~12MB/min growth. Child views that actually render
+    // their state (StatusBarView, etc.) observe them directly.
+    //
+    // presetManager IS observed: this view reads currentBundle in its
+    // body (toggle bar + custom UI webview branch), so a Save As / preset
+    // switch MUST trigger a re-render — otherwise the custom UI doesn't
+    // appear until something else happens to re-evaluate the body.
+    // presetManager only publishes on user actions (save / switch /
+    // modify), which are low-frequency enough not to regress the memory
+    // growth the original comment warned about.
+    @ObservedObject var presetManager: PresetManager
     var captureManager: AudioCaptureManager
     var processProfiler: ProcessProfiler
     var memoryMonitor: MemoryMonitor
