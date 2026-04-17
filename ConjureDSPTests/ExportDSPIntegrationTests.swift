@@ -1092,6 +1092,70 @@ struct ExportDSPIntegrationTests {
         #expect(uiBlock["fps"] as? Int == 30)
     }
 
+    /// The exported AU's WebContent process needs
+    /// `com.apple.security.network.client` or it crashes on launch with
+    /// "Application does not have permission to communicate with network
+    /// resources", causing the custom UI to render blank. This test reads
+    /// the entitlements embedded in the ExportTemplate.zip's signed appex
+    /// and fails loudly if that entitlement is missing.
+    ///
+    /// Does NOT require an export — inspects the template directly so it
+    /// catches an entitlements regression the moment the template is
+    /// rebuilt, not after a user tries to load an exported AU in a DAW.
+    @Test("Export template ships com.apple.security.network.client — required for WKWebView WebContent process")
+    func exportTemplateHasNetworkClientEntitlement() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory
+            .appendingPathComponent("ExportEntitlementsTest_\(UUID().uuidString.prefix(8))")
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tmp) }
+
+        // Unzip template into temp dir.
+        let unzip = Process()
+        unzip.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        unzip.arguments = ["-q", templateURL.path, "-d", tmp.path]
+        try unzip.run()
+        unzip.waitUntilExit()
+        #expect(unzip.terminationStatus == 0, "unzip failed")
+
+        let appexURL = tmp
+            .appendingPathComponent("ConjureDSPExportAUTemplate.app")
+            .appendingPathComponent("Contents/PlugIns/ConjureDSPExportAUTemplateExtension.appex")
+        guard fm.fileExists(atPath: appexURL.path) else {
+            Issue.record("Expected extracted appex at \(appexURL.path)")
+            return
+        }
+
+        // Read embedded entitlements via codesign.
+        let codesign = Process()
+        codesign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        codesign.arguments = ["-d", "--entitlements", "-", "--xml", appexURL.path]
+        let stdout = Pipe()
+        codesign.standardOutput = stdout
+        codesign.standardError = Pipe()
+        try codesign.run()
+        codesign.waitUntilExit()
+        #expect(codesign.terminationStatus == 0, "codesign failed with status \(codesign.terminationStatus)")
+
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        guard let xml = String(data: data, encoding: .utf8) else {
+            Issue.record("Entitlements output was not UTF-8")
+            return
+        }
+
+        // Text-based assertion is more robust than plist parsing across
+        // codesign's various output prefix formats (XML, CMS-wrapped XML,
+        // etc.). We're looking for the key followed by <true/>.
+        let pattern = #"<key>com\.apple\.security\.network\.client</key>\s*<true/>"#
+        #expect(xml.range(of: pattern, options: .regularExpression) != nil,
+                "Export template appex is MISSING com.apple.security.network.client — WKWebView's WebContent process will crash on launch in every exported AU. Add the entitlement to ConjureDSPExportAUTemplateExtension.entitlements and rebuild the template. Full entitlements dump: \(xml)")
+    }
+
     /// Export without a custom UI must NOT produce a ui/ directory in the
     /// appex and must NOT set hasCustomUI. Exists to prove the export path
     /// is only invasive when explicitly opted into.
