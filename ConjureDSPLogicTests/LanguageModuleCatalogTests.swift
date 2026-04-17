@@ -125,10 +125,10 @@ struct LanguageModuleCatalogTests {
         #expect(resultDecoded.error == "boom")
     }
 
-    @Test("Default catalog URL is HTTPS to releases.conjuredsp.com")
+    @Test("Default catalog URL is HTTPS to updates.conjuredsp.com")
     func defaultCatalogURLIsProduction() {
         #expect(LanguageCatalog.defaultCatalogURL.scheme == "https")
-        #expect(LanguageCatalog.defaultCatalogURL.host == "releases.conjuredsp.com")
+        #expect(LanguageCatalog.defaultCatalogURL.host == "updates.conjuredsp.com")
         #expect(LanguageCatalog.defaultCatalogURL.path.hasSuffix("/catalog.json"))
     }
 

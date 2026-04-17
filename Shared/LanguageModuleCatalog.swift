@@ -100,8 +100,14 @@ enum LanguageModuleIPC {
 
 /// Default catalog URL. Override at build time or via UserDefaults
 /// `ConjureDSPLanguageCatalogURL` for local development.
+///
+/// Reuses the same R2 bucket as the main-app appcast
+/// (`conjuredsp-updates`, fronted by `updates.conjuredsp.com`) rather than
+/// standing up a separate bucket — scripts/publish-language-catalog.sh
+/// uploads modules and this JSON under /language-modules/. If we later
+/// move to a dedicated domain, update this URL and the script together.
 enum LanguageCatalog {
-    static let defaultCatalogURL = URL(string: "https://releases.conjuredsp.com/language-modules/catalog.json")!
+    static let defaultCatalogURL = URL(string: "https://updates.conjuredsp.com/language-modules/catalog.json")!
 
     static func resolvedCatalogURL() -> URL {
         if let override = UserDefaults.standard.string(forKey: "ConjureDSPLanguageCatalogURL"),

@@ -180,6 +180,20 @@ done
 echo "  Uploaded to ${UPDATES_BASE_URL}/"
 
 echo ""
+# Step 3 (optional): Publish any new language-module tarballs + catalog.json.
+# build-python-module.sh / build-rustc-module.sh leave artifacts in
+# build/language-modules/; if any exist, publish them alongside the app
+# release. Skipping is always safe — catalog consumers keep pulling the
+# previous catalog until this runs.
+MODULES_DIR="$PROJECT_DIR/build/language-modules"
+if [ -d "$MODULES_DIR" ] && ls "$MODULES_DIR"/*.tar.gz >/dev/null 2>&1; then
+    echo "[3/3] Publishing language modules..."
+    "$SCRIPT_DIR/publish-language-catalog.sh"
+else
+    echo "[3/3] No language-module tarballs in build/language-modules — skipping publish."
+fi
+
+echo ""
 echo "========================================"
 echo "  Release complete!"
 echo "========================================"
