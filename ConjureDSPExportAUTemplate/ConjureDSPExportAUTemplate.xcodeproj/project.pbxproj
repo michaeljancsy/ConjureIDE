@@ -19,7 +19,6 @@
 		6D42863AE4B6C193BF7E4AFD /* ExportAUAudioUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30A24F58FB803BF3DAF9A8F5 /* ExportAUAudioUnit.swift */; };
 		7AFEE261152F30E33EF046AD /* ExportDebugLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E8C8C3F9C5D2BBE0354D69 /* ExportDebugLogTests.swift */; };
 		7E67640EA29E1F68B42F0640 /* RenderStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2DD0EEE93540428912EBBAA /* RenderStats.swift */; };
-		80DE13B46CA78445D291256F /* CustomUIContentBlocker.swift in Sources */ = {isa = PBXBuildFile; fileRef = C177D039BFECB4D1F59D1BE2 /* CustomUIContentBlocker.swift */; };
 		8D4FF6CC2046A46FFDB9E200 /* ExportAUTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC07F89451DB3644FB06CC88 /* ExportAUTests.swift */; };
 		A14B5CC87855695B03814B4C /* RenderStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3C95F6B62BBB83E18DBE82 /* RenderStatsTests.swift */; };
 		A29373D99BEA97B250FB4780 /* PythonRuntimeErrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E49F55FDC52279BA4C1413D /* PythonRuntimeErrorView.swift */; };
@@ -86,7 +85,6 @@
 		A8A47F30AB5BF457FF5172D3 /* ExportAUViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUViewController.swift; sourceTree = "<group>"; };
 		AAF307076D7D9827CCDB0919 /* preset.wasm */ = {isa = PBXFileReference; path = preset.wasm; sourceTree = "<group>"; };
 		AB589E0DB6CD48CE28492400 /* ConjureDSPExportAUTemplateExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConjureDSPExportAUTemplateExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		C177D039BFECB4D1F59D1BE2 /* CustomUIContentBlocker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomUIContentBlocker.swift; sourceTree = "<group>"; };
 		C2DD0EEE93540428912EBBAA /* RenderStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderStats.swift; sourceTree = "<group>"; };
 		C5C4014EECF6736C801F11F1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C62BFE22414EC624E226EE75 /* ExportAudioCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAudioCaptureManager.swift; sourceTree = "<group>"; };
@@ -133,7 +131,6 @@
 			isa = PBXGroup;
 			children = (
 				8CE42CBD0384F0355E8EDDBF /* BundleAssetSchemeHandler.swift */,
-				C177D039BFECB4D1F59D1BE2 /* CustomUIContentBlocker.swift */,
 				E1A74C94E3DFA8BCAF47364D /* DebugPaneView.swift */,
 				875F4246898833ED52454440 /* ExportAUMainView.swift */,
 				A8A47F30AB5BF457FF5172D3 /* ExportAUViewController.swift */,
@@ -380,7 +377,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				00CBB4BC5D9E9695ED1C921F /* BundleAssetSchemeHandler.swift in Sources */,
-				80DE13B46CA78445D291256F /* CustomUIContentBlocker.swift in Sources */,
 				F44C19B8AFFA7046B7AB6D96 /* DebugPaneView.swift in Sources */,
 				6D42863AE4B6C193BF7E4AFD /* ExportAUAudioUnit.swift in Sources */,
 				14DB4C245B276123DE07E433 /* ExportAUMainView.swift in Sources */,

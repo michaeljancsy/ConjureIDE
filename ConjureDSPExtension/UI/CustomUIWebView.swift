@@ -62,13 +62,12 @@ struct CustomUIWebView: NSViewRepresentable {
 
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
 
-        // Second-layer network block — even if author JS or author
-        // `<meta>` tags relax the CSP header shipped by
-        // BundleAssetSchemeHandler, the compiled WKContentRuleList
-        // drops every request that isn't our custom scheme / data: /
-        // blob:. Fire and forget; initial load uses our scheme so
-        // compile latency doesn't race the first page load.
-        CustomUIContentBlocker.apply(to: config)
+        // Network egress restriction is handled by BundleAssetSchemeHandler's
+        // `Content-Security-Policy: default-src 'self' 'unsafe-inline' data:;
+        // connect-src 'none';` response header — that alone blocks fetch/XHR/
+        // WebSocket from author JS. A previous attempt to layer a
+        // WKContentRuleList on top produced blank exported webviews because
+        // custom URL schemes aren't reliable allow-targets in content rules.
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator

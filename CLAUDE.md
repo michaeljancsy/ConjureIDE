@@ -151,7 +151,7 @@ MyPreset.cdp/
 
 **Legacy flat-file migration:** on first load, `PresetManager.discoverPresets` wraps any pre-bundle `.py` / `.rs` files sitting in `Presets/` into `.cdp` bundles and deletes the flat file. This is a one-shot migration for users with data from a pre-bundle install; the steady state has zero flat files.
 
-**Custom UI render path:** when a bundle ships `ui/index.html` AND its manifest declares a `ui` block, `CustomUIWebView` renders the HTML in place of `ParameterSlidersView`. `BundleAssetSchemeHandler` (`WKURLSchemeHandler`) serves bundle files into the WebContent process via `conjuredsp-preset://preset/<path>` to avoid `kTCCServiceSystemPolicyAppData` prompts — WebContent doesn't inherit the appex's App Group entitlement, but the scheme handler runs in the appex process. Path standardization + `hasPrefix(rootURL.path)` enforce sandboxing. `CustomUIContentBlocker` applies a compiled `WKContentRuleList` that drops every network request except the custom scheme / `data:` / `blob:`, so malicious preset JS can't exfiltrate.
+**Custom UI render path:** when a bundle ships `ui/index.html` AND its manifest declares a `ui` block, `CustomUIWebView` renders the HTML in place of `ParameterSlidersView`. `BundleAssetSchemeHandler` (`WKURLSchemeHandler`) serves bundle files into the WebContent process via `conjuredsp-preset://preset/<path>` to avoid `kTCCServiceSystemPolicyAppData` prompts — WebContent doesn't inherit the appex's App Group entitlement, but the scheme handler runs in the appex process. Path standardization + `hasPrefix(rootURL.path)` enforce sandboxing. The scheme handler also sets `Content-Security-Policy: default-src 'self' 'unsafe-inline' data:; connect-src 'none';` on every response, blocking fetch/XHR/WebSocket egress from author JS. (An earlier `WKContentRuleList` layer was removed — `ignore-previous-rules` for custom schemes was unreliable and blanked exported webviews.)
 
 **JS bridge (`window.ConjureDSP`, injected by `customui-bridge.js` at `.atDocumentStart`):**
 - `apiVersion: 1`
@@ -167,7 +167,7 @@ MyPreset.cdp/
 
 **In-plugin editor multi-file:** Monaco's picker above the editor lists every editable text file in the active bundle — `process.{py,rs}`, `manifest.json`, `ui/**`. Non-script edits debounce-write straight to disk (no Run button required) and the file watcher hot-reloads. Factory bundles are readable but not writable; the picker shows a lock icon.
 
-**Exported AUs carry the UI:** `ExportManager.CustomUIPayload` copies `ui/` into the exported `.appex/Contents/Resources/ui/` and sets `hasCustomUI` + `ui` block in `runtime-config.json`. The export template's `ExportCustomUIWebView` renders it using the same bridge JS. `ExportAudioCaptureManager` (stripped-down `AudioCaptureManager`) feeds `audio.onFrame` subscribers in exported AUs too. The export template has its own `CustomUIContentBlocker` mirror so exported presets inherit the same network-block policy.
+**Exported AUs carry the UI:** `ExportManager.CustomUIPayload` copies `ui/` into the exported `.appex/Contents/Resources/ui/` and sets `hasCustomUI` + `ui` block in `runtime-config.json`. The export template's `ExportCustomUIWebView` renders it using the same bridge JS. `ExportAudioCaptureManager` (stripped-down `AudioCaptureManager`) feeds `audio.onFrame` subscribers in exported AUs too. Network egress is restricted by the scheme handler's CSP header (identical to the main extension), not by `WKContentRuleList`.
 
 ### Git-backed preset library
 The user presets directory (`<AppGroup>/Presets/`) is a real git repository, initialized on first launch. Every explicit Save / Save As / Delete / Rename triggers a commit. Users can optionally configure a GitHub (or any HTTPS) remote URL, and pushes fire automatically after commits (2 s trailing-edge debounce) or via a "Push now" button.
@@ -218,8 +218,7 @@ ConjureDSPExtension/         The AU plugin itself
                              PresetBrowserView, ParameterSlidersView, RemoteSyncSettingsView (in GitHubSettingsView.swift),
                              SaveAsPopover, SaveMessagePopover, ExportPopover,
                              CustomUIWebView (HTML/JS renderer + param bridge + audio frames),
-                             CustomUIContentBlocker (WKContentRuleList network block),
-                             BundleAssetSchemeHandler (WKURLSchemeHandler), BundleFileWatcher (FSEventStream),
+                             BundleAssetSchemeHandler (WKURLSchemeHandler + CSP), BundleFileWatcher (FSEventStream),
                              BundleFilePicker (editable files for Monaco), CustomUIPreference (custom/stock toggle)
   Resources/                 Factory preset bundles (presets/preset_*.cdp/), customui-bridge.js, monaco/ (gitignored)
   Common/Audio Unit/         ConjureDSPExtensionAudioUnit.swift — AUAudioUnit subclass + render block
