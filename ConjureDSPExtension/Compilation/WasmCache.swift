@@ -45,11 +45,25 @@ final class WasmCache {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Returns the modification date of the bundled conjuredsp rlib, if found.
+    /// Returns the modification date of the conjuredsp rlib, if found.
+    /// Checks the installed rustc language module first (Phase 3+ layout),
+    /// then falls back to the bundled rustc-dist inside the extension. If
+    /// neither exists, the rlib date contribution to the cache key is nil,
+    /// which is fine: WasmCache just won't self-invalidate on rlib changes
+    /// until a compiler becomes available.
     private func rlibModificationDate() -> Date? {
-        guard let resourcePath = Bundle(for: WasmCache.self).resourcePath else { return nil }
-        let rlibPath = (resourcePath as NSString)
-            .appendingPathComponent("rustc-dist/lib/libconjuredsp.rlib")
-        return (try? FileManager.default.attributesOfItem(atPath: rlibPath))?[.modificationDate] as? Date
+        let candidates: [String] = [
+            LanguageModuleManager.moduleDirectory(for: "rustc")
+                .appendingPathComponent("lib/libconjuredsp.rlib").path,
+            (Bundle(for: WasmCache.self).resourcePath as NSString?)?
+                .appendingPathComponent("rustc-dist/lib/libconjuredsp.rlib") ?? ""
+        ]
+        for path in candidates where !path.isEmpty {
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+               let date = attrs[.modificationDate] as? Date {
+                return date
+            }
+        }
+        return nil
     }
 }

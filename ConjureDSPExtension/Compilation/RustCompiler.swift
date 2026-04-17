@@ -11,6 +11,9 @@ final class RustCompiler: ScriptCompiler {
 
     private var cachedRustcURL: URL?
     private var useBundledSysroot = false
+    /// Overrides `useBundledSysroot` when set. Points at the installed rustc
+    /// language module's root (the same layout as rustc-dist).
+    private var activeModuleSysroot: URL?
     private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "RustCompiler")
 
     func isAvailable() async -> Bool {
@@ -48,8 +51,12 @@ final class RustCompiler: ScriptCompiler {
             inputFile.path,
         ]
 
-        // When using bundled compiler, set explicit sysroot and link conjuredsp rlib
-        if useBundledSysroot, let sysroot = bundledSysroot() {
+        // Resolve the sysroot to thread through rustc:
+        // 1. Installed language module (<AppGroup>/LanguageModules/rustc/)
+        // 2. Bundled rustc-dist inside the extension .appex (legacy, pre-Phase 3)
+        // 3. System rustc (fall-through — no explicit sysroot, let rustc find its own)
+        let resolvedSysroot: URL? = activeModuleSysroot ?? (useBundledSysroot ? bundledSysroot() : nil)
+        if let sysroot = resolvedSysroot {
             args = ["--sysroot", sysroot.path] + args
 
             // Link conjuredsp rlib if available
@@ -110,6 +117,20 @@ final class RustCompiler: ScriptCompiler {
     }
 
     // MARK: - Private
+
+    /// Find the installed rustc language module (if the user has downloaded it
+    /// via the Language Modules panel). Layout mirrors the bundled rustc-dist:
+    /// `<AppGroup>/LanguageModules/rustc/{bin,lib}/...`.
+    private func moduleSysroot() -> URL? {
+        let dir = LanguageModuleManager.moduleDirectory(for: "rustc")
+        let rustc = dir.appendingPathComponent("bin/rustc")
+        return FileManager.default.fileExists(atPath: rustc.path) ? dir : nil
+    }
+
+    private func moduleRustc() -> URL? {
+        guard let sysroot = moduleSysroot() else { return nil }
+        return sysroot.appendingPathComponent("bin/rustc")
+    }
 
     /// Find the bundled rustc-dist sysroot in the extension bundle's Resources.
     private func bundledSysroot() -> URL? {
@@ -174,11 +195,23 @@ final class RustCompiler: ScriptCompiler {
     private func findRustc() -> URL? {
         if let cached = cachedRustcURL { return cached }
 
-        // Prefer bundled compiler (works in sandbox)
+        // 1) Prefer an installed rustc language module. Once the bundled
+        // rustc-dist is stripped from the app (Phase 3 final step), this is
+        // the only source of a sandbox-safe rustc for user-authored Rust.
+        if let moduleRustc = moduleRustc(), let moduleRoot = moduleSysroot() {
+            log.info("findRustc: using language-module compiler at \(moduleRustc.path, privacy: .public)")
+            cachedRustcURL = moduleRustc
+            activeModuleSysroot = moduleRoot
+            useBundledSysroot = false
+            return cachedRustcURL
+        }
+
+        // 2) Fall back to the bundled compiler (works in sandbox)
         if let bundled = bundledRustc() {
             log.info("findRustc: using bundled compiler at \(bundled.path, privacy: .public)")
             cachedRustcURL = bundled
             useBundledSysroot = true
+            activeModuleSysroot = nil
             return cachedRustcURL
         }
 
