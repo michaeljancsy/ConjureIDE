@@ -86,7 +86,7 @@ struct LanguageMigrationSheet: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Pick your languages")
                 .font(.title2.bold())
-            Text("Install the runtimes you'll use. Skip the rest.")
+            Text("Select the languages you'd like to use.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
         }
