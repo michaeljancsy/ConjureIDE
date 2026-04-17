@@ -84,6 +84,16 @@ struct ConjureDSPExtensionMainView: View {
     @State private var exportAlertMessage: String?
     @State private var showExportAlert: Bool = false
     @State private var showDaemonRequiredAlert: Bool = false
+    @State private var showLanguageMigrationSheet: Bool = false
+    @State private var languageModuleManager = LanguageModuleManager()
+
+    /// Current bundle build number (e.g. "15"). Used as the shown-marker key
+    /// for the language migration sheet so it re-appears exactly once per
+    /// upgrade and never between launches on the same build.
+    private var currentBuildNumber: String {
+        Bundle(for: AudioUnitViewController.self)
+            .infoDictionary?["CFBundleVersion"] as? String ?? "0"
+    }
     @State private var spectrogramWidth: CGFloat = 250
     @State private var spectrogramFrequencyScale: FrequencyScale = .log
     @State private var spectrogramFFTSizeIndex: Int = 2 // default: 2048
@@ -433,6 +443,12 @@ struct ConjureDSPExtensionMainView: View {
                 showDaemonRequiredAlert = false
             }
         }
+        .sheet(isPresented: $showLanguageMigrationSheet) {
+            LanguageMigrationSheet(manager: languageModuleManager) {
+                LanguageMigrationCoordinator.markShown(currentBuild: currentBuildNumber)
+                showLanguageMigrationSheet = false
+            }
+        }
         .onChange(of: showChat) { _, newValue in
             if newValue {
                 terminalHasBeenOpened = true
@@ -452,6 +468,13 @@ struct ConjureDSPExtensionMainView: View {
             }
             bypassed = isBypassed()
             daemonChecker.startChecking(instanceID: instanceID, appGroupContainerURL: appGroupContainerURL)
+
+            // First-launch-after-upgrade: introduce the on-demand language model
+            // if the user hasn't seen it yet for this build and hasn't already
+            // installed anything from the Languages panel.
+            if LanguageMigrationCoordinator.shouldShow(currentBuild: currentBuildNumber) {
+                showLanguageMigrationSheet = true
+            }
 
             // Listen for export finalization results from the daemon
             DistributedNotificationCenter.default().addObserver(
