@@ -487,10 +487,30 @@ class PresetManager: ObservableObject {
 
     /// Check that `relativePath` stays inside the bundle root. Prevents
     /// `..` path tricks from the file browser reaching out of the sandbox.
+    ///
+    /// Uses `resolvingSymlinksInPath()` on both sides so `/var/...` vs
+    /// `/private/var/...` doesn't falsely report "outside bundle" on
+    /// macOS tempdirs (where the URL `FileManager.default.temporaryDirectory`
+    /// hands out and the one re-discovered via `contentsOfDirectory`
+    /// disagree on symlink resolution).
     private func resolveBundlePath(in bundle: PresetBundle, relativePath: String) throws -> URL {
-        let candidate = bundle.rootURL.appendingPathComponent(relativePath).standardizedFileURL
-        let root = bundle.rootURL.standardizedFileURL
-        guard candidate.path.hasPrefix(root.path) else {
+        let candidate = bundle.rootURL.appendingPathComponent(relativePath)
+        // Reject explicit escape attempts (..) without relying on path
+        // canonicalization, which can't resolve components that don't
+        // exist on disk yet (e.g., a file we're about to create).
+        let normalizedRel = relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        for component in normalizedRel.split(separator: "/") {
+            if component == ".." {
+                throw BundleFileError.outsideBundle
+            }
+        }
+        let rootResolved = bundle.rootURL.resolvingSymlinksInPath().path
+        let candidateResolved = candidate.resolvingSymlinksInPath().path
+        // Also accept the unresolved form for paths that don't exist yet
+        // (resolvingSymlinksInPath returns the same string if the path
+        // isn't a symlink or doesn't exist, but belt-and-suspenders).
+        guard candidateResolved.hasPrefix(rootResolved)
+            || candidate.path.hasPrefix(bundle.rootURL.path) else {
             throw BundleFileError.outsideBundle
         }
         return candidate
