@@ -431,10 +431,19 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			return
 		}
 
-		guard let scriptPath = bundle.path(forResource: Self.defaultPresetResource, ofType: "py") else {
-			pluginLog.error("\(Self.defaultPresetResource).py not found in bundle, using Rust fallback DSP")
+		// Factory presets are `.cdp` bundle directories under Resources/presets/
+		// since the bundle conversion. Resolve the entry script via PresetBundle
+		// so the path lines up with whatever manifest.entry says (typically
+		// `process.py` but not guaranteed).
+		guard let presetBundleURL = bundle.url(
+			forResource: Self.defaultPresetResource,
+			withExtension: PresetBundle.bundleExtension,
+			subdirectory: "presets"
+		), let presetBundle = PresetBundle.load(from: presetBundleURL) else {
+			pluginLog.error("\(Self.defaultPresetResource).\(PresetBundle.bundleExtension) not found or malformed under Resources/presets, using Rust fallback DSP")
 			return
 		}
+		let scriptPath = presetBundle.entryScriptURL.path
 
 		// Set tones directory so conjuredsp.nam can resolve tone3000:// paths
 		dsp_kernel_set_tones_dir(kernel, Self.appGroupContainerURL.appendingPathComponent("tones").path)
