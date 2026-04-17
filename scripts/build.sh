@@ -262,6 +262,12 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_P
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
 
 echo ""
+# Size guard: fail fast if a bundled runtime crept back in. Override the
+# default budget via CD_MAX_APP_MB for local experiments, but the baseline
+# committed here is what CI / release-pipeline should hold the line at.
+"$SCRIPT_DIR/check-release-size.sh" "$APP_PATH"
+
+echo ""
 if $NOTARIZE; then
     echo "=== Notarizing app ==="
     "$SCRIPT_DIR/notarize.sh" "$APP_PATH"
