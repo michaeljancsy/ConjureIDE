@@ -1156,6 +1156,131 @@ struct ExportDSPIntegrationTests {
                 "Export template appex is MISSING com.apple.security.network.client — WKWebView's WebContent process will crash on launch in every exported AU. Add the entitlement to ConjureDSPExportAUTemplateExtension.entitlements and rebuild the template. Full entitlements dump: \(xml)")
     }
 
+    /// End-to-end roundtrip: call the same `PresetManager.savePreset(scaffoldUI:)`
+    /// the UI's "+ Add Custom UI" / Save-As-with-Custom-UI paths use, then
+    /// export that bundle via `ExportManager`, then verify the ui/index.html
+    /// in the exported appex byte-for-byte matches `PresetBundle.starterIndexHTML()`.
+    ///
+    /// Catches three classes of regression in one shot:
+    ///   1. scaffoldUI produces an HTML file that drifts from the canonical
+    ///      `starterIndexHTML()` (e.g. someone edited the scaffold path).
+    ///   2. ExportManager drops or modifies the ui/ payload between source
+    ///      bundle and exported appex.
+    ///   3. The CSS/layout improvements we ship in `starterIndexHTML()`
+    ///      fail to reach the exported bundle.
+    ///
+    /// Doesn't verify visual rendering (WKWebView layout still needs a
+    /// DAW or manual test), but it eliminates the "did my change actually
+    /// propagate through save + export" question.
+    @Test("End-to-end: scaffoldUI save → export → starter HTML matches byte-for-byte")
+    @MainActor
+    func scaffoldSaveExportRoundtrip() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let fm = FileManager.default
+        let testId = UUID().uuidString.prefix(8)
+
+        // 1. Set up an isolated preset directory and save a bundle with
+        //    scaffoldUI: true — same path the in-plugin "+ Add Custom UI"
+        //    and Save-As-with-Custom-UI buttons take.
+        let presetsDir = fm.temporaryDirectory
+            .appendingPathComponent("RoundtripPresets_\(testId)", isDirectory: true)
+        try fm.createDirectory(at: presetsDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: presetsDir) }
+
+        guard let extensionBundleURL = Bundle.main.builtInPlugInsURL?
+                .appendingPathComponent("ConjureDSPExtension.appex"),
+              let extensionBundle = Bundle(url: extensionBundleURL) else {
+            Issue.record("Extension bundle not available")
+            return
+        }
+
+        let presetName = "RoundtripPreset_\(testId)"
+        let source = """
+            def process(inputs, outputs, frame_count, sample_rate, params):
+                for ch in range(len(inputs)):
+                    outputs[ch][:frame_count] = inputs[ch][:frame_count]
+            """
+        let mgr = PresetManager(extensionBundle: extensionBundle, presetsURL: presetsDir)
+        let preset = try mgr.savePreset(
+            name: presetName, source: source,
+            language: .python, scaffoldUI: true
+        )
+        guard let savedBundleURL = preset.fileURL else {
+            Issue.record("Saved preset has no fileURL")
+            return
+        }
+
+        // 2. The bundle's ui/index.html must match starterIndexHTML() exactly.
+        let savedHTMLURL = savedBundleURL.appendingPathComponent("ui/index.html")
+        let savedHTML = try String(contentsOf: savedHTMLURL, encoding: .utf8)
+        let canonicalHTML = PresetBundle.starterIndexHTML()
+        #expect(savedHTML == canonicalHTML,
+                "Bundle's ui/index.html drifted from PresetBundle.starterIndexHTML() — the scaffold is writing something different than the source of truth")
+
+        // 3. Canonical HTML must include the layout markers we just shipped
+        //    (flex + justify-content: center). If someone reverts the layout
+        //    improvement, this fails loudly instead of silently regressing.
+        #expect(canonicalHTML.contains("justify-content: center"),
+                "Starter HTML must center rows vertically (single-param UIs otherwise leave a huge empty region below the slider)")
+        #expect(canonicalHTML.contains("grid-template-columns"),
+                "Starter HTML must use a grid row so labels don't clip")
+
+        // 4. Build a CustomUIPayload from the saved bundle and run export.
+        guard let bundle = PresetBundle.load(from: savedBundleURL) else {
+            Issue.record("Failed to load saved bundle for export")
+            return
+        }
+        guard let uiDir = bundle.uiDirectoryURL else {
+            Issue.record("Saved bundle missing uiDirectoryURL despite scaffoldUI: true")
+            return
+        }
+        let uiMeta = bundle.manifest.ui
+        let payload = ExportManager.CustomUIPayload(
+            directory: uiDir,
+            entryHTML: {
+                let p = bundle.manifest.uiEntryHTMLPath
+                return p.hasPrefix("ui/") ? String(p.dropFirst(3)) : p
+            }(),
+            width: uiMeta?.width,
+            height: uiMeta?.height,
+            fps: bundle.manifest.resolvedFPS,
+            audioFrames: bundle.manifest.audioFramesEnabled
+        )
+
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? fm.removeItem(at: outputDir)
+            try? fm.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: "RoundtripExport_\(testId)",
+            source: source,
+            wasmData: nil,
+            language: .python,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true,
+            customUI: payload
+        )
+
+        // 5. The exported appex's ui/index.html must be byte-identical to
+        //    what we saved and to the canonical starter. If ExportManager
+        //    ever starts rewriting ui/* files, this catches it.
+        let exportedHTMLURL = appexResourcesPath(in: appURL)
+            .appendingPathComponent("ui/index.html")
+        let exportedHTML = try String(contentsOf: exportedHTMLURL, encoding: .utf8)
+        #expect(exportedHTML == savedHTML,
+                "Exported ui/index.html drifted from the saved bundle's copy")
+        #expect(exportedHTML == canonicalHTML,
+                "Exported ui/index.html drifted from PresetBundle.starterIndexHTML()")
+    }
+
     /// Export without a custom UI must NOT produce a ui/ directory in the
     /// appex and must NOT set hasCustomUI. Exists to prove the export path
     /// is only invasive when explicitly opted into.
