@@ -422,6 +422,12 @@ struct ConjureDSPExtensionMainView: View {
 
                 bundleEditor(editable: isCurrentBundleEditable)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Paint the container with the system text-background color
+                // so the transparent WKWebView has something matching the
+                // current theme to show during Monaco's ~100ms boot. Without
+                // this, file-switches flash white (HTML default) before the
+                // theme JS applies, producing a visible flicker in dark mode.
+                .background(Color(nsColor: .textBackgroundColor))
                 .border(Color.secondary.opacity(0.3), width: 1)
                 .padding(.horizontal)
                 .padding(.top, 8)
