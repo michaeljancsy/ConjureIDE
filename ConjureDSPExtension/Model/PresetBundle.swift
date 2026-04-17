@@ -162,6 +162,10 @@ extension PresetBundle {
     /// custom UI enabled. Renders a simple labeled slider per parameter by
     /// delegating to the `ConjureDSP.parameters` API. Authors are expected to
     /// replace this with their own layout.
+    ///
+    /// Layout is vertically centered so presets with a small number of
+    /// parameters don't leave a giant empty region below the last row.
+    /// Rows expand to fill available width.
     static func starterIndexHTML() -> String {
         """
         <!DOCTYPE html>
@@ -173,12 +177,47 @@ extension PresetBundle {
           <title>Custom UI</title>
           <style>
             :root { color-scheme: light dark; }
-            html, body { margin: 0; padding: 0; font: 12px -apple-system, system-ui, sans-serif; }
-            body { padding: 12px; background: Canvas; color: CanvasText; }
-            .row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-            .row label { flex: 0 0 120px; }
-            .row input[type=range] { flex: 1 1 auto; }
-            .row .val { flex: 0 0 72px; text-align: right; font-variant-numeric: tabular-nums; }
+            * { box-sizing: border-box; }
+            html, body {
+              margin: 0; padding: 0;
+              font: 13px -apple-system, system-ui, sans-serif;
+              background: Canvas;
+              color: CanvasText;
+            }
+            html, body { height: 100%; }
+            body {
+              display: flex;
+              flex-direction: column;
+              justify-content: center;
+              padding: 20px 24px;
+              gap: 12px;
+            }
+            #rows {
+              display: flex;
+              flex-direction: column;
+              gap: 12px;
+            }
+            .row {
+              display: grid;
+              grid-template-columns: minmax(80px, 120px) 1fr minmax(60px, 88px);
+              align-items: center;
+              gap: 12px;
+            }
+            .row label {
+              font-weight: 500;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
+            .row input[type=range] {
+              width: 100%;
+              accent-color: currentColor;
+            }
+            .row .val {
+              text-align: right;
+              font-variant-numeric: tabular-nums;
+              opacity: 0.7;
+            }
           </style>
         </head>
         <body>
@@ -198,14 +237,15 @@ extension PresetBundle {
                 rng.step = (m.style === 'integer' || m.style === 'choice') ? 1 : ((m.max - m.min) / 1000);
                 rng.value = CDP.parameters.get(i);
                 const val = document.createElement('span'); val.className = 'val';
-                val.textContent = Number(rng.value).toFixed(2) + (m.unit ? ' ' + m.unit : '');
+                const fmt = (v) => Number(v).toFixed(2) + (m.unit ? ' ' + m.unit : '');
+                val.textContent = fmt(rng.value);
                 rng.addEventListener('input', () => {
                   CDP.parameters.set(i, parseFloat(rng.value));
-                  val.textContent = Number(rng.value).toFixed(2) + (m.unit ? ' ' + m.unit : '');
+                  val.textContent = fmt(rng.value);
                 });
                 CDP.parameters.onChange(i, (v) => {
                   rng.value = v;
-                  val.textContent = Number(v).toFixed(2) + (m.unit ? ' ' + m.unit : '');
+                  val.textContent = fmt(v);
                 });
                 row.append(lbl, rng, val); host.append(row);
               }
