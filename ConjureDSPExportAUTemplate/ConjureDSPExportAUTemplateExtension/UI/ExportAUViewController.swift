@@ -44,49 +44,14 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
     /// implicit spacing + `.padding(.top, 12)` / `.padding(.bottom, 8)` in
     /// the main view.
     private func computeSize(showDebug: Bool, showError: Bool) -> NSSize {
-        // Header = top padding (12) + title/gear row (~28 headline leading) +
-        // VStack gap (12) before the divider.
-        let headerHeight: CGFloat = 12 + 28 + 12
-        // Divider itself.
-        let dividerHeight: CGFloat = 1
-        // Footer = VStack gap before footer (12) + caption2 line (~18) +
-        // bottom padding (8). Plus ~4pt safety so Ableton's rounding doesn't
-        // shave the last pixel.
-        let footerHeight: CGFloat = 12 + 18 + 8 + 4
-        // Gaps surrounding the body region (divider↔body↔footer/debug).
-        let bodyGaps: CGFloat = 12 + 12
-        let chromeHeight = headerHeight + dividerHeight + footerHeight + bodyGaps
-
-        // Body region: either the preset's custom UI (manifest-declared
-        // height, or a sensible default) or the generic slider stack
-        // (~28pt per row).
-        let bodyHeight: CGFloat
-        if customUIEntryURL != nil {
-            bodyHeight = CGFloat(customUIHeight ?? 320)
-        } else {
-            bodyHeight = CGFloat(paramCount) * 28
-        }
-
-        var height = chromeHeight + bodyHeight
-
-        if showError {
-            // Error banner: divider + header line + scrollable text area +
-            // padding + VStack gap.
-            height += 180
-        }
-
-        if showDebug {
-            // Debug pane: divider + header + scrollable content + padding.
-            // DebugPaneView's inner minHeight is 100; give ~320 total so the
-            // Plugin Info + stats + log sections each get readable space
-            // without aggressive scrolling.
-            height += 360
-        }
-
-        // Enforce minimum
-        height = max(height, 150)
-
-        return NSSize(width: Self.viewWidth, height: height)
+        ExportAUWindowSizing.computeSize(
+            showDebug: showDebug,
+            showError: showError,
+            hasCustomUI: customUIEntryURL != nil,
+            customUIHeight: customUIHeight,
+            paramCount: paramCount,
+            viewWidth: Self.viewWidth
+        )
     }
 
     public override func loadView() {

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		00CBB4BC5D9E9695ED1C921F /* BundleAssetSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CE42CBD0384F0355E8EDDBF /* BundleAssetSchemeHandler.swift */; };
+		04923FAF97698C14C88490E3 /* ExportAUWindowSizing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 428FA01ED8B8F33CD9FF56A6 /* ExportAUWindowSizing.swift */; };
 		0C13E7E0026ACB052453ABB3 /* RuntimeConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 816594364DE02D78D14F7BB4 /* RuntimeConfig.swift */; };
 		0D9C4515754F04D20386C994 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 565409BB4FD167D792DA5952 /* main.swift */; };
 		14DB4C245B276123DE07E433 /* ExportAUMainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 875F4246898833ED52454440 /* ExportAUMainView.swift */; };
@@ -71,6 +72,7 @@
 		367F72A4E23E8307CAFE7BEF /* customui-bridge.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "customui-bridge.js"; sourceTree = "<group>"; };
 		378569BA407A2D3987A57D4E /* ConjureDSPExportAUTemplate.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ConjureDSPExportAUTemplate.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3D0743F894065733FC9BD356 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		428FA01ED8B8F33CD9FF56A6 /* ExportAUWindowSizing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUWindowSizing.swift; sourceTree = "<group>"; };
 		4E49F55FDC52279BA4C1413D /* PythonRuntimeErrorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PythonRuntimeErrorView.swift; sourceTree = "<group>"; };
 		542F5B9D60DD44AC42CC55B1 /* AUInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AUInfo.swift; sourceTree = "<group>"; };
 		565409BB4FD167D792DA5952 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
@@ -134,6 +136,7 @@
 				E1A74C94E3DFA8BCAF47364D /* DebugPaneView.swift */,
 				875F4246898833ED52454440 /* ExportAUMainView.swift */,
 				A8A47F30AB5BF457FF5172D3 /* ExportAUViewController.swift */,
+				428FA01ED8B8F33CD9FF56A6 /* ExportAUWindowSizing.swift */,
 				59B984FB5E98E97C85D5FC2C /* ExportCustomUIWebView.swift */,
 				F670DED792DF6234B24ECBF3 /* ExportParameterState.swift */,
 				4E49F55FDC52279BA4C1413D /* PythonRuntimeErrorView.swift */,
@@ -381,6 +384,7 @@
 				6D42863AE4B6C193BF7E4AFD /* ExportAUAudioUnit.swift in Sources */,
 				14DB4C245B276123DE07E433 /* ExportAUMainView.swift in Sources */,
 				C03A9B32512712F10F94C0A4 /* ExportAUViewController.swift in Sources */,
+				04923FAF97698C14C88490E3 /* ExportAUWindowSizing.swift in Sources */,
 				2A30E9A8134BF73FF8999150 /* ExportAudioCaptureManager.swift in Sources */,
 				D54CB9C061A9F9FC02098C2A /* ExportCustomUIWebView.swift in Sources */,
 				565C001632FF534FD548D5DC /* ExportDebugLog.swift in Sources */,

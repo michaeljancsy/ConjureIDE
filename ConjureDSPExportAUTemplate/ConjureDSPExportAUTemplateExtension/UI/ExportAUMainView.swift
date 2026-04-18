@@ -26,6 +26,18 @@ struct ExportAUMainView: View {
     var body: some View {
         if pythonRuntimeMissing {
             PythonRuntimeErrorView(presetName: config?.presetName)
+        } else if showDebugPane {
+            // Full-window debug view. Header keeps the preset name and gear
+            // menu, plus an explicit "Done" button so the return path is
+            // obvious. The pane itself fills all remaining space — 360pt
+            // squeezed under the slider stack was unreadable.
+            debugFullscreenView
+                .onChange(of: showDebugPane) { _, _ in
+                    notifyLayoutChange()
+                }
+                .onChange(of: parameterState.runtimeError) { _, _ in
+                    notifyLayoutChange()
+                }
         } else {
             VStack(spacing: 12) {
                 ZStack {
@@ -33,27 +45,7 @@ struct ExportAUMainView: View {
                         .font(.headline)
                     HStack {
                         Spacer()
-                        Menu {
-                            Button(showDebugPane ? "Hide Debug Log" : "Show Debug Log") {
-                                showDebugPane.toggle()
-                            }
-                            Divider()
-                            Button("Copy Log") {
-                                let text = parameterState.debugLog.formattedForCopy()
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(text, forType: .string)
-                            }
-                            Button("Clear Log") {
-                                parameterState.debugLog.clear()
-                            }
-                        } label: {
-                            Image(systemName: "gearshape")
-                                .font(.body)
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .foregroundStyle(.secondary)
+                        settingsMenu
                     }
                     .padding(.horizontal, 12)
                 }
@@ -88,16 +80,9 @@ struct ExportAUMainView: View {
                     .padding(.horizontal)
                 }
 
-                // Below the fixed parameter area: show either the debug pane
-                // (which includes errors in its log) or the error banner.
-                if showDebugPane {
-                    Divider()
-                    DebugPaneView(
-                        debugLog: parameterState.debugLog,
-                        stats: parameterState.statsSnapshot,
-                        info: parameterState.pluginInfo
-                    )
-                } else if let error = loadError ?? parameterState.runtimeError {
+                // Error banner when debug is closed. (When debug is open, the
+                // log already includes the error — no banner needed.)
+                if let error = loadError ?? parameterState.runtimeError {
                     Divider()
                     errorBanner(error: error, isLoadError: loadError != nil)
                 }
@@ -118,6 +103,62 @@ struct ExportAUMainView: View {
             .onAppear {
                 notifyLayoutChange()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var settingsMenu: some View {
+        Menu {
+            Button(showDebugPane ? "Hide Debug Log" : "Show Debug Log") {
+                showDebugPane.toggle()
+            }
+            Divider()
+            Button("Copy Log") {
+                let text = parameterState.debugLog.formattedForCopy()
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+            Button("Clear Log") {
+                parameterState.debugLog.clear()
+            }
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.body)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private var debugFullscreenView: some View {
+        VStack(spacing: 12) {
+            ZStack {
+                Text(config?.presetName ?? "ConjureDSP Export")
+                    .font(.headline)
+                HStack {
+                    Button("Done") { showDebugPane = false }
+                        .buttonStyle(.borderless)
+                        .keyboardShortcut(.escape, modifiers: [])
+                        .accessibilityIdentifier("debugDoneButton")
+                    Spacer()
+                    settingsMenu
+                }
+                .padding(.horizontal, 12)
+            }
+            .padding(.top, 12)
+
+            Divider()
+
+            DebugPaneView(
+                debugLog: parameterState.debugLog,
+                stats: parameterState.statsSnapshot,
+                info: parameterState.pluginInfo
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal)
+            .padding(.bottom, 12)
         }
     }
 }
