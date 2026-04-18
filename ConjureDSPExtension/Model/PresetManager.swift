@@ -114,6 +114,15 @@ class PresetManager: ObservableObject {
         result.append(contentsOf: discoverPresets(in: presetsURL))
 
         presets = result
+
+        // Re-parse the currently active bundle from disk so observers see
+        // manifest.json / ui/ edits made via the file browser. Without
+        // this, currentBundle holds a stale PresetBundle captured at
+        // setCurrentPreset time, and the custom-UI frame keeps rendering
+        // yesterday's height even after the user edits the manifest.
+        if let current = currentPreset {
+            currentBundle = loadBundle(for: current)
+        }
     }
 
     private func discoverPresets(in directory: URL) -> [Preset] {
@@ -316,55 +325,81 @@ class PresetManager: ObservableObject {
             "\(sanitized).\(PresetBundle.bundleExtension)", isDirectory: true
         )
 
-        // If the bundle already exists, capture any `ui/` subtree so the
-        // rewrite doesn't clobber author-visible HTML/CSS/JS.
-        var preservedUIContents: [(URL, Data)] = []
-        if fileManager.fileExists(atPath: bundleURL.path) {
-            let uiDir = bundleURL.appendingPathComponent("ui", isDirectory: true)
-            if let walker = fileManager.enumerator(
-                at: uiDir,
-                includingPropertiesForKeys: [.isRegularFileKey],
-                options: [.skipsHiddenFiles]
-            ) {
-                for case let url as URL in walker {
-                    let isRegular = (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) ?? false
-                    guard isRegular, let data = try? Data(contentsOf: url) else { continue }
-                    preservedUIContents.append((url, data))
-                }
+        let bundleExists = fileManager.fileExists(atPath: bundleURL.path)
+
+        // For an existing bundle (Cmd+S on the current preset), preserve
+        // the user's manifest.json and ui/ as-is — only the entry script
+        // is what Cmd+S is actually updating. The old behavior wiped the
+        // whole bundle and regenerated manifest.json from defaults, which
+        // silently destroyed any width/height/fps edits the user made via
+        // the file browser.
+        //
+        // For a new bundle (New Preset or Save As), no preservation is
+        // possible — write the full default structure.
+        if bundleExists {
+            let manifestURL = bundleURL.appendingPathComponent(PresetManifest.filename)
+            let existingManifest: PresetManifest? = {
+                guard let data = try? Data(contentsOf: manifestURL) else { return nil }
+                return try? JSONDecoder().decode(PresetManifest.self, from: data)
+            }()
+            // If we can't parse the existing manifest, fall back to the
+            // defaults — a broken manifest is worse than losing user edits.
+            let manifest = existingManifest
+                ?? PresetBundle.defaultManifest(language: language, includeUI: scaffoldUI)
+
+            // Write the entry script according to whatever the manifest
+            // says its entry path is — respects user edits to `entry` too.
+            let scriptURL = bundleURL.appendingPathComponent(manifest.entry)
+            try source.write(to: scriptURL, atomically: true, encoding: .utf8)
+            AppGroupContainer.stripQuarantine(at: scriptURL)
+
+            // If the existing manifest didn't round-trip (corrupt file),
+            // rewrite it with the fallback so subsequent reads succeed.
+            if existingManifest == nil {
+                try manifest.jsonData().write(to: manifestURL)
+                AppGroupContainer.stripQuarantine(at: manifestURL)
             }
-            try fileManager.removeItem(at: bundleURL)
-        }
 
-        try fileManager.createDirectory(at: bundleURL, withIntermediateDirectories: true)
-        AppGroupContainer.stripQuarantine(at: bundleURL)
-
-        let manifest = PresetBundle.defaultManifest(language: language, includeUI: true)
-        try manifest.jsonData().write(to: bundleURL.appendingPathComponent(PresetManifest.filename))
-
-        let scriptURL = bundleURL.appendingPathComponent(manifest.entry)
-        try source.write(to: scriptURL, atomically: true, encoding: .utf8)
-
-        // Restore preserved UI files first; if nothing was preserved and
-        // the caller asked for a scaffold, drop in the starter index.html.
-        if !preservedUIContents.isEmpty {
-            for (originalURL, data) in preservedUIContents {
-                try fileManager.createDirectory(
-                    at: originalURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
+            // scaffoldUI on an existing bundle adds `ui/index.html` if
+            // the bundle doesn't already ship one. Respects the "+ Add
+            // Custom UI" contract. New code paths use `scaffoldCustomUI`
+            // directly; this handles older call sites that pass the flag.
+            let uiIndexURL = bundleURL.appendingPathComponent("ui/index.html")
+            if scaffoldUI, !fileManager.fileExists(atPath: uiIndexURL.path) {
+                let uiDir = bundleURL.appendingPathComponent("ui", isDirectory: true)
+                try fileManager.createDirectory(at: uiDir, withIntermediateDirectories: true)
+                try PresetBundle.starterIndexHTML().write(
+                    to: uiIndexURL,
+                    atomically: true,
+                    encoding: .utf8
                 )
-                try data.write(to: originalURL, options: .atomic)
+                AppGroupContainer.stripQuarantine(at: uiIndexURL)
             }
-        } else if scaffoldUI {
-            let uiDir = bundleURL.appendingPathComponent("ui", isDirectory: true)
-            try fileManager.createDirectory(at: uiDir, withIntermediateDirectories: true)
-            try PresetBundle.starterIndexHTML().write(
-                to: uiDir.appendingPathComponent("index.html"),
-                atomically: true,
-                encoding: .utf8
-            )
+
+            log.info("Updated user bundle (preserved manifest): \(bundleURL.path, privacy: .public)")
+        } else {
+            try fileManager.createDirectory(at: bundleURL, withIntermediateDirectories: true)
+            AppGroupContainer.stripQuarantine(at: bundleURL)
+
+            let manifest = PresetBundle.defaultManifest(language: language, includeUI: true)
+            try manifest.jsonData().write(to: bundleURL.appendingPathComponent(PresetManifest.filename))
+
+            let scriptURL = bundleURL.appendingPathComponent(manifest.entry)
+            try source.write(to: scriptURL, atomically: true, encoding: .utf8)
+
+            if scaffoldUI {
+                let uiDir = bundleURL.appendingPathComponent("ui", isDirectory: true)
+                try fileManager.createDirectory(at: uiDir, withIntermediateDirectories: true)
+                try PresetBundle.starterIndexHTML().write(
+                    to: uiDir.appendingPathComponent("index.html"),
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
+
+            log.info("Saved new user bundle: \(bundleURL.path, privacy: .public)")
         }
 
-        log.info("Saved user bundle: \(bundleURL.path, privacy: .public)")
         refreshPresets()
 
         guard let preset = presets.first(where: { $0.id == "user:\(sanitized)" }) else {

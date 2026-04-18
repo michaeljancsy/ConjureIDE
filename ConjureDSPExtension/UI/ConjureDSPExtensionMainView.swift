@@ -297,13 +297,21 @@ struct ConjureDSPExtensionMainView: View {
 
                 if useCustom, let bundle = activeBundle {
                     if isCustomUIExpanded {
+                        // Pin to the manifest-declared height (not
+                        // `minHeight`) — without an upper bound, SwiftUI's
+                        // outer VStack hands the webview all the spare
+                        // vertical space the window has, producing a tall
+                        // dark void around a preset that wants 260pt. The
+                        // preset author controls the height via
+                        // `manifest.ui.height`; users who want more room
+                        // can edit the manifest.
                         CustomUIWebView(
                             parameterState: parameterState,
                             bundle: bundle,
                             theme: colorScheme,
                             captureManager: captureManager
                         )
-                        .frame(minHeight: CGFloat(bundle.manifest.ui?.height ?? 220))
+                        .frame(height: CGFloat(bundle.manifest.ui?.height ?? 220))
                         .id(bundle.uiIndexURL)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }

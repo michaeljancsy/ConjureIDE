@@ -188,6 +188,194 @@ struct PresetManagerTests {
         #expect(loaded == "# version 2\n")
     }
 
+    // MARK: - Manifest Persistence on Cmd+S
+    //
+    // The bug has two halves and the tests here cover both:
+    //
+    //   1. **Disk persistence.** User edits manifest.json via the file
+    //      browser, hits Cmd+S → PresetManager.savePreset was deleting the
+    //      bundle and regenerating manifest.json from defaults. Only `ui/`
+    //      survived, so every width/height/fps edit silently vanished.
+    //      `manifestUserEditsSurviveResave` locks this in.
+    //
+    //   2. **Model reactivity.** Even if the edit lives on disk, the
+    //      SwiftUI view must see the new values. The view reads
+    //      `presetManager.currentBundle.manifest.ui.height` for its
+    //      `.frame(height:)` — that only re-renders when `currentBundle`
+    //      republishes after `refreshPresets()`. `currentBundleReflects
+    //      ManifestChangesAfterRefresh` covers that plumbing: manifest
+    //      value on disk → PresetBundle re-parse → currentBundle property
+    //      updated → view would pick up the new height on next body eval.
+    //
+    // We don't exercise the actual SwiftUI re-render in these tests —
+    // that would require an XCUITest against the AU ViewBridge, which is
+    // brittle. Instead we pin both observable halves and rely on SwiftUI's
+    // normal "read property in body → re-render on change" contract for
+    // the glue.
+
+    @Test @MainActor func manifestUserEditsSurviveResave() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        // Create the bundle via the New Preset / Save As code path.
+        let preset = try manager.savePreset(
+            name: "ManifestEdits",
+            source: "# v1\n",
+            language: .python,
+            scaffoldUI: true
+        )
+        guard let bundleURL = preset.fileURL else {
+            Issue.record("Saved preset missing fileURL")
+            return
+        }
+        let manifestURL = bundleURL.appendingPathComponent("manifest.json")
+
+        // Simulate a user editing manifest.json via the file browser —
+        // change height, fps, add a meta block. All things the default
+        // manifest doesn't match.
+        var manifestDict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: manifestURL)
+        ) as! [String: Any]
+        var uiDict = manifestDict["ui"] as! [String: Any]
+        uiDict["height"] = 100
+        uiDict["fps"] = 60
+        manifestDict["ui"] = uiDict
+        manifestDict["meta"] = ["author": "test", "version": "1.2.3"]
+        let editedData = try JSONSerialization.data(
+            withJSONObject: manifestDict,
+            options: [.prettyPrinted]
+        )
+        try editedData.write(to: manifestURL)
+
+        // Simulate Cmd+S on the entry script — same name, new source.
+        // Pre-fix, this would delete the bundle and regenerate the manifest
+        // from defaults, wiping every edit above.
+        try manager.savePreset(
+            name: "ManifestEdits",
+            source: "# v2\n",
+            language: .python
+        )
+
+        // Re-read the manifest and verify every user edit survived.
+        let reloadedData = try Data(contentsOf: manifestURL)
+        let reloaded = try JSONSerialization.jsonObject(with: reloadedData) as! [String: Any]
+        let reloadedUI = reloaded["ui"] as! [String: Any]
+        #expect(reloadedUI["height"] as? Int == 100,
+               "User's ui.height edit must survive Cmd+S")
+        #expect(reloadedUI["fps"] as? Int == 60,
+               "User's ui.fps edit must survive Cmd+S")
+        let reloadedMeta = reloaded["meta"] as? [String: Any]
+        #expect(reloadedMeta?["author"] as? String == "test",
+               "User's meta block must survive Cmd+S")
+
+        // Sanity: the entry script DID update — we're not testing a total
+        // no-op, just that manifest.json wasn't clobbered.
+        let scriptURL = bundleURL.appendingPathComponent("process.py")
+        let scriptContent = try String(contentsOf: scriptURL, encoding: .utf8)
+        #expect(scriptContent == "# v2\n",
+               "Entry script should be updated on save")
+    }
+
+    @Test @MainActor func currentBundleReflectsManifestChangesAfterRefresh() throws {
+        // Half two of the bug: even if manifest.json survives on disk,
+        // the SwiftUI view has to actually observe the new value. This
+        // test confirms `presetManager.currentBundle` republishes with
+        // the updated manifest after a save + refreshPresets cycle —
+        // which is what the view binds its .frame(height:) to.
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(
+            name: "Reactive",
+            source: "# v1\n",
+            language: .python,
+            scaffoldUI: true
+        )
+        manager.setCurrentPreset(preset, source: "# v1\n")
+
+        // Sanity: currentBundle reflects the fresh manifest's default height.
+        let initialHeight = manager.currentBundle?.manifest.ui?.height
+        #expect(initialHeight != nil,
+               "Fresh bundle with scaffoldUI must expose a ui block")
+
+        // Simulate the file-browser write path: edit manifest.json on disk,
+        // then call the same refresh hook `scheduleAltFileSave` uses.
+        guard let bundleURL = preset.fileURL else {
+            Issue.record("Saved preset missing fileURL")
+            return
+        }
+        let manifestURL = bundleURL.appendingPathComponent("manifest.json")
+        var manifestDict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: manifestURL)
+        ) as! [String: Any]
+        var uiDict = manifestDict["ui"] as! [String: Any]
+        uiDict["height"] = 77
+        manifestDict["ui"] = uiDict
+        try JSONSerialization.data(
+            withJSONObject: manifestDict,
+            options: [.prettyPrinted]
+        ).write(to: manifestURL)
+
+        manager.refreshPresets()
+
+        // currentBundle should now expose the new height — this is what
+        // the view reads for its frame. If this assertion ever fails, the
+        // view will keep rendering the old height until the user switches
+        // presets and back, which is exactly the "changing manifest
+        // doesn't trigger any changes" bug the user hit.
+        let refreshedHeight = manager.currentBundle?.manifest.ui?.height
+        #expect(refreshedHeight == 77,
+               "currentBundle must republish with the on-disk manifest height, got \(refreshedHeight ?? -1)")
+    }
+
+    @Test @MainActor func resaveRespectsManifestCustomEntryPath() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(
+            name: "CustomEntry",
+            source: "# v1\n",
+            language: .python
+        )
+        guard let bundleURL = preset.fileURL else {
+            Issue.record("Saved preset missing fileURL")
+            return
+        }
+        let manifestURL = bundleURL.appendingPathComponent("manifest.json")
+
+        // User renames entry from "process.py" → "dsp.py" via a manifest edit
+        // plus a file-browser rename (the rename itself is out of scope; we
+        // just simulate the end state).
+        var manifestDict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: manifestURL)
+        ) as! [String: Any]
+        manifestDict["entry"] = "dsp.py"
+        let editedData = try JSONSerialization.data(
+            withJSONObject: manifestDict,
+            options: [.prettyPrinted]
+        )
+        try editedData.write(to: manifestURL)
+        // Move the entry file to match.
+        let oldScript = bundleURL.appendingPathComponent("process.py")
+        let newScript = bundleURL.appendingPathComponent("dsp.py")
+        try FileManager.default.moveItem(at: oldScript, to: newScript)
+
+        // Cmd+S — should write the new source to `dsp.py` (per manifest),
+        // not to the default `process.py`.
+        try manager.savePreset(
+            name: "CustomEntry",
+            source: "# v2\n",
+            language: .python
+        )
+
+        #expect(FileManager.default.fileExists(atPath: newScript.path),
+               "Entry script at manifest-declared path must still exist")
+        #expect(!FileManager.default.fileExists(atPath: oldScript.path),
+               "Default-named entry script must NOT be recreated")
+        let scriptContent = try String(contentsOf: newScript, encoding: .utf8)
+        #expect(scriptContent == "# v2\n")
+    }
+
     // MARK: - Modification Tracking
 
     @Test @MainActor func isModifiedTracking() throws {
