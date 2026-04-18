@@ -36,7 +36,14 @@ enum AppGroupContainer {
             if let url = FileManager.default.containerURL(
                 forSecurityApplicationGroupIdentifier: id
             ) {
-                stripQuarantineRecursively(at: url, maxDepth: 2)
+                // Strip quarantine on the container root only. Walking
+                // deeper is fatal at startup: WasmCache has 2000+ entries
+                // and Presets/.git has hundreds of object dirs — the
+                // enumeration blows the AU instantiation XPC timeout
+                // (~2s) and the host gives up with "Failed to open
+                // AudioUnit extension: Client is gone". Per-write strips
+                // in PresetManager handle subdirectories going forward.
+                stripQuarantine(at: url)
                 return url
             }
         }
@@ -61,25 +68,5 @@ enum AppGroupContainer {
     /// or if the sandbox blocks the removal — best effort by design.
     static func stripQuarantine(at url: URL) {
         _ = url.path.withCString { removexattr($0, "com.apple.quarantine", 0) }
-    }
-
-    /// Strip quarantine from `url` and immediate children up to `maxDepth`
-    /// directories deep. Keeps the cost bounded — we only care about
-    /// top-level directories (Presets, mcp-instances, git-queue, etc.)
-    /// because the xattr attaches to the dir, not every file inside.
-    private static func stripQuarantineRecursively(at url: URL, maxDepth: Int) {
-        stripQuarantine(at: url)
-        guard maxDepth > 0 else { return }
-        guard let children = try? FileManager.default.contentsOfDirectory(
-            at: url,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else { return }
-        for child in children {
-            let isDir = (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            if isDir {
-                stripQuarantineRecursively(at: child, maxDepth: maxDepth - 1)
-            }
-        }
     }
 }
