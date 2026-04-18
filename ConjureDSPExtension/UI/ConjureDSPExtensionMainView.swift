@@ -72,6 +72,11 @@ struct ConjureDSPExtensionMainView: View {
     @State private var mcpFlashToken: UUID? = nil
     @State private var selectedLanguage: ScriptLanguage = .python
     @State private var errorMessage: String?
+    /// Extended diagnostic text (e.g. git worker stderr) for the current
+    /// errorMessage. Set alongside errorMessage on failure paths that have
+    /// real detail to surface; nil otherwise. Surfaced via the StatusBarView's
+    /// "More info" popover when present so the inline message stays concise.
+    @State private var errorDetails: String?
     @State private var warningMessage: String?
     @State private var editorMarkers: [MonacoEditorView.Marker] = []
     @State private var showingSaveAs = false
@@ -453,6 +458,7 @@ struct ConjureDSPExtensionMainView: View {
                 StatusBarView(
                     isCompiling: isCompiling,
                     errorMessage: errorMessage,
+                    errorDetails: errorDetails,
                     warningMessage: warningMessage,
                     processProfiler: processProfiler,
                     memoryMonitor: memoryMonitor,
@@ -460,8 +466,16 @@ struct ConjureDSPExtensionMainView: View {
                     buildIDFormatted: buildID != 0 ? Self.formatBuildID(buildID) : nil,
                     onCopyError: {
                         if let err = errorMessage {
+                            // Copy summary + full stderr detail if we have it,
+                            // so pasting into an issue captures the whole thing.
+                            let payload: String = {
+                                if let d = errorDetails, !d.isEmpty {
+                                    return err + "\n\n" + d
+                                }
+                                return err
+                            }()
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(err, forType: .string)
+                            NSPasteboard.general.setString(payload, forType: .string)
                         }
                     }
                 )
@@ -635,6 +649,7 @@ struct ConjureDSPExtensionMainView: View {
             // warningMessage is NOT cleared here: handleResult manages it, and clearing here
             // would race with handleResult during preset selection, making warnings invisible.
             errorMessage = nil
+            errorDetails = nil
             editorMarkers = []
             if let processTimeMs = change.processTimeMs, let budgetMs = change.budgetMs {
                 lastBenchmark = (processTimeMs, budgetMs)
@@ -1002,6 +1017,7 @@ struct ConjureDSPExtensionMainView: View {
                 isAddingCustomUI = false
                 if case .failure(let err) = result {
                     errorMessage = "Custom UI scaffolded but commit failed: \(err.localizedDescription)"
+                    errorDetails = (err as? PresetGitError)?.stderr
                 }
                 _ = indexURL // silence unused warning; URL is useful for tests
             }
@@ -1277,6 +1293,7 @@ struct ConjureDSPExtensionMainView: View {
     private func handleResult(_ result: ScriptSaveResult) {
         if result.success {
             errorMessage = nil
+            errorDetails = nil
             warningMessage = result.warning
             editorMarkers = []
             if let processTimeMs = result.processTimeMs, let budgetMs = result.budgetMs {
@@ -1346,12 +1363,18 @@ private struct MeterBar: View {
 private struct StatusBarView: View {
     var isCompiling: Bool
     var errorMessage: String?
+    /// Extended diagnostic text (e.g. git worker stderr). When non-nil, an
+    /// info.circle button appears next to the Copy button; tapping it shows
+    /// the full text in a popover so the inline message stays concise.
+    var errorDetails: String?
     var warningMessage: String?
     @ObservedObject var processProfiler: ProcessProfiler
     @ObservedObject var memoryMonitor: MemoryMonitor
     var lastBenchmark: (processTimeMs: Double, budgetMs: Double)?
     var buildIDFormatted: String?
     var onCopyError: () -> Void
+
+    @State private var showingErrorDetails: Bool = false
 
     /// Convert milliseconds to a sample frame count using the profiler's current sample rate.
     private func frames(_ ms: Double) -> Int {
@@ -1386,10 +1409,24 @@ private struct StatusBarView: View {
                     .foregroundColor(.red)
                     .lineLimit(3)
                     .accessibilityIdentifier("errorStatus")
+                if let details = errorDetails, !details.isEmpty {
+                    Button {
+                        showingErrorDetails = true
+                    } label: {
+                        Image(systemName: "info.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Show full error detail")
+                    .accessibilityIdentifier("errorMoreInfoButton")
+                    .popover(isPresented: $showingErrorDetails, arrowEdge: .top) {
+                        errorDetailsPopover(summary: err, details: details)
+                    }
+                }
                 Button(action: onCopyError) {
                     Image(systemName: "doc.on.doc")
                 }
                 .buttonStyle(.borderless)
+                .help("Copy error details")
             } else if let warn = warningMessage {
                 Image(systemName: "info.circle")
                     .foregroundColor(.orange)
@@ -1457,6 +1494,38 @@ private struct StatusBarView: View {
         .font(.caption.monospaced())
         .padding(.horizontal)
         .padding(.vertical, 4)
+    }
+
+    /// Popover body for the "More info" button on an error. Shows the short
+    /// summary + the full details (typically git worker stderr) in a
+    /// scrollable monospaced block, with Copy / Dismiss actions.
+    @ViewBuilder
+    private func errorDetailsPopover(summary: String, details: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(summary)
+                .font(.headline)
+                .foregroundColor(.red)
+                .textSelection(.enabled)
+            Divider()
+            ScrollView {
+                Text(details)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(minWidth: 360, maxWidth: 520, minHeight: 120, maxHeight: 280)
+            HStack {
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(summary + "\n\n" + details, forType: .string)
+                }
+                Spacer()
+                Button("Done") { showingErrorDetails = false }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(12)
+        .accessibilityIdentifier("errorDetailsPopover")
     }
 }
 
