@@ -75,6 +75,11 @@ class PresetManager: ObservableObject {
         guard !fileManager.fileExists(atPath: url.path) else { return }
         do {
             try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+            // Strip the quarantine xattr macOS 26 sets on new sandboxed-appex
+            // writes — without this, a future build with a different
+            // signing identity gets denied when it tries to write into
+            // this directory. See AppGroupContainer.stripQuarantine docs.
+            AppGroupContainer.stripQuarantine(at: url)
             log.info("Created directory: \(url.path, privacy: .public)")
         } catch {
             log.error("Failed to create directory: \(error.localizedDescription, privacy: .public)")
@@ -331,6 +336,7 @@ class PresetManager: ObservableObject {
         }
 
         try fileManager.createDirectory(at: bundleURL, withIntermediateDirectories: true)
+        AppGroupContainer.stripQuarantine(at: bundleURL)
 
         let manifest = PresetBundle.defaultManifest(language: language, includeUI: true)
         try manifest.jsonData().write(to: bundleURL.appendingPathComponent(PresetManifest.filename))
@@ -546,6 +552,7 @@ class PresetManager: ObservableObject {
             withIntermediateDirectories: true
         )
         try template.initialContent.write(to: url, atomically: true, encoding: .utf8)
+        AppGroupContainer.stripQuarantine(at: url)
         refreshPresets()
         return url
     }
@@ -559,6 +566,7 @@ class PresetManager: ObservableObject {
             throw BundleFileError.alreadyExists
         }
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+        AppGroupContainer.stripQuarantine(at: url)
         refreshPresets()
         return url
     }
