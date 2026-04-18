@@ -35,6 +35,118 @@ struct PythonStdlibProvisioningTests {
         (try? String(contentsOf: url, encoding: .utf8))
     }
 
+    // MARK: - copyPythonBinaries (symlink-chain survival)
+
+    /// Builds a realistic `python-dist/bin/` layout:
+    ///   python         -> python3
+    ///   python3        -> python3.14
+    ///   python3.14     -> python3.14t
+    ///   python3.14t    (real file)
+    private func makeSymlinkChainBin(at parent: URL) throws -> URL {
+        let bin = parent.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        // Real binary file
+        try "fake-python-binary".data(using: .utf8)!
+            .write(to: bin.appendingPathComponent("python3.14t"))
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: bin.appendingPathComponent("python3.14t").path
+        )
+        // Relative symlinks (what python-build-standalone ships). Use the
+        // path-based API — createSymbolicLink(at:withDestinationURL:) would
+        // resolve the URL against CWD and write an absolute target, which
+        // defeats the purpose since we're testing relative-link survival
+        // through copyItem.
+        let fm = FileManager.default
+        try fm.createSymbolicLink(
+            atPath: bin.appendingPathComponent("python3.14").path,
+            withDestinationPath: "python3.14t"
+        )
+        try fm.createSymbolicLink(
+            atPath: bin.appendingPathComponent("python3").path,
+            withDestinationPath: "python3.14"
+        )
+        try fm.createSymbolicLink(
+            atPath: bin.appendingPathComponent("python").path,
+            withDestinationPath: "python3"
+        )
+        return bin
+    }
+
+    @Test("copyPythonBinaries preserves the full python3→3.14→3.14t symlink chain")
+    func binSymlinkChainSurvives() throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let source = tmp.appendingPathComponent("source")
+        let destination = tmp.appendingPathComponent("dest")
+        _ = try makeSymlinkChainBin(at: source)
+
+        try TerminalAppServer.copyPythonBinaries(from: source, to: destination)
+
+        // Every chain link exists in dest.
+        let dstBin = destination.appendingPathComponent("bin")
+        for name in ["python3.14t", "python3.14", "python3", "python"] {
+            #expect(
+                FileManager.default.fileExists(atPath: dstBin.appendingPathComponent(name).path),
+                "missing \(name) in dst bin/"
+            )
+        }
+
+        // The chain is non-dangling: walk each symlink manually and verify
+        // the tail is a real regular file. This is the actual bug the fix
+        // prevents. FileManager.fileExists follows symlinks only if every
+        // link in the chain resolves; one broken hop returns false.
+        let fm = FileManager.default
+        let leaf = dstBin.appendingPathComponent("python3")
+        #expect(
+            fm.fileExists(atPath: leaf.path),
+            "python3 symlink chain dangles in dst — fileExists returned false"
+        )
+        // Symlinks point at relative targets (one level deep each).
+        let target1 = try #require(try? fm.destinationOfSymbolicLink(atPath: leaf.path))
+        #expect(target1 == "python3.14")
+        let next = dstBin.appendingPathComponent(target1)
+        let target2 = try #require(try? fm.destinationOfSymbolicLink(atPath: next.path))
+        #expect(target2 == "python3.14t")
+        let real = dstBin.appendingPathComponent(target2)
+        let attrs = try fm.attributesOfItem(atPath: real.path)
+        #expect(attrs[.type] as? FileAttributeType == .typeRegular)
+    }
+
+    @Test("copyPythonBinaries removes pre-existing dst bin before copy")
+    func binCopyIsDestructiveAtDestination() throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let source = tmp.appendingPathComponent("source")
+        let destination = tmp.appendingPathComponent("dest")
+        _ = try makeSymlinkChainBin(at: source)
+
+        // Stale destination with an old extra file that shouldn't linger.
+        let dstBin = destination.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: dstBin, withIntermediateDirectories: true)
+        try "stale".data(using: .utf8)!
+            .write(to: dstBin.appendingPathComponent("old-tool"))
+
+        try TerminalAppServer.copyPythonBinaries(from: source, to: destination)
+
+        #expect(!FileManager.default.fileExists(atPath: dstBin.appendingPathComponent("old-tool").path))
+        #expect(FileManager.default.fileExists(atPath: dstBin.appendingPathComponent("python3.14t").path))
+    }
+
+    @Test("copyPythonBinaries into a non-existent destination creates the parent")
+    func binCopyCreatesDestination() throws {
+        let tmp = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let source = tmp.appendingPathComponent("source")
+        let destination = tmp.appendingPathComponent("nonexistent")  // doesn't exist
+        _ = try makeSymlinkChainBin(at: source)
+
+        try TerminalAppServer.copyPythonBinaries(from: source, to: destination)
+        #expect(FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent("bin/python3.14t").path
+        ))
+    }
+
     // MARK: - mergeSitePackages
 
     @Test("User packages survive a re-provision that updates bundled packages")

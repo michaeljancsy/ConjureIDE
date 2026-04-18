@@ -505,14 +505,7 @@ class TerminalAppServer {
             do {
                 let fm = FileManager.default
 
-                let srcBin = pythonSource.appendingPathComponent("bin/python3")
-                let dstBin = runtimeURL.appendingPathComponent("bin")
-                try fm.createDirectory(at: dstBin, withIntermediateDirectories: true)
-                let dstPython = dstBin.appendingPathComponent("python3")
-                if fm.fileExists(atPath: dstPython.path) {
-                    try fm.removeItem(at: dstPython)
-                }
-                try fm.copyItem(at: srcBin, to: dstPython)
+                try Self.copyPythonBinaries(from: pythonSource, to: runtimeURL)
 
                 let srcDylib = pythonSource.appendingPathComponent("lib/libpython3.14t.dylib")
                 let dstLib = runtimeURL.appendingPathComponent("lib")
@@ -637,6 +630,27 @@ class TerminalAppServer {
     private nonisolated static func writeProvenanceMarker(at directory: URL, provenance: String) {
         let markerFile = directory.appendingPathComponent(".source")
         try? provenance.write(to: markerFile, atomically: true, encoding: .utf8)
+    }
+
+    /// Copy Python's `bin/` directory from `source/bin` to `destination/bin`,
+    /// preserving the whole `python3 → python3.14 → python3.14t` symlink
+    /// chain plus sibling tools (pip, f2py, numpy-config, etc.). Copying
+    /// just one file is a trap — FileManager.copyItem preserves symlinks
+    /// rather than following them, so a single `bin/python3` copy would
+    /// leave a dangling symlink at the destination and break Python's
+    /// self-locating (which then breaks `import numpy`).
+    ///
+    /// Exposed as a nonisolated static so tests can verify the chain
+    /// survives the copy without spinning up the @MainActor Terminal app.
+    nonisolated static func copyPythonBinaries(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        let srcBinDir = source.appendingPathComponent("bin")
+        let dstBinDir = destination.appendingPathComponent("bin")
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        if fm.fileExists(atPath: dstBinDir.path) {
+            try fm.removeItem(at: dstBinDir)
+        }
+        try fm.copyItem(at: srcBinDir, to: dstBinDir)
     }
 
     /// Provision Python's standard library non-destructively:
