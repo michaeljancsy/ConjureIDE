@@ -3,10 +3,10 @@
 //  ConjureDSPUITests
 //
 //  UI tests for the Custom UI UX refinement pass:
-//   • toggle bar (Sliders/Custom UI) visibility + CTAs
-//   • Save As segmented UI picker
+//   • toggle bar (Basic UI/Custom UI) visibility + CTAs
+//   • New Preset popover — name + language + UI pickers
+//   • Save As popover — no UI picker (UI type inherited from source)
 //   • bundle file browser sidebar + its toggle (button and ⇧⌘E)
-//   • scratchpad-mode "Save As to enable Custom UI" signpost
 //
 //  Tests share a single XCUIApplication launch (static setUp pattern) so
 //  running the suite is cheap. Each method is still independently runnable —
@@ -63,12 +63,15 @@ final class CustomUIUXTests: XCTestCase {
         return app.descendants(matching: .any).matching(p).firstMatch.exists
     }
 
-    // MARK: - Toggle bar / Save As picker
+    // MARK: - New Preset / Save As popovers
 
-    /// The segmented UI picker lives inside the Save As popover. Verify it
-    /// renders alongside the preset-name field so users see both choices.
+    /// Save As is a "duplicate with a new name" action — UI type is
+    /// inherited from the source bundle, not chosen here. Verify the
+    /// picker is GONE (it used to exist; removing it fixed the UX
+    /// incoherence of asking "do you want a custom UI?" at copy time
+    /// instead of create time).
     @MainActor
-    func testSaveAsPopoverHasUIPicker() throws {
+    func testSaveAsPopoverHasNoUIPicker() throws {
         let app = Self.sharedApp!
 
         try openToolbarPopover(app: app, buttonId: "saveAsButton")
@@ -77,8 +80,33 @@ final class CustomUIUXTests: XCTestCase {
         try assertExistsOrSkip(nameField, label: "Save As name field")
 
         let picker = anyElement(in: app, id: "saveAsUIPicker")
-        XCTAssertTrue(picker.waitForExistence(timeout: 3),
-                      "Save As should expose a [Sliders | Custom UI] segmented picker")
+        XCTAssertFalse(picker.waitForExistence(timeout: 1),
+                      "Save As must not ask about UI type — that belongs in New Preset")
+    }
+
+    /// The New Preset popover collects name + language + UI type up front
+    /// so the bundle hits disk fully-formed. Verify all three inputs and
+    /// the confirm button are accessible.
+    @MainActor
+    func testNewPresetPopoverHasNameLanguageUIPickers() throws {
+        let app = Self.sharedApp!
+
+        try openToolbarPopover(app: app, buttonId: "newScriptButton")
+
+        let nameField = anyElement(in: app, id: "newPresetNameField")
+        try assertExistsOrSkip(nameField, label: "New Preset name field")
+
+        let languagePicker = anyElement(in: app, id: "newPresetLanguagePicker")
+        XCTAssertTrue(languagePicker.waitForExistence(timeout: 2),
+                      "New Preset must expose a [Python | Rust] language picker")
+
+        let uiPicker = anyElement(in: app, id: "newPresetUIPicker")
+        XCTAssertTrue(uiPicker.waitForExistence(timeout: 2),
+                      "New Preset must expose a [Basic UI | Custom UI] picker")
+
+        let confirm = anyElement(in: app, id: "confirmNewPresetButton")
+        XCTAssertTrue(confirm.waitForExistence(timeout: 2),
+                      "New Preset must expose a Create button")
     }
 
     // MARK: - File browser toggle
@@ -178,57 +206,4 @@ final class CustomUIUXTests: XCTestCase {
                           "process.py row not accessible through AU ViewBridge")
     }
 
-    // MARK: - Scratchpad mode
-
-    /// Clicking "New" drops into scratchpad state (no bundle). The toggle
-    /// bar should then show the "Save As to enable Custom UI" signpost
-    /// instead of the normal slider toggle.
-    ///
-    /// Leaves the app in scratchpad state — we pick a factory preset back
-    /// afterwards so the shared app returns to a known bundle state for
-    /// subsequent tests.
-    @MainActor
-    func testScratchpadModeShowsSaveAsCustomUISignpost() throws {
-        let app = Self.sharedApp!
-
-        // Enter scratchpad. ViewBridge-safe lookup for the New button.
-        let newButton = anyElement(in: app, id: "newScriptButton")
-        try XCTSkipUnless(newButton.waitForExistence(timeout: 5),
-                          "New button not available")
-        newButton.click()
-
-        // The New popover asks for a language — pick Python.
-        let pythonButton = app.buttons["Python"].firstMatch
-        if pythonButton.waitForExistence(timeout: 2) {
-            pythonButton.click()
-        } else {
-            // Fallback: return via ⌘Shortcut flow would go here, but the
-            // New popover is pretty reliably accessible.
-            app.typeKey(.escape, modifierFlags: [])
-            throw XCTSkip("Language picker not accessible through AU ViewBridge")
-        }
-
-        // Now the toggle bar should show the scratchpad CTA.
-        let predicate = NSPredicate(format: "identifier == 'scratchpadSaveAsForCustomUIButton'")
-        let cta = app.descendants(matching: .any).matching(predicate).firstMatch
-        let found = cta.waitForExistence(timeout: 3)
-
-        // Navigate back to the default factory preset so subsequent tests
-        // don't run in scratchpad mode. Preset menu → first factory.
-        let presetMenu = app.buttons["presetMenu"]
-        if presetMenu.exists {
-            presetMenu.click()
-            // Click the first preset row we can find, then Done. Falls back
-            // to Escape if the picker doesn't yield.
-            let done = anyElement(in: app, id: "presetBrowserDoneButton")
-            if done.waitForExistence(timeout: 2) {
-                done.click()
-            } else {
-                app.typeKey(.escape, modifierFlags: [])
-            }
-        }
-
-        try XCTSkipUnless(found,
-                          "Scratchpad CTA not accessible through AU ViewBridge")
-    }
 }

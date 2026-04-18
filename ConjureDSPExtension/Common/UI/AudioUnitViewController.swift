@@ -535,25 +535,63 @@ pub extern "C" fn process(
             }
         }
 
-        // New: reset to default template for the selected language
+        // New Preset: writes a fresh .cdp bundle to disk with the chosen
+        // language + UI type, commits via the git coordinator, then switches
+        // the current preset to it. No scratchpad — every preset exists on
+        // disk from the moment of creation, so Cmd+S is always a commit.
+        // Returns nil on success, or an error string for the popover to
+        // display inline (disk write failed, git refused the commit, etc.).
         let extensionBundle = Bundle(for: type(of: self))
-        let onNew: (ScriptLanguage) -> ScriptSaveResult = { [weak au, weak pm] language in
+        let onNew: (_ name: String, _ language: ScriptLanguage, _ includeCustomUI: Bool) -> String? = { [weak au, weak pm, weak gc] name, language, includeCustomUI in
             guard let au, let pm else {
-                return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
+                return "Audio unit not available"
             }
             let source = language == .rust ? Self.newRustTemplate : Self.newPythonTemplate
-            switch language {
-            case .python:
-                let result = au.reloadScript(source: source)
-                pm.setCurrentPreset(nil, source: source)
-                au.scriptSourceDidChange.send(ConjureDSPExtensionAudioUnit.ScriptSourceChange(source: source))
-                return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
-            case .rust:
-                // Don't compile on New — just show the template
-                au.currentScriptLanguage = .rust
-                pm.setCurrentPreset(nil, source: source)
-                au.scriptSourceDidChange.send(ConjureDSPExtensionAudioUnit.ScriptSourceChange(source: source))
-                return ScriptSaveResult(success: true, error: nil, processTimeMs: nil, budgetMs: nil)
+            do {
+                let saved: Preset = try pm.savePreset(
+                    name: name,
+                    source: source,
+                    language: language,
+                    scaffoldUI: includeCustomUI
+                )
+                Analytics.track(.presetSave, properties: [
+                    "preset_name": name,
+                    "is_new": true,
+                    "language": language.rawValue,
+                    "from": "new_preset",
+                    "include_custom_ui": includeCustomUI,
+                ])
+                Analytics.flush()
+
+                // Always use the default "Add <name>" message — the New
+                // Preset dialog deliberately doesn't ask for a commit
+                // message. Users control commit text via Cmd+S after the
+                // bundle exists; the first commit is routine.
+                let commitMessage = gc?.defaultMessage(for: .add(name: saved.name))
+                let commitURL = saved.fileURL
+                let doCommit: (Bool) -> Void = { success in
+                    guard success, let gc, let fileURL = commitURL, let message = commitMessage else { return }
+                    Task { _ = await gc.recordSave(paths: [fileURL], message: message) }
+                }
+
+                switch language {
+                case .python:
+                    let result = au.reloadScript(source: source)
+                    pm.setCurrentPreset(saved, source: source)
+                    doCommit(result.success)
+                    if !result.success {
+                        return result.error ?? "Failed to load new preset"
+                    }
+                    return nil
+                case .rust:
+                    // Don't compile on create — user hits Run when ready.
+                    au.currentScriptLanguage = .rust
+                    pm.setCurrentPreset(saved, source: source)
+                    doCommit(true)
+                    return nil
+                }
+            } catch {
+                return error.localizedDescription
             }
         }
 

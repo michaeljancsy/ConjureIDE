@@ -59,7 +59,9 @@ struct ConjureDSPExtensionMainView: View {
     var onSaveAsPreset: (_ name: String, _ source: String, _ language: ScriptLanguage, _ commitMessage: String?, _ includeCustomUI: Bool) -> ScriptSaveResult
     var onDeletePreset: () -> Void
     var onRenamePreset: (String) -> String?
-    var onNew: (ScriptLanguage) -> ScriptSaveResult
+    /// Create a new preset bundle on disk. Returns nil on success, an error
+    /// message otherwise. Caller closes the dialog on success.
+    var onNew: (_ name: String, _ language: ScriptLanguage, _ includeCustomUI: Bool) -> String?
     var onExport: (String) async -> ExportResult
     var defaultBenchmark: (processTimeMs: Double, budgetMs: Double)?
     var appGroupContainerURL: URL?
@@ -199,7 +201,15 @@ struct ConjureDSPExtensionMainView: View {
                     let result = onSavePreset(scriptSource, selectedLanguage, commitMessage)
                     handleResult(result)
                 },
-                onSaveAs: { name, commitMessage, includeCustomUI in
+                onSaveAs: { name, commitMessage in
+                    // Save As = duplicate with a new name. UI type is
+                    // inherited from the source bundle (the user saw it
+                    // when they picked "Save As" — no reason to ask again).
+                    // For factory presets being forked, source.hasCustomUI
+                    // comes from the factory bundle. For scratchpad state
+                    // (no current bundle), default to Basic UI — Custom UI
+                    // bundles are picked deliberately via New Preset.
+                    let includeCustomUI = presetManager.currentBundle?.hasCustomUI ?? false
                     let result = onSaveAsPreset(name, scriptSource, selectedLanguage, commitMessage, includeCustomUI)
                     handleResult(result)
                 },
@@ -209,13 +219,18 @@ struct ConjureDSPExtensionMainView: View {
                 onRename: { name in
                     return onRenamePreset(name)
                 },
-                onNew: { language in
+                onNew: { name, language, includeCustomUI in
                     selectedLanguage = language
-                    let result = onNew(language)
-                    handleResult(result)
-                    if language == .rust && result.success {
+                    if let err = onNew(name, language, includeCustomUI) {
+                        return err
+                    }
+                    // Rust presets pre-compile on create so the user can hit
+                    // play immediately. Python scripts compiled during
+                    // onNew's reloadScript call — no second compile needed.
+                    if language == .rust {
                         handleCmdR()
                     }
+                    return nil
                 },
                 onExport: { name in
                     guard daemonChecker.isDaemonAvailable else {
@@ -876,11 +891,11 @@ struct ConjureDSPExtensionMainView: View {
     /// "fresh script" to "has a UI" is visible instead of implicit.
     ///
     /// States (driven by `currentBundle` + `isCurrentBundleEditable`):
-    ///   - No bundle (scratchpad post-New) → label "Sliders" +
+    ///   - No bundle (scratchpad post-New) → label "Basic UI" +
     ///     `[ Save As to enable Custom UI ]`
-    ///   - User bundle, no custom UI → label "Sliders" + `[ + Add Custom UI ]`
-    ///   - User bundle, has custom UI → segmented toggle (Custom UI ↔ Sliders)
-    ///   - Factory bundle, no custom UI → label "Sliders" only (branch
+    ///   - User bundle, no custom UI → label "Basic UI" + `[ + Add Custom UI ]`
+    ///   - User bundle, has custom UI → segmented toggle (Custom UI ↔ Basic UI)
+    ///   - Factory bundle, no custom UI → label "Basic UI" only (branch
     ///     via the toolbar's Save As)
     ///   - Factory bundle, has custom UI → segmented toggle (read-only preview)
     @ViewBuilder
@@ -915,7 +930,7 @@ struct ConjureDSPExtensionMainView: View {
             Image(systemName: showingCustom ? "paintpalette" : "slider.horizontal.3")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text(showingCustom ? "Custom UI" : "Sliders")
+            Text(showingCustom ? "Custom UI" : "Basic UI")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -998,7 +1013,7 @@ struct ConjureDSPExtensionMainView: View {
             isAddingCustomUI = false
         case .success(let indexURL):
             // Flip the toggle to show the fresh UI immediately — no point
-            // landing on "Sliders" right after the user tapped "Add Custom
+            // landing on "Basic UI" right after the user tapped "Add Custom
             // UI." The preference is keyed on the bundle name, which just
             // got re-loaded by refreshPresets().
             customUIPreference.bundleKey = presetManager.currentBundle?.name

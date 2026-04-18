@@ -64,12 +64,17 @@ struct PresetToolbar: View {
     var onRun: () -> Void
     /// Overwrite-save with an optional user-supplied commit message. nil means use default.
     var onSave: (_ commitMessage: String?) -> Void
-    /// Save As with an optional user-supplied commit message (nil = use
-    /// default) and whether the new bundle should scaffold a custom UI.
-    var onSaveAs: (_ name: String, _ commitMessage: String?, _ includeCustomUI: Bool) -> Void
+    /// Save As (duplicate) with an optional user-supplied commit message
+    /// (nil = use default). UI type is inherited from the source bundle —
+    /// not asked here; use New Preset to pick a UI type up front, or
+    /// `+ Add Custom UI` in the toggle bar to upgrade an existing bundle.
+    var onSaveAs: (_ name: String, _ commitMessage: String?) -> Void
     var onDelete: () -> Void
     var onRename: (String) -> String?
-    var onNew: (ScriptLanguage) -> Void
+    /// Create a new preset bundle on disk with the given name, language,
+    /// and UI type. Returns nil on success, an error message on failure.
+    /// The caller closes the dialog on success.
+    var onNew: (_ name: String, _ language: ScriptLanguage, _ includeCustomUI: Bool) -> String?
     var onExport: (String) -> Void
     var isExporting: Bool = false
     var containsNamTone: Bool = false
@@ -292,14 +297,9 @@ struct PresetToolbar: View {
                     existingNames: Set(presetManager.presets.filter { !$0.isFactory }.map(\.name)),
                     commitMessageMode: gitCoordinator.mode,
                     defaultCommitMessagePrefix: "Add",
-                    // Default to "match the source": if the user is saving
-                    // as from a preset that ships a custom UI, start with
-                    // Custom UI selected; otherwise Sliders. Save As is
-                    // "copy and modify", not "probably wants a new UI."
-                    defaultIncludeCustomUI: presetManager.currentBundle?.hasCustomUI ?? false,
-                    onSave: { name, commitMessage, includeCustomUI in
+                    onSave: { name, commitMessage in
                         showingSaveAs = false
-                        onSaveAs(name, commitMessage, includeCustomUI)
+                        onSaveAs(name, commitMessage)
                     },
                     onDontAskAgain: {
                         gitCoordinator.mode = .alwaysTimestamp
@@ -323,26 +323,17 @@ struct PresetToolbar: View {
             .toolbarTooltip("New (\u{2318}N)")
             .accessibilityIdentifier("newScriptButton")
             .popover(isPresented: $showNewScriptDialog) {
-                VStack(spacing: 8) {
-                    Text("New Script")
-                        .font(.headline)
-                    Text("Choose a language:")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    HStack(spacing: 8) {
-                        Button("Python") {
-                            showNewScriptDialog = false
-                            onNew(.python)
+                NewPresetPopover(
+                    existingNames: Set(presetManager.presets.filter { !$0.isFactory }.map(\.name)),
+                    onCreate: { name, language, includeCustomUI in
+                        if let err = onNew(name, language, includeCustomUI) {
+                            return err
                         }
-                        .controlSize(.large)
-                        Button("Rust") {
-                            showNewScriptDialog = false
-                            onNew(.rust)
-                        }
-                        .controlSize(.large)
-                    }
-                }
-                .padding()
+                        showNewScriptDialog = false
+                        return nil
+                    },
+                    onCancel: { showNewScriptDialog = false }
+                )
             }
 
             // Delete and Rename (user/repo presets only)
