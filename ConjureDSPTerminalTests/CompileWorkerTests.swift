@@ -118,6 +118,96 @@ struct CompileWorkerTests {
         #expect(!FileManager.default.fileExists(atPath: requestURL.path))
     }
 
+    @Test("Two sequential requests both complete with distinct results")
+    func sequentialRequests() async throws {
+        let container = try makeTempContainer()
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        let worker = CompileWorker(appGroupURL: container)
+
+        func submit(id: String, language: String) throws {
+            let request = CompileRequest(
+                requestId: id,
+                language: language,
+                source: "x",
+                conjuredspRlibPath: nil,
+                cratesLibPath: nil,
+                externs: [],
+                timestamp: Date().timeIntervalSince1970
+            )
+            try JSONEncoder().encode(request).write(
+                to: container.appendingPathComponent(CompileIPC.requestFile),
+                options: .atomic
+            )
+        }
+
+        // First request
+        try submit(id: "req-1", language: "lua")
+        await worker.checkForRequests()
+        let r1 = try JSONDecoder().decode(
+            CompileResult.self,
+            from: Data(contentsOf: container.appendingPathComponent(CompileIPC.resultFile))
+        )
+        #expect(r1.requestId == "req-1")
+
+        // Second request after the first was consumed; result file gets overwritten
+        try submit(id: "req-2", language: "lua")
+        await worker.checkForRequests()
+        let r2 = try JSONDecoder().decode(
+            CompileResult.self,
+            from: Data(contentsOf: container.appendingPathComponent(CompileIPC.resultFile))
+        )
+        #expect(r2.requestId == "req-2")
+    }
+
+    @Test("Multiple queued requests before a single tick: latest wins (last-writer-wins)")
+    func concurrentRequestsLastWriterWins() async throws {
+        let container = try makeTempContainer()
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        let worker = CompileWorker(appGroupURL: container)
+
+        // Simulate two extensions racing to write before Terminal polls.
+        // Atomic writes mean one wins the last-write; the other's bytes are
+        // gone. The winning requestId is what Terminal processes.
+        let earlier = CompileRequest(
+            requestId: "req-early",
+            language: "lua",
+            source: "early",
+            conjuredspRlibPath: nil,
+            cratesLibPath: nil,
+            externs: [],
+            timestamp: Date().timeIntervalSince1970 - 1
+        )
+        let later = CompileRequest(
+            requestId: "req-late",
+            language: "lua",
+            source: "late",
+            conjuredspRlibPath: nil,
+            cratesLibPath: nil,
+            externs: [],
+            timestamp: Date().timeIntervalSince1970
+        )
+        try JSONEncoder().encode(earlier).write(
+            to: container.appendingPathComponent(CompileIPC.requestFile),
+            options: .atomic
+        )
+        try JSONEncoder().encode(later).write(
+            to: container.appendingPathComponent(CompileIPC.requestFile),
+            options: .atomic
+        )
+
+        await worker.checkForRequests()
+        let result = try JSONDecoder().decode(
+            CompileResult.self,
+            from: Data(contentsOf: container.appendingPathComponent(CompileIPC.resultFile))
+        )
+        // The earlier request's extension would poll for req-early forever,
+        // eventually time out. That's the documented multi-instance
+        // behavior — ONE concurrent compile at a time. Not a crash.
+        #expect(result.requestId == "req-late")
+    }
+
     @Test("Full roundtrip compiles source to WASM (uses repo rustc-dist)")
     func successfulRoundtrip() async throws {
         let container = try makeTempContainer()

@@ -112,6 +112,125 @@ struct LanguageDownloaderTests {
         #expect(!FileManager.default.fileExists(atPath: progressURL.path))
     }
 
+    // MARK: - Uninstall boundary
+
+    @Test("Uninstall removes only the module dir — leaves PythonRuntime + other App Group state alone")
+    func uninstallIsScopedToModuleDir() async throws {
+        let container = try makeTempContainer()
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        // Simulate a lived-in App Group container:
+        //   LanguageModules/python/         ← to be removed
+        //   LanguageModules/rustc/          ← must survive
+        //   PythonRuntime/                  ← must survive (runtime the ext uses)
+        //   subscription-token.bin          ← license state (untouched)
+        //   WasmCache/...                   ← compile cache (untouched)
+        let fm = FileManager.default
+        let pyModule = container.appendingPathComponent("LanguageModules/python/lib/python3.14t")
+        try fm.createDirectory(at: pyModule, withIntermediateDirectories: true)
+        try "manifest".data(using: .utf8)!
+            .write(to: container.appendingPathComponent("LanguageModules/python/manifest.json"))
+
+        let rustcModule = container.appendingPathComponent("LanguageModules/rustc/bin")
+        try fm.createDirectory(at: rustcModule, withIntermediateDirectories: true)
+        try "manifest".data(using: .utf8)!
+            .write(to: container.appendingPathComponent("LanguageModules/rustc/manifest.json"))
+
+        let pythonRuntime = container.appendingPathComponent("PythonRuntime/lib/python3.14t/site-packages/numpy")
+        try fm.createDirectory(at: pythonRuntime, withIntermediateDirectories: true)
+        try "numpy binary".data(using: .utf8)!
+            .write(to: pythonRuntime.appendingPathComponent("__init__.py"))
+
+        let licenseFile = container.appendingPathComponent("subscription-token.bin")
+        try "license-bytes".data(using: .utf8)!.write(to: licenseFile)
+
+        let wasmCache = container.appendingPathComponent("WasmCache/abc.wasm")
+        try fm.createDirectory(at: wasmCache.deletingLastPathComponent(),
+                               withIntermediateDirectories: true)
+        try Data([0x00, 0x61, 0x73, 0x6D]).write(to: wasmCache)
+
+        // Create the downloader FIRST — its init would otherwise discard
+        // any request file we pre-wrote as "stale" and write a failure
+        // result. Now write the uninstall request for the running worker
+        // to pick up on the next tick.
+        let downloader = LanguageDownloader(appGroupURL: container)
+
+        let uninstall = LanguageUninstallRequest(
+            requestId: "req-uninstall-py",
+            moduleName: "python",
+            timestamp: Date().timeIntervalSince1970
+        )
+        try JSONEncoder().encode(uninstall).write(
+            to: container.appendingPathComponent(LanguageModuleIPC.uninstallRequestFile),
+            options: .atomic
+        )
+        await downloader.checkForRequests()
+
+        // python module gone
+        #expect(!fm.fileExists(
+            atPath: container.appendingPathComponent("LanguageModules/python").path
+        ))
+        // rustc module intact
+        #expect(fm.fileExists(
+            atPath: container.appendingPathComponent("LanguageModules/rustc/manifest.json").path
+        ))
+        // PythonRuntime untouched — a running preset keeps working
+        #expect(fm.fileExists(atPath: pythonRuntime.appendingPathComponent("__init__.py").path))
+        // License untouched
+        #expect(fm.fileExists(atPath: licenseFile.path))
+        // Wasm cache untouched
+        #expect(fm.fileExists(atPath: wasmCache.path))
+        // Success result written for the uninstall
+        let resultURL = container.appendingPathComponent(LanguageModuleIPC.installResultFile)
+        let result = try JSONDecoder().decode(
+            LanguageInstallResult.self,
+            from: Data(contentsOf: resultURL)
+        )
+        #expect(result.success == true)
+        #expect(result.moduleName == "python")
+    }
+
+    @Test("Install of one module doesn't touch other App Group state")
+    func installBoundary() async throws {
+        let container = try makeTempContainer()
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        let fm = FileManager.default
+
+        // Pre-existing license + wasm cache in the container.
+        let licenseFile = container.appendingPathComponent("subscription-token.bin")
+        try "license".data(using: .utf8)!.write(to: licenseFile)
+        let cache = container.appendingPathComponent("WasmCache/cached.wasm")
+        try fm.createDirectory(at: cache.deletingLastPathComponent(),
+                               withIntermediateDirectories: true)
+        try Data([0, 0x61, 0x73, 0x6D]).write(to: cache)
+
+        // Queue a startup cleanup case: an install request whose SHA can't
+        // be matched (there's no real server). We rely on the downloader's
+        // stale-request cleanup path to write a failure result. This
+        // exercises init + writeResult without actually invoking the
+        // network.
+        let req = LanguageInstallRequest(
+            requestId: "req-boundary",
+            moduleName: "python",
+            version: "3.14.3",
+            url: "https://invalid.example/python.tar.gz",
+            sha256: "deadbeef",
+            timestamp: Date().timeIntervalSince1970
+        )
+        try JSONEncoder().encode(req).write(
+            to: container.appendingPathComponent(LanguageModuleIPC.installRequestFile),
+            options: .atomic
+        )
+
+        _ = LanguageDownloader(appGroupURL: container)  // init discards + writes failure
+
+        // License + cache survived the downloader init.
+        #expect(fm.fileExists(atPath: licenseFile.path))
+        #expect(fm.fileExists(atPath: cache.path))
+        #expect((try? String(contentsOf: licenseFile, encoding: .utf8)) == "license")
+    }
+
     @Test("Garbled request file is still removed (no crash, no result)")
     func garbledRequestIsCleanedUp() throws {
         let container = try makeTempContainer()
