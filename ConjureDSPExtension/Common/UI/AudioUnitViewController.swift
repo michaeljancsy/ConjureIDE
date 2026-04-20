@@ -578,6 +578,14 @@ pub extern "C" fn process(
                 case .python:
                     let result = au.reloadScript(source: source)
                     pm.setCurrentPreset(saved, source: source)
+                    // Propagate the new source to the Monaco editor.
+                    // Without this, the editor stays on the previous
+                    // preset's code while the custom UI renders the
+                    // newly-compiled metadata — the "script says width,
+                    // UI says Gain" mismatch.
+                    au.scriptSourceDidChange.send(
+                        ConjureDSPExtensionAudioUnit.ScriptSourceChange(source: source)
+                    )
                     doCommit(result.success)
                     if !result.success {
                         return result.error ?? "Failed to load new preset"
@@ -587,6 +595,9 @@ pub extern "C" fn process(
                     // Don't compile on create — user hits Run when ready.
                     au.currentScriptLanguage = .rust
                     pm.setCurrentPreset(saved, source: source)
+                    au.scriptSourceDidChange.send(
+                        ConjureDSPExtensionAudioUnit.ScriptSourceChange(source: source)
+                    )
                     doCommit(true)
                     return nil
                 }

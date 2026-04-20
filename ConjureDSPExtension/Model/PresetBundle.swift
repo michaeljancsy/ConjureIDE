@@ -239,11 +239,26 @@ extension PresetBundle {
                 const val = document.createElement('span'); val.className = 'val';
                 const fmt = (v) => Number(v).toFixed(2) + (m.unit ? ' ' + m.unit : '');
                 val.textContent = fmt(rng.value);
+                // Stage-1 logs trace the user's raw interaction. Read the
+                // [1.ui.*] lines in Console.app to see exactly what the
+                // slider is firing. Emits ONLY on the relevant pointer +
+                // value-change events, not on every frame.
+                rng.addEventListener('pointerdown', (e) => {
+                  // CDP.log('[1.ui.pointerdown] idx=' + i + ' v=' + rng.value);
+                });
+                rng.addEventListener('pointerup', (e) => {
+                  // CDP.log('[1.ui.pointerup] idx=' + i + ' v=' + rng.value);
+                });
+                rng.addEventListener('pointercancel', (e) => {
+                  // CDP.log('[1.ui.pointercancel] idx=' + i + ' v=' + rng.value);
+                });
                 rng.addEventListener('input', () => {
+                  // CDP.log('[1.ui.input] idx=' + i + ' v=' + rng.value);
                   CDP.parameters.set(i, parseFloat(rng.value));
                   val.textContent = fmt(rng.value);
                 });
                 CDP.parameters.onChange(i, (v) => {
+                  // CDP.log('[1.ui.onChange] idx=' + i + ' v=' + v);
                   rng.value = v;
                   val.textContent = fmt(v);
                 });

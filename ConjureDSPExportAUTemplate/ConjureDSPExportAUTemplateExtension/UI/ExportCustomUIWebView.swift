@@ -200,7 +200,11 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         var cancellables = Set<AnyCancellable>()
 
         private var lastSentValues: [Float] = []
-        private var suppressNextEchoForIndex: Set<Int> = []
+        // Echo suppression lives in the JS bridge (_lastSetAt). Swift
+        // unconditionally forwards value changes; the bridge decides
+        // whether to fire onChange based on proximity to the user's
+        // own recent set() call. Keeps the Swift side simple and matches
+        // the main extension's CustomUIWebView.
 
         init(theme: String) { self.lastTheme = theme }
 
@@ -296,30 +300,24 @@ struct ExportCustomUIWebView: NSViewRepresentable {
 
         func subscribe(to state: ExportParameterState) {
             guard cancellables.isEmpty else { return }
-            state.$values
+            // Forward only EXTERNAL value changes — UI writes are
+            // excluded at the Swift side via AU's originator contract.
+            // See ExportParameterState.externalValueChange docs.
+            state.externalValueChange
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] values in
-                    self?.forwardValues(values)
+                .sink { [weak self] change in
+                    self?.forwardExternalValue(index: change.index, value: change.value)
                 }
                 .store(in: &cancellables)
         }
 
-        private func forwardValues(_ values: [Float]) {
+        private func forwardExternalValue(index: Int, value: Float) {
             guard isReady, let webView else { return }
-            if lastSentValues.count != values.count {
-                lastSentValues = Array(repeating: .nan, count: values.count)
+            if index < lastSentValues.count {
+                lastSentValues[index] = value
             }
-            for i in 0..<values.count {
-                let v = values[i]
-                if suppressNextEchoForIndex.remove(i) != nil && v == lastSentValues[i] {
-                    continue
-                }
-                if lastSentValues[i] != v {
-                    lastSentValues[i] = v
-                    let js = "window.ConjureDSP && window.ConjureDSP._paramUpdate(\(i), \(Self.jsNumber(v)))"
-                    webView.evaluateJavaScript(js) { _, _ in }
-                }
-            }
+            let js = "window.ConjureDSP && window.ConjureDSP._paramUpdate(\(index), \(Self.jsNumber(value)))"
+            webView.evaluateJavaScript(js) { _, _ in }
         }
 
         // MARK: Initial state payload
@@ -377,7 +375,6 @@ struct ExportCustomUIWebView: NSViewRepresentable {
                       let index = body["index"] as? Int,
                       let value = (body["value"] as? Double).map(Float.init) ?? (body["value"] as? Float),
                       let state = parameterState else { return }
-                suppressNextEchoForIndex.insert(index)
                 state.binding(for: index).wrappedValue = value
 
             case "log":

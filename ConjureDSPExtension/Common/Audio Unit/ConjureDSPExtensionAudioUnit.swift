@@ -12,6 +12,15 @@ import os.log
 
 private let pluginLog = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "DSP")
 
+/// See CustomUIWebView.swift for the same `ParamFlow` category. Stage 5
+/// (implementorValueObserver = what actually gets written to the kernel)
+/// and stage 6 (main-thread poll of what the audio thread reads) both
+/// log here.
+private let paramFlow = Logger(
+    subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExtension",
+    category: "ParamFlow"
+)
+
 public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 {
 	// Rust DSP kernel (opaque pointer)
@@ -132,8 +141,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			let idx = Int(param.address)
 			if let meta = self.currentParamMetadata, idx < meta.count {
 				let normalized = meta[idx].normalize(value)
+				// paramFlow.notice("[5.swift.implObserver] idx=\(idx, privacy: .public) raw=\(value, privacy: .public) normalized=\(normalized, privacy: .public)")
 				dsp_kernel_set_parameter(kernelRef, param.address, normalized)
 			} else {
+				// paramFlow.notice("[5.swift.implObserver.nometa] idx=\(idx, privacy: .public) v=\(value, privacy: .public)")
 				dsp_kernel_set_parameter(kernelRef, param.address, value)
 			}
 		}
@@ -242,8 +253,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			let idx = Int(param.address)
 			if let meta = self.currentParamMetadata, idx < meta.count {
 				let normalized = meta[idx].normalize(value)
+				// paramFlow.notice("[5.swift.implObserver] idx=\(idx, privacy: .public) raw=\(value, privacy: .public) normalized=\(normalized, privacy: .public)")
 				dsp_kernel_set_parameter(kernelRef, param.address, normalized)
 			} else {
+				// paramFlow.notice("[5.swift.implObserver.nometa] idx=\(idx, privacy: .public) v=\(value, privacy: .public)")
 				dsp_kernel_set_parameter(kernelRef, param.address, value)
 			}
 		}
@@ -396,6 +409,13 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	private var mutableAudioBufferList: UnsafeMutablePointer<AudioBufferList>?
 	private var _maxFrames: AUAudioFrameCount = 0
 
+	/// Debug-only timer that samples `dsp_kernel_get_parameter` from the
+	/// main thread and logs the result. Stage 6 of the parameter-flow
+	/// trace: shows what value the audio render thread actually reads.
+	/// If UI writes show up in stages 3–5 but stage 6 stays stale, the
+	/// problem is between implementorValueObserver and the kernel.
+	private var kernelPollTimer: Timer?
+
 	@objc override init(componentDescription: AudioComponentDescription, options: AudioComponentInstantiationOptions) throws {
 		kernel = dsp_kernel_create()
 
@@ -416,6 +436,37 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		// Load the bundled Python DSP script
 		loadPythonScript()
+
+		startKernelPollTimer()
+	}
+
+	/// Last kernel-poll values (per address) so the 100ms tick only
+	/// emits a log line when a parameter actually changed. Keeps the
+	/// ParamFlow log readable instead of 10 identical lines/second.
+	private var lastKernelPollValues: [AUParameterAddress: Float] = [:]
+
+	/// Fires at 100ms, logs `[6.kernel.poll]` ONLY for params whose
+	/// kernel value changed since the last tick. A silent tick means
+	/// the audio thread still sees the same values as last time.
+	private func startKernelPollTimer() {
+		let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+			guard let self else { return }
+			let kernelRef = self.kernel!
+			let activeCount: Int = {
+				if let meta = self.currentParamMetadata { return meta.count }
+				return Self.paramCount
+			}()
+			for i in 0..<activeCount {
+				let addr = AUParameterAddress(i)
+				let v = dsp_kernel_get_parameter(kernelRef, addr)
+				if self.lastKernelPollValues[addr] != v {
+					// paramFlow.notice("[6.kernel.poll] idx=\(i, privacy: .public) v=\(v, privacy: .public)")
+					self.lastKernelPollValues[addr] = v
+				}
+			}
+		}
+		RunLoop.main.add(t, forMode: .common)
+		kernelPollTimer = t
 	}
 
 	/// Default preset loaded on AU init (before any fullState restore).
@@ -981,6 +1032,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	}
 
 	deinit {
+		kernelPollTimer?.invalidate()
 		if let kernel = kernel {
 			dsp_kernel_destroy(kernel)
 		}
@@ -1420,6 +1472,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				} else {
 					value = paramEvent.value
 				}
+				// DAW-originated render-thread automation event. Not logged —
+				// can't os_log from the audio thread without risking xruns.
+				// Stage 6's main-thread kernel poll will show the resulting
+				// kernel value; that's the observable side-effect.
 				dsp_kernel_set_parameter(kernel, paramEvent.parameterAddress, value)
 			}
 

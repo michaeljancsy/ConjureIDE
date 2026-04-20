@@ -51,6 +51,13 @@
     var _audioHandlers = [];        // [{cb, wantsFft}]
     var _audioFftOn = false;        // last FFT flag sent to Swift
 
+    // No echo-filtering state here by design. Swift side only forwards
+    // EXTERNAL parameter changes to JS (DAW automation, MIDI, MCP,
+    // preset load) via ParameterState.externalValueChange. UI-initiated
+    // writes via `parameters.set(...)` never come back to JS as
+    // `_paramUpdate` callbacks, so there's nothing to filter — the
+    // user's own drag can't fight itself.
+
     function postTo(name, payload) {
         try {
             if (window.webkit &&
@@ -97,7 +104,11 @@
             get: function(i) { return _values[i]; },
             set: function(i, value) {
                 var v = Number(value);
-                if (!isFinite(v)) return;
+                if (!isFinite(v)) {
+                    postTo('log', '[2.js.bridge.set.SKIP] idx=' + i + ' v=' + value + ' (not finite)');
+                    return;
+                }
+                postTo('log', '[2.js.bridge.set] idx=' + i + ' v=' + v);
                 _values[i] = v;
                 postTo('paramSet', { index: i, value: v });
             },
@@ -174,6 +185,12 @@
     };
 
     ConjureDSP._paramUpdate = function(i, v) {
+        // Swift only calls this for EXTERNAL changes — DAW automation,
+        // MIDI, MCP writes, preset load. UI-initiated writes via
+        // `parameters.set()` are filtered out at the Swift side by AU's
+        // originator exclusion, so we can unconditionally update state
+        // and fire onChange here.
+        postTo('log', '[8.js.bridge.update] idx=' + i + ' v=' + v);
         _values[i] = v;
         var handlers = _paramHandlers[String(i)] || [];
         for (var k = 0; k < handlers.length; k++) safeInvoke(handlers[k], [v], 'onChange');

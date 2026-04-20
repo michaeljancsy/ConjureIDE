@@ -5,6 +5,18 @@ import WebKit
 
 private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExtension", category: "CustomUI")
 
+/// Dedicated category for tracing parameter value flow end-to-end.
+/// Emits at `.notice` level so lines appear in Console.app / `log stream`
+/// without any persistence-config step. Noisy on purpose — these logs
+/// are the diagnostic tool, not ambient telemetry. Remove/lower the
+/// level once the flow is verified working.
+///
+/// Filter: `log stream --predicate 'subsystem == "com.MichaelJancsy.ConjureDSP.ConjureDSPExtension" && category == "ParamFlow"'`
+private let paramFlow = Logger(
+    subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExtension",
+    category: "ParamFlow"
+)
+
 extension Notification.Name {
     /// Posted by the preset toolbar's "Reload UI" button. Any live
     /// `CustomUIWebView` observes this and reloads its current page.
@@ -221,10 +233,18 @@ struct CustomUIWebView: NSViewRepresentable {
         /// observer token will echo it back).
         private var lastSentValues: [Float] = []
 
-        /// Values the coordinator wrote to the AU from JS, plus timestamp.
-        /// We skip the next observer-echo for each index to avoid feedback
-        /// loops / slider jitter.
-        private var suppressNextEchoForIndex: Set<Int> = []
+        // Echo suppression used to live here as `suppressNextEchoForIndex`
+        // + a 30ms debounce on forwardValues. Both were workarounds for a
+        // design bug: Swift was treating every $values change as
+        // forward-worthy, including echoes of the user's own paramSet.
+        // JS's onChange handler writes `rng.value = v`, which jerks the
+        // thumb mid-drag. The correct layer to filter is the bridge: JS
+        // knows whether an incoming value is an echo of its own set()
+        // call (see _lastSetAt in customui-bridge.js). Swift just forwards
+        // values — the bridge decides whether to fire onChange or update
+        // silently. This matches how a SwiftUI slider's drag gesture
+        // owns the thumb position independently of the bound value
+        // during active dragging.
 
         init(theme: String) {
             self.lastTheme = theme
@@ -278,12 +298,17 @@ struct CustomUIWebView: NSViewRepresentable {
         func subscribe(to state: ParameterState) {
             guard cancellables.isEmpty else { return }
 
-            // Push DAW-originated value changes to JS. Diffed against
-            // lastSentValues to coalesce bursts.
-            state.$values
+            // Forward EXTERNAL value changes to JS (DAW automation,
+            // MIDI, MCP writes, preset load). Explicitly NOT subscribed
+            // to `$values` — that fires for UI writes too, which would
+            // echo the user's own slider drags back and fight the drag.
+            // `externalValueChange` is gated by AU's originator
+            // exclusion on the observer, so it sees only true external
+            // updates.
+            state.externalValueChange
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] values in
-                    self?.forwardValues(values)
+                .sink { [weak self] change in
+                    self?.forwardExternalValue(index: change.index, value: change.value)
                 }
                 .store(in: &cancellables)
 
@@ -297,22 +322,17 @@ struct CustomUIWebView: NSViewRepresentable {
                 .store(in: &cancellables)
         }
 
-        private func forwardValues(_ values: [Float]) {
-            guard isReady, let webView else { return }
-            if lastSentValues.count != values.count {
-                lastSentValues = Array(repeating: .nan, count: values.count)
+        private func forwardExternalValue(index: Int, value: Float) {
+            guard isReady, let webView else {
+                // paramFlow.notice("[7.swift.forward.skip] idx=\(index, privacy: .public) v=\(value, privacy: .public) reason=\(self.isReady ? "no-webview" : "not-ready", privacy: .public)")
+                return
             }
-            for i in 0..<values.count {
-                let v = values[i]
-                if suppressNextEchoForIndex.remove(i) != nil && v == lastSentValues[i] {
-                    continue
-                }
-                if lastSentValues[i] != v {
-                    lastSentValues[i] = v
-                    let js = "window.ConjureDSP && window.ConjureDSP._paramUpdate(\(i), \(jsNumber(v)))"
-                    webView.evaluateJavaScript(js) { _, _ in }
-                }
+            // paramFlow.notice("[7.swift.forward] idx=\(index, privacy: .public) v=\(value, privacy: .public)")
+            if index < lastSentValues.count {
+                lastSentValues[index] = value
             }
+            let js = "window.ConjureDSP && window.ConjureDSP._paramUpdate(\(index), \(jsNumber(value)))"
+            webView.evaluateJavaScript(js) { _, _ in }
         }
 
         // MARK: Initial state payload
@@ -393,18 +413,49 @@ struct CustomUIWebView: NSViewRepresentable {
                 sendInit()
 
             case "paramSet":
-                guard let body = message.body as? [String: Any],
-                      let index = body["index"] as? Int,
-                      let value = (body["value"] as? Double).map(Float.init) ?? (body["value"] as? Float),
-                      let state = parameterState else { return }
-                suppressNextEchoForIndex.insert(index)
+                // Log BEFORE the guard so we see every message that
+                // arrives, not just the ones that parse cleanly. If a
+                // drag fires 20 JS postMessages but only 3 show up as
+                // [3.swift.paramSet], the guard is silently dropping
+                // the other 17 — previously impossible to see.
+                let rawBodyType = String(describing: type(of: message.body))
+                // paramFlow.notice("[3.swift.paramSet.arrived] body=\(String(describing: message.body), privacy: .public) type=\(rawBodyType, privacy: .public)")
+                guard let body = message.body as? [String: Any] else {
+                    // paramFlow.notice("[3.swift.paramSet.DROP] reason=body-not-dict type=\(rawBodyType, privacy: .public)")
+                    return
+                }
+                guard let index = body["index"] as? Int else {
+                    let indexType = body["index"].map { String(describing: type(of: $0)) } ?? "nil"
+                    // paramFlow.notice("[3.swift.paramSet.DROP] reason=index-not-int got=\(String(describing: body["index"]), privacy: .public) type=\(indexType, privacy: .public)")
+                    return
+                }
+                let value: Float
+                if let d = body["value"] as? Double {
+                    value = Float(d)
+                } else if let f = body["value"] as? Float {
+                    value = f
+                } else {
+                    let valueType = body["value"].map { String(describing: type(of: $0)) } ?? "nil"
+                    // paramFlow.notice("[3.swift.paramSet.DROP] reason=value-not-number got=\(String(describing: body["value"]), privacy: .public) type=\(valueType, privacy: .public)")
+                    return
+                }
+                guard let state = parameterState else {
+                    // paramFlow.notice("[3.swift.paramSet.DROP] reason=no-parameterState idx=\(index, privacy: .public) v=\(value, privacy: .public)")
+                    return
+                }
+                // paramFlow.notice("[3.swift.paramSet] idx=\(index, privacy: .public) v=\(value, privacy: .public)")
                 // Route through the existing binding so the AUParameter setter
-                // fires (same path DAW automation uses).
+                // fires (same path DAW automation uses). UI writes use our
+                // observer token as originator so the observer is excluded
+                // from its own callback → no echo back to JS.
                 state.binding(for: index).wrappedValue = value
 
             case "log":
                 let text = (message.body as? String) ?? String(describing: message.body)
-                log.info("[preset-ui] \(text, privacy: .public)")
+                // .notice so JS-originated trace logs (stages 1 + 2, and
+                // author debug) show up in `log stream` without any
+                // --level flag or persistence config.
+                log.notice("[preset-ui] \(text, privacy: .public)")
 
             case "subscribeAudioFrames":
                 // JS may (re-)post with `{ fft: true }` to request FFT bins.
