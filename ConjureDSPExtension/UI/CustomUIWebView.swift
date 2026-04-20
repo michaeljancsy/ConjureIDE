@@ -226,6 +226,12 @@ struct CustomUIWebView: NSViewRepresentable {
         var isReady = false
         var lastTheme: String
         var cancellables = Set<AnyCancellable>()
+        /// Separate bag for per-`ParameterState` subscriptions so
+        /// `subscribe(to:)` can be safely re-called (e.g. from
+        /// `updateNSView` when `parameterState` identity changes) without
+        /// stacking duplicate sinks or entangling with the long-lived
+        /// window/notification observers in `cancellables`.
+        private var paramCancellables = Set<AnyCancellable>()
 
         /// Last values sent to JS, keyed by index. Used to suppress redundant
         /// `_paramUpdate` calls when the Combine publisher fires with an
@@ -296,7 +302,10 @@ struct CustomUIWebView: NSViewRepresentable {
         // MARK: Combine subscription to parameter values
 
         func subscribe(to state: ParameterState) {
-            guard cancellables.isEmpty else { return }
+            // Clear any prior per-state subs so re-calls (e.g. from
+            // `updateNSView` when parameterState identity changes) rebind
+            // cleanly instead of stacking duplicates.
+            paramCancellables.removeAll()
 
             // Forward EXTERNAL value changes to JS (DAW automation,
             // MIDI, MCP writes, preset load). Explicitly NOT subscribed
@@ -310,7 +319,7 @@ struct CustomUIWebView: NSViewRepresentable {
                 .sink { [weak self] change in
                     self?.forwardExternalValue(index: change.index, value: change.value)
                 }
-                .store(in: &cancellables)
+                .store(in: &paramCancellables)
 
             // Metadata (script load) — re-init the JS side with a fresh
             // payload so authored UIs see the new parameter shape.
@@ -319,7 +328,7 @@ struct CustomUIWebView: NSViewRepresentable {
                 .sink { [weak self] _ in
                     self?.reinitIfReady()
                 }
-                .store(in: &cancellables)
+                .store(in: &paramCancellables)
         }
 
         private func forwardExternalValue(index: Int, value: Float) {

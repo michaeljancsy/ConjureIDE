@@ -200,7 +200,10 @@ class PresetManager: ObservableObject {
 
             do {
                 try fileManager.createDirectory(at: bundleURL, withIntermediateDirectories: true)
-                let manifest = PresetBundle.defaultManifest(language: language, includeUI: true)
+                // Legacy flat-file migration wraps an existing .py/.rs — no
+                // custom UI is being introduced, so don't emit a manifest
+                // ui block that points at a nonexistent ui/index.html.
+                let manifest = PresetBundle.defaultManifest(language: language, includeUI: false)
                 try manifest.jsonData().write(to: bundleURL.appendingPathComponent(PresetManifest.filename))
                 let scriptURL = bundleURL.appendingPathComponent(manifest.entry)
                 try fileManager.moveItem(at: url, to: scriptURL)
@@ -381,7 +384,7 @@ class PresetManager: ObservableObject {
             try fileManager.createDirectory(at: bundleURL, withIntermediateDirectories: true)
             AppGroupContainer.stripQuarantine(at: bundleURL)
 
-            let manifest = PresetBundle.defaultManifest(language: language, includeUI: true)
+            let manifest = PresetBundle.defaultManifest(language: language, includeUI: scaffoldUI)
             try manifest.jsonData().write(to: bundleURL.appendingPathComponent(PresetManifest.filename))
 
             let scriptURL = bundleURL.appendingPathComponent(manifest.entry)
