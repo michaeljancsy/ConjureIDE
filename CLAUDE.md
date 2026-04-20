@@ -563,9 +563,11 @@ The test target (`ConjureDSPTests`) has its own copy of `ExportManager.swift` wi
 
 ## Backlog Management
 
-At the start of every session, read `backlog.md` in the repo root. Always begin a session by reading backlog.md and briefly summarizing current status. At the end of every session (or when completing/starting features), update `backlog.md` to reflect:
-- Newly completed features (move from "To Do" or "In Progress" to "Done" with the date)
-- Any new feature requests or ideas that came up during the session
-- Any items that moved to "In Progress"
+The backlog lives in the Asana project **ConjureDSP Backlog** (gid `1214126484601018`), organized into sections: `In Progress`, `v1 Release`, `Post-Launch`, `Bugs`, `UX`, `Optimization`, `Other`. Access it via the Asana MCP connector.
 
-Always keep `backlog.md` as the source of truth for project status.
+At the start of every session, list open tasks in the project and briefly summarize current status. At the end of every session (or when completing/starting features), update Asana to reflect:
+- Newly completed features — mark the task complete (completion date is tracked automatically)
+- Any new feature requests or ideas that came up during the session — create a task in the appropriate section
+- Any items that moved to "In Progress" — move the task into the `In Progress` section
+
+Asana is the source of truth for project status. The legacy `backlog.md` (if still present in the repo) is a historical snapshot of the pre-2026-04-18 Done list only; do not update it.
