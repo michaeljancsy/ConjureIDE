@@ -151,7 +151,9 @@ pub extern "C" fn process(
 	deinit {
         runtimePollTimer?.invalidate()
         captureManager?.setConsumer(id: "spectrogram", active: false)
-        captureManager?.setConsumer(id: "customUI", active: false)
+        // Custom-UI audio consumer is owned by CustomUIWebView.Coordinator
+        // and deregistered in dismantleNSView — the ID is per-coordinator
+        // (`"customUI-<hash>"`), so any call from here wouldn't match.
         processProfiler?.stop()
         memoryMonitor?.stop()
         terminalServer?.stop()

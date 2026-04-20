@@ -58,7 +58,12 @@ final class BundleAssetSchemeHandler: NSObject, WKURLSchemeHandler {
         // Sandbox: candidate must stay inside rootURL. `standardizedFileURL`
         // resolves `..` segments so a path like `../../../etc/passwd` no
         // longer starts with rootURL's path and gets rejected.
-        guard candidate.path.hasPrefix(rootURL.path) else {
+        //
+        // Require either exact match OR prefix with trailing "/" — a bare
+        // hasPrefix check would match sibling paths like `/MyBundle.cdpEvil`
+        // when the root is `/MyBundle.cdp`.
+        let rootPath = rootURL.standardizedFileURL.path
+        guard candidate.path == rootPath || candidate.path.hasPrefix(rootPath + "/") else {
             throw ResolveError.outsideBundle
         }
 

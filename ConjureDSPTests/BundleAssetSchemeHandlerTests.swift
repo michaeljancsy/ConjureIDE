@@ -112,6 +112,27 @@ struct BundleAssetSchemeHandlerTests {
         }
     }
 
+    @Test func resolveRejectsSiblingDirectoryWithPathPrefix() throws {
+        // rootURL is `…/MyBundle.cdp`; a sibling `…/MyBundle.cdpEvil/secret.txt`
+        // must not resolve even though its absolute path starts with the
+        // literal string of rootURL's path. Earlier versions used
+        // `hasPrefix(rootURL.path)` which matched the sibling.
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SchemeHandlerSiblingTest_\(UUID().uuidString)", isDirectory: true)
+        let root = parent.appendingPathComponent("MyBundle.cdp", isDirectory: true)
+        let evil = parent.appendingPathComponent("MyBundle.cdpEvil", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: evil, withIntermediateDirectories: true)
+        try "secret".write(to: evil.appendingPathComponent("secret.txt"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: parent) }
+
+        let handler = BundleAssetSchemeHandler(rootURL: root)
+        let url = URL(string: "conjuredsp-preset://preset/../MyBundle.cdpEvil/secret.txt")!
+        #expect(throws: BundleAssetSchemeHandler.ResolveError.outsideBundle) {
+            try handler.resolve(requestURL: url)
+        }
+    }
+
     // MARK: - Resolve: missing / unreadable
 
     @Test func resolveReportsNotFoundForMissingFile() throws {
