@@ -549,7 +549,7 @@
                 b.type = 'button';
                 b.textContent = label;
                 b.dataset.i = i;
-                b.onclick = () => this._ctrl.setValue(i);
+                b.onclick = () => { this._ctrl.setValue(i); this._render(i); };
                 seg.append(b);
             });
             this._slotMount.append(seg);
@@ -566,7 +566,11 @@
                 o.textContent = label;
                 sel.append(o);
             });
-            sel.onchange = () => this._ctrl.setValue(Number(sel.value));
+            sel.onchange = () => {
+                var n = Number(sel.value);
+                this._ctrl.setValue(n);
+                this._render(n);
+            };
             this._slotMount.append(sel);
             this._select = sel;
             this._buttons = null;
@@ -680,6 +684,11 @@
                 var tyParam = this._invertY ? 1 - ty : ty;
                 this._cx.setValue(denormalize(tx, this._cx.metadata));
                 this._cy.setValue(denormalize(tyParam, this._cy.metadata));
+                // `parameters.set` deliberately doesn't fire onChange
+                // (echo avoidance for external automation). The puck's
+                // `_render()` is subscribed to onChange, so it wouldn't
+                // move during a local drag without an explicit nudge.
+                this._render();
             };
             apply(e);
             var move = (ev) => apply(ev);
@@ -708,6 +717,7 @@
             var ty = clamp(normalize(this._cy.value, this._cy.metadata) + (this._invertY ? -dy : dy), 0, 1);
             this._cx.setValue(denormalize(tx, this._cx.metadata));
             this._cy.setValue(denormalize(ty, this._cy.metadata));
+            this._render();
         }
     }
 

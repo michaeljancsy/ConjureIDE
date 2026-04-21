@@ -432,6 +432,38 @@ struct CdpUIComponentTests {
         #expect(top == "50%")
     }
 
+    /// Regression: a local drag on the pad must move the puck.
+    /// `parameters.set` deliberately doesn't fire `onChange` (echo-
+    /// avoidance), so a component that only subscribes to onChange
+    /// won't redraw itself during its own drag. `_startDrag` must call
+    /// `_render()` explicitly after each set.
+    @Test func xyPadPuckMovesOnInternalDrag() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [
+            ["name": "X", "min": 0.0, "max": 1.0, "default": 0.0],
+            ["name": "Y", "min": 0.0, "max": 1.0, "default": 0.0],
+        ])
+        try await createElement(h, tag: "cdp-xy", id: "xy", attrs: ["param-x": "0", "param-y": "1"])
+        try await h.eval("""
+            var xy = document.getElementById('xy');
+            var pad = xy.shadowRoot.querySelector('.pad');
+            var rect = pad.getBoundingClientRect();
+            // Simulate a pointerdown at 30% x, 40% y.
+            var e = new PointerEvent('pointerdown', {
+                pointerId: 1,
+                clientX: rect.left + rect.width * 0.3,
+                clientY: rect.top + rect.height * 0.4,
+                bubbles: true
+            });
+            pad.dispatchEvent(e);
+        """)
+        let left = try await h.eval("document.getElementById('xy').shadowRoot.querySelector('.puck').style.left") as? String
+        let top = try await h.eval("document.getElementById('xy').shadowRoot.querySelector('.puck').style.top") as? String
+        #expect(left == "30%", "puck x didn't track pointerdown — `_startDrag` likely missing an explicit `_render()` after `setValue`; got \(left ?? "nil")")
+        #expect(top == "40%", "got \(top ?? "nil")")
+    }
+
     @Test func xyPadPuckMovesOnExternalUpdate() async throws {
         let h = try Harness(html: "")
         try await h.waitForNavigationAndSetup()
