@@ -2,11 +2,19 @@
 
 Incomplete test items from open PRs. Check off as you verify each item.
 
-## PR #241 — [Lower deployment target to macOS 15 (Sequoia)](https://github.com/michaeljancsy/conjuredsp-application/pull/241)
+## PR #246 — [Strip markdown code fences on Run](https://github.com/michaeljancsy/conjuredsp-application/pull/246)
 
-- [ ] Smoke-test a Debug build on an actual macOS 15 (Sequoia) machine — host app launches, AU registers in a DAW, a Python and a Rust preset both process audio
-- [ ] Regenerate `ConjureDSPExportAUTemplate.xcodeproj` via XcodeGen to pick up the `project.yml` change
-- [ ] Sanity-check that the export flow still produces a working standalone AU
+- [ ] Paste a Python script wrapped in ```` ```python ... ``` ```` and press ⌘R — runs without error.
+- [ ] Paste a Rust script wrapped in ```` ```rust ... ``` ```` and press ⌘R — compiles and runs.
+- [ ] Unwrapped scripts continue to run as before.
+- [ ] A script that contains a fence in the middle (e.g. in a docstring) is not modified.
+
+## PR #244 — [Strip markdown code fences from Monaco paste](https://github.com/michaeljancsy/conjuredsp-application/pull/244)
+
+- [ ] Paste ```` ```python\nimport numpy\n``` ```` into the script editor and confirm only `import numpy` appears.
+- [ ] Paste a plain snippet with no backticks and confirm behavior is unchanged (undo stack, cursor position).
+- [ ] Paste inline ``` `foo` ``` and confirm backticks are stripped.
+- [ ] Paste a snippet that contains backticks in the middle but not at the ends and confirm it is inserted verbatim.
 
 ## PR #238 — [Modular language installer (Phases 1–3) — do NOT merge until release-ready](https://github.com/michaeljancsy/conjuredsp-application/pull/238)
 
