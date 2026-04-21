@@ -60,7 +60,7 @@
     // Canvas 2D can't parse `color-mix()` or the `CanvasText` keyword,
     // so we resolve the foreground color via getComputedStyle and use
     // globalAlpha for transparency.
-    function resolveFG() { return getComputedStyle(document.body).color || '#fff'; }
+    function resolveFG() { return (CDP && CDP.theme === "dark") ? "rgb(232, 232, 232)" : "rgb(24, 24, 24)"; }
     let FG = resolveFG();
     window.addEventListener('themechange', () => { FG = resolveFG(); });
 

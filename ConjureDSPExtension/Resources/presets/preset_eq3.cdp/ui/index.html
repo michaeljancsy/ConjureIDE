@@ -87,10 +87,10 @@
     }
 
     // Canvas 2D doesn't parse `color-mix()` or the `CanvasText` CSS
-    // keyword, so we resolve the foreground color once via a probe and
-    // use `globalAlpha` for transparency.
+    // keyword, so we pick an explicit rgb() foreground from the bridge's
+    // theme flag. Transparency layered via `globalAlpha`.
     function resolveFG() {
-      return getComputedStyle(document.body).color || '#fff';
+      return (CDP && CDP.theme === 'dark') ? 'rgb(232, 232, 232)' : 'rgb(24, 24, 24)';
     }
     let FG = resolveFG();
     window.addEventListener('themechange', () => { FG = resolveFG(); });
