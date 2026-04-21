@@ -220,6 +220,12 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         var isReady = false
         var lastTheme: String
         var cancellables = Set<AnyCancellable>()
+        /// Separate bag for per-`ExportParameterState` subscriptions so
+        /// `subscribe(to:)` can be safely re-called (e.g. from
+        /// `updateNSView`) without stacking duplicates or entangling with
+        /// the long-lived window-visibility observers in `cancellables`.
+        /// Mirrors the main-extension fix for the same bug.
+        private var paramCancellables = Set<AnyCancellable>()
 
         private var lastSentValues: [Float] = []
         // Echo suppression lives in the JS bridge (_lastSetAt). Swift
@@ -321,7 +327,14 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         // MARK: Combine subscription
 
         func subscribe(to state: ExportParameterState) {
-            guard cancellables.isEmpty else { return }
+            // Clear any prior per-state subs so re-calls (e.g. from
+            // `updateNSView` on identity change) rebind cleanly instead
+            // of stacking duplicates. The bare `cancellables.isEmpty`
+            // guard that lived here would always fail on re-call because
+            // `observeWindowVisibility()` populates `cancellables` at
+            // coordinator setup — making automation silently stop
+            // propagating after the first view update.
+            paramCancellables.removeAll()
             // Forward only EXTERNAL value changes — UI writes are
             // excluded at the Swift side via AU's originator contract.
             // See ExportParameterState.externalValueChange docs.
@@ -330,7 +343,7 @@ struct ExportCustomUIWebView: NSViewRepresentable {
                 .sink { [weak self] change in
                     self?.forwardExternalValue(index: change.index, value: change.value)
                 }
-                .store(in: &cancellables)
+                .store(in: &paramCancellables)
         }
 
         private func forwardExternalValue(index: Int, value: Float) {
