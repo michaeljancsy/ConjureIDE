@@ -13,7 +13,7 @@ struct CdpUIPrimitivesTests {
     /// Logic tests run without a host-app bundle, so walk back up from
     /// this source file's parent directory to the repo root, then into
     /// ConjureDSPExtension/Resources.
-    private static func loadLibrarySource() throws -> String {
+    static func loadLibrarySource() throws -> String {
         let thisFile = URL(fileURLWithPath: #filePath)
         let repoRoot = thisFile
             .deletingLastPathComponent()   // ConjureDSPLogicTests/
@@ -177,5 +177,203 @@ struct CdpUIPrimitivesTests {
         ctx.evaluateScript("try { ConjureDSP.ui.requireVersion(999); } catch (e) { globalThis._err = e.message; }")
         let msg = ctx.evaluateScript("globalThis._err")!.toString()!
         #expect(msg.contains("too old"))
+    }
+
+    // MARK: - normalizeParamName
+
+    @Test func normalizeParamNameStripsCaseAndPunct() throws {
+        let ctx = try Self.makeContext(paramMetadata: [])
+        let cases: [(String, String)] = [
+            ("low_gain", "lowgain"),
+            ("LOW_GAIN", "lowgain"),
+            ("Low Gain", "lowgain"),
+            ("low gain", "lowgain"),
+            ("  Low-Gain!  ", "lowgain"),
+            ("", ""),
+        ]
+        for (input, expected) in cases {
+            let escaped = input.replacingOccurrences(of: "\\", with: "\\\\")
+                              .replacingOccurrences(of: "\"", with: "\\\"")
+            let got = ctx.evaluateScript("ConjureDSP.ui.normalizeParamName(\"\(escaped)\")")!.toString()!
+            #expect(got == expected, "normalize(\(input)) — got \(got), want \(expected)")
+        }
+    }
+
+    @Test func normalizeParamNameHandlesNullish() throws {
+        let ctx = try Self.makeContext(paramMetadata: [])
+        let a = ctx.evaluateScript("ConjureDSP.ui.normalizeParamName(null)")!.toString()!
+        let b = ctx.evaluateScript("ConjureDSP.ui.normalizeParamName(undefined)")!.toString()!
+        #expect(a == "")
+        #expect(b == "")
+    }
+
+    // MARK: - findParam (the lookup used by every <cdp-* param="…">)
+
+    /// Python-style name: exact match against the dict key.
+    @Test func findParamExactMatchPython() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "cutoff", "min": 20.0, "max": 20000.0, "unit": "Hz"]
+        ])
+        let i = ctx.evaluateScript("ConjureDSP.ui.findParam('cutoff')")!.toInt32()
+        #expect(i == 0)
+    }
+
+    /// Rust-style Title Case name (`stringify!($NAME)` → Title Case with
+    /// spaces). The SAME UI tag in a bundle serving both variants must
+    /// resolve the parameter either way.
+    @Test func findParamMatchesRustTitleCaseFromSnakeCaseAttr() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "Low Gain", "min": -12.0, "max": 12.0, "unit": "dB"]
+        ])
+        // UI author writes `<cdp-slider param="low_gain">`; metadata
+        // comes from Rust as "Low Gain". Must still resolve to index 0.
+        let i = ctx.evaluateScript("ConjureDSP.ui.findParam('low_gain')")!.toInt32()
+        #expect(i == 0, "Rust-title-cased metadata must be findable via snake_case attribute")
+    }
+
+    @Test func findParamMatchesUppercaseIdent() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "LOW_GAIN", "min": -12.0, "max": 12.0, "unit": "dB"]
+        ])
+        let i = ctx.evaluateScript("ConjureDSP.ui.findParam('low_gain')")!.toInt32()
+        #expect(i == 0)
+    }
+
+    @Test func findParamAcceptsNumericString() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "A"], ["name": "B"], ["name": "C"]
+        ])
+        let i0 = ctx.evaluateScript("ConjureDSP.ui.findParam('0')")!.toInt32()
+        let i2 = ctx.evaluateScript("ConjureDSP.ui.findParam('2')")!.toInt32()
+        #expect(i0 == 0)
+        #expect(i2 == 2)
+    }
+
+    @Test func findParamReturnsMinusOneWhenMissing() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "cutoff"]
+        ])
+        let miss = ctx.evaluateScript("ConjureDSP.ui.findParam('resonance')")!.toInt32()
+        let empty = ctx.evaluateScript("ConjureDSP.ui.findParam('')")!.toInt32()
+        let oob = ctx.evaluateScript("ConjureDSP.ui.findParam('99')")!.toInt32()
+        #expect(miss == -1)
+        #expect(empty == -1)
+        #expect(oob == -1)
+    }
+
+    @Test func findParamExactBeatsNormalized() throws {
+        // If a bundle really does ship two params that normalize to
+        // the same thing (pathological, but possible), exact match
+        // should win over normalized.
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "Low Gain"],
+            ["name": "low_gain"],
+        ])
+        let i = ctx.evaluateScript("ConjureDSP.ui.findParam('low_gain')")!.toInt32()
+        #expect(i == 1, "exact 'low_gain' match must win over normalized 'Low Gain'")
+    }
+
+    // MARK: - control() primitive
+
+    @Test func controlReadsAndWritesValue() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "gain", "min": -24.0, "max": 12.0, "unit": "dB", "default": 0.0]
+        ])
+        let initial = ctx.evaluateScript("ConjureDSP.ui.control(0).value")!.toDouble()
+        #expect(initial == 0.0)
+
+        // setValue round-trips through the stubbed bridge.
+        ctx.evaluateScript("ConjureDSP.ui.control(0).setValue(-6.5)")
+        let after = ctx.evaluateScript("ConjureDSP.parameters.get(0)")!.toDouble()
+        #expect(after == -6.5)
+    }
+
+    @Test func controlExposesNormalizeDenormalize() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "cutoff", "min": 20.0, "max": 20000.0, "unit": "Hz", "curve": "log"]
+        ])
+        let mid = ctx.evaluateScript("ConjureDSP.ui.control(0).denormalize(0.5)")!.toDouble()
+        #expect(abs(mid - 632.4555) < 0.01)
+        let roundTrip = ctx.evaluateScript("""
+            var c = ConjureDSP.ui.control(0);
+            c.normalize(c.denormalize(0.8));
+        """)!.toDouble()
+        #expect(abs(roundTrip - 0.8) < 1e-9)
+    }
+
+    @Test func controlFormatUsesMetadata() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "Cutoff", "min": 20.0, "max": 20000.0, "unit": "Hz"]
+        ])
+        let label = ctx.evaluateScript("ConjureDSP.ui.control(0).format(5000)")!.toString()!
+        #expect(label == "5.00 kHz")
+    }
+
+    // MARK: - formatValue edge cases
+
+    @Test func formatValuePercentRoundsInteger() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "Mix", "min": 0.0, "max": 100.0, "unit": "%"]
+        ])
+        let a = ctx.evaluateScript("ConjureDSP.ui.formatValue(42.7, ConjureDSP.parameters.metadata(0))")!.toString()!
+        #expect(a == "43%")
+    }
+
+    @Test func formatValueIntegerStyleHasNoDecimal() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "Voices", "min": 1.0, "max": 16.0, "style": "integer", "unit": "v"]
+        ])
+        let a = ctx.evaluateScript("ConjureDSP.ui.formatValue(5.7, ConjureDSP.parameters.metadata(0))")!.toString()!
+        #expect(a == "6 v")
+    }
+
+    @Test func formatValueHandlesNaN() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "Gain", "min": -24.0, "max": 12.0, "unit": "dB"]
+        ])
+        let a = ctx.evaluateScript("ConjureDSP.ui.formatValue(NaN, ConjureDSP.parameters.metadata(0))")!.toString()!
+        #expect(a == "—")
+    }
+
+    // MARK: - denormalize edge cases
+
+    @Test func denormalizeLinearWithZeroRange() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "Constant", "min": 5.0, "max": 5.0]
+        ])
+        let a = ctx.evaluateScript("ConjureDSP.ui.denormalize(0.5, ConjureDSP.parameters.metadata(0))")!.toDouble()
+        #expect(a == 5.0)
+    }
+
+    @Test func denormalizeLogRejectsNonPositiveRange() throws {
+        // A log-curved range that crosses zero falls back to linear —
+        // Math.log(0) is -Infinity, so we can't do the geometric map.
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "Bad", "min": 0.0, "max": 100.0, "curve": "log"]
+        ])
+        let a = ctx.evaluateScript("ConjureDSP.ui.denormalize(0.5, ConjureDSP.parameters.metadata(0))")!.toDouble()
+        #expect(a == 50.0, "log curve with non-positive min should fall back to linear")
+    }
+
+    // MARK: - Component registration
+
+    @Test func componentsRegisterOnLoad() throws {
+        // Install a recording `customElements.define` stub, then clear
+        // `ConjureDSP.ui` so the library's double-load guard lets the
+        // IIFE re-run against our spy.
+        let ctx = try Self.makeContext(paramMetadata: [])
+        ctx.evaluateScript("""
+            var definedTags = [];
+            window.customElements = {
+                define: function(name) { definedTags.push(name); },
+                get: function() { return undefined; }
+            };
+            delete window.ConjureDSP.ui;
+        """)
+        ctx.evaluateScript(try Self.loadLibrarySource())
+        let tags = ctx.evaluateScript("definedTags.join(',')")!.toString()!
+        for expected in ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-panel"] {
+            #expect(tags.contains(expected), "expected \(expected) to be registered; got: \(tags)")
+        }
     }
 }

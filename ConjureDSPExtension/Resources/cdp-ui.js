@@ -237,26 +237,35 @@
     // a case-sensitive name match against metadata.name / metadata.key.
     // ------------------------------------------------------------------
 
+    /// Collapse a string to its alphanumeric-lowercase form. Used to
+    /// equate parameter names across variants: Python ships the dict
+    /// key literally (`"low_gain"`), Rust's `params!` macro Title-Cases
+    /// the ident (`LOW_GAIN` → `"Low Gain"` with a space). All three
+    /// collapse to `"lowgain"` and compare equal.
+    function normalizeParamName(s) {
+        return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
+
     function resolveParamAttr(attr) {
         if (attr == null || attr === '') return -1;
         var n = Number(attr);
         if (!isNaN(n) && n >= 0 && n < CDP.parameters.count) return n | 0;
-        // Exact match first (wins over case-insensitive if both are present).
+        // Exact match first (wins if multiple params normalize to the
+        // same thing, which shouldn't happen in practice).
         for (var i = 0; i < CDP.parameters.count; i++) {
             var m = CDP.parameters.metadata(i);
             if (!m) continue;
             if (m.name === attr || m.key === attr) return i;
         }
-        // Case-insensitive fallback so the same UI HTML can target both
-        // Python presets (lowercase names like `cutoff`) and Rust presets
-        // (uppercase names like `CUTOFF` emitted by the params!() macro's
-        // `stringify!($NAME)` call).
-        var low = String(attr).toLowerCase();
+        // Normalized fallback so the same UI HTML targets both Python
+        // (`"low_gain"`) and Rust (`"Low Gain"` from params!() title-
+        // casing) variants of a preset.
+        var target = normalizeParamName(attr);
         for (var j = 0; j < CDP.parameters.count; j++) {
             var mj = CDP.parameters.metadata(j);
             if (!mj) continue;
-            if ((mj.name && mj.name.toLowerCase() === low) ||
-                (mj.key && mj.key.toLowerCase() === low)) return j;
+            if ((mj.name && normalizeParamName(mj.name) === target) ||
+                (mj.key && normalizeParamName(mj.key) === target)) return j;
         }
         return -1;
     }
@@ -759,5 +768,16 @@
         formatValue: formatValue,
         denormalize: denormalize,
         normalize: normalize,
+        /// Resolve a `param="…"` attribute value to an index. Accepts
+        /// numeric strings (`"0"`), exact names (`"cutoff"`), and
+        /// normalized names (underscores, spaces, and case all ignored,
+        /// so `"Low Gain"`, `"LOW_GAIN"`, `"low_gain"`, and
+        /// `"low gain"` all resolve to the same parameter). Returns
+        /// -1 when no match is found. Exposed for authored UIs that
+        /// want the same lookup rules the library uses internally.
+        findParam: resolveParamAttr,
+        /// The canonicalization used by `findParam`. Useful for tests
+        /// and for authors doing their own name comparisons.
+        normalizeParamName: normalizeParamName,
     };
 })();
