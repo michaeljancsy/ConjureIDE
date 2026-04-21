@@ -335,11 +335,19 @@ pub extern "C" fn process(
                 .sink { [weak ps] names in
                     ps?.paramNames = names
                 }
+            // No `.receive(on: DispatchQueue.main)` here — the sink must
+            // run SYNCHRONOUSLY from `paramMetadataDidChange.send(...)`
+            // so that `ParameterState.paramMetadata` is up to date by
+            // the time the closure returns. Custom-UI webviews that
+            // race to post 'ready' during a preset switch would
+            // otherwise see the previous preset's metadata in
+            // `makeInitPayload`. All senders are on main; the
+            // subscription assertion below catches any future caller
+            // that isn't.
             paramMetadataCancellable = au.paramMetadataDidChange
-                .receive(on: DispatchQueue.main)
                 .sink { [weak ps, weak au] metadata in
+                    MainActor.assertIsolated("paramMetadataDidChange must be sent on main")
                     ps?.paramMetadata = metadata
-                    // Re-attach to the parameter tree since it was rebuilt
                     if let tree = au?.parameterTree {
                         ps?.attach(to: tree)
                     }

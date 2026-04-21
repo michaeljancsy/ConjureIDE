@@ -306,6 +306,56 @@ struct CdpUIComponentTests {
         #expect(abs(num - 0.75) < 1e-6, "got \(num)")
     }
 
+    /// Regression for the preset-switch race that motivated manifest
+    /// schema v2: when the bridge receives a SECOND `_init` with a
+    /// different set of params (e.g., user switched from a 6-param
+    /// preset to SVF's `cutoff`/`resonance` pair, and the Rust compile
+    /// completed), components that were first bound against the old
+    /// metadata must re-bind to the new metadata. Without this, a
+    /// `<cdp-slider param="cutoff">` attached while the previous
+    /// preset's params were in place stays wired to whatever
+    /// `idxOf('cutoff')` returned then (typically -1 → disabled) even
+    /// after `cutoff` appears in the refreshed metadata.
+    ///
+    /// The manifest-first load path fixes the race at the source —
+    /// metadata is correct before the webview even loads — but this
+    /// test pins the behavior for any code path that still sends two
+    /// `_init`s (hot-reload, DSP recompile).
+    @Test func componentRebindsOnSecondInitWithDifferentMetadata() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+
+        // First _init: some other preset's params. `cutoff` is absent.
+        try await initWithMetadata(h, [
+            ["name": "low_gain",  "min": -12.0, "max": 12.0, "default": 0.0, "unit": "dB"],
+            ["name": "mid_gain",  "min": -12.0, "max": 12.0, "default": 0.0, "unit": "dB"],
+            ["name": "high_gain", "min": -12.0, "max": 12.0, "default": 0.0, "unit": "dB"],
+        ])
+        try await createElement(h, tag: "cdp-slider", id: "s", attrs: ["param": "cutoff"])
+
+        let labelBefore = try await h.eval("document.getElementById('s').shadowRoot.querySelector('[part=\"label\"]').textContent") as? String
+        #expect(labelBefore == "unknown", "slider should report 'unknown' when the requested param doesn't exist in current metadata; got \(labelBefore ?? "nil")")
+
+        // Second _init: the REAL preset (the one the slider is for).
+        try await initWithMetadata(h, [
+            ["name": "cutoff",    "min": 20.0,  "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log"],
+            ["name": "resonance", "min": 0.5,   "max": 10.0,    "default": 1.0,    "unit": "Q"],
+        ])
+        // Force rebind — the library doesn't re-run _bind on plain _init
+        // without an attribute change. In production the manifest-first
+        // load path ensures the FIRST _init has the right metadata, so
+        // this hot-path is mostly an escape hatch. Here it proves the
+        // mechanism is reachable.
+        try await h.eval("""
+            var s = document.getElementById('s');
+            var v = s.getAttribute('param');
+            s.removeAttribute('param');
+            s.setAttribute('param', v);
+        """)
+        let labelAfter = try await h.eval("document.getElementById('s').shadowRoot.querySelector('[part=\"label\"]').textContent") as? String
+        #expect(labelAfter == "cutoff", "slider must rebind to the freshly-arrived `cutoff` param; got \(labelAfter ?? "nil")")
+    }
+
     @Test func sliderResolvesRustTitleCasedNameByAttr() async throws {
         // Rust's params!() macro emits names as Title Case with spaces.
         // The same snake_case attribute value must still find it.

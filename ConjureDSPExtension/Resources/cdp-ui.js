@@ -330,12 +330,14 @@
                 this._input.disabled = true;
                 return;
             }
+            this._input.disabled = false;
             this._ctrl = control(idx);
             var meta = this._ctrl.metadata || {};
-            // Default slot content — authors can override via <span slot="label">.
-            if (!this._label.textContent.trim()) {
-                this._label.textContent = meta.name || ('Param ' + idx);
-            }
+            // Always refresh the label. A prior bind when this param
+            // wasn't yet in metadata would have set "unknown"; without
+            // an unconditional overwrite here, that string sticks
+            // forever even after the real param arrives.
+            this._label.textContent = meta.name || ('Param ' + idx);
             var isInt = meta.style === 'integer';
             // Slider UI works in normalized space so log curves feel uniform.
             this._input.min = 0;

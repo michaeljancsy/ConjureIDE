@@ -1244,20 +1244,25 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			return ScriptSaveResult(success: false, error: "Failed to load preset source", processTimeMs: nil, budgetMs: nil)
 		}
 
-		// Always update preset manager and editor so the user can see the script
-		pm.setCurrentPreset(preset, source: source)
-		scriptSourceDidChange.send(ScriptSourceChange(source: source))
-
-		// Apply manifest-declared params BEFORE compiling — gives the
-		// custom-UI webview (and the stock slider panel) the right
-		// metadata immediately, instead of racing with the compile.
-		// Bundles without a `params` block in manifest.json fall through
-		// to the v1 behavior (metadata sourced post-compile).
+		// CRITICAL ORDERING: apply manifest params BEFORE
+		// `pm.setCurrentPreset`. setCurrentPreset triggers the SwiftUI
+		// view update that recreates `CustomUIWebView` with a new `.id`
+		// — the new webview starts loading immediately and races to
+		// post 'ready'. If `ParameterState.paramMetadata` isn't already
+		// the NEW preset's by the time 'ready' arrives, `sendInit`
+		// would send stale metadata from the previous preset, and the
+		// custom UI would render against wrong param indices for the
+		// whole duration of the compile.
 		if let bundle = pm.loadBundle(for: preset) {
 			applyManifestParams(bundle.manifest.resolvedParamMetadata())
 		} else {
 			applyManifestParams(nil)
 		}
+
+		// Now kick off the view update — webview gets the right
+		// metadata from its first `sendInit`.
+		pm.setCurrentPreset(preset, source: source)
+		scriptSourceDidChange.send(ScriptSourceChange(source: source))
 
 		let result = await compileAndRun(source: source)
 
