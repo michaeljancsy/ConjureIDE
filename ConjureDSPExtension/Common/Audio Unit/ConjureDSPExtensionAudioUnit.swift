@@ -98,8 +98,43 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
+	/// Compare manifest-declared metadata against what the DSP kernel
+	/// extracted from the source. Logs (os_log) on any name / range /
+	/// unit / curve / style / options drift. The manifest wins at
+	/// runtime either way — the DSP still processes whatever it reads —
+	/// but the author should see the mismatch loudly so they can fix it.
+	static func validateManifestVsDSP(manifest: [ParamMetadata], dsp: [ParamMetadata]) {
+		if manifest.count != dsp.count {
+			pluginLog.warning("Manifest declares \(manifest.count, privacy: .public) params, DSP declares \(dsp.count, privacy: .public) — counts disagree")
+		}
+		let pairs = zip(manifest, dsp)
+		for (i, (m, d)) in pairs.enumerated() {
+			if m.name != d.name {
+				pluginLog.warning("param[\(i, privacy: .public)] name drift: manifest=\(m.name, privacy: .public) dsp=\(d.name, privacy: .public)")
+			}
+			if m.min != d.min || m.max != d.max {
+				pluginLog.warning("param[\(i, privacy: .public)] \(m.name, privacy: .public) range drift: manifest=\(m.min, privacy: .public)..\(m.max, privacy: .public) dsp=\(d.min, privacy: .public)..\(d.max, privacy: .public)")
+			}
+			if m.unit != d.unit {
+				pluginLog.warning("param[\(i, privacy: .public)] \(m.name, privacy: .public) unit drift: manifest=\(m.unit, privacy: .public) dsp=\(d.unit, privacy: .public)")
+			}
+			if (m.curve ?? "linear") != (d.curve ?? "linear") {
+				pluginLog.warning("param[\(i, privacy: .public)] \(m.name, privacy: .public) curve drift: manifest=\(m.curve ?? "linear", privacy: .public) dsp=\(d.curve ?? "linear", privacy: .public)")
+			}
+			if (m.style ?? "slider") != (d.style ?? "slider") {
+				pluginLog.warning("param[\(i, privacy: .public)] \(m.name, privacy: .public) style drift: manifest=\(m.style ?? "slider", privacy: .public) dsp=\(d.style ?? "slider", privacy: .public)")
+			}
+		}
+	}
+
 	/// Current rich parameter metadata (nil = legacy 0–1 mode).
 	private(set) var currentParamMetadata: [ParamMetadata]? = nil
+
+	/// Set by `applyManifestParams` when a preset ships declarations in
+	/// `manifest.json`. Makes `currentParamMetadata` authoritative over
+	/// whatever the kernel later extracts from the DSP source, and gates
+	/// the post-load validator.
+	private var manifestDeclaredMetadata: [ParamMetadata]? = nil
 
 	/// Fires after every script load with the new param metadata (or nil).
 	public let paramMetadataDidChange = PassthroughSubject<[ParamMetadata]?, Never>()
@@ -176,6 +211,34 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 
 		self.parameterTree = tree
+	}
+
+	/// Apply parameter metadata declared in `manifest.json` as the
+	/// authoritative source. Intended to be called BEFORE
+	/// `compileAndRun` / `reloadScript` / `loadWasm` when selecting a
+	/// preset, so the AU parameter tree, stock sliders, and the custom-UI
+	/// bridge's `_init` payload all reflect the new preset's params the
+	/// instant the webview loads — rather than waiting on rustc to
+	/// finish and the kernel to extract metadata.
+	///
+	/// Pass nil to return to "DSP-extracted metadata is truth" mode for
+	/// presets whose manifest has no `params` key (v1 bundles).
+	public func applyManifestParams(_ metadata: [ParamMetadata]?) {
+		manifestDeclaredMetadata = metadata
+		if let metadata, !metadata.isEmpty {
+			currentParamMetadata = metadata
+			paramMetadataDidChange.send(metadata)
+			var names: [Int: String] = [:]
+			for (i, meta) in metadata.enumerated() { names[i] = meta.name }
+			currentParamNames = names
+			paramNamesDidChange.send(names)
+			rebuildParameterTree(metadata: metadata)
+		} else {
+			// Manifest has no declarations. Don't yank metadata here —
+			// let the next compile repopulate it from DSP extraction as
+			// before. Clearing preemptively would cause a flash of
+			// "no params" between preset select and compile complete.
+		}
 	}
 
 	/// Rebuild the parameter tree with rich metadata (real names, ranges, units).
@@ -628,6 +691,23 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			willChangeValue(forKey: "latency")
 			_latencySamples = newLatency
 			didChangeValue(forKey: "latency")
+		}
+
+		// If the preset's `manifest.json` declared `params`, those are
+		// already in place (via `applyManifestParams` before load) and
+		// take priority over whatever the kernel extracted. Run the
+		// drift validator and skip the override. Authors can edit the
+		// manifest freely; the DSP keeps processing whatever it reads.
+		if let manifest = manifestDeclaredMetadata, !manifest.isEmpty {
+			if let metaPtr = dsp_kernel_param_metadata_json(kernel) {
+				let json = String(cString: metaPtr)
+				if let data = json.data(using: .utf8),
+				   let dspMeta = try? JSONDecoder().decode([ParamMetadata].self, from: data),
+				   !dspMeta.isEmpty {
+					Self.validateManifestVsDSP(manifest: manifest, dsp: dspMeta)
+				}
+			}
+			return
 		}
 
 		// Try rich metadata first
@@ -1168,6 +1248,17 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		pm.setCurrentPreset(preset, source: source)
 		scriptSourceDidChange.send(ScriptSourceChange(source: source))
 
+		// Apply manifest-declared params BEFORE compiling — gives the
+		// custom-UI webview (and the stock slider panel) the right
+		// metadata immediately, instead of racing with the compile.
+		// Bundles without a `params` block in manifest.json fall through
+		// to the v1 behavior (metadata sourced post-compile).
+		if let bundle = pm.loadBundle(for: preset) {
+			applyManifestParams(bundle.manifest.resolvedParamMetadata())
+		} else {
+			applyManifestParams(nil)
+		}
+
 		let result = await compileAndRun(source: source)
 
 		if result.success {
@@ -1231,6 +1322,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				pluginLog.error("Factory bundle script not found: \(entry.resourceName, privacy: .public)")
 				return
 			}
+
+			// Apply manifest params BEFORE load — lets the custom UI
+			// render immediately without waiting for rustc / kernel.
+			applyManifestParams(presetBundle.manifest.resolvedParamMetadata())
 
 			switch entry.language {
 			case .python:

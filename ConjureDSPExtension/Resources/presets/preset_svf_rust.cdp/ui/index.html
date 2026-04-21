@@ -15,27 +15,6 @@
       grid-template-rows: auto auto 1fr auto;
       padding: 14px 16px; gap: 6px; box-sizing: border-box;
     }
-    /* Show a loading indicator until `CDP.ready` lands. On Rust-backed
-       presets the first-time WASM compile can take several seconds, so
-       the UI would otherwise sit blank and look broken. */
-    body.cdp-loading > #content { display: none; }
-    body:not(.cdp-loading) > #cdp-loader { display: none; }
-    #cdp-loader {
-      position: absolute; inset: 0;
-      display: flex; flex-direction: column; justify-content: center; align-items: center;
-      gap: 10px; color: color-mix(in srgb, CanvasText 55%, transparent);
-      text-transform: uppercase; letter-spacing: 0.15em; font-size: 0.8em;
-    }
-    #cdp-loader .dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: color-mix(in srgb, CanvasText 40%, transparent);
-      animation: cdp-pulse 1.2s ease-in-out infinite;
-    }
-    @keyframes cdp-pulse {
-      0%, 100% { opacity: 0.25; transform: scale(1); }
-      50% { opacity: 1; transform: scale(1.3); }
-    }
-    #content { display: contents; }
     .title {
       font-weight: 600; letter-spacing: 0.02em;
       text-transform: uppercase; font-size: 0.75em; opacity: 0.55;
@@ -63,20 +42,14 @@
     .axis .mid { text-align: center; }
   </style>
 </head>
-<body class="cdp-loading">
-  <div id="cdp-loader">
-    <div class="dot"></div>
-    <div>Loading…</div>
-  </div>
-  <div id="content">
-    <div class="title">Frequency response</div>
-    <canvas id="response" width="800" height="240"></canvas>
-    <cdp-xy param-x="cutoff" param-y="resonance" invert-y></cdp-xy>
-    <div class="axis">
-      <span>20 Hz</span>
-      <span class="mid">Cutoff  •  Q ↑</span>
-      <span>20 kHz</span>
-    </div>
+<body>
+  <div class="title">Frequency response</div>
+  <canvas id="response" width="800" height="240"></canvas>
+  <cdp-xy param-x="cutoff" param-y="resonance" invert-y></cdp-xy>
+  <div class="axis">
+    <span>20 Hz</span>
+    <span class="mid">Cutoff  •  Q ↑</span>
+    <span>20 kHz</span>
   </div>
   <script>
   (function () {
@@ -184,59 +157,15 @@
       raf = requestAnimationFrame(() => { raf = 0; drawResponse(); });
     }
 
-    // Remove the loading overlay only when the params THIS preset
-    // actually uses are present.
-    //
-    // Architectural note: `ParameterState` (the Swift object backing
-    // the bridge) persists across preset switches. When the user
-    // switches from a 6-param preset to this one, the webview is
-    // recreated, the bridge posts 'ready' immediately, and Swift's
-    // `sendInit()` fires while the Rust WASM compile is still running
-    // — so the first `_init` carries the PREVIOUS preset's metadata
-    // (6 params, not ours). A count-based gate (`count > 0`) passes
-    // immediately on the stale data and hides the loader too early.
-    // Checking for a specific param name from our own bundle is
-    // robust: only when the compile finishes and our real metadata
-    // lands do `cutoff` / `resonance` show up.
-    function maybeRevealContent() {
-      if (idxOf('cutoff') >= 0 && idxOf('resonance') >= 0) {
-        document.body.classList.remove('cdp-loading');
-        // The `<cdp-xy>` inside #content already ran its `_bind()`
-        // against whatever metadata was live at page-load time — which
-        // on a preset switch was the PREVIOUS preset's stale params.
-        // Its attributeChangedCallback re-binds on attribute change, so
-        // toggle param-x/param-y off and back on to force a rebind
-        // against the now-correct metadata. Same idea for the other
-        // components — cheap and safe.
-        document.querySelectorAll('cdp-xy, cdp-slider, cdp-toggle, cdp-choice').forEach((el) => {
-          ['param', 'param-x', 'param-y'].forEach((attr) => {
-            const v = el.getAttribute(attr);
-            if (v != null) { el.removeAttribute(attr); el.setAttribute(attr, v); }
-          });
-        });
-        return true;
-      }
-      return false;
-    }
-
     function init() {
       FG = resolveFG();
       window.addEventListener('resize', schedule);
-      if (!maybeRevealContent()) {
-        // Poll for our params to arrive. Cheap — 10 Hz for at most a
-        // few seconds while rustc runs. Safety cap at 15s so a
-        // misconfigured bundle still ends up visible.
-        var started = Date.now();
-        var poll = setInterval(function () {
-          if (maybeRevealContent() || Date.now() - started > 15000) {
-            clearInterval(poll);
-            document.body.classList.remove('cdp-loading');
-          }
-        }, 100);
-      }
       // Continuous rAF loop: cdp-ui components call parameters.set on
       // local drags which (deliberately) doesn't fire onAnyChange, so
       // we can't rely on change events alone to trigger a redraw.
+      //
+      // Manifest `params` (schema v2) means metadata is already
+      // populated by the time `_init` arrives — no loader-gate needed.
       function tick() { schedule(); requestAnimationFrame(tick); }
       tick();
     }

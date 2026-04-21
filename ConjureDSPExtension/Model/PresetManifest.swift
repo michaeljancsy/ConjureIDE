@@ -11,7 +11,7 @@ import Foundation
 struct PresetManifest: Codable, Equatable {
     /// Schema version. Increment when the wire format changes in a
     /// non-backward-compatible way.
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
     var schemaVersion: Int = Self.currentSchemaVersion
 
@@ -27,6 +27,41 @@ struct PresetManifest: Codable, Equatable {
     /// the path given by `entryHTML`) exists, the plugin renders this in place
     /// of `ParameterSlidersView`.
     var ui: UI?
+
+    /// Parameter declarations. When present, this is the authoritative
+    /// source of metadata: the AU parameter tree, stock sliders, and the
+    /// custom-UI JS bridge's `_init` all build from these BEFORE the DSP
+    /// script is compiled or loaded. That lets custom UIs render
+    /// immediately instead of waiting on rustc for a Rust preset, and
+    /// eliminates the "first `_init` has stale previous-preset metadata"
+    /// race that we otherwise paper over with UI-side loader hacks.
+    ///
+    /// A post-DSP-load validator warns when the DSP's own param
+    /// declarations drift from this list. Manifests without `params` keep
+    /// the v1 behavior (metadata sourced from DSP extraction); the loader
+    /// hacks above still apply in that path.
+    var params: [ParamDecl]?
+
+    /// Parameter declaration — mirrors
+    /// `ConjureDSPExtensionAudioUnit.ParamMetadata` intentionally. The
+    /// duplication keeps the manifest schema decoupled from the AU type
+    /// (so someone renaming the Swift field doesn't silently break
+    /// on-disk manifests) and gives the manifest a place to hold fields
+    /// the AU doesn't care about (e.g., future `data:` hint payloads).
+    struct ParamDecl: Codable, Equatable {
+        var name: String
+        var key: String?
+        var min: Float
+        var max: Float
+        var `default`: Float
+        var unit: String
+        /// "linear" (default) or "log" (geometric).
+        var curve: String?
+        /// "slider" (default), "toggle", "choice", "integer".
+        var style: String?
+        /// Label array for "choice" params.
+        var options: [String]?
+    }
 
     /// Optional free-form author metadata.
     var meta: Meta?
