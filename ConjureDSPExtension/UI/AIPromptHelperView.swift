@@ -146,11 +146,11 @@ struct AIPromptHelperView: View {
         case .python:
             langName = "Python"
             langNote = ""
-            outputInstruction = "Reply with ONLY the raw Python code. No markdown code fences, no explanation. I will paste it directly into the code editor and press ⌘R to run."
+            outputInstruction = "Reply with only the raw code inside markdown code fences (backticks). I will paste your output directly into the code editor and press cmd+R to run."
         case .rust:
             langName = "Rust"
             langNote = " (compiled to WebAssembly via wasm32-wasip1)"
-            outputInstruction = "Reply with ONLY the raw Rust code. No markdown code fences, no explanation. I will paste it directly into the code editor and press ⌘R to run."
+            outputInstruction = "Reply with only the raw code inside markdown code fences (backticks). I will paste your output directly into the code editor and press cmd+R to run."
         }
 
         let conventions: String
