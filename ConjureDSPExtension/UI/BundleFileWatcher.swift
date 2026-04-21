@@ -27,6 +27,16 @@ final class BundleFileWatcher {
 
     private var stream: FSEventStreamRef?
 
+    /// Indirection so FSEventStream can safely hold a retained reference
+    /// without pinning the watcher alive (which would break deinit-based
+    /// teardown). The box holds a weak reference; if the watcher deinits
+    /// before an already-queued callback drains, the weak ref zeroes and
+    /// the callback becomes a no-op instead of a use-after-free.
+    private final class CallbackBox {
+        weak var watcher: BundleFileWatcher?
+        init(_ w: BundleFileWatcher) { self.watcher = w }
+    }
+
     init(path: String) {
         self.path = path
     }
@@ -36,19 +46,27 @@ final class BundleFileWatcher {
     func start(on queue: DispatchQueue = .main, latency: CFTimeInterval = 0.2) {
         guard stream == nil else { return }
 
+        // Hand FSEventStream a +1-retained pointer to a weak-holding box.
+        // FSEventStream owns the box for its lifetime; the release callback
+        // drops our +1 when the stream is released in stop(). Any callback
+        // already enqueued after stop() sees box.watcher == nil (weak
+        // zeroed) and returns without touching freed memory.
+        let box = CallbackBox(self)
         var context = FSEventStreamContext(
             version: 0,
-            info: Unmanaged.passUnretained(self).toOpaque(),
+            info: Unmanaged.passRetained(box).toOpaque(),
             retain: nil,
-            release: nil,
+            release: { info in
+                guard let info else { return }
+                Unmanaged<CallbackBox>.fromOpaque(info).release()
+            },
             copyDescription: nil
         )
 
         let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
             guard let info else { return }
-            // `passUnretained` above; fromOpaque without retain.
-            let watcher = Unmanaged<BundleFileWatcher>.fromOpaque(info).takeUnretainedValue()
-            watcher.onChange?()
+            let box = Unmanaged<CallbackBox>.fromOpaque(info).takeUnretainedValue()
+            box.watcher?.onChange?()
         }
 
         let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents)

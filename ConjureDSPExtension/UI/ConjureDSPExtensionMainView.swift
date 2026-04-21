@@ -140,6 +140,15 @@ struct ConjureDSPExtensionMainView: View {
     /// Width of the bundle-file sidebar when visible. Persisted so resizes
     /// stick across sessions.
     @AppStorage("bundleFileBrowser.width") private var fileBrowserWidth: Double = 180
+    /// Drag-start snapshots for each resize handle. `DragGesture` delivers
+    /// cumulative `translation` from gesture start, so we capture the
+    /// width-at-start on the first `onChanged` and add translation to
+    /// *that* instead of the live (already-updated) width. Reset on
+    /// `onEnded`. A bare `value + translation` accumulates across every
+    /// tick and makes the panel jump to its min/max almost immediately.
+    @State private var fileBrowserResizeStart: Double? = nil
+    @State private var chatResizeStart: CGFloat? = nil
+    @State private var spectrogramResizeStart: CGFloat? = nil
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("editorTheme") private var selectedTheme: String = "conjuredsp"
 
@@ -392,8 +401,11 @@ struct ConjureDSPExtensionMainView: View {
                     .gesture(
                         DragGesture()
                             .onChanged { value in
-                                chatWidth = max(200, min(450, chatWidth + value.translation.width))
+                                let start = chatResizeStart ?? chatWidth
+                                if chatResizeStart == nil { chatResizeStart = chatWidth }
+                                chatWidth = max(200, min(450, start + value.translation.width))
                             }
+                            .onEnded { _ in chatResizeStart = nil }
                     )
                     .onHover { hovering in
                         if hovering && showChat {
@@ -443,8 +455,11 @@ struct ConjureDSPExtensionMainView: View {
                     .gesture(
                         DragGesture()
                             .onChanged { value in
-                                fileBrowserWidth = max(120, min(360, fileBrowserWidth + value.translation.width))
+                                let start: Double = fileBrowserResizeStart ?? fileBrowserWidth
+                                if fileBrowserResizeStart == nil { fileBrowserResizeStart = fileBrowserWidth }
+                                fileBrowserWidth = max(120.0, min(360.0, start + Double(value.translation.width)))
                             }
+                            .onEnded { _ in fileBrowserResizeStart = nil }
                     )
                     .onHover { hovering in
                         if hovering {
@@ -515,8 +530,11 @@ struct ConjureDSPExtensionMainView: View {
                     .gesture(
                         DragGesture()
                             .onChanged { value in
-                                spectrogramWidth = max(150, min(500, spectrogramWidth - value.translation.width))
+                                let start = spectrogramResizeStart ?? spectrogramWidth
+                                if spectrogramResizeStart == nil { spectrogramResizeStart = spectrogramWidth }
+                                spectrogramWidth = max(150, min(500, start - value.translation.width))
                             }
+                            .onEnded { _ in spectrogramResizeStart = nil }
                     )
                     .onHover { hovering in
                         if hovering {
