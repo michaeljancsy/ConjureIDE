@@ -184,10 +184,37 @@
       raf = requestAnimationFrame(() => { raf = 0; drawResponse(); });
     }
 
+    // Remove the loading overlay only when metadata is actually
+    // populated. CDP.ready fires on the first `_init`, but Swift
+    // sends that as soon as the bridge posts 'ready' — which on a
+    // Rust-backed preset happens BEFORE the WASM compile finishes,
+    // so the first `_init` arrives with an empty parameter list.
+    // Metadata lands via a second `_init` once the compile completes.
+    function maybeRevealContent() {
+      if (CDP.parameters.count > 0) {
+        document.body.classList.remove('cdp-loading');
+        return true;
+      }
+      return false;
+    }
+
     function init() {
       FG = resolveFG();
-      document.body.classList.remove('cdp-loading');
       window.addEventListener('resize', schedule);
+      if (!maybeRevealContent()) {
+        // Poll for metadata arrival. Cheap — 10 Hz for at most a
+        // few seconds while rustc runs. Safety cap at 15s so a
+        // genuinely parameterless preset still ends up visible.
+        var started = Date.now();
+        var poll = setInterval(function () {
+          if (maybeRevealContent() || Date.now() - started > 15000) {
+            clearInterval(poll);
+            if (CDP.parameters.count === 0) {
+              document.body.classList.remove('cdp-loading');
+            }
+          }
+        }, 100);
+      }
       // Continuous rAF loop: cdp-ui components call parameters.set on
       // local drags which (deliberately) doesn't fire onAnyChange, so
       // we can't rely on change events alone to trigger a redraw.
