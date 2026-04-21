@@ -269,13 +269,21 @@ struct ExportCustomUIWebView: NSViewRepresentable {
             captureManager?.setConsumer(id: audioConsumerID, active: shouldCaptureAudio)
         }
 
+        /// Latest requested FFT flag from JS. Read at forward time rather
+        /// than captured in the sink closure so a re-subscribe that flips
+        /// `fft: true ↔ false` takes effect on the existing sink instead
+        /// of being pinned to whatever `wantsFFT` was on first subscribe.
+        private var includeFFT: Bool = false
+
         fileprivate func startAudioFrameForwarding(wantsFFT: Bool) {
+            includeFFT = wantsFFT
             captureManager?.includeFFT = wantsFFT
             if audioFrameCancellable == nil, let manager = captureManager {
                 audioFrameCancellable = manager.audioFramePublisher
                     .receive(on: DispatchQueue.main)
                     .sink { [weak self] frame in
-                        self?.forwardAudioFrame(frame, includeFFT: wantsFFT)
+                        guard let self else { return }
+                        self.forwardAudioFrame(frame, includeFFT: self.includeFFT)
                     }
             }
             lastForwardTime = 0
@@ -285,6 +293,7 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         fileprivate func stopAudioFrameForwarding() {
             audioFrameCancellable?.cancel()
             audioFrameCancellable = nil
+            includeFFT = false
             captureManager?.includeFFT = false
             syncCaptureConsumer()
         }
