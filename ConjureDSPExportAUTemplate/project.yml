@@ -2,7 +2,7 @@ name: ConjureDSPExportAUTemplate
 options:
   bundleIdPrefix: com.ConjureDSP-user
   deploymentTarget:
-    macOS: "26.2"
+    macOS: "15.0"
   xcodeVersion: "16.3"
 
 settings:
