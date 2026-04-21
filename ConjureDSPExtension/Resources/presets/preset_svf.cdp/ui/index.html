@@ -61,20 +61,30 @@
       return 10 * Math.log10(gg * gg / (re * re + im * im));
     }
 
+    // Canvas 2D can't parse `color-mix()` or the `CanvasText` keyword,
+    // so we resolve the foreground color via getComputedStyle and use
+    // globalAlpha for transparency.
+    function resolveFG() { return getComputedStyle(document.body).color || '#fff'; }
+    let FG = resolveFG();
+    window.addEventListener('themechange', () => { FG = resolveFG(); });
+
     function drawResponse() {
       const w = canvas.width = canvas.clientWidth * devicePixelRatio;
       const h = canvas.height = canvas.clientHeight * devicePixelRatio;
+      if (w === 0 || h === 0) return;
       ctx.clearRect(0, 0, w, h);
       const pad = 6 * devicePixelRatio;
       const iw = w - pad * 2, ih = h - pad * 2;
 
       // Grid.
-      ctx.strokeStyle = 'color-mix(in srgb, CanvasText 12%, transparent)';
+      ctx.strokeStyle = FG;
       ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.12;
       [-24, -12, 0, 12].forEach(db => {
         const y = pad + ih * (1 - (db + 30) / 40);
         ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(w - pad, y); ctx.stroke();
       });
+      ctx.globalAlpha = 1;
 
       const fMin = 20, fMax = 20000;
       const cutoff = CDP.parameters.get(idxOf('cutoff'));
@@ -91,17 +101,19 @@
         const y = pad + ih * (1 - (db + 30) / 40);
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
-      ctx.strokeStyle = 'CanvasText';
+      ctx.strokeStyle = FG;
       ctx.lineWidth = 2 * devicePixelRatio;
       ctx.stroke();
 
       // Cutoff marker.
       const tCut = Math.log(fClamped / fMin) / Math.log(fMax / fMin);
       const xCut = pad + tCut * iw;
-      ctx.strokeStyle = 'color-mix(in srgb, CanvasText 35%, transparent)';
+      ctx.strokeStyle = FG;
+      ctx.globalAlpha = 0.35;
       ctx.setLineDash([4, 4]);
       ctx.beginPath(); ctx.moveTo(xCut, pad); ctx.lineTo(xCut, h - pad); ctx.stroke();
       ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
     }
 
     let raf = 0;

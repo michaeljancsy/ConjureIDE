@@ -86,9 +86,19 @@
       return 10 * Math.log10(num / den);
     }
 
+    // Canvas 2D doesn't parse `color-mix()` or the `CanvasText` CSS
+    // keyword, so we resolve the foreground color once via a probe and
+    // use `globalAlpha` for transparency.
+    function resolveFG() {
+      return getComputedStyle(document.body).color || '#fff';
+    }
+    let FG = resolveFG();
+    window.addEventListener('themechange', () => { FG = resolveFG(); });
+
     function drawResponse() {
       const w = canvas.width = canvas.clientWidth * devicePixelRatio;
       const h = canvas.height = canvas.clientHeight * devicePixelRatio;
+      if (w === 0 || h === 0) return;
       ctx.clearRect(0, 0, w, h);
 
       const pad = 8 * devicePixelRatio;
@@ -96,8 +106,8 @@
       const dbRange = 18;  // ±18 dB visible
 
       // Grid + zero line.
-      ctx.strokeStyle = 'color-mix(in srgb, CanvasText 10%, transparent)';
-      ctx.fillStyle = 'color-mix(in srgb, CanvasText 50%, transparent)';
+      ctx.strokeStyle = FG;
+      ctx.fillStyle = FG;
       ctx.lineWidth = 1;
       ctx.font = `${10 * devicePixelRatio}px -apple-system, sans-serif`;
       const gridDbs = [-12, -6, 0, 6, 12];
@@ -105,9 +115,13 @@
         const y = pad + innerH * (0.5 - db / (dbRange * 2));
         ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(w - pad, y);
         ctx.globalAlpha = db === 0 ? 0.4 : 0.15;
-        ctx.stroke(); ctx.globalAlpha = 1;
-        if (db !== 0) ctx.fillText(db > 0 ? `+${db}` : `${db}`, pad + 2, y - 2);
+        ctx.stroke();
+        if (db !== 0) {
+          ctx.globalAlpha = 0.5;
+          ctx.fillText(db > 0 ? `+${db}` : `${db}`, pad + 2, y - 2);
+        }
       });
+      ctx.globalAlpha = 1;
 
       // Compute coefficients per band.
       const activeCoeffs = BANDS.map(b => {
@@ -130,7 +144,7 @@
         const y = pad + innerH * (0.5 - totalDb / (dbRange * 2));
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
-      ctx.strokeStyle = 'CanvasText';
+      ctx.strokeStyle = FG;
       ctx.lineWidth = 2 * devicePixelRatio;
       ctx.stroke();
 
@@ -143,9 +157,11 @@
         const y = pad + innerH * (0.5 - (bypassed ? 0 : Math.max(-dbRange, Math.min(dbRange, gain))) / (dbRange * 2));
         ctx.beginPath();
         ctx.arc(x, y, 6 * devicePixelRatio, 0, Math.PI * 2);
-        ctx.fillStyle = bypassed ? 'color-mix(in srgb, CanvasText 25%, transparent)' : 'CanvasText';
+        ctx.fillStyle = FG;
+        ctx.globalAlpha = bypassed ? 0.25 : 1;
         ctx.fill();
       });
+      ctx.globalAlpha = 1;
     }
 
     // Case-insensitive lookup so the same UI file works for both the

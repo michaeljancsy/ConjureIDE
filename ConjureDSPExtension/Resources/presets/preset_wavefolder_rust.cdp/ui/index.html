@@ -57,9 +57,17 @@
     // Peak amplitude of the live input signal, smoothed.
     let smoothedPeak = 0;
 
+    // Canvas 2D can't parse `color-mix()` or the `CanvasText` keyword,
+    // so we resolve the foreground color via getComputedStyle and use
+    // globalAlpha for transparency.
+    function resolveFG() { return getComputedStyle(document.body).color || '#fff'; }
+    let FG = resolveFG();
+    window.addEventListener('themechange', () => { FG = resolveFG(); });
+
     function draw() {
       const w = canvas.width = canvas.clientWidth * devicePixelRatio;
       const h = canvas.height = canvas.clientHeight * devicePixelRatio;
+      if (w === 0 || h === 0) return;
       ctx.clearRect(0, 0, w, h);
       const pad = 12 * devicePixelRatio;
       const iw = w - pad * 2, ih = h - pad * 2;
@@ -69,20 +77,22 @@
       const yAt = (v) => pad + ih * (1 - (v + 1) / 2);
 
       // Axes.
-      ctx.strokeStyle = 'color-mix(in srgb, CanvasText 12%, transparent)';
+      ctx.strokeStyle = FG;
       ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.12;
       ctx.beginPath(); ctx.moveTo(pad, yAt(0)); ctx.lineTo(w - pad, yAt(0)); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(xAt(0), pad); ctx.lineTo(xAt(0), h - pad); ctx.stroke();
 
       // 1:1 reference.
-      ctx.strokeStyle = 'color-mix(in srgb, CanvasText 18%, transparent)';
+      ctx.globalAlpha = 0.18;
       ctx.setLineDash([4, 4]);
       ctx.beginPath(); ctx.moveTo(xAt(-1), yAt(-1)); ctx.lineTo(xAt(1), yAt(1)); ctx.stroke();
       ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
 
       // Fold curve.
       const drive = CDP.parameters.get(idx('drive'));
-      ctx.strokeStyle = 'CanvasText';
+      ctx.strokeStyle = FG;
       ctx.lineWidth = 2.5 * devicePixelRatio;
       ctx.beginPath();
       const N = 400;
@@ -99,8 +109,10 @@
         const y = fold(smoothedPeak * drive);
         ctx.beginPath();
         ctx.arc(xAt(smoothedPeak), yAt(y), 6 * devicePixelRatio, 0, Math.PI * 2);
-        ctx.fillStyle = 'color-mix(in srgb, CanvasText 80%, transparent)';
+        ctx.fillStyle = FG;
+        ctx.globalAlpha = 0.8;
         ctx.fill();
+        ctx.globalAlpha = 1;
       }
     }
 

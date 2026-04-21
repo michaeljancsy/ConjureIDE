@@ -61,9 +61,17 @@
     const IN_MIN = -60, IN_MAX = 0;
     const OUT_MIN = -60, OUT_MAX = 6;
 
+    // Canvas 2D can't parse `color-mix()` or the `CanvasText` keyword,
+    // so we resolve the foreground color via getComputedStyle and use
+    // globalAlpha for transparency.
+    function resolveFG() { return getComputedStyle(document.body).color || '#fff'; }
+    let FG = resolveFG();
+    window.addEventListener('themechange', () => { FG = resolveFG(); });
+
     function drawCurve() {
       const w = canvas.width = canvas.clientWidth * devicePixelRatio;
       const h = canvas.height = canvas.clientHeight * devicePixelRatio;
+      if (w === 0 || h === 0) return;
       ctx.clearRect(0, 0, w, h);
       const pad = 10 * devicePixelRatio;
       const iw = w - pad * 2, ih = h - pad * 2;
@@ -72,8 +80,9 @@
       const yAt = (db) => pad + ih * (1 - (db - OUT_MIN) / (OUT_MAX - OUT_MIN));
 
       // Grid every 12 dB.
-      ctx.strokeStyle = 'color-mix(in srgb, CanvasText 10%, transparent)';
+      ctx.strokeStyle = FG;
       ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.1;
       for (let db = IN_MIN; db <= IN_MAX; db += 12) {
         ctx.beginPath(); ctx.moveTo(xAt(db), pad); ctx.lineTo(xAt(db), h - pad); ctx.stroke();
       }
@@ -82,17 +91,18 @@
       }
 
       // 1:1 reference.
-      ctx.strokeStyle = 'color-mix(in srgb, CanvasText 20%, transparent)';
+      ctx.globalAlpha = 0.2;
       ctx.setLineDash([4, 4]);
       ctx.beginPath(); ctx.moveTo(xAt(IN_MIN), yAt(IN_MIN)); ctx.lineTo(xAt(IN_MAX), yAt(IN_MAX)); ctx.stroke();
       ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
 
       const threshold = CDP.parameters.get(idx('threshold'));
       const ratio = CDP.parameters.get(idx('ratio'));
       const makeup = CDP.parameters.get(idx('makeup'));
 
       // Compression transfer: output = min(input, threshold + (input - threshold)/ratio) + makeup
-      ctx.strokeStyle = 'CanvasText';
+      ctx.strokeStyle = FG;
       ctx.lineWidth = 2.5 * devicePixelRatio;
       ctx.beginPath();
       const N = 200;
@@ -107,10 +117,11 @@
       ctx.stroke();
 
       // Threshold marker.
-      ctx.strokeStyle = 'color-mix(in srgb, CanvasText 45%, transparent)';
+      ctx.globalAlpha = 0.45;
       ctx.setLineDash([2, 3]);
       ctx.beginPath(); ctx.moveTo(xAt(threshold), pad); ctx.lineTo(xAt(threshold), h - pad); ctx.stroke();
       ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
     }
 
     function formatDb(v) { return (v >= 0 ? '+' : '') + v.toFixed(1) + ' dB'; }
