@@ -5,27 +5,51 @@
   <title>State Variable Filter</title>
   <style>
     :root { color-scheme: light dark; }
-    html, body { margin: 0; padding: 0; height: 100%; font: 12px -apple-system, system-ui, sans-serif; background: Canvas; color: CanvasText; }
-    body { display: grid; grid-template-rows: auto 1fr auto; padding: 14px 16px; gap: 10px; box-sizing: border-box; }
-    canvas { width: 100%; height: 120px; display: block; border-radius: 6px; background: color-mix(in srgb, CanvasText 6%, Canvas); }
-    cdp-xy { --cdp-xy-size: 100%; }
-    .pad-wrap { position: relative; display: flex; justify-content: center; align-items: center; }
-    .axis { display: flex; justify-content: space-between; font-size: 0.85em; opacity: 0.6; }
-    .axis .x { text-align: center; }
-    .title { font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; font-size: 0.75em; opacity: 0.55; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      font: 12px -apple-system, system-ui, sans-serif;
+      background: Canvas; color: CanvasText;
+    }
+    body {
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      padding: 14px 16px; gap: 6px; box-sizing: border-box;
+    }
+    .title {
+      font-weight: 600; letter-spacing: 0.02em;
+      text-transform: uppercase; font-size: 0.75em; opacity: 0.55;
+    }
+    canvas {
+      width: 100%; height: 120px; display: block;
+      border-radius: 6px;
+      background: color-mix(in srgb, CanvasText 6%, Canvas);
+    }
+    /* Pad: spans the full width, non-square, so cutoff (its X axis)
+       lines up with the frequency-response canvas above. */
+    cdp-xy { display: block; width: 100%; }
+    cdp-xy::part(pad) {
+      aspect-ratio: auto;
+      max-width: none;
+      width: 100%;
+      height: 180px;
+    }
+    .axis {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      font-size: 0.85em; opacity: 0.6;
+      align-items: center;
+    }
+    .axis .mid { text-align: center; }
   </style>
 </head>
 <body>
-  <div>
-    <div class="title">Frequency response</div>
-    <canvas id="response" width="800" height="240"></canvas>
-  </div>
-  <div class="pad-wrap">
-    <cdp-xy param-x="cutoff" param-y="resonance" invert-y style="width: 240px; height: 240px;"></cdp-xy>
-  </div>
+  <div class="title">Frequency response</div>
+  <canvas id="response" width="800" height="240"></canvas>
+  <cdp-xy param-x="cutoff" param-y="resonance" invert-y></cdp-xy>
   <div class="axis">
-    <span>20 Hz ← Cutoff → 20 kHz</span>
-    <span>Q ↑</span>
+    <span>20 Hz</span>
+    <span class="mid">Cutoff  •  Q ↑</span>
+    <span>20 kHz</span>
   </div>
   <script>
   (function () {
@@ -47,13 +71,12 @@
       return -1;
     }
 
-    // TPT SVF magnitude response (LP output). See Zavalishin; lp/bp/hp are
-    // all exact with this topology so magnitude mirrors what the preset
-    // actually produces.
+    // TPT SVF magnitude response (LP output). See Zavalishin; lp/bp/hp
+    // are all exact with this topology so magnitude mirrors what the
+    // preset actually produces.
     function lpMagnitudeDb(f0, Q, f) {
       const g = Math.tan(Math.PI * f0 / SR);
       const k = 1 / Q;
-      // H_lp(s) = g^2 / (s^2 + k*g*s + g^2) with s = j*ω_tan
       const wt = Math.tan(Math.PI * f / SR);
       const gg = g * g;
       const re = gg - wt * wt;
@@ -62,9 +85,11 @@
     }
 
     // Canvas 2D can't parse `color-mix()` or the `CanvasText` keyword,
-    // so we resolve the foreground color via getComputedStyle and use
-    // globalAlpha for transparency.
-    function resolveFG() { return (CDP && CDP.theme === "dark") ? "rgb(232, 232, 232)" : "rgb(24, 24, 24)"; }
+    // so we pick explicit rgb() colors keyed off `CDP.theme` and use
+    // `globalAlpha` for transparency.
+    function resolveFG() {
+      return (CDP && CDP.theme === 'dark') ? 'rgb(232, 232, 232)' : 'rgb(24, 24, 24)';
+    }
     let FG = resolveFG();
     window.addEventListener('themechange', () => { FG = resolveFG(); schedule(); });
 
@@ -76,7 +101,7 @@
       const pad = 6 * devicePixelRatio;
       const iw = w - pad * 2, ih = h - pad * 2;
 
-      // Grid.
+      // Horizontal dB grid.
       ctx.strokeStyle = FG;
       ctx.lineWidth = 1;
       ctx.globalAlpha = 0.12;
@@ -91,6 +116,7 @@
       const Q = CDP.parameters.get(idxOf('resonance'));
       const fClamped = Math.max(20, Math.min(SR * 0.49, cutoff));
 
+      // LP magnitude curve.
       ctx.beginPath();
       const N = 256;
       for (let i = 0; i <= N; i++) {
@@ -105,7 +131,9 @@
       ctx.lineWidth = 2 * devicePixelRatio;
       ctx.stroke();
 
-      // Cutoff marker.
+      // Cutoff marker — log-frequency, so its X position on the canvas
+      // matches the puck's X position on the pad below (which uses the
+      // same log curve via param metadata).
       const tCut = Math.log(fClamped / fMin) / Math.log(fMax / fMin);
       const xCut = pad + tCut * iw;
       ctx.strokeStyle = FG;
@@ -123,13 +151,11 @@
     }
 
     function init() {
-      // CDP.theme only becomes authoritative after _init.
       FG = resolveFG();
       window.addEventListener('resize', schedule);
       // Continuous rAF loop: cdp-ui components call parameters.set on
-      // local drags which (deliberately) doesn't fire onAnyChange, so we
-      // can't rely on change events to trigger a redraw. Polling at
-      // display frame rate costs almost nothing for a single canvas.
+      // local drags which (deliberately) doesn't fire onAnyChange, so
+      // we can't rely on change events alone to trigger a redraw.
       function tick() { schedule(); requestAnimationFrame(tick); }
       tick();
     }
