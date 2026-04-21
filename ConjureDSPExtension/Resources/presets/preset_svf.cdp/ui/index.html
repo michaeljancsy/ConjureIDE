@@ -184,15 +184,36 @@
       raf = requestAnimationFrame(() => { raf = 0; drawResponse(); });
     }
 
-    // Remove the loading overlay only when metadata is actually
-    // populated. CDP.ready fires on the first `_init`, but Swift
-    // sends that as soon as the bridge posts 'ready' — which on a
-    // Rust-backed preset happens BEFORE the WASM compile finishes,
-    // so the first `_init` arrives with an empty parameter list.
-    // Metadata lands via a second `_init` once the compile completes.
+    // Remove the loading overlay only when the params THIS preset
+    // actually uses are present.
+    //
+    // Architectural note: `ParameterState` (the Swift object backing
+    // the bridge) persists across preset switches. When the user
+    // switches from a 6-param preset to this one, the webview is
+    // recreated, the bridge posts 'ready' immediately, and Swift's
+    // `sendInit()` fires while the Rust WASM compile is still running
+    // — so the first `_init` carries the PREVIOUS preset's metadata
+    // (6 params, not ours). A count-based gate (`count > 0`) passes
+    // immediately on the stale data and hides the loader too early.
+    // Checking for a specific param name from our own bundle is
+    // robust: only when the compile finishes and our real metadata
+    // lands do `cutoff` / `resonance` show up.
     function maybeRevealContent() {
-      if (CDP.parameters.count > 0) {
+      if (idxOf('cutoff') >= 0 && idxOf('resonance') >= 0) {
         document.body.classList.remove('cdp-loading');
+        // The `<cdp-xy>` inside #content already ran its `_bind()`
+        // against whatever metadata was live at page-load time — which
+        // on a preset switch was the PREVIOUS preset's stale params.
+        // Its attributeChangedCallback re-binds on attribute change, so
+        // toggle param-x/param-y off and back on to force a rebind
+        // against the now-correct metadata. Same idea for the other
+        // components — cheap and safe.
+        document.querySelectorAll('cdp-xy, cdp-slider, cdp-toggle, cdp-choice').forEach((el) => {
+          ['param', 'param-x', 'param-y'].forEach((attr) => {
+            const v = el.getAttribute(attr);
+            if (v != null) { el.removeAttribute(attr); el.setAttribute(attr, v); }
+          });
+        });
         return true;
       }
       return false;
@@ -202,16 +223,14 @@
       FG = resolveFG();
       window.addEventListener('resize', schedule);
       if (!maybeRevealContent()) {
-        // Poll for metadata arrival. Cheap — 10 Hz for at most a
+        // Poll for our params to arrive. Cheap — 10 Hz for at most a
         // few seconds while rustc runs. Safety cap at 15s so a
-        // genuinely parameterless preset still ends up visible.
+        // misconfigured bundle still ends up visible.
         var started = Date.now();
         var poll = setInterval(function () {
           if (maybeRevealContent() || Date.now() - started > 15000) {
             clearInterval(poll);
-            if (CDP.parameters.count === 0) {
-              document.body.classList.remove('cdp-loading');
-            }
+            document.body.classList.remove('cdp-loading');
           }
         }, 100);
       }
