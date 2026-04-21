@@ -1,7 +1,14 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "entry": "process.py",
   "language": "python",
+  "params": [
+    { "name": "threshold", "min": -40.0, "max": -3.0,  "default": -20.0, "unit": "dB" },
+    { "name": "ratio",     "min": 2.0,   "max": 20.0,  "default": 4.0,   "unit": ":1" },
+    { "name": "attack",    "min": 0.5,   "max": 50.0,  "default": 5.0,   "unit": "ms", "curve": "log" },
+    { "name": "release",   "min": 10.0,  "max": 500.0, "default": 50.0,  "unit": "ms", "curve": "log" },
+    { "name": "makeup",    "min": 0.0,   "max": 20.0,  "default": 0.0,   "unit": "dB" }
+  ],
   "ui": {
     "entryHTML": "ui/index.html",
     "width": 600,
