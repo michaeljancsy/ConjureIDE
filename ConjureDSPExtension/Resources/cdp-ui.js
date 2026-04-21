@@ -241,10 +241,22 @@
         if (attr == null || attr === '') return -1;
         var n = Number(attr);
         if (!isNaN(n) && n >= 0 && n < CDP.parameters.count) return n | 0;
+        // Exact match first (wins over case-insensitive if both are present).
         for (var i = 0; i < CDP.parameters.count; i++) {
             var m = CDP.parameters.metadata(i);
             if (!m) continue;
             if (m.name === attr || m.key === attr) return i;
+        }
+        // Case-insensitive fallback so the same UI HTML can target both
+        // Python presets (lowercase names like `cutoff`) and Rust presets
+        // (uppercase names like `CUTOFF` emitted by the params!() macro's
+        // `stringify!($NAME)` call).
+        var low = String(attr).toLowerCase();
+        for (var j = 0; j < CDP.parameters.count; j++) {
+            var mj = CDP.parameters.metadata(j);
+            if (!mj) continue;
+            if ((mj.name && mj.name.toLowerCase() === low) ||
+                (mj.key && mj.key.toLowerCase() === low)) return j;
         }
         return -1;
     }

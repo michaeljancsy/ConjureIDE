@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Compressor</title>
+  <style>
+    :root { color-scheme: light dark; }
+    html, body { margin: 0; padding: 0; height: 100%; font: 12px -apple-system, system-ui, sans-serif; background: Canvas; color: CanvasText; }
+    body { display: grid; grid-template-columns: 1fr 48px; grid-template-rows: auto 1fr; gap: 12px; padding: 14px 16px; box-sizing: border-box; }
+    .head { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: baseline; }
+    .title { font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; font-size: 0.75em; opacity: 0.55; }
+    .gr-readout { font-variant-numeric: tabular-nums; font-size: 1.1em; }
+    #curve { width: 100%; height: 100%; display: block; border-radius: 6px; background: color-mix(in srgb, CanvasText 6%, Canvas); }
+    .meter { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .meter-bar { position: relative; width: 16px; flex: 1 1 0; background: color-mix(in srgb, CanvasText 8%, Canvas); border-radius: 4px; overflow: hidden; }
+    .meter-fill { position: absolute; left: 0; right: 0; top: 0; background: color-mix(in srgb, CanvasText 65%, transparent); transition: height 60ms linear; }
+    .meter-label { font-size: 0.7em; opacity: 0.55; text-transform: uppercase; letter-spacing: 0.05em; }
+    .controls { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+    .ctrl { display: flex; flex-direction: column; gap: 2px; }
+    .ctrl label { font-size: 0.75em; opacity: 0.6; }
+    .ctrl cdp-slider { --cdp-label-width: 0; --cdp-value-width: 0; }
+  </style>
+</head>
+<body>
+  <div class="head">
+    <span class="title">Transfer curve</span>
+    <span class="gr-readout" id="grReadout">GR 0.0 dB</span>
+  </div>
+  <canvas id="curve" width="800" height="500"></canvas>
+  <div class="meter">
+    <div class="meter-bar"><div class="meter-fill" id="grFill"></div></div>
+    <div class="meter-label">GR</div>
+  </div>
+  <div class="controls">
+    <div class="ctrl"><label>Threshold</label><cdp-slider param="threshold"></cdp-slider></div>
+    <div class="ctrl"><label>Ratio</label><cdp-slider param="ratio"></cdp-slider></div>
+    <div class="ctrl"><label>Attack</label><cdp-slider param="attack"></cdp-slider></div>
+    <div class="ctrl"><label>Release</label><cdp-slider param="release"></cdp-slider></div>
+    <div class="ctrl"><label>Makeup</label><cdp-slider param="makeup"></cdp-slider></div>
+  </div>
+  <script>
+  (function () {
+    const CDP = window.ConjureDSP;
+    const canvas = document.getElementById('curve');
+    const ctx = canvas.getContext('2d');
+
+    function idx(key) {
+      // Case-insensitive so this UI serves both Python (lowercase)
+      // and Rust (uppercase from params!()) variants.
+      const low = String(key).toLowerCase();
+      for (let i = 0; i < CDP.parameters.count; i++) {
+        const m = CDP.parameters.metadata(i);
+        if (!m) continue;
+        if ((m.name && m.name.toLowerCase() === low) ||
+            (m.key && m.key.toLowerCase() === low)) return i;
+      }
+      return -1;
+    }
+
+    // Input dB axis: -60..0. Output dB: -60..+6 (lets makeup gain lift above zero).
+    const IN_MIN = -60, IN_MAX = 0;
+    const OUT_MIN = -60, OUT_MAX = 6;
+
+    function drawCurve() {
+      const w = canvas.width = canvas.clientWidth * devicePixelRatio;
+      const h = canvas.height = canvas.clientHeight * devicePixelRatio;
+      ctx.clearRect(0, 0, w, h);
+      const pad = 10 * devicePixelRatio;
+      const iw = w - pad * 2, ih = h - pad * 2;
+
+      const xAt = (db) => pad + iw * (db - IN_MIN) / (IN_MAX - IN_MIN);
+      const yAt = (db) => pad + ih * (1 - (db - OUT_MIN) / (OUT_MAX - OUT_MIN));
+
+      // Grid every 12 dB.
+      ctx.strokeStyle = 'color-mix(in srgb, CanvasText 10%, transparent)';
+      ctx.lineWidth = 1;
+      for (let db = IN_MIN; db <= IN_MAX; db += 12) {
+        ctx.beginPath(); ctx.moveTo(xAt(db), pad); ctx.lineTo(xAt(db), h - pad); ctx.stroke();
+      }
+      for (let db = OUT_MIN; db <= OUT_MAX; db += 12) {
+        ctx.beginPath(); ctx.moveTo(pad, yAt(db)); ctx.lineTo(w - pad, yAt(db)); ctx.stroke();
+      }
+
+      // 1:1 reference.
+      ctx.strokeStyle = 'color-mix(in srgb, CanvasText 20%, transparent)';
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(xAt(IN_MIN), yAt(IN_MIN)); ctx.lineTo(xAt(IN_MAX), yAt(IN_MAX)); ctx.stroke();
+      ctx.setLineDash([]);
+
+      const threshold = CDP.parameters.get(idx('threshold'));
+      const ratio = CDP.parameters.get(idx('ratio'));
+      const makeup = CDP.parameters.get(idx('makeup'));
+
+      // Compression transfer: output = min(input, threshold + (input - threshold)/ratio) + makeup
+      ctx.strokeStyle = 'CanvasText';
+      ctx.lineWidth = 2.5 * devicePixelRatio;
+      ctx.beginPath();
+      const N = 200;
+      for (let i = 0; i <= N; i++) {
+        const x = IN_MIN + (IN_MAX - IN_MIN) * i / N;
+        const over = x - threshold;
+        const compressed = over > 0 ? threshold + over / ratio : x;
+        const y = compressed + makeup;
+        const px = xAt(x), py = yAt(y);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+
+      // Threshold marker.
+      ctx.strokeStyle = 'color-mix(in srgb, CanvasText 45%, transparent)';
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(xAt(threshold), pad); ctx.lineTo(xAt(threshold), h - pad); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    function formatDb(v) { return (v >= 0 ? '+' : '') + v.toFixed(1) + ' dB'; }
+
+    const grFill = document.getElementById('grFill');
+    const grReadout = document.getElementById('grReadout');
+
+    let smoothedGR = 0;
+
+    function onFrame(frame) {
+      // Peak-based GR estimate: peakIn (dBFS) - peakOut (dBFS), minus makeup so
+      // we isolate the compression amount. peaks arrive in linear amplitude.
+      const pin = Math.max(1e-6, frame.peakIn || 0);
+      const pout = Math.max(1e-6, frame.peakOut || 0);
+      const dbIn = 20 * Math.log10(pin);
+      const dbOut = 20 * Math.log10(pout);
+      const makeup = CDP.parameters.get(idx('makeup')) || 0;
+      const gr = Math.max(0, dbIn - (dbOut - makeup));
+      // Smooth the reading so the bar doesn't strobe.
+      smoothedGR = smoothedGR * 0.7 + gr * 0.3;
+      const clamped = Math.min(24, smoothedGR);
+      grFill.style.height = (clamped / 24 * 100) + '%';
+      grReadout.textContent = 'GR -' + smoothedGR.toFixed(1) + ' dB';
+    }
+
+    let raf = 0;
+    function scheduleCurve() {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; drawCurve(); });
+    }
+
+    function init() {
+      CDP.parameters.onAnyChange(scheduleCurve);
+      window.addEventListener('resize', scheduleCurve);
+      CDP.audio.onFrame(onFrame);
+      scheduleCurve();
+    }
+    if (CDP && CDP.ready) CDP.ready(init);
+    else window.addEventListener('ConjureDSPReady', init);
+  })();
+  </script>
+</body>
+</html>

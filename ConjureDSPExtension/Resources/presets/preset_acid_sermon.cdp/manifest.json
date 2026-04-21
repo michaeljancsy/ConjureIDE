@@ -1,5 +1,12 @@
 {
   "schemaVersion": 1,
   "entry": "process.py",
-  "language": "python"
+  "language": "python",
+  "ui": {
+    "entryHTML": "ui/index.html",
+    "width": 520,
+    "height": 380,
+    "fps": 30,
+    "audioFrames": false
+  }
 }

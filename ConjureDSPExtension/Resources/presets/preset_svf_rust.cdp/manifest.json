@@ -1,5 +1,12 @@
 {
   "schemaVersion": 1,
   "entry": "process.rs",
-  "language": "rust"
+  "language": "rust",
+  "ui": {
+    "entryHTML": "ui/index.html",
+    "width": 480,
+    "height": 420,
+    "fps": 30,
+    "audioFrames": false
+  }
 }

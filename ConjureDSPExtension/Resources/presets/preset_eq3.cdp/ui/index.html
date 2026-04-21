@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>3-Band EQ</title>
+  <style>
+    :root { color-scheme: light dark; }
+    html, body { margin: 0; padding: 0; height: 100%; font: 12px -apple-system, system-ui, sans-serif; background: Canvas; color: CanvasText; }
+    body { display: flex; flex-direction: column; padding: 12px 16px; gap: 10px; box-sizing: border-box; }
+    canvas { width: 100%; height: 200px; display: block; border-radius: 6px; background: color-mix(in srgb, CanvasText 6%, Canvas); cursor: ns-resize; }
+    .legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .band { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border-radius: 6px; background: color-mix(in srgb, CanvasText 4%, Canvas); }
+    .band-head { display: flex; justify-content: space-between; align-items: center; }
+    .band-label { font-weight: 600; letter-spacing: 0.02em; }
+    .band-freq { font-size: 0.85em; opacity: 0.6; font-variant-numeric: tabular-nums; }
+    .band-gain { font-size: 1.1em; font-variant-numeric: tabular-nums; }
+    .band-bypass { opacity: 0.55; font-size: 0.8em; cursor: pointer; user-select: none; }
+    .band-bypass[aria-pressed="true"] { color: CanvasText; opacity: 1; font-weight: 600; }
+    .band.inactive .band-gain { opacity: 0.35; }
+  </style>
+</head>
+<body>
+  <canvas id="response" width="800" height="400"></canvas>
+  <div class="legend">
+    <div class="band" data-band="low"><div class="band-head"><span class="band-label">Low</span><span class="band-bypass" role="button" aria-pressed="false">bypass</span></div><div class="band-freq">200 Hz shelf</div><div class="band-gain">0.00 dB</div></div>
+    <div class="band" data-band="mid"><div class="band-head"><span class="band-label">Mid</span><span class="band-bypass" role="button" aria-pressed="false">bypass</span></div><div class="band-freq">1.0 kHz peak</div><div class="band-gain">0.00 dB</div></div>
+    <div class="band" data-band="high"><div class="band-head"><span class="band-label">High</span><span class="band-bypass" role="button" aria-pressed="false">bypass</span></div><div class="band-freq">5.0 kHz shelf</div><div class="band-gain">0.00 dB</div></div>
+  </div>
+  <script>
+  (function () {
+    const CDP = window.ConjureDSP;
+    const canvas = document.getElementById('response');
+    const ctx = canvas.getContext('2d');
+
+    // Must match DSP constants in process.py.
+    const BANDS = [
+      { key: 'low',  freq: 200,  type: 'lowshelf',  gainParam: 'low_gain',  bypassParam: 'low_bypass'  },
+      { key: 'mid',  freq: 1000, type: 'peak',      gainParam: 'mid_gain',  bypassParam: 'mid_bypass'  },
+      { key: 'high', freq: 5000, type: 'highshelf', gainParam: 'high_gain', bypassParam: 'high_bypass' },
+    ];
+    const Q = 0.707;
+    const SR = 48000;  // response is visualization-only; host SR only shifts Nyquist off-screen.
+
+    // RBJ cookbook biquad coefficients. Returns {b0, b1, b2, a0, a1, a2}.
+    function coeffs(type, f0, Q, gainDb, sampleRate) {
+      const A = Math.pow(10, gainDb / 40);
+      const w0 = 2 * Math.PI * f0 / sampleRate;
+      const cosw = Math.cos(w0);
+      const sinw = Math.sin(w0);
+      const alpha = sinw / (2 * Q);
+      let b0, b1, b2, a0, a1, a2;
+      if (type === 'peak') {
+        b0 = 1 + alpha * A; b1 = -2 * cosw; b2 = 1 - alpha * A;
+        a0 = 1 + alpha / A; a1 = -2 * cosw; a2 = 1 - alpha / A;
+      } else if (type === 'lowshelf') {
+        const beta = 2 * Math.sqrt(A) * alpha;
+        b0 =    A * ((A + 1) - (A - 1) * cosw + beta);
+        b1 =  2*A * ((A - 1) - (A + 1) * cosw);
+        b2 =    A * ((A + 1) - (A - 1) * cosw - beta);
+        a0 =        (A + 1) + (A - 1) * cosw + beta;
+        a1 =   -2 * ((A - 1) + (A + 1) * cosw);
+        a2 =        (A + 1) + (A - 1) * cosw - beta;
+      } else { /* highshelf */
+        const beta = 2 * Math.sqrt(A) * alpha;
+        b0 =    A * ((A + 1) + (A - 1) * cosw + beta);
+        b1 = -2*A * ((A - 1) + (A + 1) * cosw);
+        b2 =    A * ((A + 1) + (A - 1) * cosw - beta);
+        a0 =        (A + 1) - (A - 1) * cosw + beta;
+        a1 =    2 * ((A - 1) - (A + 1) * cosw);
+        a2 =        (A + 1) - (A - 1) * cosw - beta;
+      }
+      return { b0: b0/a0, b1: b1/a0, b2: b2/a0, a1: a1/a0, a2: a2/a0 };
+    }
+
+    // |H(e^jω)| for the biquad. f in Hz.
+    function magnitudeDb(c, f) {
+      const w = 2 * Math.PI * f / SR;
+      const cw = Math.cos(w), c2w = Math.cos(2*w);
+      const sw = Math.sin(w), s2w = Math.sin(2*w);
+      const nr = c.b0 + c.b1*cw + c.b2*c2w;
+      const ni = -(c.b1*sw + c.b2*s2w);
+      const dr = 1 + c.a1*cw + c.a2*c2w;
+      const di = -(c.a1*sw + c.a2*s2w);
+      const num = nr*nr + ni*ni;
+      const den = dr*dr + di*di;
+      return 10 * Math.log10(num / den);
+    }
+
+    function drawResponse() {
+      const w = canvas.width = canvas.clientWidth * devicePixelRatio;
+      const h = canvas.height = canvas.clientHeight * devicePixelRatio;
+      ctx.clearRect(0, 0, w, h);
+
+      const pad = 8 * devicePixelRatio;
+      const innerH = h - pad*2, innerW = w - pad*2;
+      const dbRange = 18;  // ±18 dB visible
+
+      // Grid + zero line.
+      ctx.strokeStyle = 'color-mix(in srgb, CanvasText 10%, transparent)';
+      ctx.fillStyle = 'color-mix(in srgb, CanvasText 50%, transparent)';
+      ctx.lineWidth = 1;
+      ctx.font = `${10 * devicePixelRatio}px -apple-system, sans-serif`;
+      const gridDbs = [-12, -6, 0, 6, 12];
+      gridDbs.forEach(db => {
+        const y = pad + innerH * (0.5 - db / (dbRange * 2));
+        ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(w - pad, y);
+        ctx.globalAlpha = db === 0 ? 0.4 : 0.15;
+        ctx.stroke(); ctx.globalAlpha = 1;
+        if (db !== 0) ctx.fillText(db > 0 ? `+${db}` : `${db}`, pad + 2, y - 2);
+      });
+
+      // Compute coefficients per band.
+      const activeCoeffs = BANDS.map(b => {
+        const gain = CDP.parameters.get(getIndex(b.gainParam));
+        const bypassed = CDP.parameters.get(getIndex(b.bypassParam)) >= 0.5;
+        return bypassed ? null : coeffs(b.type, b.freq, Q, gain, SR);
+      });
+
+      // Sweep log frequency 20 Hz -> 20 kHz.
+      const fMin = 20, fMax = 20000;
+      const N = 256;
+      ctx.beginPath();
+      for (let i = 0; i <= N; i++) {
+        const t = i / N;
+        const f = fMin * Math.pow(fMax / fMin, t);
+        let totalDb = 0;
+        activeCoeffs.forEach(c => { if (c) totalDb += magnitudeDb(c, f); });
+        totalDb = Math.max(-dbRange, Math.min(dbRange, totalDb));
+        const x = pad + t * innerW;
+        const y = pad + innerH * (0.5 - totalDb / (dbRange * 2));
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = 'CanvasText';
+      ctx.lineWidth = 2 * devicePixelRatio;
+      ctx.stroke();
+
+      // Band markers.
+      BANDS.forEach(b => {
+        const t = Math.log(b.freq / fMin) / Math.log(fMax / fMin);
+        const x = pad + t * innerW;
+        const gain = CDP.parameters.get(getIndex(b.gainParam));
+        const bypassed = CDP.parameters.get(getIndex(b.bypassParam)) >= 0.5;
+        const y = pad + innerH * (0.5 - (bypassed ? 0 : Math.max(-dbRange, Math.min(dbRange, gain))) / (dbRange * 2));
+        ctx.beginPath();
+        ctx.arc(x, y, 6 * devicePixelRatio, 0, Math.PI * 2);
+        ctx.fillStyle = bypassed ? 'color-mix(in srgb, CanvasText 25%, transparent)' : 'CanvasText';
+        ctx.fill();
+      });
+    }
+
+    // Case-insensitive lookup so the same UI file works for both the
+    // Python variant (lowercase names like `low_gain`) and the Rust
+    // variant (uppercase names like `LOW_GAIN` emitted by params!()).
+    let _nameMap = null;
+    function getIndex(key) {
+      if (!_nameMap) {
+        _nameMap = {};
+        for (let i = 0; i < CDP.parameters.count; i++) {
+          const m = CDP.parameters.metadata(i);
+          if (!m) continue;
+          if (m.key) _nameMap[m.key.toLowerCase()] = i;
+          if (m.name) _nameMap[m.name.toLowerCase()] = i;
+        }
+      }
+      return _nameMap[String(key).toLowerCase()];
+    }
+
+    // Drag a band's node vertically to set its gain.
+    let dragging = null;
+    canvas.addEventListener('pointerdown', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      // Find nearest band in log-x space.
+      const fMin = 20, fMax = 20000;
+      let nearest = null, nearestDx = 1;
+      BANDS.forEach(b => {
+        const t = Math.log(b.freq / fMin) / Math.log(fMax / fMin);
+        const dx = Math.abs(t - x);
+        if (dx < nearestDx) { nearestDx = dx; nearest = b; }
+      });
+      if (!nearest || nearestDx > 0.18) return;
+      dragging = nearest;
+      canvas.setPointerCapture(e.pointerId);
+      applyDrag(e);
+    });
+    canvas.addEventListener('pointermove', (e) => { if (dragging) applyDrag(e); });
+    const release = (e) => {
+      if (!dragging) return;
+      try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      dragging = null;
+    };
+    canvas.addEventListener('pointerup', release);
+    canvas.addEventListener('pointercancel', release);
+
+    function applyDrag(e) {
+      const rect = canvas.getBoundingClientRect();
+      const yFrac = (e.clientY - rect.top) / rect.height;
+      // -18..+18 visible dB range; clamp to ±12 (the actual param range).
+      const db = (0.5 - yFrac) * 36;
+      const clamped = Math.max(-12, Math.min(12, db));
+      CDP.parameters.set(getIndex(dragging.gainParam), clamped);
+    }
+
+    // Legend click-to-bypass.
+    document.querySelectorAll('.band').forEach(row => {
+      const key = row.dataset.band;
+      const band = BANDS.find(b => b.key === key);
+      const btn = row.querySelector('.band-bypass');
+      btn.addEventListener('click', () => {
+        const cur = CDP.parameters.get(getIndex(band.bypassParam)) >= 0.5 ? 0 : 1;
+        CDP.parameters.set(getIndex(band.bypassParam), cur);
+      });
+    });
+
+    function updateLegend() {
+      document.querySelectorAll('.band').forEach(row => {
+        const band = BANDS.find(b => b.key === row.dataset.band);
+        const gain = CDP.parameters.get(getIndex(band.gainParam));
+        const bypassed = CDP.parameters.get(getIndex(band.bypassParam)) >= 0.5;
+        row.classList.toggle('inactive', bypassed);
+        row.querySelector('.band-gain').textContent = (gain >= 0 ? '+' : '') + gain.toFixed(2) + ' dB';
+        row.querySelector('.band-bypass').setAttribute('aria-pressed', bypassed ? 'true' : 'false');
+      });
+    }
+
+    let raf = 0;
+    function scheduleRedraw() {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        drawResponse();
+        updateLegend();
+      });
+    }
+
+    function init() {
+      CDP.parameters.onAnyChange(scheduleRedraw);
+      window.addEventListener('resize', scheduleRedraw);
+      scheduleRedraw();
+    }
+
+    if (CDP && CDP.ready) CDP.ready(init);
+    else window.addEventListener('ConjureDSPReady', init);
+  })();
+  </script>
+</body>
+</html>
