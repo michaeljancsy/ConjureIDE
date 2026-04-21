@@ -42,6 +42,31 @@ const bridge = {
                 );
             });
 
+            // Strip markdown code fences from pasted text. Users often copy code from AI
+            // chatbots that wrap snippets in ```lang ... ``` fences; neither Python nor Rust
+            // use backticks syntactically, so leading/trailing backtick runs are always noise.
+            const domNode = this.editor.getDomNode();
+            if (domNode) {
+                domNode.addEventListener('paste', (e) => {
+                    const cd = e.clipboardData;
+                    if (!cd) return;
+                    const raw = cd.getData('text/plain');
+                    if (!raw) return;
+                    const cleaned = raw
+                        .replace(/^`+[^\n`]*\n?/, '')
+                        .replace(/\n?`+\s*$/, '');
+                    if (cleaned === raw) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const sel = this.editor.getSelection();
+                    this.editor.executeEdits('paste-strip-fences', [{
+                        range: sel,
+                        text: cleaned,
+                        forceMoveMarkers: true
+                    }]);
+                }, true);
+            }
+
             // Register custom color themes
             if (typeof registerConjureDSPThemes === 'function') {
                 registerConjureDSPThemes();
