@@ -66,7 +66,17 @@
     let reconnectAttempts = 0;
     let reconnectTimer = null;
     let wsPort = null;
+    let hasSentFirstInput = false;
     const MAX_RECONNECT_ATTEMPTS = 50;
+
+    function sendUserInput(data) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(data);
+        if (!hasSentFirstInput) {
+            hasSentFirstInput = true;
+            postToSwift('firstInput', {});
+        }
+    }
 
     // --- Initialize terminal ---
     function initTerminal() {
@@ -108,9 +118,7 @@
 
         // Send user input to WebSocket
         terminal.onData(function(data) {
-            if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(data);
-            }
+            sendUserInput(data);
         });
 
         // Handle resize
@@ -152,8 +160,8 @@
         // Regular character input
         inputProxy.addEventListener('input', function() {
             var text = inputProxy.textContent || '';
-            if (text && socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(text);
+            if (text) {
+                sendUserInput(text);
             }
             inputProxy.textContent = '';
         });
@@ -209,9 +217,7 @@
 
             if (data !== null) {
                 e.preventDefault();
-                if (socket && socket.readyState === WebSocket.OPEN) {
-                    socket.send(data);
-                }
+                sendUserInput(data);
             }
         });
 
@@ -242,6 +248,7 @@
 
             socket.onopen = function() {
                 reconnectAttempts = 0;
+                hasSentFirstInput = false;
                 hideStatus();
                 postToSwift('connected', {});
 
