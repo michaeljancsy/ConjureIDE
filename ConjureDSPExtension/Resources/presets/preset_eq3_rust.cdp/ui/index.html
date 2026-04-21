@@ -88,12 +88,14 @@
 
     // Canvas 2D doesn't parse `color-mix()` or the `CanvasText` CSS
     // keyword, so we pick an explicit rgb() foreground from the bridge's
-    // theme flag. Transparency layered via `globalAlpha`.
+    // theme flag. Transparency layered via `globalAlpha`. Re-resolved
+    // inside draw() so the initial 'light' default doesn't stick once
+    // CDP._init arrives with the real theme.
     function resolveFG() {
       return (CDP && CDP.theme === 'dark') ? 'rgb(232, 232, 232)' : 'rgb(24, 24, 24)';
     }
     let FG = resolveFG();
-    window.addEventListener('themechange', () => { FG = resolveFG(); });
+    window.addEventListener('themechange', () => { FG = resolveFG(); scheduleRedraw(); });
 
     function drawResponse() {
       const w = canvas.width = canvas.clientWidth * devicePixelRatio;
@@ -164,21 +166,25 @@
       ctx.globalAlpha = 1;
     }
 
-    // Case-insensitive lookup so the same UI file works for both the
-    // Python variant (lowercase names like `low_gain`) and the Rust
-    // variant (uppercase names like `LOW_GAIN` emitted by params!()).
+    // Alnum-only normalization so the same UI file matches across
+    // variants: Python emits names like `"low_gain"` (dict key),
+    // Rust's `params!` macro Title-Cases the ident to `"Low Gain"`
+    // (space, mixed case). Stripping non-alphanumerics + lowercasing
+    // lands both at `"lowgain"`.
+    function norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
     let _nameMap = null;
-    function getIndex(key) {
-      if (!_nameMap) {
-        _nameMap = {};
-        for (let i = 0; i < CDP.parameters.count; i++) {
-          const m = CDP.parameters.metadata(i);
-          if (!m) continue;
-          if (m.key) _nameMap[m.key.toLowerCase()] = i;
-          if (m.name) _nameMap[m.name.toLowerCase()] = i;
-        }
+    function rebuildNameMap() {
+      _nameMap = {};
+      for (let i = 0; i < CDP.parameters.count; i++) {
+        const m = CDP.parameters.metadata(i);
+        if (!m) continue;
+        if (m.key) _nameMap[norm(m.key)] = i;
+        if (m.name) _nameMap[norm(m.name)] = i;
       }
-      return _nameMap[String(key).toLowerCase()];
+    }
+    function getIndex(key) {
+      if (!_nameMap) rebuildNameMap();
+      return _nameMap[norm(key)];
     }
 
     // Drag a band's node vertically to set its gain.
@@ -215,6 +221,12 @@
       const db = (0.5 - yFrac) * 36;
       const clamped = Math.max(-12, Math.min(12, db));
       CDP.parameters.set(getIndex(dragging.gainParam), clamped);
+      // `parameters.set` deliberately doesn't fire onAnyChange (that path
+      // is for EXTERNAL changes only, to avoid slider-drag echo fights).
+      // Our visualization depends on a redraw after the local write, so
+      // we schedule it manually here. Same story in the bypass click
+      // handler below.
+      scheduleRedraw();
     }
 
     // Legend click-to-bypass.
@@ -225,6 +237,7 @@
       btn.addEventListener('click', () => {
         const cur = CDP.parameters.get(getIndex(band.bypassParam)) >= 0.5 ? 0 : 1;
         CDP.parameters.set(getIndex(band.bypassParam), cur);
+        scheduleRedraw();
       });
     });
 
@@ -250,6 +263,10 @@
     }
 
     function init() {
+      // CDP.theme is only authoritative after _init lands; re-resolve now
+      // and rebuild the name map against the now-populated parameter list.
+      FG = resolveFG();
+      rebuildNameMap();
       CDP.parameters.onAnyChange(scheduleRedraw);
       window.addEventListener('resize', scheduleRedraw);
       scheduleRedraw();

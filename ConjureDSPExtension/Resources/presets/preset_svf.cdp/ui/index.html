@@ -66,7 +66,7 @@
     // globalAlpha for transparency.
     function resolveFG() { return (CDP && CDP.theme === "dark") ? "rgb(232, 232, 232)" : "rgb(24, 24, 24)"; }
     let FG = resolveFG();
-    window.addEventListener('themechange', () => { FG = resolveFG(); });
+    window.addEventListener('themechange', () => { FG = resolveFG(); schedule(); });
 
     function drawResponse() {
       const w = canvas.width = canvas.clientWidth * devicePixelRatio;
@@ -123,9 +123,15 @@
     }
 
     function init() {
-      CDP.parameters.onAnyChange(schedule);
+      // CDP.theme only becomes authoritative after _init.
+      FG = resolveFG();
       window.addEventListener('resize', schedule);
-      schedule();
+      // Continuous rAF loop: cdp-ui components call parameters.set on
+      // local drags which (deliberately) doesn't fire onAnyChange, so we
+      // can't rely on change events to trigger a redraw. Polling at
+      // display frame rate costs almost nothing for a single canvas.
+      function tick() { schedule(); requestAnimationFrame(tick); }
+      tick();
     }
     if (CDP && CDP.ready) CDP.ready(init);
     else window.addEventListener('ConjureDSPReady', init);
