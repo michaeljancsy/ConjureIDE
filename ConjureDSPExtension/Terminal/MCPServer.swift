@@ -341,8 +341,8 @@ final class MCPServer {
         let requestId = request.id
         let startTime = DispatchTime.now()
         provider.executeMCPTool(toolName, inputJSON: inputJSON) { [weak self] resultJSON, isError in
+            let elapsedMs = Int(Double(DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds) / 1_000_000.0)
             Task { @MainActor in
-                let elapsedMs = Int(Double(DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds) / 1_000_000.0)
                 Analytics.track(.mcpToolCall, properties: [
                     "tool": toolName,
                     "success": !isError,
