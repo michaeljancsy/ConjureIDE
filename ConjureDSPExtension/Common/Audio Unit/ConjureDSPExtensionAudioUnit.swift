@@ -829,7 +829,35 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Marker substring emitted by conjuredsp.nam when a NAM tone file is missing.
 	private static let namNotDownloadedMarker = "NAM model not found"
 
-	public func compileAndRun(source: String) async -> (success: Bool, error: String?, warning: String?, processTimeMs: Double?, budgetMs: Double?) {
+	/// Strip leading/trailing markdown code fences (e.g. ```python ... ```) that
+	/// LLMs sometimes wrap around code. Only fences on their own lines at the
+	/// very start and end of the source are removed.
+	static func stripCodeFences(_ source: String) -> String {
+		var lines = source.components(separatedBy: "\n")
+
+		// Trim leading blank lines, remember how many so trailing trim is symmetric.
+		while let first = lines.first, first.trimmingCharacters(in: .whitespaces).isEmpty {
+			lines.removeFirst()
+		}
+		while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+			lines.removeLast()
+		}
+
+		guard let first = lines.first, let last = lines.last, lines.count >= 2 else {
+			return source
+		}
+		let firstTrim = first.trimmingCharacters(in: .whitespaces)
+		let lastTrim = last.trimmingCharacters(in: .whitespaces)
+		guard firstTrim.hasPrefix("```"), lastTrim == "```" else {
+			return source
+		}
+		lines.removeFirst()
+		lines.removeLast()
+		return lines.joined(separator: "\n")
+	}
+
+	public func compileAndRun(source rawSource: String) async -> (success: Bool, error: String?, warning: String?, processTimeMs: Double?, budgetMs: Double?) {
+		let source = Self.stripCodeFences(rawSource)
 		let language = ScriptLanguage.detect(from: source)
 
 		switch language {
