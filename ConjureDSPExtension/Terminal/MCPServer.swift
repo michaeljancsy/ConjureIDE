@@ -317,11 +317,13 @@ final class MCPServer {
     private func handleToolsCall(request: MCPProtocol.JSONRPCRequest, on connection: NWConnection) {
         guard let params = request.params,
               let toolName = params["name"]?.value as? String else {
+            Analytics.track(.mcpToolCall, properties: ["tool": "<missing>", "success": false, "reason": "missing_name"])
             sendJSONRPCError(connection: connection, id: request.id, code: -32602, message: "Missing tool name")
             return
         }
 
         guard let provider = toolProvider else {
+            Analytics.track(.mcpToolCall, properties: ["tool": toolName, "success": false, "reason": "provider_unavailable"])
             sendJSONRPCError(connection: connection, id: request.id, code: -32603, message: "Audio unit not available")
             return
         }
@@ -337,8 +339,16 @@ final class MCPServer {
         }
 
         let requestId = request.id
+        let startTime = DispatchTime.now()
         provider.executeMCPTool(toolName, inputJSON: inputJSON) { [weak self] resultJSON, isError in
             Task { @MainActor in
+                let elapsedMs = Int(Double(DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds) / 1_000_000.0)
+                Analytics.track(.mcpToolCall, properties: [
+                    "tool": toolName,
+                    "success": !isError,
+                    "duration_ms": elapsedMs,
+                ])
+
                 let toolResult = MCPProtocol.ToolCallResult(
                     content: [MCPProtocol.ContentBlock(type: "text", text: resultJSON)],
                     isError: isError ? true : nil
