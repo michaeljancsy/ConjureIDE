@@ -226,14 +226,21 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	public func applyManifestParams(_ metadata: [ParamMetadata]?) {
 		manifestDeclaredMetadata = metadata
 		if let metadata, !metadata.isEmpty {
+			// Visible marker so `log stream --subsystem ...` in Console
+			// can confirm the running binary has the schema-v2 manifest-
+			// first path active. If this line doesn't appear on preset
+			// switch, the plugin host is still running a pre-fix build.
+			let names = metadata.map { $0.name }.joined(separator: ",")
+			pluginLog.info("[manifest-v2] applyManifestParams count=\(metadata.count, privacy: .public) names=\(names, privacy: .public)")
 			currentParamMetadata = metadata
 			paramMetadataDidChange.send(metadata)
-			var names: [Int: String] = [:]
-			for (i, meta) in metadata.enumerated() { names[i] = meta.name }
-			currentParamNames = names
-			paramNamesDidChange.send(names)
+			var nameMap: [Int: String] = [:]
+			for (i, meta) in metadata.enumerated() { nameMap[i] = meta.name }
+			currentParamNames = nameMap
+			paramNamesDidChange.send(nameMap)
 			rebuildParameterTree(metadata: metadata)
 		} else {
+			pluginLog.info("[manifest-v2] applyManifestParams(nil) — falling back to DSP-extracted metadata")
 			// Manifest has no declarations. Don't yank metadata here —
 			// let the next compile repopulate it from DSP extraction as
 			// before. Clearing preemptively would cause a flash of
@@ -1254,8 +1261,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		// custom UI would render against wrong param indices for the
 		// whole duration of the compile.
 		if let bundle = pm.loadBundle(for: preset) {
+			pluginLog.info("[manifest-v2] selectPreset '\(preset.name, privacy: .public)' loaded bundle, manifest.schemaVersion=\(bundle.manifest.schemaVersion, privacy: .public), params=\(bundle.manifest.params?.count ?? 0, privacy: .public)")
 			applyManifestParams(bundle.manifest.resolvedParamMetadata())
 		} else {
+			pluginLog.info("[manifest-v2] selectPreset '\(preset.name, privacy: .public)' — no bundle")
 			applyManifestParams(nil)
 		}
 
