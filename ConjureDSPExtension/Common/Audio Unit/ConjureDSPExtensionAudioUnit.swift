@@ -233,12 +233,20 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			let names = metadata.map { $0.name }.joined(separator: ",")
 			pluginLog.info("[manifest-v2] applyManifestParams count=\(metadata.count, privacy: .public) names=\(names, privacy: .public)")
 			currentParamMetadata = metadata
-			paramMetadataDidChange.send(metadata)
 			var nameMap: [Int: String] = [:]
 			for (i, meta) in metadata.enumerated() { nameMap[i] = meta.name }
 			currentParamNames = nameMap
-			paramNamesDidChange.send(nameMap)
+			// CRITICAL: rebuild the tree BEFORE broadcasting
+			// paramMetadataDidChange. The subscription in
+			// AudioUnitViewController calls `ps.attach(to: tree)` inside
+			// the sink, which snapshots the CURRENT values. If we send
+			// first, that attach hits the PREVIOUS preset's tree — so
+			// `ParameterState.values` gets populated with stale data and
+			// the UI shows wrong numbers (e.g. "1 Hz 0 Q" instead of
+			// "1000 Hz 1 Q") for the whole duration of the Rust compile.
 			rebuildParameterTree(metadata: metadata)
+			paramNamesDidChange.send(nameMap)
+			paramMetadataDidChange.send(metadata)
 		} else {
 			pluginLog.info("[manifest-v2] applyManifestParams(nil) — falling back to DSP-extracted metadata")
 			// Manifest has no declarations. Don't yank metadata here —
