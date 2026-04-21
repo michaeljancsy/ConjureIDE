@@ -67,6 +67,18 @@ struct ExportCustomUIWebView: NSViewRepresentable {
             log.error("customui-bridge.js missing from exported AU resources")
         }
 
+        // cdp-ui.js component library (mirrors main extension).
+        if let uiLibSource = Self.uiLibrarySource() {
+            let userScript = WKUserScript(
+                source: uiLibSource,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+            config.userContentController.addUserScript(userScript)
+        } else {
+            log.error("cdp-ui.js missing from exported AU resources")
+        }
+
         let contentController = config.userContentController
         contentController.add(context.coordinator, name: "paramSet")
         contentController.add(context.coordinator, name: "ready")
@@ -160,6 +172,16 @@ struct ExportCustomUIWebView: NSViewRepresentable {
     }()
 
     private static func bridgeSource() -> String? { _cachedBridgeSource }
+
+    private static let _cachedUILibrarySource: String? = {
+        let bundle = Bundle(for: Coordinator.self)
+        guard let url = bundle.url(forResource: "cdp-ui", withExtension: "js") else {
+            return nil
+        }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }()
+
+    private static func uiLibrarySource() -> String? { _cachedUILibrarySource }
 
     // MARK: - Coordinator
 

@@ -158,115 +158,51 @@ extension PresetBundle {
         )
     }
 
-    /// Starter `ui/index.html` content used when scaffolding a new bundle with
-    /// custom UI enabled. Renders a simple labeled slider per parameter by
-    /// delegating to the `ConjureDSP.parameters` API. Authors are expected to
-    /// replace this with their own layout.
-    ///
-    /// Layout is vertically centered so presets with a small number of
-    /// parameters don't leave a giant empty region below the last row.
-    /// Rows expand to fill available width.
+    /// Starter `ui/index.html` content used when scaffolding a new
+    /// bundle with custom UI enabled. Leans on the injected `cdp-ui`
+    /// component library — `<cdp-panel auto>` renders one appropriate
+    /// control per parameter (slider / toggle / choice / etc.), matching
+    /// the Swift stock panel's behavior. Authors can replace as little
+    /// or as much as they want: drop in `<cdp-slider param="0">` or
+    /// `<cdp-xy param-x="0" param-y="1">` alongside, or strip the
+    /// panel entirely and hand-build a layout.
     static func starterIndexHTML() -> String {
         """
         <!DOCTYPE html>
         <html>
         <head>
           <meta charset="utf-8">
-          <meta http-equiv="Content-Security-Policy"
-                content="default-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:;">
           <title>Custom UI</title>
           <style>
             :root { color-scheme: light dark; }
-            * { box-sizing: border-box; }
             html, body {
-              margin: 0; padding: 0;
+              margin: 0; padding: 0; height: 100%;
               font: 13px -apple-system, system-ui, sans-serif;
-              background: Canvas;
-              color: CanvasText;
+              background: Canvas; color: CanvasText;
             }
-            html, body { height: 100%; }
             body {
-              display: flex;
-              flex-direction: column;
+              display: flex; flex-direction: column;
               justify-content: center;
               padding: 20px 24px;
-              gap: 12px;
             }
-            #rows {
-              display: flex;
-              flex-direction: column;
-              gap: 12px;
-            }
-            .row {
-              display: grid;
-              grid-template-columns: minmax(80px, 120px) 1fr minmax(60px, 88px);
-              align-items: center;
-              gap: 12px;
-            }
-            .row label {
-              font-weight: 500;
-              white-space: nowrap;
-              overflow: hidden;
-              text-overflow: ellipsis;
-            }
-            .row input[type=range] {
-              width: 100%;
-              accent-color: currentColor;
-            }
-            .row .val {
-              text-align: right;
-              font-variant-numeric: tabular-nums;
-              opacity: 0.7;
+            /* Theme the cdp-ui components via CSS custom properties. */
+            cdp-panel, cdp-slider, cdp-toggle, cdp-choice, cdp-xy {
+              --cdp-accent: currentColor;
             }
           </style>
         </head>
         <body>
-          <div id="rows"></div>
-          <script>
-            const CDP = window.ConjureDSP;
-            function render() {
-              const host = document.getElementById('rows');
-              host.innerHTML = '';
-              const n = CDP.parameters.count;
-              for (let i = 0; i < n; i++) {
-                const m = CDP.parameters.metadata(i);
-                const row = document.createElement('div'); row.className = 'row';
-                const lbl = document.createElement('label'); lbl.textContent = m.name || ('Param ' + i);
-                const rng = document.createElement('input'); rng.type = 'range';
-                rng.min = m.min ?? 0; rng.max = m.max ?? 1;
-                rng.step = (m.style === 'integer' || m.style === 'choice') ? 1 : ((m.max - m.min) / 1000);
-                rng.value = CDP.parameters.get(i);
-                const val = document.createElement('span'); val.className = 'val';
-                const fmt = (v) => Number(v).toFixed(2) + (m.unit ? ' ' + m.unit : '');
-                val.textContent = fmt(rng.value);
-                // Stage-1 logs trace the user's raw interaction. Read the
-                // [1.ui.*] lines in Console.app to see exactly what the
-                // slider is firing. Emits ONLY on the relevant pointer +
-                // value-change events, not on every frame.
-                rng.addEventListener('pointerdown', (e) => {
-                  // CDP.log('[1.ui.pointerdown] idx=' + i + ' v=' + rng.value);
-                });
-                rng.addEventListener('pointerup', (e) => {
-                  // CDP.log('[1.ui.pointerup] idx=' + i + ' v=' + rng.value);
-                });
-                rng.addEventListener('pointercancel', (e) => {
-                  // CDP.log('[1.ui.pointercancel] idx=' + i + ' v=' + rng.value);
-                });
-                rng.addEventListener('input', () => {
-                  // CDP.log('[1.ui.input] idx=' + i + ' v=' + rng.value);
-                  CDP.parameters.set(i, parseFloat(rng.value));
-                  val.textContent = fmt(rng.value);
-                });
-                CDP.parameters.onChange(i, (v) => {
-                  // CDP.log('[1.ui.onChange] idx=' + i + ' v=' + v);
-                  rng.value = v;
-                  val.textContent = fmt(v);
-                });
-                row.append(lbl, rng, val); host.append(row);
-              }
-            }
-            if (CDP && CDP.ready) { CDP.ready(render); } else { window.addEventListener('ConjureDSPReady', render); }
-          </script>
+          <cdp-panel auto></cdp-panel>
+          <!--
+            Swap the line above for anything you want. Examples:
+              <cdp-slider param="0"></cdp-slider>
+              <cdp-toggle param="Bypass"></cdp-toggle>
+              <cdp-choice param="Mode"></cdp-choice>
+              <cdp-xy param-x="0" param-y="1"></cdp-xy>
+            The library is documented at `window.ConjureDSP.ui` —
+            primitives (ConjureDSP.ui.control(i), formatValue, ...) are
+            available when you want to render your own widgets.
+          -->
         </body>
         </html>
         """

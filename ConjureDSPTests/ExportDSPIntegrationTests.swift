@@ -1221,13 +1221,15 @@ struct ExportDSPIntegrationTests {
         #expect(savedHTML == canonicalHTML,
                 "Bundle's ui/index.html drifted from PresetBundle.starterIndexHTML() — the scaffold is writing something different than the source of truth")
 
-        // 3. Canonical HTML must include the layout markers we just shipped
-        //    (flex + justify-content: center). If someone reverts the layout
-        //    improvement, this fails loudly instead of silently regressing.
+        // 3. Canonical HTML must include the markers that tie the starter
+        //    to the injected `cdp-ui` component library. If someone reverts
+        //    the library integration — swapping back to a hand-rolled slider
+        //    list or breaking the vertical centering layout — this fails
+        //    loudly instead of silently regressing.
         #expect(canonicalHTML.contains("justify-content: center"),
                 "Starter HTML must center rows vertically (single-param UIs otherwise leave a huge empty region below the slider)")
-        #expect(canonicalHTML.contains("grid-template-columns"),
-                "Starter HTML must use a grid row so labels don't clip")
+        #expect(canonicalHTML.contains("<cdp-panel auto"),
+                "Starter HTML must use the <cdp-panel auto> component from the injected cdp-ui library")
 
         // 4. Build a CustomUIPayload from the saved bundle and run export.
         guard let bundle = PresetBundle.load(from: savedBundleURL) else {

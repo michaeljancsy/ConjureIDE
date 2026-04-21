@@ -65,6 +65,21 @@ struct CustomUIWebView: NSViewRepresentable {
             log.error("customui-bridge.js missing from extension Resources")
         }
 
+        // cdp-ui.js: the component library (primitives + <cdp-slider>,
+        // <cdp-toggle>, <cdp-choice>, <cdp-xy>, <cdp-panel>). Injected
+        // AFTER the bridge so `window.ConjureDSP` is already defined;
+        // `atDocumentStart` guarantees ordering across user scripts.
+        if let uiLibSource = Self.uiLibrarySource() {
+            let userScript = WKUserScript(
+                source: uiLibSource,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+            config.userContentController.addUserScript(userScript)
+        } else {
+            log.error("cdp-ui.js missing from extension Resources")
+        }
+
         let contentController = config.userContentController
         contentController.add(context.coordinator, name: "paramSet")
         contentController.add(context.coordinator, name: "ready")
@@ -176,6 +191,18 @@ struct CustomUIWebView: NSViewRepresentable {
     }()
 
     private static func bridgeSource() -> String? { _cachedBridgeSource }
+
+    /// Read `cdp-ui.js` from the extension bundle. Cached for the same
+    /// reason as the bridge — every new CustomUIWebView re-uses it.
+    private static let _cachedUILibrarySource: String? = {
+        let bundle = Bundle(for: Coordinator.self)
+        guard let url = bundle.url(forResource: "cdp-ui", withExtension: "js") else {
+            return nil
+        }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }()
+
+    private static func uiLibrarySource() -> String? { _cachedUILibrarySource }
 
     // MARK: - Coordinator
 

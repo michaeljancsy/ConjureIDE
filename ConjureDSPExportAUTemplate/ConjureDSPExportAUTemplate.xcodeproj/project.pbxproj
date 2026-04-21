@@ -12,6 +12,7 @@
 		0C13E7E0026ACB052453ABB3 /* RuntimeConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 816594364DE02D78D14F7BB4 /* RuntimeConfig.swift */; };
 		0D9C4515754F04D20386C994 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 565409BB4FD167D792DA5952 /* main.swift */; };
 		14DB4C245B276123DE07E433 /* ExportAUMainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 875F4246898833ED52454440 /* ExportAUMainView.swift */; };
+		17B8FAA0F4195CFCD619A67B /* cdp-ui.js in Resources */ = {isa = PBXBuildFile; fileRef = 2F34E42B3903FE8523A9B8BA /* cdp-ui.js */; };
 		18B7CB8D84E15910B03C264A /* ConjureDSPExportAUTemplateExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AB589E0DB6CD48CE28492400 /* ConjureDSPExportAUTemplateExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		2A30E9A8134BF73FF8999150 /* ExportAudioCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C62BFE22414EC624E226EE75 /* ExportAudioCaptureManager.swift */; };
 		3E832C87D136A08503A51D34 /* customui-bridge.js in Resources */ = {isa = PBXBuildFile; fileRef = 367F72A4E23E8307CAFE7BEF /* customui-bridge.js */; };
@@ -68,6 +69,7 @@
 /* Begin PBXFileReference section */
 		03413FD1AE782DCF776B1D1E /* ExportRenderStatsAtomics.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ExportRenderStatsAtomics.h; sourceTree = "<group>"; };
 		0F1C66D700918AA8178CB7E0 /* ExportDebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportDebugLog.swift; sourceTree = "<group>"; };
+		2F34E42B3903FE8523A9B8BA /* cdp-ui.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "cdp-ui.js"; sourceTree = "<group>"; };
 		30A24F58FB803BF3DAF9A8F5 /* ExportAUAudioUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportAUAudioUnit.swift; sourceTree = "<group>"; };
 		367F72A4E23E8307CAFE7BEF /* customui-bridge.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "customui-bridge.js"; sourceTree = "<group>"; };
 		378569BA407A2D3987A57D4E /* ConjureDSPExportAUTemplate.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ConjureDSPExportAUTemplate.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -158,6 +160,7 @@
 		C37484854BF7A8A4061F26F1 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				2F34E42B3903FE8523A9B8BA /* cdp-ui.js */,
 				367F72A4E23E8307CAFE7BEF /* customui-bridge.js */,
 				AAF307076D7D9827CCDB0919 /* preset.wasm */,
 				A1CF678FE3C420F5D4082090 /* runtime-config.json */,
@@ -325,6 +328,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				17B8FAA0F4195CFCD619A67B /* cdp-ui.js in Resources */,
 				3E832C87D136A08503A51D34 /* customui-bridge.js in Resources */,
 				BE4533861577852904A2D1FB /* preset.wasm in Resources */,
 				A6CF38D2BBBA00717EA074F0 /* runtime-config.json in Resources */,
