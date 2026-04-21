@@ -274,10 +274,18 @@
     // immediately (synchronously invokes if already ready).
     function whenReady(cb) { CDP.ready(cb); }
 
-    // Apply theme attribute + listen for flips.
+    // Apply theme attribute + listen for flips. MUST be called from
+    // `connectedCallback`, NEVER from the constructor — per the Custom
+    // Elements spec, a constructor may not set attributes on itself,
+    // and WebKit silently skips element upgrade (the element stays
+    // `HTMLUnknownElement`) if the constructor does so. Idempotent so
+    // repeated connectedCallback calls on reinsert don't stack
+    // themechange listeners.
     function adoptTheme(host) {
         function apply(t) { host.setAttribute('data-cdp-theme', t || 'light'); }
         apply(CDP.theme);
+        if (host.__cdpThemeBound) return;
+        host.__cdpThemeBound = true;
         window.addEventListener('themechange', function (e) {
             apply(e && e.detail && e.detail.theme);
         });
@@ -306,10 +314,12 @@
             this._label = root.querySelector('[part="label"]');
             this._input = root.querySelector('input');
             this._value = root.querySelector('[part="value"]');
-            adoptTheme(this);
         }
 
-        connectedCallback() { whenReady(() => this._bind()); }
+        connectedCallback() {
+            adoptTheme(this);
+            whenReady(() => this._bind());
+        }
         attributeChangedCallback() { if (this.isConnected) this._bind(); }
 
         _bind() {
@@ -411,10 +421,10 @@
             this._label = root.querySelector('[part="label"]');
             this._sw = root.querySelector('.switch');
             this._value = root.querySelector('[part="value"]');
-            adoptTheme(this);
         }
 
         connectedCallback() {
+            adoptTheme(this);
             whenReady(() => this._bind());
             this._sw.addEventListener('click', () => this._flip());
             this._sw.addEventListener('keydown', (e) => {
@@ -501,10 +511,12 @@
             this._label = this.shadowRoot.querySelector('[part="label"]');
             this._slotMount = this.shadowRoot.querySelector('.slot-mount');
             this._value = this.shadowRoot.querySelector('[part="value"]');
-            adoptTheme(this);
         }
 
-        connectedCallback() { whenReady(() => this._bind()); }
+        connectedCallback() {
+            adoptTheme(this);
+            whenReady(() => this._bind());
+        }
         attributeChangedCallback() { if (this.isConnected) this._bind(); }
         disconnectedCallback() { if (this._offChange) this._offChange(); }
 
@@ -619,10 +631,10 @@
             this._puck = root.querySelector('.puck');
             this._vx = root.querySelector('.vx');
             this._vy = root.querySelector('.vy');
-            adoptTheme(this);
         }
 
         connectedCallback() {
+            adoptTheme(this);
             whenReady(() => this._bind());
             this._pad.addEventListener('pointerdown', (e) => this._startDrag(e));
             this._pad.addEventListener('keydown', (e) => this._onKey(e));
@@ -716,9 +728,11 @@
         constructor() {
             super();
             this.attachShadow({ mode: 'open' });
-            adoptTheme(this);
         }
-        connectedCallback() { whenReady(() => this._render()); }
+        connectedCallback() {
+            adoptTheme(this);
+            whenReady(() => this._render());
+        }
 
         _render() {
             this.shadowRoot.innerHTML = '';
