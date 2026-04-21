@@ -51,7 +51,7 @@ UI test classes and what they cover:
 - xterm.js terminal (one-time setup): `./scripts/setup-xterm.sh`
 - Bundled uv package manager (one-time setup): `./scripts/setup-uv.sh`
 
-Deployment targets: macOS 26.2+.
+Deployment targets: macOS 15 (Sequoia)+.
 
 ### Python setup
 Run `rust/setup-python.sh` once before the first build. This downloads a free-threaded Python 3.14 build from python-build-standalone (~100MB) and installs numpy and scipy into it. The result lives in `rust/python-dist/` (gitignored).

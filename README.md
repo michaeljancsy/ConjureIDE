@@ -29,7 +29,7 @@ xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP build
 
 ### Prerequisites
 
-- macOS 26.2+
+- macOS 15 (Sequoia)+
 - Xcode with Swift 5.0+
 - Rust toolchain (`rustup`, `cargo`) with target `aarch64-apple-darwin`
 - `cbindgen` (`cargo install cbindgen`)
