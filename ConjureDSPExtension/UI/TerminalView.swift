@@ -116,6 +116,9 @@ struct TerminalView: NSViewRepresentable {
                 portPollTask = nil
                 webView?.evaluateJavaScript("terminalBridge.focus()") { _, _ in }
 
+            case "firstInput":
+                Analytics.track(.terminalFirstInput)
+
             case "error":
                 let message = data["message"] as? String ?? "unknown"
                 log.error("Terminal JS error: \(message, privacy: .public)")

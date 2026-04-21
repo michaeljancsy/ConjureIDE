@@ -24,6 +24,8 @@ enum AnalyticsEvent: String {
     case namToneInsert = "NAM Tone Insert"
     case packageInstall = "Package Install"
     case crateInstall = "Crate Install"
+    case mcpToolCall = "MCP Tool Call"
+    case terminalFirstInput = "Terminal First Input"
 }
 
 enum Analytics {
