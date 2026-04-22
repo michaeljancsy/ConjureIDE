@@ -12,6 +12,15 @@ import os.log
 
 private let pluginLog = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "DSP")
 
+/// See CustomUIWebView.swift for the same `ParamFlow` category. Stage 5
+/// (implementorValueObserver = what actually gets written to the kernel)
+/// and stage 6 (main-thread poll of what the audio thread reads) both
+/// log here.
+private let paramFlow = Logger(
+    subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExtension",
+    category: "ParamFlow"
+)
+
 public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 {
 	// Rust DSP kernel (opaque pointer)
@@ -89,8 +98,43 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
+	/// Compare manifest-declared metadata against what the DSP kernel
+	/// extracted from the source. Logs (os_log) on any name / range /
+	/// unit / curve / style / options drift. The manifest wins at
+	/// runtime either way — the DSP still processes whatever it reads —
+	/// but the author should see the mismatch loudly so they can fix it.
+	static func validateManifestVsDSP(manifest: [ParamMetadata], dsp: [ParamMetadata]) {
+		if manifest.count != dsp.count {
+			pluginLog.warning("Manifest declares \(manifest.count, privacy: .public) params, DSP declares \(dsp.count, privacy: .public) — counts disagree")
+		}
+		let pairs = zip(manifest, dsp)
+		for (i, (m, d)) in pairs.enumerated() {
+			if m.name != d.name {
+				pluginLog.warning("param[\(i, privacy: .public)] name drift: manifest=\(m.name, privacy: .public) dsp=\(d.name, privacy: .public)")
+			}
+			if m.min != d.min || m.max != d.max {
+				pluginLog.warning("param[\(i, privacy: .public)] \(m.name, privacy: .public) range drift: manifest=\(m.min, privacy: .public)..\(m.max, privacy: .public) dsp=\(d.min, privacy: .public)..\(d.max, privacy: .public)")
+			}
+			if m.unit != d.unit {
+				pluginLog.warning("param[\(i, privacy: .public)] \(m.name, privacy: .public) unit drift: manifest=\(m.unit, privacy: .public) dsp=\(d.unit, privacy: .public)")
+			}
+			if (m.curve ?? "linear") != (d.curve ?? "linear") {
+				pluginLog.warning("param[\(i, privacy: .public)] \(m.name, privacy: .public) curve drift: manifest=\(m.curve ?? "linear", privacy: .public) dsp=\(d.curve ?? "linear", privacy: .public)")
+			}
+			if (m.style ?? "slider") != (d.style ?? "slider") {
+				pluginLog.warning("param[\(i, privacy: .public)] \(m.name, privacy: .public) style drift: manifest=\(m.style ?? "slider", privacy: .public) dsp=\(d.style ?? "slider", privacy: .public)")
+			}
+		}
+	}
+
 	/// Current rich parameter metadata (nil = legacy 0–1 mode).
 	private(set) var currentParamMetadata: [ParamMetadata]? = nil
+
+	/// Set by `applyManifestParams` when a preset ships declarations in
+	/// `manifest.json`. Makes `currentParamMetadata` authoritative over
+	/// whatever the kernel later extracts from the DSP source, and gates
+	/// the post-load validator.
+	private var manifestDeclaredMetadata: [ParamMetadata]? = nil
 
 	/// Fires after every script load with the new param metadata (or nil).
 	public let paramMetadataDidChange = PassthroughSubject<[ParamMetadata]?, Never>()
@@ -132,8 +176,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			let idx = Int(param.address)
 			if let meta = self.currentParamMetadata, idx < meta.count {
 				let normalized = meta[idx].normalize(value)
+				// paramFlow.notice("[5.swift.implObserver] idx=\(idx, privacy: .public) raw=\(value, privacy: .public) normalized=\(normalized, privacy: .public)")
 				dsp_kernel_set_parameter(kernelRef, param.address, normalized)
 			} else {
+				// paramFlow.notice("[5.swift.implObserver.nometa] idx=\(idx, privacy: .public) v=\(value, privacy: .public)")
 				dsp_kernel_set_parameter(kernelRef, param.address, value)
 			}
 		}
@@ -165,6 +211,49 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 
 		self.parameterTree = tree
+	}
+
+	/// Apply parameter metadata declared in `manifest.json` as the
+	/// authoritative source. Intended to be called BEFORE
+	/// `compileAndRun` / `reloadScript` / `loadWasm` when selecting a
+	/// preset, so the AU parameter tree, stock sliders, and the custom-UI
+	/// bridge's `_init` payload all reflect the new preset's params the
+	/// instant the webview loads — rather than waiting on rustc to
+	/// finish and the kernel to extract metadata.
+	///
+	/// Pass nil to return to "DSP-extracted metadata is truth" mode for
+	/// presets whose manifest has no `params` key (v1 bundles).
+	public func applyManifestParams(_ metadata: [ParamMetadata]?) {
+		manifestDeclaredMetadata = metadata
+		if let metadata, !metadata.isEmpty {
+			// Visible marker so `log stream --subsystem ...` in Console
+			// can confirm the running binary has the schema-v2 manifest-
+			// first path active. If this line doesn't appear on preset
+			// switch, the plugin host is still running a pre-fix build.
+			let names = metadata.map { $0.name }.joined(separator: ",")
+			pluginLog.info("[manifest-v2] applyManifestParams count=\(metadata.count, privacy: .public) names=\(names, privacy: .public)")
+			currentParamMetadata = metadata
+			var nameMap: [Int: String] = [:]
+			for (i, meta) in metadata.enumerated() { nameMap[i] = meta.name }
+			currentParamNames = nameMap
+			// CRITICAL: rebuild the tree BEFORE broadcasting
+			// paramMetadataDidChange. The subscription in
+			// AudioUnitViewController calls `ps.attach(to: tree)` inside
+			// the sink, which snapshots the CURRENT values. If we send
+			// first, that attach hits the PREVIOUS preset's tree — so
+			// `ParameterState.values` gets populated with stale data and
+			// the UI shows wrong numbers (e.g. "1 Hz 0 Q" instead of
+			// "1000 Hz 1 Q") for the whole duration of the Rust compile.
+			rebuildParameterTree(metadata: metadata)
+			paramNamesDidChange.send(nameMap)
+			paramMetadataDidChange.send(metadata)
+		} else {
+			pluginLog.info("[manifest-v2] applyManifestParams(nil) — falling back to DSP-extracted metadata")
+			// Manifest has no declarations. Don't yank metadata here —
+			// let the next compile repopulate it from DSP extraction as
+			// before. Clearing preemptively would cause a flash of
+			// "no params" between preset select and compile complete.
+		}
 	}
 
 	/// Rebuild the parameter tree with rich metadata (real names, ranges, units).
@@ -242,8 +331,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			let idx = Int(param.address)
 			if let meta = self.currentParamMetadata, idx < meta.count {
 				let normalized = meta[idx].normalize(value)
+				// paramFlow.notice("[5.swift.implObserver] idx=\(idx, privacy: .public) raw=\(value, privacy: .public) normalized=\(normalized, privacy: .public)")
 				dsp_kernel_set_parameter(kernelRef, param.address, normalized)
 			} else {
+				// paramFlow.notice("[5.swift.implObserver.nometa] idx=\(idx, privacy: .public) v=\(value, privacy: .public)")
 				dsp_kernel_set_parameter(kernelRef, param.address, value)
 			}
 		}
@@ -396,6 +487,13 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	private var mutableAudioBufferList: UnsafeMutablePointer<AudioBufferList>?
 	private var _maxFrames: AUAudioFrameCount = 0
 
+	/// Debug-only timer that samples `dsp_kernel_get_parameter` from the
+	/// main thread and logs the result. Stage 6 of the parameter-flow
+	/// trace: shows what value the audio render thread actually reads.
+	/// If UI writes show up in stages 3–5 but stage 6 stays stale, the
+	/// problem is between implementorValueObserver and the kernel.
+	private var kernelPollTimer: Timer?
+
 	@objc override init(componentDescription: AudioComponentDescription, options: AudioComponentInstantiationOptions) throws {
 		kernel = dsp_kernel_create()
 
@@ -416,6 +514,37 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		// Load the bundled Python DSP script
 		loadPythonScript()
+
+		startKernelPollTimer()
+	}
+
+	/// Last kernel-poll values (per address) so the 100ms tick only
+	/// emits a log line when a parameter actually changed. Keeps the
+	/// ParamFlow log readable instead of 10 identical lines/second.
+	private var lastKernelPollValues: [AUParameterAddress: Float] = [:]
+
+	/// Fires at 100ms, logs `[6.kernel.poll]` ONLY for params whose
+	/// kernel value changed since the last tick. A silent tick means
+	/// the audio thread still sees the same values as last time.
+	private func startKernelPollTimer() {
+		let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+			guard let self else { return }
+			let kernelRef = self.kernel!
+			let activeCount: Int = {
+				if let meta = self.currentParamMetadata { return meta.count }
+				return Self.paramCount
+			}()
+			for i in 0..<activeCount {
+				let addr = AUParameterAddress(i)
+				let v = dsp_kernel_get_parameter(kernelRef, addr)
+				if self.lastKernelPollValues[addr] != v {
+					// paramFlow.notice("[6.kernel.poll] idx=\(i, privacy: .public) v=\(v, privacy: .public)")
+					self.lastKernelPollValues[addr] = v
+				}
+			}
+		}
+		RunLoop.main.add(t, forMode: .common)
+		kernelPollTimer = t
 	}
 
 	/// Default preset loaded on AU init (before any fullState restore).
@@ -431,10 +560,19 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			return
 		}
 
-		guard let scriptPath = bundle.path(forResource: Self.defaultPresetResource, ofType: "py") else {
-			pluginLog.error("\(Self.defaultPresetResource).py not found in bundle, using Rust fallback DSP")
+		// Factory presets are `.cdp` bundle directories under Resources/presets/
+		// since the bundle conversion. Resolve the entry script via PresetBundle
+		// so the path lines up with whatever manifest.entry says (typically
+		// `process.py` but not guaranteed).
+		guard let presetBundleURL = bundle.url(
+			forResource: Self.defaultPresetResource,
+			withExtension: PresetBundle.bundleExtension,
+			subdirectory: "presets"
+		), let presetBundle = PresetBundle.load(from: presetBundleURL) else {
+			pluginLog.error("\(Self.defaultPresetResource).\(PresetBundle.bundleExtension) not found or malformed under Resources/presets, using Rust fallback DSP")
 			return
 		}
+		let scriptPath = presetBundle.entryScriptURL.path
 
 		// Set tones directory so conjuredsp.nam can resolve tone3000:// paths
 		dsp_kernel_set_tones_dir(kernel, Self.appGroupContainerURL.appendingPathComponent("tones").path)
@@ -568,6 +706,23 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			willChangeValue(forKey: "latency")
 			_latencySamples = newLatency
 			didChangeValue(forKey: "latency")
+		}
+
+		// If the preset's `manifest.json` declared `params`, those are
+		// already in place (via `applyManifestParams` before load) and
+		// take priority over whatever the kernel extracted. Run the
+		// drift validator and skip the override. Authors can edit the
+		// manifest freely; the DSP keeps processing whatever it reads.
+		if let manifest = manifestDeclaredMetadata, !manifest.isEmpty {
+			if let metaPtr = dsp_kernel_param_metadata_json(kernel) {
+				let json = String(cString: metaPtr)
+				if let data = json.data(using: .utf8),
+				   let dspMeta = try? JSONDecoder().decode([ParamMetadata].self, from: data),
+				   !dspMeta.isEmpty {
+					Self.validateManifestVsDSP(manifest: manifest, dsp: dspMeta)
+				}
+			}
+			return
 		}
 
 		// Try rich metadata first
@@ -1000,6 +1155,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	}
 
 	deinit {
+		kernelPollTimer?.invalidate()
 		if let kernel = kernel {
 			dsp_kernel_destroy(kernel)
 		}
@@ -1131,7 +1287,25 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			return ScriptSaveResult(success: false, error: "Failed to load preset source", processTimeMs: nil, budgetMs: nil)
 		}
 
-		// Always update preset manager and editor so the user can see the script
+		// CRITICAL ORDERING: apply manifest params BEFORE
+		// `pm.setCurrentPreset`. setCurrentPreset triggers the SwiftUI
+		// view update that recreates `CustomUIWebView` with a new `.id`
+		// — the new webview starts loading immediately and races to
+		// post 'ready'. If `ParameterState.paramMetadata` isn't already
+		// the NEW preset's by the time 'ready' arrives, `sendInit`
+		// would send stale metadata from the previous preset, and the
+		// custom UI would render against wrong param indices for the
+		// whole duration of the compile.
+		if let bundle = pm.loadBundle(for: preset) {
+			pluginLog.info("[manifest-v2] selectPreset '\(preset.name, privacy: .public)' loaded bundle, manifest.schemaVersion=\(bundle.manifest.schemaVersion, privacy: .public), params=\(bundle.manifest.params?.count ?? 0, privacy: .public)")
+			applyManifestParams(bundle.manifest.resolvedParamMetadata())
+		} else {
+			pluginLog.info("[manifest-v2] selectPreset '\(preset.name, privacy: .public)' — no bundle")
+			applyManifestParams(nil)
+		}
+
+		// Now kick off the view update — webview gets the right
+		// metadata from its first `sendInit`.
 		pm.setCurrentPreset(preset, source: source)
 		scriptSourceDidChange.send(ScriptSourceChange(source: source))
 
@@ -1174,6 +1348,14 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		didChangeValue(forKey: "currentPreset")
 	}
 
+	/// Clear the DAW-facing currentPreset with KVO notification. Used
+	/// from non-file-scope callers (e.g. the MCP save_preset handler
+	/// in a separate extension file) when a fork moves us off of a
+	/// factory preset — no more factory number to advertise.
+	func clearDAWCurrentPreset() {
+		setCurrentPresetWithKVO(nil)
+	}
+
 	public override var currentPreset: AUAudioUnitPreset? {
 		get { return _currentPreset }
 		set {
@@ -1184,13 +1366,24 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 			guard let entry = FactoryPresetRegistry.entries.first(where: { $0.number == preset.number }) else { return }
 
-			let ext = entry.language == .rust ? "rs" : "py"
+			// Factory presets ship as `.cdp` bundles under the extension's
+			// Resources. Resolve the bundle dir, then read the entry script
+			// named in `manifest.entry` (mirrors the user/repo bundle path).
 			let bundle = Bundle(for: type(of: self))
-			guard let url = bundle.url(forResource: entry.resourceName, withExtension: ext),
-				  let source = try? String(contentsOf: url, encoding: .utf8) else {
-				pluginLog.error("Factory preset script not found: \(entry.resourceName).\(ext, privacy: .public)")
+			guard let bundleURL = bundle.url(
+				forResource: entry.resourceName,
+				withExtension: PresetBundle.bundleExtension,
+				subdirectory: "presets"
+			),
+				  let presetBundle = PresetBundle.load(from: bundleURL),
+				  let source = try? presetBundle.readSource() else {
+				pluginLog.error("Factory bundle script not found: \(entry.resourceName, privacy: .public)")
 				return
 			}
+
+			// Apply manifest params BEFORE load — lets the custom UI
+			// render immediately without waiting for rustc / kernel.
+			applyManifestParams(presetBundle.manifest.resolvedParamMetadata())
 
 			switch entry.language {
 			case .python:
@@ -1432,6 +1625,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				} else {
 					value = paramEvent.value
 				}
+				// DAW-originated render-thread automation event. Not logged —
+				// can't os_log from the audio thread without risking xruns.
+				// Stage 6's main-thread kernel poll will show the resulting
+				// kernel value; that's the observable side-effect.
 				dsp_kernel_set_parameter(kernel, paramEvent.parameterAddress, value)
 			}
 

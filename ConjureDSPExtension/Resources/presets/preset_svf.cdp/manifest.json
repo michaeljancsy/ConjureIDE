@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 2,
+  "entry": "process.py",
+  "language": "python",
+  "params": [
+    {
+      "name": "cutoff",
+      "min": 20.0,
+      "max": 20000.0,
+      "default": 1000.0,
+      "unit": "Hz",
+      "curve": "log"
+    },
+    {
+      "name": "resonance",
+      "min": 0.5,
+      "max": 10.0,
+      "default": 1.0,
+      "unit": "Q"
+    }
+  ],
+  "ui": {
+    "entryHTML": "ui/index.html",
+    "width": 480,
+    "height": 420,
+    "fps": 30,
+    "audioFrames": false
+  }
+}

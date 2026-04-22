@@ -27,12 +27,48 @@ fi
 # outside Xcode, causing the exported AU to crash on load in DAWs.
 TEMPLATE_CONFIG="Release"
 
-# Build the export template (incremental — fast no-op if nothing changed).
-# Use env -i to prevent the parent build's environment (extension build settings)
-# from leaking into the template build. Without this, inherited env vars cause
-# the Swift compiler to generate an extension entry point (_NSExtensionMain)
-# instead of the app's _main, crashing the exported app on launch.
+TEMPLATE_SRC="${TEMPLATE_BUILD}/Build/Products/${TEMPLATE_CONFIG}/ConjureDSPExportAUTemplate.app"
+TEMPLATE_DST="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExportTemplate.zip"
+TEMPLATE_BINARY="${TEMPLATE_SRC}/Contents/PlugIns/ConjureDSPExportAUTemplateExtension.appex/Contents/MacOS/ConjureDSPExportAUTemplateExtension"
+TEMPLATE_SOURCES="${SRCROOT}/ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplateExtension"
+
+# Detect stale incremental builds: if ANY source file is newer than the
+# built extension binary, force a clean first. We hit this in a git worktree
+# where a symlink→directory swap (above) leaves xcodebuild's build-database
+# confused — incremental build silently produces a "SUCCESS" that doesn't
+# actually recompile changed Swift files, leading to exports containing
+# yesterday's template. Detecting the gap between source mtime and binary
+# mtime is the cheapest robust check.
+needs_clean=false
+if [ -f "${TEMPLATE_BINARY}" ]; then
+    binary_mtime=$(stat -f %m "${TEMPLATE_BINARY}")
+    newest_source_mtime=$(find "${TEMPLATE_SOURCES}" -type f \( -name "*.swift" -o -name "*.m" -o -name "*.mm" -o -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.plist" -o -name "*.entitlements" \) -exec stat -f %m {} \; | sort -n | tail -1)
+    if [ -n "${newest_source_mtime}" ] && [ "${newest_source_mtime}" -gt "${binary_mtime}" ]; then
+        echo "note: Template binary is older than template sources — forcing clean build" >&2
+        needs_clean=true
+    fi
+else
+    # No binary yet → first build, no clean needed.
+    :
+fi
+
+# Build the export template. Use env -i to prevent the parent build's
+# environment (extension build settings) from leaking into the template
+# build. Without this, inherited env vars cause the Swift compiler to
+# generate an extension entry point (_NSExtensionMain) instead of the
+# app's _main, crashing the exported app on launch.
 if [ -f "${TEMPLATE_PROJECT}/project.pbxproj" ]; then
+    if [ "${needs_clean}" = "true" ]; then
+        echo "Cleaning export template (${TEMPLATE_CONFIG})..."
+        env -i HOME="$HOME" PATH="$PATH" DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}" \
+            xcodebuild -project "${TEMPLATE_PROJECT}" \
+            -scheme ConjureDSPExportAUTemplate \
+            -configuration "${TEMPLATE_CONFIG}" \
+            -arch arm64 \
+            -derivedDataPath "${TEMPLATE_BUILD}" \
+            clean \
+            2>&1 | tail -1
+    fi
     echo "Building export template (${TEMPLATE_CONFIG})..."
     env -i HOME="$HOME" PATH="$PATH" DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}" \
         xcodebuild -project "${TEMPLATE_PROJECT}" \
@@ -44,8 +80,19 @@ if [ -f "${TEMPLATE_PROJECT}/project.pbxproj" ]; then
         2>&1 | tail -1
 fi
 
-TEMPLATE_SRC="${TEMPLATE_BUILD}/Build/Products/${TEMPLATE_CONFIG}/ConjureDSPExportAUTemplate.app"
-TEMPLATE_DST="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExportTemplate.zip"
+# Post-build sanity check: if sources are STILL newer than the built
+# binary after xcodebuild claimed success, fail loudly. Catches any future
+# incremental-build regression that silently ships yesterday's code.
+if [ -f "${TEMPLATE_BINARY}" ]; then
+    binary_mtime=$(stat -f %m "${TEMPLATE_BINARY}")
+    newest_source_mtime=$(find "${TEMPLATE_SOURCES}" -type f \( -name "*.swift" -o -name "*.m" -o -name "*.mm" -o -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.plist" -o -name "*.entitlements" \) -exec stat -f %m {} \; | sort -n | tail -1)
+    if [ -n "${newest_source_mtime}" ] && [ "${newest_source_mtime}" -gt "${binary_mtime}" ]; then
+        echo "error: Template sources newer than built binary AFTER build. xcodebuild didn't actually recompile." >&2
+        echo "error:   binary mtime: $(date -r "${binary_mtime}")" >&2
+        echo "error:   newest source mtime: $(date -r "${newest_source_mtime}")" >&2
+        exit 1
+    fi
+fi
 
 if [ -d "$TEMPLATE_SRC" ]; then
     # Skip zip if the output is newer than the source app

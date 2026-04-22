@@ -120,11 +120,60 @@ Rust API overview:
 The code editor uses Monaco Editor (VS Code's editor) loaded in a WKWebView. It auto-detects Python vs Rust, applies light/dark themes, and communicates with Swift via `WKUserContentController` message handlers. Downloaded by `scripts/setup-monaco.sh` to `Resources/monaco/vs/` (gitignored).
 
 ### Claude Code Terminal
-An in-plugin terminal running Claude Code CLI via a companion app architecture. The AU extension runs an MCP server (HTTP, direct AU access) exposing 12 tools: `compile_and_run`, `get_script`, `get_error`, `set_parameter`, `get_parameters`, `get_audio_state`, `list_presets`, `save_preset`, `toggle_bypass`, `get_docs`, `list_packages`, and `list_tones`. The terminal UI uses xterm.js in a WKWebView with a contentEditable input proxy for keyboard input through the AU ViewBridge.
+An in-plugin terminal running Claude Code CLI via a companion app architecture. The AU extension runs an MCP server (HTTP, direct AU access) exposing 17 tools:
+
+- **DSP scripting:** `compile_and_run`, `get_script`, `get_error`, `get_docs` (topics: `params`, `filters`, `delays`, `oscillators`, `utilities`, `accel`, `nam`, `ui`, `all` — see `ConjureDSPExtension/Common/DSPDocumentation.swift`), `list_packages`
+- **Parameters + audio state:** `set_parameter`, `get_parameters`, `get_audio_state`, `toggle_bypass`
+- **Presets + tones:** `list_presets` (returns `is_bundle` + `has_custom_ui`), `save_preset` (accepts `scaffold_ui`), `list_tones`
+- **Custom UI authoring:** `get_bundle_info` (inspect the active bundle — files, manifest UI block, factory/editable status), `read_bundle_file`, `write_bundle_file` (for editing `ui/index.html`, `manifest.json`, `ui/assets/*.css`, etc. — responses for ui/* and manifest.json edits include an inline `validation` block from `BundleUIValidator`), `validate_bundle` (explicit re-run of the same validator — returns `{status, issues[]}` covering orphan ui files, missing manifest.ui blocks, unresolved `param=` references (including when manifest.params is absent), CSP-blocked external assets, Canvas 2D system-color literals, UIs with no interactive surface, low text contrast (including cross-rule body-bg + descendant-color cases), and theme-breaking hard-coded body colors), `smoke_test_ui` (runtime check — loads the UI in an offscreen WKWebView via `BundleUISmokeTester`, waits for bridge `ready`, reports JS errors / callback exceptions / per-component binding state / per-parameter coverage)
+
+The terminal UI uses xterm.js in a WKWebView with a contentEditable input proxy for keyboard input through the AU ViewBridge.
 
 **ConjureDSPTerminal** is a companion app that runs the Claude Code CLI process (PTY) and WebSocket relay outside the AU extension sandbox. The extension cannot fork external binaries due to sandbox restrictions. Communication uses the App Group container for port discovery and lifecycle signaling. The companion app detects AU restarts via MCP port changes and health checks.
 
 Setup: `scripts/setup-xterm.sh` downloads xterm.js to `Resources/terminal/xterm/` (gitignored).
+
+### Preset Bundles & Custom HTML/JS UIs
+Every preset ships as a `.cdp` bundle directory containing `manifest.json` + an entry script + optional `ui/` subtree. Layout:
+
+```
+MyPreset.cdp/
+  manifest.json          {schemaVersion, entry, language?, params?, ui?:{entryHTML,width,height,fps,audioFrames}, meta?}
+  process.py | process.rs
+  ui/
+    index.html           # optional — when present + manifest declares `ui`, renders in place of generic sliders
+    assets/              # CSS/JS/images/fonts
+```
+
+**Manifest schema versions:** `schemaVersion: 1` bundles extract parameter metadata from the compiled DSP (after script load). `schemaVersion: 2` bundles declare a `params: [{name, min, max, default, unit?, curve?, style?, options?}]` array that populates the AU parameter tree BEFORE the script compiles — so custom UIs render with correct defaults during a slow Rust compile instead of showing placeholders. New presets should always use v2; v1 is preserved for backward compat. The validator warns on v1 bundles that ship a custom UI.
+
+**Where bundles live:**
+- **Factory:** `ConjureDSPExtension/Resources/presets/preset_<name>.cdp/`. Copied verbatim into the appex via `PBXFileSystemSynchronizedRootGroup.explicitFolders = ("Resources/presets")`. Read-only at runtime (the appex's Resources aren't writable under hardened runtime). When a user wants to modify a factory preset, they Save As to create an editable user bundle.
+- **User:** `<AppGroup>/Presets/<name>.cdp/`. The `Presets/` directory is a git repository (see "Git-backed preset library" below); every save writes bundle contents into the repo and fires a commit through `PresetGitCoordinator`.
+
+**Legacy flat-file migration:** on first load, `PresetManager.discoverPresets` wraps any pre-bundle `.py` / `.rs` files sitting in `Presets/` into `.cdp` bundles and deletes the flat file. This is a one-shot migration for users with data from a pre-bundle install; the steady state has zero flat files.
+
+**Custom UI render path:** when a bundle ships `ui/index.html` AND its manifest declares a `ui` block, `CustomUIWebView` renders the HTML in place of `ParameterSlidersView`. `BundleAssetSchemeHandler` (`WKURLSchemeHandler`) serves bundle files into the WebContent process via `conjuredsp-preset://preset/<path>` to avoid `kTCCServiceSystemPolicyAppData` prompts — WebContent doesn't inherit the appex's App Group entitlement, but the scheme handler runs in the appex process. Path standardization + `hasPrefix(rootURL.path)` enforce sandboxing. The scheme handler also sets `Content-Security-Policy: default-src 'self' 'unsafe-inline' data:; connect-src 'none';` on every response, blocking fetch/XHR/WebSocket egress from author JS. (An earlier `WKContentRuleList` layer was removed — `ignore-previous-rules` for custom schemes was unreliable and blanked exported webviews.)
+
+**Component library (`cdp-ui.js`):** injected into the webview alongside `customui-bridge.js` at document-start. Provides `<cdp-slider>`, `<cdp-toggle>`, `<cdp-choice>`, `<cdp-xy>`, `<cdp-panel>` web components plus helper functions under `window.ConjureDSP.ui` (`control(i)`, `formatValue`, `normalize`, `denormalize`). Themed via CSS custom properties + `::part()` hooks; loose param-name resolution (case / underscore / space insensitive) lets the same `ui/index.html` serve both the Python and Rust variant of a preset. Full reference: `docs/custom-ui-component-library.md` and `get_docs("ui")`.
+
+**Validation:** Two-tier. `BundleUIValidator` (Tier 1/2) statically lints `manifest.json` + `ui/index.html` for the common authoring failures — orphan ui files with no manifest ui block, unresolved `param=` references (with Levenshtein "did you mean" when manifest.params exists, plus explicit flagging of named references that appear when manifest.params is nil/empty), CSP-blocked external assets / `fetch` / `WebSocket`, Canvas 2D system-color literals that silently paint black, UIs that declare params but expose no interactive controls, low text contrast (WCAG < 3.0, including cross-rule cases where body declares just a background and a descendant declares just a clashing color), and theme-breaking hard-coded body colors against `Canvas`. The MCP `write_bundle_file` handler runs the validator on every write that touches `ui/*` or `manifest.json` and inlines the report in its response. `validate_bundle` MCP tool re-runs the sweep on demand. `BundleUISmokeTester` (Tier 3) loads the UI in an offscreen WKWebView using the same bridge + cdp-ui.js injection as the live plugin, waits for `ConjureDSP.ready`, then reports runtime failures the static lint can't see: JS errors, exceptions thrown inside bridge `ready(cb)` callbacks (captured via the bridge's `log` channel since they're swallowed by `safeInvoke`), per-component binding state (did every `cdp-slider` actually resolve its `param=` attribute?), and per-declared-parameter coverage. Exposed via the `smoke_test_ui` MCP tool.
+
+**JS bridge (`window.ConjureDSP`, injected by `customui-bridge.js` at `.atDocumentStart`):**
+- `apiVersion: 1`
+- `parameters.{count, get(i), set(i, v), metadata(i), onChange(i, cb), onAnyChange(cb)}` — writes route through the existing `ParameterState.binding(for:)` path so DAW automation sees them identically to slider drags.
+- `theme` getter + `'themechange'` event
+- `ready(cb)` — fires once when the initial state arrives
+- `log(…)` — forwards to `os_log`
+- `audio.{onFrame(cb, opts?), offFrame(cb)}` — per-tick RMS/peak (and optional FFT) from `AudioCaptureManager`. FFT is opt-in so the default payload stays ~80 bytes; consumer-counted capture only runs while at least one UI is subscribed.
+
+**Hot reload:** `BundleFileWatcher` (FSEventStream with `kFSEventStreamCreateFlagFileEvents`) watches the active bundle's `ui/` directory and triggers `webView.reload()` on edit. Edits from the in-plugin editor, VS Code, or MCP `write_bundle_file` all hot-reload within ~300ms.
+
+**Per-bundle toggle:** users can flip between the custom UI and the stock slider panel via `CustomUIPreference` (UserDefaults-backed, keyed by bundle name). Default is custom UI on when one exists.
+
+**In-plugin editor multi-file:** Monaco's picker above the editor lists every editable text file in the active bundle — `process.{py,rs}`, `manifest.json`, `ui/**`. Non-script edits debounce-write straight to disk (no Run button required) and the file watcher hot-reloads. Factory bundles are readable but not writable; the picker shows a lock icon.
+
+**Exported AUs carry the UI:** `ExportManager.CustomUIPayload` copies `ui/` into the exported `.appex/Contents/Resources/ui/` and sets `hasCustomUI` + `ui` block in `runtime-config.json`. The export template's `ExportCustomUIWebView` renders it using the same bridge JS. `ExportAudioCaptureManager` (stripped-down `AudioCaptureManager`) feeds `audio.onFrame` subscribers in exported AUs too. Network egress is restricted by the scheme handler's CSP header (identical to the main extension), not by `WKContentRuleList`.
 
 ### Git-backed preset library
 The user presets directory (`<AppGroup>/Presets/`) is a real git repository, initialized on first launch. Every explicit Save / Save As / Delete / Rename triggers a commit. Users can optionally configure a GitHub (or any HTTPS) remote URL, and pushes fire automatically after commits (2 s trailing-edge debounce) or via a "Push now" button.
@@ -138,6 +187,8 @@ Architecture:
 Push auth: the extension's Keychain-backed PAT is passed via a short-lived 0600 token file in the App Group container; the worker consumes it via an inline git credential helper (`!f() { echo username=x-access-token; echo "password=$(cat $tokenFile)"; }; f`) and unlinks it immediately after spawning git. Backlog item tracks switching to a stdin `GIT_ASKPASS` pipe for belt-and-suspenders.
 
 Commit-message UX: `SaveAsPopover` shows an inline "Commit message" field when mode is `.alwaysPrompt`, pre-filled with `Add <name>`. The Save toolbar button opens `SaveMessagePopover` with `Update <name>` pre-filled. Either popover has a "Don't ask again — always use timestamp" link that flips the preference. Settings (`RemoteSyncSettingsView`) exposes a radio picker + "Reset to default".
+
+Commits work naturally with bundles: `recordSave` is given the bundle's root URL and git commits every tracked file under the directory. Adding `ui/index.html`, editing `manifest.json`, or dropping a new `ui/assets/style.css` all show up as per-file diffs in `git log`.
 
 Fail-open: if the terminal is down when a save happens, the request queues on disk and drains whenever the terminal next comes up. The preset file still saves locally. Push failures surface inline in Settings with a "Push failed: …" badge.
 
@@ -159,19 +210,23 @@ ConjureDSP/                  Host app — loads and tests the AU extension
   SentrySetup.swift          Sentry crash reporting initialization
   ValidationView.swift       Debug UI for AU validation output
 ConjureDSPExtension/         The AU plugin itself
-  Terminal/                  MCPServer (HTTP+JSON-RPC), MCPProtocol (9 tools), TerminalServer (lifecycle)
+  Terminal/                  MCPServer (HTTP+JSON-RPC), MCPProtocol (15 tools), TerminalServer (lifecycle)
   Analytics.swift            Mixpanel analytics wrapper
   Audio/                     AudioCaptureManager — reads ring buffers for spectrogram FFT
   Compilation/               RustCompiler (bundled rustc → WASM), ScriptCompiler, ScriptLanguage (auto-detect), WasmCache (SHA256)
   Export/                    ExportManager (standalone AUv3 pipeline), ExportRegistry, SubtypeGenerator
   Git/                       PresetGitCoordinator, GitQueueClient, GitRequest — orchestrates git-backed preset history
   GitHub/                    GitHubService (PAT + remote URL), GitHubURLResolver (URL import helper)
-  Model/                     SubscriptionManager (token verification + server refresh), SubscriptionAPI (server comms), Preset, PresetManager
+  Model/                     SubscriptionManager (token verification + server refresh), SubscriptionAPI (server comms),
+                             Preset, PresetManager, PresetBundle (parsed .cdp view), PresetManifest (Codable)
   Parameters/                Parameter addresses (Swift enum)
   UI/                        MonacoEditorView, SpectrogramView, TerminalView,
                              PresetBrowserView, ParameterSlidersView, RemoteSyncSettingsView (in GitHubSettingsView.swift),
-                             SaveAsPopover, SaveMessagePopover, ExportPopover, and more
-  Resources/                 Factory presets (.py + .wasm), process.py, monaco/ (gitignored)
+                             SaveAsPopover, SaveMessagePopover, ExportPopover,
+                             CustomUIWebView (HTML/JS renderer + param bridge + audio frames),
+                             BundleAssetSchemeHandler (WKURLSchemeHandler + CSP), BundleFileWatcher (FSEventStream),
+                             BundleFilePicker (editable files for Monaco), CustomUIPreference (custom/stock toggle)
+  Resources/                 Factory preset bundles (presets/preset_*.cdp/), customui-bridge.js, monaco/ (gitignored)
   Common/Audio Unit/         ConjureDSPExtensionAudioUnit.swift — AUAudioUnit subclass + render block
   Common/UI/                 AudioUnitViewController
   Common/Utility/            CrossPlatform.swift, SentrySetup.swift, String+Utils.swift, KeychainHelper.swift

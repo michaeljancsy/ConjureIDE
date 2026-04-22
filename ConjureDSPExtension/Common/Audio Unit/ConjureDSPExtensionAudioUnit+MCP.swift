@@ -89,6 +89,31 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 let result = self.mcpListTones()
                 completion(result.0, result.1)
             }
+        case "get_bundle_info":
+            Task { @MainActor in
+                let result = self.mcpGetBundleInfo()
+                completion(result.0, result.1)
+            }
+        case "read_bundle_file":
+            Task { @MainActor in
+                let result = self.mcpReadBundleFile(input: input)
+                completion(result.0, result.1)
+            }
+        case "write_bundle_file":
+            Task { @MainActor in
+                let result = self.mcpWriteBundleFile(input: input)
+                completion(result.0, result.1)
+            }
+        case "validate_bundle":
+            Task { @MainActor in
+                let result = self.mcpValidateBundle()
+                completion(result.0, result.1)
+            }
+        case "smoke_test_ui":
+            Task { @MainActor in
+                let result = await self.mcpSmokeTestUI()
+                completion(result.0, result.1)
+            }
         default:
             completion(jsonStr(["error": "Unknown tool: \(name)"]), true)
         }
@@ -228,9 +253,21 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     private func mcpListPresetsImpl() -> (String, Bool) {
         let pm = presetManager
         let presetList = pm.presets.map { preset -> [String: Any] in
-            [
+            // Surface bundle-ness + custom-UI status so Claude Code can
+            // pick the right preset to edit when the user asks for
+            // "the one with the custom UI". loadBundle is cached for
+            // factory presets so this doesn't re-parse the manifest
+            // every time list_presets runs.
+            // Every preset is a bundle now (factory or user). Surface
+            // `has_custom_ui` so Claude Code can pick the right preset
+            // when a user asks for "the one with the custom UI".
+            // loadBundle is cached for factory presets so this doesn't
+            // re-parse the manifest every time list_presets runs.
+            let bundle = pm.loadBundle(for: preset)
+            return [
                 "name": preset.name,
                 "is_factory": preset.isFactory,
+                "has_custom_ui": bundle?.hasCustomUI ?? false,
                 "language": preset.language.rawValue,
             ]
         }
@@ -245,13 +282,277 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         guard let source = scriptSource else {
             return (jsonStr(["error": "No script loaded to save"]), true)
         }
+        let scaffoldUI = (input["scaffold_ui"] as? Bool) ?? false
         let pm = presetManager
+
+        // Factory-only clone scope: if the user is currently on a factory
+        // preset, copy its entire .cdp/ tree (manifest + ui/ + assets)
+        // into the new user bundle so the agent inherits the factory's
+        // custom UI as a starting point for further write_bundle_file
+        // edits. User-preset flows get nil here and keep today's
+        // fresh-or-resave behavior.
+        let cloneFrom: PresetBundle? = {
+            guard let current = pm.currentPreset, current.isFactory else { return nil }
+            return pm.loadBundle(for: current)
+        }()
+        let factorySourceName: String? = cloneFrom.map { _ in pm.currentPreset?.name ?? "" }
+
         do {
-            let preset = try pm.savePreset(name: name, source: source, language: currentScriptLanguage)
-            return (jsonStr(["success": true, "name": preset.name]), false)
+            let preset = try pm.savePreset(
+                name: name, source: source,
+                language: currentScriptLanguage,
+                scaffoldUI: scaffoldUI,
+                cloneFrom: cloneFrom
+            )
+
+            // Switch the plugin to the new bundle so follow-up
+            // write_bundle_file calls edit it (instead of continuing
+            // to hit "factory is read-only" or "no current preset").
+            // Mirrors onSaveAsPreset in AudioUnitViewController.
+            pm.setCurrentPreset(preset, source: source)
+            // User bundles don't have a factory preset number — clear
+            // the DAW's currentPreset so hosts don't show a stale
+            // factory name alongside the new user bundle.
+            clearDAWCurrentPreset()
+
+            var response: [String: Any] = [
+                "success": true,
+                "name": preset.name,
+                "switched_current_preset": true,
+            ]
+            if let src = factorySourceName, !src.isEmpty {
+                response["cloned_from_factory"] = src
+                response["note"] = "Copied the factory bundle's manifest + ui/ subtree. Edit ui/index.html via write_bundle_file to iterate on the inherited UI."
+            } else if scaffoldUI {
+                response["scaffolded_ui"] = true
+                response["note"] = "Starter ui/index.html written. Edit it via write_bundle_file to customize the custom HTML/JS UI."
+            }
+            return (jsonStr(response), false)
         } catch {
             return (jsonStr(["error": "Failed to save preset: \(error.localizedDescription)"]), true)
         }
+    }
+
+    // MARK: - Bundle tools
+
+    /// Return everything Claude Code needs to reason about the current
+    /// preset bundle: whether it's a bundle at all, whether it ships a
+    /// custom UI, the manifest's UI block, and the list of editable
+    /// text files inside. Binary assets (PNG/WOFF) don't appear in the
+    /// file list because write_bundle_file takes UTF-8 only.
+    @MainActor
+    private func mcpGetBundleInfo() -> (String, Bool) {
+        guard let preset = presetManager.currentPreset,
+              let bundle = presetManager.loadBundle(for: preset) else {
+            // Legacy single-file presets have no bundle view — surface
+            // that explicitly rather than returning an error.
+            return (jsonStr(["bundle": NSNull()]), false)
+        }
+
+        let entries = BundleFilePickerEntries.entries(for: bundle)
+        let files: [[String: Any]] = entries.map { entry in
+            var dict: [String: Any] = [
+                "path": entry.relativePath,
+                "kind": entry.kind.rawValue,
+            ]
+            dict["language_id"] = entry.monacoLanguageID
+            return dict
+        }
+
+        var uiInfo: [String: Any] = [:]
+        if let ui = bundle.manifest.ui {
+            uiInfo["entryHTML"] = ui.entryHTML ?? "ui/index.html"
+            if let w = ui.width { uiInfo["width"] = w }
+            if let h = ui.height { uiInfo["height"] = h }
+            if let fps = ui.fps { uiInfo["fps"] = fps }
+            uiInfo["audioFrames"] = ui.audioFrames ?? false
+        }
+
+        var bundleInfo: [String: Any] = [
+            "name": bundle.name,
+            "root_path": bundle.rootURL.path,
+            "language": bundle.language.rawValue,
+            "has_custom_ui": bundle.hasCustomUI,
+            "is_factory": preset.isFactory,
+            "editable": !preset.isFactory, // factory bundles live in read-only Resources
+            "files": files,
+        ]
+        if !uiInfo.isEmpty { bundleInfo["ui"] = uiInfo }
+
+        return (jsonStr(["bundle": bundleInfo]), false)
+    }
+
+    /// Safely resolve a caller-supplied relative path against the current
+    /// bundle's root. Rejects absolute paths, `..` escapes, and any path
+    /// whose resolved location falls outside the bundle. Returns the
+    /// resolved URL on success, or a user-facing error message on failure
+    /// (the URL slot is nil then).
+    @MainActor
+    private func resolveBundleFilePath(
+        _ input: [String: Any]
+    ) -> (bundle: PresetBundle?, url: URL?, error: String?) {
+        guard let preset = presetManager.currentPreset,
+              let bundle = presetManager.loadBundle(for: preset) else {
+            return (nil, nil, "No bundle loaded. Current preset is not a bundle.")
+        }
+        guard let raw = input["path"] as? String, !raw.isEmpty else {
+            return (bundle, nil, "Missing required parameter: path")
+        }
+        if raw.hasPrefix("/") {
+            return (bundle, nil, "path must be relative to the bundle root; absolute paths are not allowed.")
+        }
+        let candidate = bundle.rootURL.appendingPathComponent(raw).standardizedFileURL
+        let rootStandardized = bundle.rootURL.standardizedFileURL
+        guard candidate.path.hasPrefix(rootStandardized.path + "/") || candidate.path == rootStandardized.path else {
+            return (bundle, nil, "path escapes the bundle root (got '\(raw)').")
+        }
+        return (bundle, candidate, nil)
+    }
+
+    @MainActor
+    private func mcpReadBundleFile(input: [String: Any]) -> (String, Bool) {
+        let resolved = resolveBundleFilePath(input)
+        if let error = resolved.error {
+            return (jsonStr(["error": error]), true)
+        }
+        guard let url = resolved.url else {
+            return (jsonStr(["error": "Could not resolve bundle file URL."]), true)
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return (jsonStr(["error": "File not found: \(input["path"] ?? "")"]), true)
+        }
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
+            return (jsonStr(["error": "File is not UTF-8 text. Binary bundle assets (images, fonts) aren't readable through this tool."]), true)
+        }
+        return (jsonStr(["path": input["path"] ?? "", "content": content]), false)
+    }
+
+    @MainActor
+    private func mcpWriteBundleFile(input: [String: Any]) -> (String, Bool) {
+        let resolved = resolveBundleFilePath(input)
+        if let error = resolved.error {
+            return (jsonStr(["error": error]), true)
+        }
+        guard let url = resolved.url else {
+            return (jsonStr(["error": "Could not resolve bundle file URL."]), true)
+        }
+        guard let content = input["content"] as? String else {
+            return (jsonStr(["error": "Missing required parameter: content"]), true)
+        }
+        guard let preset = presetManager.currentPreset else {
+            return (jsonStr(["error": "No current preset."]), true)
+        }
+        if preset.isFactory {
+            return (jsonStr(["error": "Factory presets are read-only. Save the preset with save_preset first to create an editable user bundle."]), true)
+        }
+        do {
+            // Parent dirs may not exist yet — e.g. first write to
+            // ui/assets/style.css in a bundle that only had ui/.
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try content.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            return (jsonStr(["error": "Write failed: \(error.localizedDescription)"]), true)
+        }
+        // Manifest edits can flip hasCustomUI on or off; refresh so the
+        // in-plugin UI toggle state tracks the new state.
+        if url.lastPathComponent == PresetManifest.filename {
+            presetManager.refreshPresets()
+        }
+
+        // For edits that could affect the custom UI (ui/*, manifest.json),
+        // run the static validator and include its report in the response
+        // so the agent sees warnings on the same turn it wrote the file —
+        // no separate tool call required for the common case.
+        var response: [String: Any] = [
+            "success": true,
+            "path": input["path"] ?? "",
+            "bytes_written": content.utf8.count,
+        ]
+        let pathStr = (input["path"] as? String) ?? ""
+        let touchesUISurface = pathStr.hasPrefix("ui/")
+            || pathStr == PresetManifest.filename
+            || url.lastPathComponent == PresetManifest.filename
+        if touchesUISurface,
+           let refreshed = presetManager.currentPreset.flatMap({ presetManager.loadBundle(for: $0) }) {
+            response["validation"] = validationReportAsJSON(BundleUIValidator.validate(refreshed))
+        }
+        return (jsonStr(response), false)
+    }
+
+    @MainActor
+    private func mcpSmokeTestUI() async -> (String, Bool) {
+        guard let preset = presetManager.currentPreset,
+              let bundle = presetManager.loadBundle(for: preset) else {
+            return (jsonStr(["error": "No current preset with a loadable bundle."]), true)
+        }
+        guard bundle.hasCustomUI else {
+            return (jsonStr([
+                "status": "pass",
+                "note": "Bundle has no custom UI; nothing to smoke-test.",
+            ]), false)
+        }
+
+        // `currentParamNames` is [Int: String]? — the kernel/manifest
+        // fills it in, may be nil before any preset loads.
+        let names = currentParamNames ?? [:]
+        let count = ConjureDSPExtensionAudioUnit.paramCount
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: names,
+            hostParameterCount: count
+        )
+        return (encodeReport(report), false)
+    }
+
+    /// Structured Codable → [String: Any] → jsonStr. Keeps the MCP
+    /// response wire format consistent with the other handlers that
+    /// build dicts by hand.
+    private func encodeReport<T: Encodable>(_ report: T) -> String {
+        do {
+            let data = try JSONEncoder().encode(report)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return jsonStr(["error": "Report serialization produced non-object JSON"])
+            }
+            return jsonStr(obj)
+        } catch {
+            return jsonStr(["error": "Report encode failed: \(error.localizedDescription)"])
+        }
+    }
+
+    @MainActor
+    private func mcpValidateBundle() -> (String, Bool) {
+        guard let preset = presetManager.currentPreset else {
+            return (jsonStr(["error": "No current preset."]), true)
+        }
+        guard let bundle = presetManager.loadBundle(for: preset) else {
+            return (jsonStr(["error": "Could not load bundle for current preset."]), true)
+        }
+        let report = BundleUIValidator.validate(bundle)
+        return (jsonStr(validationReportAsJSON(report)), false)
+    }
+
+    /// JSON-friendly shape for inclusion in tool responses. Mirrors
+    /// `BundleUIValidator.Report` — kept explicit because `jsonStr` works
+    /// on `[String: Any]`, not `Encodable`.
+    private func validationReportAsJSON(_ report: BundleUIValidator.Report) -> [String: Any] {
+        let issues: [[String: Any]] = report.issues.map { issue in
+            var d: [String: Any] = [
+                "severity": issue.severity.rawValue,
+                "check": issue.check,
+                "message": issue.message,
+            ]
+            if let file = issue.file { d["file"] = file }
+            if let suggestion = issue.suggestion { d["suggestion"] = suggestion }
+            return d
+        }
+        return [
+            "status": report.status.rawValue,
+            "issues": issues,
+        ]
     }
 
     @MainActor
@@ -267,7 +568,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             return (jsonStr(["error": "Missing required parameter: topic"]), true)
         }
 
-        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "accel", "nam", "all"]
+        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "accel", "nam", "ui", "all"]
         guard validTopics.contains(topic) else {
             return (jsonStr(["error": "Invalid topic: \(topic). Valid topics: \(validTopics.joined(separator: ", "))"]), true)
         }
@@ -280,6 +581,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         if topic == "utilities" || topic == "all" { sections.append(DSPDocumentation.utilities) }
         if topic == "accel" || topic == "all" { sections.append(DSPDocumentation.accel) }
         if topic == "nam" || topic == "all" { sections.append(DSPDocumentation.nam) }
+        if topic == "ui" || topic == "all" { sections.append(DSPDocumentation.ui) }
 
         return (jsonStr(["topic": topic, "docs": sections.joined(separator: "\n\n")]), false)
     }

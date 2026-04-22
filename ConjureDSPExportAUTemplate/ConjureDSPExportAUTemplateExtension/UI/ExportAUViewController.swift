@@ -13,6 +13,18 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
     private var parameterState: ExportParameterState?
     private var errorPollTimer: Timer?
     private var paramCount: Int = 8
+    /// Resolved entry HTML for a custom UI (when the preset shipped one).
+    /// Null means the AU falls back to the generic slider layout. Cached at
+    /// `configureSwiftUIView` time so `computeSize` doesn't re-stat the FS.
+    private var customUIEntryURL: URL?
+    /// Preferred height the preset's manifest asked for. Only honored when
+    /// `customUIEntryURL` resolved to a real file.
+    private var customUIHeight: Int?
+    /// Audio capture pipeline for the custom UI. Owned by the view
+    /// controller (not the view) so it survives DAW-driven view
+    /// re-creation. Created lazily on first view setup since we need
+    /// the kernel handle from the AU.
+    private var captureManager: ExportAudioCaptureManager?
 
     private static let viewWidth: CGFloat = 500
 
@@ -24,30 +36,22 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
         NSSize(width: 800, height: 900)
     }
 
-    /// Compute the ideal window height based on content.
+    /// Compute the ideal window height based on content. Values here are
+    /// conservative upper bounds — underestimating causes the title/gear to
+    /// clip at the top or "Made with ConjureDSP" to disappear at the bottom
+    /// when the DAW honors `preferredContentSize`. The earlier 45/30 values
+    /// were short by ~15pt because they didn't account for SwiftUI's
+    /// implicit spacing + `.padding(.top, 12)` / `.padding(.bottom, 8)` in
+    /// the main view.
     private func computeSize(showDebug: Bool, showError: Bool) -> NSSize {
-        // Header (title + gear): ~45pt
-        // Divider: 1pt
-        // Each param row: ~28pt
-        // Footer (Made with ConjureDSP): ~30pt
-        var height: CGFloat = 45 + 1 + CGFloat(paramCount) * 28 + 30
-        // Padding/spacing between sections
-        height += 24
-
-        if showError {
-            // Error banner: header line + scrollable text area + padding
-            height += 160
-        }
-
-        if showDebug {
-            // Debug pane: header + scrollable content
-            height += 350
-        }
-
-        // Enforce minimum
-        height = max(height, 150)
-
-        return NSSize(width: Self.viewWidth, height: height)
+        ExportAUWindowSizing.computeSize(
+            showDebug: showDebug,
+            showError: showError,
+            hasCustomUI: customUIEntryURL != nil,
+            customUIHeight: customUIHeight,
+            paramCount: paramCount,
+            viewWidth: Self.viewWidth
+        )
     }
 
     public override func loadView() {
@@ -97,9 +101,30 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
         }
 
         self.paramCount = config?.effectiveParamCount ?? 8
+        // Resolve the custom UI once per view setup so the SwiftUI body
+        // stays pure and doesn't re-stat the filesystem on every render.
+        // If either hasCustomUI is false or ui/index.html is missing from
+        // Resources, the view falls back to generic sliders.
+        self.customUIEntryURL = config?.customUIEntryURL(in: bundle)
+        self.customUIHeight = config?.ui?.height
+
+        // Stand up the capture manager for custom UIs that subscribe to
+        // audio.onFrame. Kernel handle comes from the AU; host NSView is
+        // this controller's view so the display link has a render target.
+        // Only instantiated when we're actually showing a custom UI —
+        // there's no point spinning it up for the generic slider path.
+        if self.customUIEntryURL != nil {
+            let mgr = self.captureManager ?? ExportAudioCaptureManager()
+            mgr.kernel = au.kernelRef
+            mgr.hostView = self.view
+            self.captureManager = mgr
+        }
+
         let content = ExportAUMainView(
             parameterState: ps,
             config: config,
+            customUIEntryURL: self.customUIEntryURL,
+            captureManager: self.captureManager,
             pythonRuntimeMissing: au.pythonRuntimeMissing,
             loadError: au.loadError,
             onLayoutChange: { [weak self] showDebug, showError in

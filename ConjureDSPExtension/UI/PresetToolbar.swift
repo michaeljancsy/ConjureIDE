@@ -59,15 +59,22 @@ struct PresetToolbar: View {
     @Binding var showSpectrogram: Bool
     @Binding var showChat: Bool
     @Binding var showNewScriptDialog: Bool
+    @Binding var showFileBrowser: Bool
     var onSelectPreset: (Preset) -> Void
     var onRun: () -> Void
     /// Overwrite-save with an optional user-supplied commit message. nil means use default.
     var onSave: (_ commitMessage: String?) -> Void
-    /// Save As with an optional user-supplied commit message. nil means use default.
+    /// Save As (duplicate) with an optional user-supplied commit message
+    /// (nil = use default). UI type is inherited from the source bundle —
+    /// not asked here; use New Preset to pick a UI type up front, or
+    /// `+ Add Custom UI` in the toggle bar to upgrade an existing bundle.
     var onSaveAs: (_ name: String, _ commitMessage: String?) -> Void
     var onDelete: () -> Void
     var onRename: (String) -> String?
-    var onNew: (ScriptLanguage) -> Void
+    /// Create a new preset bundle on disk with the given name, language,
+    /// and UI type. Returns nil on success, an error message on failure.
+    /// The caller closes the dialog on success.
+    var onNew: (_ name: String, _ language: ScriptLanguage, _ includeCustomUI: Bool) -> String?
     var onExport: (String) -> Void
     var isExporting: Bool = false
     var containsNamTone: Bool = false
@@ -106,6 +113,22 @@ struct PresetToolbar: View {
         return current.isUser
     }
 
+    /// Whether the current preset is stored as a bundle directory (and so
+    /// has a meaningful "reveal the folder" affordance). Every user preset
+    /// is a bundle now, so this is effectively "is the current preset
+    /// non-factory and revealable."
+    private var currentIsBundle: Bool {
+        guard let current = presetManager.currentPreset else { return false }
+        return !current.isFactory
+    }
+
+    /// Whether the current preset is a bundle that currently has a custom
+    /// HTML/JS UI wired up. Drives the "Reload UI" affordance — only useful
+    /// when there's an actual custom UI to reload.
+    private var currentBundleHasCustomUI: Bool {
+        presetManager.currentBundle?.hasCustomUI ?? false
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             // — Preset zone —
@@ -132,6 +155,14 @@ struct PresetToolbar: View {
                     presets: presetManager.presets,
                     currentPreset: presetManager.currentPreset,
                     isModified: presetManager.isModified,
+                    hasCustomUI: { preset in
+                        // Lightweight — factory bundles are cached on
+                        // PresetManager; user bundles require a cheap
+                        // manifest.json parse. The browser is a
+                        // click-to-open popover, not a per-frame
+                        // surface, so this cost is fine.
+                        presetManager.loadBundle(for: preset)?.hasCustomUI ?? false
+                    },
                     onSelectPreset: { preset in
                         showingPresetBrowser = false
                         onSelectPreset(preset)
@@ -217,7 +248,12 @@ struct PresetToolbar: View {
                 }
                 .buttonStyle(.borderless)
                 .fixedSize()
-                .disabled(!presetManager.isModified)
+                // Enabled when the entry-script buffer differs from disk
+                // OR the debounced writer has landed ui/manifest edits
+                // that haven't been committed yet. Pre-§5 this only
+                // tracked the entry script, which meant editing only
+                // ui/index.html left the Save button disabled.
+                .disabled(!presetManager.hasPendingChanges)
                 .toolbarTooltip("Save (\u{2318}S)")
                 .accessibilityIdentifier("savePresetButton")
                 .popover(isPresented: $showingSaveMessage) {
@@ -287,26 +323,17 @@ struct PresetToolbar: View {
             .toolbarTooltip("New (\u{2318}N)")
             .accessibilityIdentifier("newScriptButton")
             .popover(isPresented: $showNewScriptDialog) {
-                VStack(spacing: 8) {
-                    Text("New Script")
-                        .font(.headline)
-                    Text("Choose a language:")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    HStack(spacing: 8) {
-                        Button("Python") {
-                            showNewScriptDialog = false
-                            onNew(.python)
+                NewPresetPopover(
+                    existingNames: Set(presetManager.presets.filter { !$0.isFactory }.map(\.name)),
+                    onCreate: { name, language, includeCustomUI in
+                        if let err = onNew(name, language, includeCustomUI) {
+                            return err
                         }
-                        .controlSize(.large)
-                        Button("Rust") {
-                            showNewScriptDialog = false
-                            onNew(.rust)
-                        }
-                        .controlSize(.large)
-                    }
-                }
-                .padding()
+                        showNewScriptDialog = false
+                        return nil
+                    },
+                    onCancel: { showNewScriptDialog = false }
+                )
             }
 
             // Delete and Rename (user/repo presets only)
@@ -373,6 +400,53 @@ struct PresetToolbar: View {
                 } message: {
                     Text("Delete \"\(presetManager.currentPreset?.name ?? "")\"? This cannot be undone (but it will remain in the preset git history).")
                 }
+
+                // Reveal the preset's bundle directory in Finder, so authors
+                // can drop in/edit `ui/index.html` in an external editor.
+                // Only shown for user (non-factory) bundles — factory
+                // bundles live in the extension's Resources and aren't
+                // intended to be edited externally.
+                if currentIsBundle {
+                    Button(action: {
+                        if let url = presetManager.currentPreset?.fileURL {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                        }
+                    }) {
+                        VStack(alignment: .center, spacing: 1) {
+                            Image(systemName: "folder")
+                                .frame(height: 16)
+                            Text("Reveal")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .fixedSize()
+                    .toolbarTooltip("Reveal preset bundle in Finder")
+                    .accessibilityIdentifier("revealBundleButton")
+                }
+
+                // Manually reload the custom UI. Redundant with the hot-reload
+                // file watcher for most editors, but useful when an editor
+                // writes via a path the FSEventStream doesn't flag (iCloud,
+                // network mounts, some remote-edit tools).
+                if currentBundleHasCustomUI {
+                    Button(action: {
+                        NotificationCenter.default.post(name: .reloadCustomUI, object: nil)
+                    }) {
+                        VStack(alignment: .center, spacing: 1) {
+                            Image(systemName: "arrow.clockwise")
+                                .frame(height: 16)
+                            Text("Reload UI")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .fixedSize()
+                    .toolbarTooltip("Reload custom UI")
+                    .accessibilityIdentifier("reloadCustomUIButton")
+                }
             }
 
             // — Panel toggles zone —
@@ -420,6 +494,24 @@ struct PresetToolbar: View {
             // Git push/sync status button will be wired up in Checkpoint 4
             // when RemoteSyncSettingsView + PresetGitCoordinator are fully
             // surfaced. For now the toolbar has no sync affordance.
+
+            // File browser toggle — sidebar with the active bundle's files.
+            // Only meaningful when a bundle is loaded (user or factory).
+            if presetManager.currentBundle != nil {
+                Button(action: { showFileBrowser.toggle() }) {
+                    VStack(alignment: .center, spacing: 1) {
+                        Image(systemName: showFileBrowser ? "sidebar.left" : "sidebar.leading")
+                            .frame(height: 16)
+                        Text("Files")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .fixedSize()
+                .toolbarTooltip(showFileBrowser ? "Hide files sidebar" : "Show files sidebar (\u{21E7}\u{2318}E)")
+                .accessibilityIdentifier("fileBrowserToggleButton")
+            }
 
             // Claude Code terminal toggle
             Button(action: { showChat.toggle() }) {

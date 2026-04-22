@@ -19,6 +19,21 @@ struct ParamMetadata: Codable {
 ///
 /// Pipeline: copy template → inject preset → patch plists → code sign → register.
 final class ExportManager {
+    /// Snapshot of a preset bundle's custom UI that the exporter should carry
+    /// into the exported AU. Callers construct this from
+    /// `PresetBundle.uiDirectoryURL` + `manifest.ui`; the exporter copies the
+    /// directory into `.appex/Contents/Resources/ui/` and writes matching
+    /// fields into `runtime-config.json` so the template AU knows to render
+    /// the custom UI instead of generic sliders.
+    struct CustomUIPayload {
+        let directory: URL
+        let entryHTML: String
+        let width: Int?
+        let height: Int?
+        let fps: Int?
+        let audioFrames: Bool
+    }
+
     enum ExportError: LocalizedError {
         case templateNotFound
         case missingWasmData
@@ -88,7 +103,8 @@ final class ExportManager {
         skipSigning: Bool = false,
         paramNames: [Int: String]? = nil,
         paramMetadata: [ParamMetadata]? = nil,
-        latencySamples: UInt32 = 0
+        latencySamples: UInt32 = 0,
+        customUI: CustomUIPayload? = nil
     ) throws -> URL {
         guard FileManager.default.fileExists(atPath: templateURL.path) else {
             throw ExportError.templateNotFound
@@ -131,8 +147,18 @@ final class ExportManager {
             appexResourcesURL: appexResourcesURL
         )
 
+        // 3c. Copy the preset bundle's custom UI into the appex Resources.
+        let carriedUI = try embedCustomUIIfProvided(
+            customUI: customUI, appexResourcesURL: appexResourcesURL
+        )
+
         // 4. Write runtime-config.json
-        let config = makeRuntimeConfig(name: name, language: language, paramNames: paramNames, paramMetadata: paramMetadata, latencySamples: latencySamples, namModelFile: namModelFile)
+        let config = makeRuntimeConfig(
+            name: name, language: language,
+            paramNames: paramNames, paramMetadata: paramMetadata,
+            latencySamples: latencySamples, namModelFile: namModelFile,
+            customUI: carriedUI
+        )
         try config.write(to: appexResourcesURL.appendingPathComponent("runtime-config.json"))
 
         // 5. Patch host app Info.plist
@@ -291,13 +317,37 @@ final class ExportManager {
         return destFileName
     }
 
+    private func embedCustomUIIfProvided(
+        customUI: CustomUIPayload?, appexResourcesURL: URL
+    ) throws -> CustomUIPayload? {
+        guard let payload = customUI else { return nil }
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: payload.directory.path, isDirectory: &isDir), isDir.boolValue else {
+            return nil
+        }
+        let entryURL = payload.directory.appendingPathComponent(payload.entryHTML)
+        guard fm.fileExists(atPath: entryURL.path) else { return nil }
+        let destUI = appexResourcesURL.appendingPathComponent("ui", isDirectory: true)
+        if fm.fileExists(atPath: destUI.path) {
+            try fm.removeItem(at: destUI)
+        }
+        do {
+            try fm.copyItem(at: payload.directory, to: destUI)
+        } catch {
+            throw ExportError.copyFailed("Custom UI copy failed: \(error.localizedDescription)")
+        }
+        return payload
+    }
+
     private func makeRuntimeConfig(
         name: String,
         language: ScriptLanguage,
         paramNames: [Int: String]?,
         paramMetadata: [ParamMetadata]? = nil,
         latencySamples: UInt32 = 0,
-        namModelFile: String? = nil
+        namModelFile: String? = nil,
+        customUI: CustomUIPayload? = nil
     ) -> Data {
         var config: [String: Any] = [
             "version": 1,
@@ -313,6 +363,18 @@ final class ExportManager {
 
         if let namFile = namModelFile {
             config["namModelFile"] = namFile
+        }
+
+        if let ui = customUI {
+            config["hasCustomUI"] = true
+            var uiDict: [String: Any] = [
+                "entryHTML": ui.entryHTML,
+                "audioFrames": ui.audioFrames,
+            ]
+            if let w = ui.width { uiDict["width"] = w }
+            if let h = ui.height { uiDict["height"] = h }
+            if let fps = ui.fps { uiDict["fps"] = fps }
+            config["ui"] = uiDict
         }
 
         // Include rich metadata if available (v2 format)

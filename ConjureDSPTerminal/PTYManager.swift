@@ -562,6 +562,98 @@ final class PTYManager {
     even though WASM I/O buffers are f32. In Rust, cast to/from f64 when interfacing with \
     library types. In Python, this is handled automatically.
 
+    ## Custom HTML/JS UIs (only when the user asks for one)
+
+    The extension renders a stock slider panel for every preset \
+    automatically. Don't touch UI unless the user specifically asks for \
+    one — phrases like "custom UI," "visualization," "XY pad," "make it \
+    look like X," "skin this," "animated UI." Plain DSP tasks ("write a \
+    compressor," "change the attack time," "fix this bug in the script") \
+    do NOT need UI work; the stock sliders already cover them.
+
+    When the user IS asking for a custom UI, FIRST call `get_docs` with \
+    topic `"ui"` for the full component reference, Canvas patterns, \
+    audio-frame API, theming hooks, and gotchas. Don't guess the \
+    component API from memory — the most common failure mode of \
+    custom UIs is hand-rolling param math against invented metadata \
+    field names, producing NaN readouts and dead sliders.
+
+    Quick orientation (full details in the docs):
+
+    - Bundles ship `ui/index.html` + optional `ui/assets/*`; the manifest \
+      needs a `ui` block pointing at entryHTML.
+    - The webview is pre-injected with `window.ConjureDSP` and \
+      `cdp-ui.js`. DO NOT include `<script src="...">` for either.
+    - Components available: `<cdp-slider>`, `<cdp-toggle>`, `<cdp-choice>`, \
+      `<cdp-xy>`, `<cdp-panel auto>`.
+    - The webview's CSP blocks fetch/XHR/WebSocket. All assets must live \
+      inside the bundle — no CDN imports, no external fonts.
+    - File watcher hot-reloads ~300ms after every `write_bundle_file`, so \
+      iterate quickly. To scaffold a new bundle with a starter UI, pass \
+      `scaffold_ui=true` to `save_preset`.
+
+    Working examples to copy from: `read_bundle_file` on `preset_svf`, \
+    `preset_compressor`, `preset_wavefolder`, `preset_mockingbird_at_night_rust`.
+
+    **Factory presets and scratchpad state — fork before editing:**
+
+    Factory presets are read-only; scratchpad state has no bundle to \
+    write into. Either way, when the user asks you to modify a preset's \
+    files, your FIRST tool call after understanding the request should \
+    be `save_preset` with a meaningful new name. Don't wait for the \
+    first `write_bundle_file` to fail — that's a dead turn.
+
+    - `save_preset` on a factory preset WITH a custom UI automatically \
+    clones the factory's `ui/` subtree and manifest into the new user \
+    bundle, so your follow-up `write_bundle_file` calls start from the \
+    factory's UI as the base to modify. You don't need `scaffold_ui=true` \
+    in this case — it's ignored when cloning from a factory that already \
+    has a UI.
+    - `save_preset` on a factory WITHOUT a UI (or from scratchpad) \
+    creates a script-only bundle by default. Pass `scaffold_ui=true` \
+    if you want a starter `ui/index.html` to edit.
+    - On success, `save_preset` returns `switched_current_preset: true` \
+    and (when applicable) `cloned_from_factory: "<source name>"`. The \
+    plugin has auto-switched to the new bundle — subsequent \
+    `write_bundle_file` calls target it, not the factory.
+    - Tell the user what you named the new bundle so they can find it \
+    in the preset browser.
+
+    **Validation protocol (mandatory before claiming done on a UI task):**
+
+    Two tools, used in sequence. Static lint first (catches authoring \
+    mistakes in the source text), then the runtime smoke test (catches \
+    failures that only manifest when the UI actually renders).
+
+    - Every `write_bundle_file` to `ui/*` or `manifest.json` returns a \
+    `validation` block with a `status` (`pass` / `warn` / `fail`) and an \
+    `issues` array. Read it. If `status: "fail"`, fix the failures before \
+    continuing — the UI is broken in a way the user will notice.
+    - Common failures the static validator catches: unresolved `param="X"` \
+    references (including when manifest.params is missing entirely), \
+    external `<script src>` / `fetch()` / `WebSocket` calls that the CSP \
+    blocks, missing manifest.ui block, Canvas 2D fillStyle set to a CSS \
+    system color keyword that won't parse, UIs that declare parameters \
+    but expose zero interactive controls, and low text contrast — \
+    including cross-rule cases like `body { background: #0a0a0a; }` \
+    paired with `.label { color: #555; }` in a separate rule.
+    - When you're done with a UI task, call `smoke_test_ui` as a runtime \
+    check. It loads the UI in an offscreen WKWebView using the same \
+    bridge + cdp-ui.js injection the live plugin uses, then reports: \
+    whether `ConjureDSP.ready` fired, every JS error (including ones \
+    thrown inside `ready(cb)` that the bridge catches), per-component \
+    binding state ("did every cdp-slider actually resolve its param= \
+    attribute at runtime?"), and per-declared-parameter coverage ("does \
+    every AU parameter have at least one working UI control?"). Don't \
+    say "done" until `smoke_test_ui` returns `status: "pass"` (or "warn" \
+    with issues you've read and deliberately accepted).
+    - The static `validate_bundle` tool re-runs the same lint sweep on \
+    demand. Use it when you want to re-check without another write.
+    - Do NOT try to validate a UI by asking yourself whether the code \
+    looks right — this has produced NaN readouts, dead sliders, dark \
+    text on dark backgrounds, and pointer-event ghosts in past sessions. \
+    Run the tools.
+
     ## Latency Reporting
 
     Scripts that introduce algorithmic latency (lookahead, FFT windowing, oversampling) \
@@ -587,6 +679,11 @@ final class PTYManager {
     - Before writing a script, call `get_docs` for the language-specific API reference. Topics: \
     params, filters, delays, oscillators, utilities, accel, nam. Python and Rust have different \
     syntax for the same concepts — always check.
+    - Ignore the custom UI surface entirely unless the user explicitly asks for a custom UI \
+    (phrases like "custom UI", "visualization", "XY pad", "make it look like X"). The \
+    extension renders stock sliders automatically. If the user IS asking for a custom UI, \
+    call `get_docs` with topic `"ui"` before writing any `ui/index.html` — the cdp-ui \
+    component API and the window.ConjureDSP bridge aren't guessable from memory.
     - Python loads instantly; Rust compiles to WASM (a few seconds) but runs much faster
     - **Language selection**: Default to Rust unless the user asks for Python or you are revising a \
     script that is already in Python. Always call `get_script` before writing or modifying a script \

@@ -16,6 +16,13 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     // Rust DSP kernel (opaque pointer)
     private var kernel: DSPKernelRef!
 
+    /// Kernel handle for out-of-class consumers (e.g. the custom-UI audio
+    /// capture manager, which flips capture on/off and reads the ring
+    /// buffers). Non-optional from the view controller's perspective —
+    /// `kernel` is created before super.init returns, so by the time the
+    /// view appears it's always set.
+    var kernelRef: DSPKernelRef? { kernel }
+
     // Runtime configuration loaded from bundle
     private var config: RuntimeConfig?
 
@@ -157,13 +164,23 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
     // MARK: - Parameter Tree
 
+    /// Metadata cached from `buildRichParameterTree` so the render-thread
+    /// event handler can normalize DAW-scheduled parameter values before
+    /// writing them to the kernel. Without this, a DAW sending an
+    /// automation event at -1.75 dB for a Gain param with range [-24, 12]
+    /// would clobber the UI-set normalized value with the raw -1.75,
+    /// producing garbage audio until the next UI-driven write.
+    private var renderMetadata: [ExportParamMetadata]?
+
     private func buildParameterTree() {
         // Use rich metadata if available, otherwise fall back to generic 0–1 params
         if let metadata = config?.paramMetadata, !metadata.isEmpty {
             buildRichParameterTree(metadata: metadata)
+            renderMetadata = metadata
             trace(.info, "params", "built rich parameter tree (\(min(metadata.count, 16)) params)")
         } else {
             buildGenericParameterTree()
+            renderMetadata = nil
             let count = config?.effectiveParamCount ?? 8
             trace(.info, "params", "built generic parameter tree (\(count) params, 0–1 range)")
         }
@@ -652,6 +669,11 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         let kernel = self.kernel!
         let unmanagedSelf = Unmanaged.passUnretained(self)
         let unmanagedStats = Unmanaged.passUnretained(self.renderStats)
+        // Capture once up front — render thread can't touch self.renderMetadata
+        // safely, so we snapshot here. Tree rebuilds already call `allocateRenderResources`
+        // which re-queries `internalRenderBlock`, so a param-count change rebuilds
+        // the closure with fresh metadata.
+        let metadataForRender = self.renderMetadata
 
         return { actionFlags, timestamp, frameCount, outputBusNumber,
                  outputData, realtimeEventListHead, pullInputBlock in
@@ -786,7 +808,10 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
                     now += AUEventSampleTime(framesThisSegment)
                 }
 
-                nextEvent = Self.performAllSimultaneousEvents(kernel: kernel, now: now, event: nextEvent!)
+                nextEvent = Self.performAllSimultaneousEvents(
+                    kernel: kernel, now: now, event: nextEvent!,
+                    metadata: metadataForRender
+                )
             }
 
             stats.recordRender(
@@ -832,18 +857,32 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     private static func performAllSimultaneousEvents(
         kernel: DSPKernelRef,
         now: AUEventSampleTime,
-        event: UnsafePointer<AURenderEvent>
+        event: UnsafePointer<AURenderEvent>,
+        metadata: [ExportParamMetadata]?
     ) -> UnsafePointer<AURenderEvent>? {
         var current: UnsafePointer<AURenderEvent>? = event
         repeat {
             guard let evt = current else { break }
 
-            if evt.pointee.head.eventType == .parameter {
+            if evt.pointee.head.eventType == .parameter
+                || evt.pointee.head.eventType == .parameterRamp {
                 let paramEvent = evt.pointee.parameter
-                dsp_kernel_set_parameter(kernel, paramEvent.parameterAddress, paramEvent.value)
-            } else if evt.pointee.head.eventType == .parameterRamp {
-                let paramEvent = evt.pointee.parameter
-                dsp_kernel_set_parameter(kernel, paramEvent.parameterAddress, paramEvent.value)
+                let idx = Int(paramEvent.parameterAddress)
+                // Rich metadata means AUParameter ranges are in actual units
+                // (e.g. -24..12 dB), but the kernel stores normalized 0..1.
+                // Normalize on the way in — otherwise a DAW automation event
+                // (or a duplicate event fired by `param.value = …`) clobbers
+                // the correctly-normalized kernel value with raw range data
+                // and audio produces garbage until the next UI write races
+                // back through implementorValueObserver. This was the source
+                // of "sometimes no change at all" reported against exports.
+                let value: Float
+                if let meta = metadata, idx < meta.count {
+                    value = meta[idx].normalize(paramEvent.value)
+                } else {
+                    value = paramEvent.value
+                }
+                dsp_kernel_set_parameter(kernel, paramEvent.parameterAddress, value)
             }
 
             if let next = evt.pointee.head.next {

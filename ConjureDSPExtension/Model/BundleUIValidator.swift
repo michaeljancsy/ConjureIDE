@@ -1,0 +1,896 @@
+import Foundation
+
+/// Static validation for a preset bundle's custom UI.
+///
+/// Runs a set of cheap text-based checks over `manifest.json` + `ui/index.html`
+/// that catch the most common ways a custom UI ships broken: unresolved
+/// `param=` references, external network fetches that the scheme handler's CSP
+/// will block, missing manifest `ui` block, canvas 2D using CSS system colors
+/// it can't parse, and UIs that declare parameters but expose zero controls.
+///
+/// The validator is intentionally forgiving — it treats the HTML as plain text
+/// (regex scans, not a real parser) because preset UIs are small and authors
+/// use inline script/style tags that full parsers choke on. False positives are
+/// preferable to false negatives: the agent can always disagree with an
+/// individual warning, but it can't recover from a silently-broken ship.
+///
+/// Exposed to the MCP layer so `write_bundle_file` can surface warnings in the
+/// same turn the file is written, and `validate_bundle` can re-run the full
+/// sweep on demand.
+enum BundleUIValidator {
+
+    enum Severity: String, Encodable {
+        case warn
+        case fail
+    }
+
+    struct Issue: Encodable, Equatable {
+        let severity: Severity
+        /// Short identifier for the check, e.g. `"params_referenced_in_ui"`.
+        /// Stable — the agent can pattern-match on these to suppress noise.
+        let check: String
+        /// File path (bundle-relative) where the issue lives, when applicable.
+        let file: String?
+        let message: String
+        /// Optional one-liner pointing at the fix.
+        let suggestion: String?
+    }
+
+    struct Report: Encodable {
+        let status: ReportStatus
+        let issues: [Issue]
+    }
+
+    enum ReportStatus: String, Encodable {
+        case pass   // no issues
+        case warn   // only warnings
+        case fail   // at least one fail
+    }
+
+    // MARK: - Entry point
+
+    /// Run every check against the given bundle. Always returns a `Report`
+    /// even for bundles without a custom UI — they just get `status: .pass`
+    /// and no issues (nothing to validate).
+    static func validate(_ bundle: PresetBundle) -> Report {
+        var issues: [Issue] = []
+
+        // A bundle without any UI intent has nothing to validate — the
+        // stock slider panel renders for it either way. "UI intent" =
+        // either the manifest declares a ui block OR there's a physical
+        // ui/index.html on disk. Check the file system directly since
+        // `bundle.uiIndexURL` is nil when the manifest has no ui block
+        // even if the file exists (that's the orphan case we want to
+        // flag, not skip).
+        let hasUIBlock = bundle.manifest.ui != nil
+        let defaultIndexPath = bundle.rootURL
+            .appendingPathComponent("ui")
+            .appendingPathComponent("index.html")
+            .path
+        let hasIndexOnDisk = FileManager.default.fileExists(atPath: defaultIndexPath)
+        guard hasUIBlock || hasIndexOnDisk else {
+            return Report(status: .pass, issues: [])
+        }
+
+        issues.append(contentsOf: checkManifestUIBlock(bundle))
+        issues.append(contentsOf: checkEntryHTMLResolves(bundle))
+        issues.append(contentsOf: checkSchemaV2Recommended(bundle))
+
+        // HTML-dependent checks. Prefer the manifest-declared entry
+        // (via `bundle.uiIndexURL`); fall back to the default `ui/index.html`
+        // path so orphan-file bundles (no ui block in manifest, file on disk)
+        // still get their HTML linted — the manifest_ui_block_missing check
+        // flags the orphan, but the HTML may also have param typos, CSP
+        // violations, etc. worth surfacing alongside it.
+        let htmlURL: URL? = bundle.uiIndexURL ?? (hasIndexOnDisk
+            ? URL(fileURLWithPath: defaultIndexPath)
+            : nil)
+        if let url = htmlURL,
+           let html = try? String(contentsOf: url, encoding: .utf8) {
+            issues.append(contentsOf: checkParamReferences(html: html, bundle: bundle))
+            issues.append(contentsOf: checkNoExternalNetwork(html: html))
+            issues.append(contentsOf: checkNoSystemColorInCanvas(html: html))
+            issues.append(contentsOf: checkHasInteractiveSurface(html: html, bundle: bundle))
+            issues.append(contentsOf: checkTextContrast(html: html))
+        }
+
+        let status: ReportStatus
+        if issues.contains(where: { $0.severity == .fail }) {
+            status = .fail
+        } else if !issues.isEmpty {
+            status = .warn
+        } else {
+            status = .pass
+        }
+        return Report(status: status, issues: issues)
+    }
+
+    // MARK: - Individual checks
+
+    /// ui/index.html exists on disk but the manifest doesn't advertise a ui
+    /// block — the plugin falls back to stock sliders and the author's UI
+    /// file is ignored. Always a fail because there's no ambiguity.
+    private static func checkManifestUIBlock(_ bundle: PresetBundle) -> [Issue] {
+        let indexURL = bundle.rootURL
+            .appendingPathComponent("ui")
+            .appendingPathComponent("index.html")
+        let indexExists = FileManager.default.fileExists(atPath: indexURL.path)
+        guard indexExists, bundle.manifest.ui == nil else { return [] }
+        return [
+            Issue(
+                severity: .fail,
+                check: "manifest_ui_block_missing",
+                file: PresetManifest.filename,
+                message: "ui/index.html exists but manifest.json has no \"ui\" block — the plugin will render stock sliders and ignore the HTML.",
+                suggestion: #"Add a "ui" block to manifest.json, e.g. {"entryHTML": "ui/index.html", "width": 520, "height": 380, "fps": 30, "audioFrames": false}."#
+            )
+        ]
+    }
+
+    /// manifest.ui.entryHTML must point at a real file inside the bundle.
+    /// Typo here silently disables the custom UI.
+    private static func checkEntryHTMLResolves(_ bundle: PresetBundle) -> [Issue] {
+        // manifest.ui.entryHTML is itself optional; fall back to the same
+        // default the manifest uses when rendering (`ui/index.html`).
+        guard bundle.manifest.ui != nil else { return [] }
+        let entryPath = bundle.manifest.uiEntryHTMLPath
+        let entryURL = bundle.rootURL.appendingPathComponent(entryPath)
+        guard !FileManager.default.fileExists(atPath: entryURL.path) else { return [] }
+        return [
+            Issue(
+                severity: .fail,
+                check: "ui_entry_html_missing",
+                file: PresetManifest.filename,
+                message: "manifest.ui.entryHTML points at \"\(entryPath)\" but that file doesn't exist in the bundle.",
+                suggestion: "Either create the file via write_bundle_file, or update manifest.ui.entryHTML to match an existing path."
+            )
+        ]
+    }
+
+    /// Using schemaVersion 1 for a bundle with a custom UI means param
+    /// metadata is only available after the DSP compiles. For Rust presets
+    /// that's a long cold-load during which the UI renders with placeholder
+    /// defaults. v2 + params: [...] solves it.
+    private static func checkSchemaV2Recommended(_ bundle: PresetBundle) -> [Issue] {
+        guard bundle.manifest.schemaVersion == 1 else { return [] }
+        return [
+            Issue(
+                severity: .warn,
+                check: "schema_v2_recommended",
+                file: PresetManifest.filename,
+                message: "schemaVersion is 1 — custom UI will render with placeholder defaults until the DSP compiles. For Rust presets this is a multi-second cold-load.",
+                suggestion: "Upgrade to schemaVersion 2 and declare a params: [...] array in the manifest. See get_docs(\"ui\")."
+            )
+        ]
+    }
+
+    /// Every `param="X"`, `param-x="X"`, `param-y="X"` attribute in the UI
+    /// must resolve to a parameter in the manifest (or, as a last resort,
+    /// a numeric index string). Loose match mirrors cdp-ui.js: ignore
+    /// case, underscores, and spaces.
+    ///
+    /// When `manifest.params` is nil or empty, named references can't be
+    /// resolved against anything AT ALL — the components will render with
+    /// "unknown" labels and no user-visible way to bind them, even after
+    /// the DSP compiles (resolveParamAttr doesn't late-bind to DSP-
+    /// extracted metadata by name, only by index). Flag that explicitly
+    /// so the agent adds a manifest.params block.
+    private static func checkParamReferences(html: String, bundle: PresetBundle) -> [Issue] {
+        var issues: [Issue] = []
+        let attrRegex = try? NSRegularExpression(
+            pattern: #"param(?:-x|-y)?\s*=\s*["']([^"']+)["']"#,
+            options: []
+        )
+        guard let regex = attrRegex else { return [] }
+        let ns = html as NSString
+        let matches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+
+        // Collect every named (non-numeric) reference in the HTML so the
+        // two branches below can reason about them.
+        var namedRefs: [String] = []
+        for match in matches where match.numberOfRanges >= 2 {
+            let value = ns.substring(with: match.range(at: 1))
+            if Int(value) != nil { continue }  // numeric index binds don't need a name lookup
+            namedRefs.append(value)
+        }
+
+        // Branch 1: no manifest.params. Any named reference is unresolvable.
+        let declared = bundle.manifest.params ?? []
+        guard !declared.isEmpty else {
+            guard !namedRefs.isEmpty else { return [] }
+            let unique = Array(Set(namedRefs)).sorted()
+            let preview = unique.prefix(3).map { "\"\($0)\"" }.joined(separator: ", ")
+            let andMore = unique.count > 3 ? " and \(unique.count - 3) more" : ""
+            issues.append(
+                Issue(
+                    severity: .fail,
+                    check: "params_referenced_in_ui",
+                    file: "ui/index.html",
+                    message: "UI has \(unique.count) named param reference\(unique.count == 1 ? "" : "s") (\(preview)\(andMore)) but manifest.json has no `params` block — every component that looks these up will render with an \"unknown\" label and stay disabled.",
+                    suggestion: "Add a `params: [{name, min, max, default, unit?, curve?, ...}]` array to manifest.json (schema v2). See get_docs(\"ui\")."
+                )
+            )
+            return issues
+        }
+
+        // Branch 2: manifest.params exists. Flag each name that doesn't
+        // match a declared param (loose match).
+        let declaredNorms = Set(declared.map { looseNormalize($0.name) })
+        var seenUnresolved: Set<String> = []
+        for value in namedRefs {
+            let norm = looseNormalize(value)
+            if declaredNorms.contains(norm) { continue }
+            if seenUnresolved.contains(value) { continue }
+            seenUnresolved.insert(value)
+            let nearest = nearestDeclaredName(to: value, declared: declared)
+            issues.append(
+                Issue(
+                    severity: .fail,
+                    check: "params_referenced_in_ui",
+                    file: "ui/index.html",
+                    message: "param=\"\(value)\" doesn't match any manifest.params[].name.",
+                    suggestion: nearest.map { "Did you mean \"\($0)\"?" } ?? "Add the param to manifest.params, or bind to an existing name."
+                )
+            )
+        }
+        return issues
+    }
+
+    /// The custom UI webview runs with a strict CSP that blocks fetch, XHR,
+    /// WebSocket, and any non-bundle script/link. Flag the common ways the
+    /// agent forgets and produces UIs that look fine in the HTML but fail
+    /// silently at runtime.
+    private static func checkNoExternalNetwork(html: String) -> [Issue] {
+        var issues: [Issue] = []
+
+        // External <script src>, <link href>, <img src> (absolute URLs only;
+        // relative refs go through the scheme handler, which is fine).
+        let externalRefPattern = #"<(script|link|img|iframe|audio|video|source)\b[^>]*\s(?:src|href)\s*=\s*["'](?:https?:|//|data:font|ftp:|ws:|wss:)([^"']+)["']"#
+        if let regex = try? NSRegularExpression(pattern: externalRefPattern, options: [.caseInsensitive]) {
+            let ns = html as NSString
+            let matches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+            for match in matches where match.numberOfRanges >= 2 {
+                let tag = ns.substring(with: match.range(at: 1))
+                issues.append(
+                    Issue(
+                        severity: .fail,
+                        check: "external_asset_ref",
+                        file: "ui/index.html",
+                        message: "<\(tag)> references an external URL; the custom-UI CSP only allows assets bundled inside the preset.",
+                        suggestion: "Inline the code/style, or ship the asset under ui/assets/ and reference it with a relative path."
+                    )
+                )
+            }
+        }
+
+        // fetch / XMLHttpRequest / WebSocket in inline script.
+        let egressChecks: [(String, String, String)] = [
+            (#"\bfetch\s*\("#, "fetch call", "connect-src 'none' in the CSP blocks fetch."),
+            (#"\bnew\s+XMLHttpRequest\s*\("#, "XMLHttpRequest", "connect-src 'none' blocks XHR."),
+            (#"\bnew\s+WebSocket\s*\("#, "WebSocket", "connect-src 'none' blocks WebSockets."),
+            (#"\bnew\s+EventSource\s*\("#, "EventSource", "connect-src 'none' blocks EventSource."),
+        ]
+        for (pattern, label, detail) in egressChecks {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+               regex.firstMatch(in: html, range: NSRange(location: 0, length: (html as NSString).length)) != nil {
+                issues.append(
+                    Issue(
+                        severity: .fail,
+                        check: "network_egress_in_ui",
+                        file: "ui/index.html",
+                        message: "Custom UI contains \(label) — \(detail)",
+                        suggestion: "Remove the network call, or ship the data it would fetch as a bundled asset."
+                    )
+                )
+            }
+        }
+
+        return issues
+    }
+
+    /// Canvas 2D can't parse CSS system color keywords (`CanvasText`,
+    /// `Canvas`) or `color-mix()`. Assigning them to fillStyle/strokeStyle
+    /// silently fails (the canvas falls back to black). The docs recommend
+    /// a getComputedStyle probe pattern. Flag the literal assignments.
+    private static func checkNoSystemColorInCanvas(html: String) -> [Issue] {
+        var issues: [Issue] = []
+        let pattern = #"(?:fillStyle|strokeStyle)\s*=\s*["'](CanvasText|Canvas|color-mix\([^"']*\))["']"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
+        let ns = html as NSString
+        let matches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+        var seen = Set<String>()
+        for match in matches where match.numberOfRanges >= 2 {
+            let value = ns.substring(with: match.range(at: 1))
+            if seen.contains(value) { continue }
+            seen.insert(value)
+            issues.append(
+                Issue(
+                    severity: .warn,
+                    check: "canvas_system_color_literal",
+                    file: "ui/index.html",
+                    message: "Canvas 2D fillStyle/strokeStyle can't parse \"\(value)\" — it falls back to black, defeating the theme-aware color intent.",
+                    suggestion: "Resolve system colors via a hidden probe: `const probe = document.createElement('span'); probe.style.color = 'CanvasText'; document.body.appendChild(probe); const c = getComputedStyle(probe).color;`. See get_docs(\"ui\")."
+                )
+            )
+        }
+        return issues
+    }
+
+    /// A custom UI that declares parameters but contains no interactive
+    /// components leaves users without a way to change any of them. Flag
+    /// when the HTML has zero cdp-* controls, zero <input type="range">,
+    /// and no <cdp-panel auto> fallback.
+    private static func checkHasInteractiveSurface(html: String, bundle: PresetBundle) -> [Issue] {
+        guard let params = bundle.manifest.params, !params.isEmpty else { return [] }
+
+        let interactiveTags = ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-panel"]
+        let foundInteractiveTag = interactiveTags.contains { tag in
+            html.range(of: "<\(tag)", options: .caseInsensitive) != nil
+        }
+        let foundRangeInput = html.range(of: #"<input[^>]+type\s*=\s*["']range["']"#, options: .regularExpression) != nil
+
+        if foundInteractiveTag || foundRangeInput { return [] }
+
+        return [
+            Issue(
+                severity: .warn,
+                check: "no_interactive_surface",
+                file: "ui/index.html",
+                message: "UI has \(params.count) declared parameter\(params.count == 1 ? "" : "s") but no cdp-slider / cdp-toggle / cdp-choice / cdp-xy / cdp-panel / <input type=\"range\"> — users will have no way to change them.",
+                suggestion: "Add per-param controls, or drop in <cdp-panel auto></cdp-panel> as a catch-all. Fully decorative UIs are fine for display-only presets, but every parameter should have at least one way to be edited."
+            )
+        ]
+    }
+
+    /// Scan the UI for text whose color and background are both dark
+    /// or both light — unreadable. Four sub-checks:
+    ///
+    /// 1. Inline `style="color: X; background[-color]: Y; …"` pairs on
+    ///    the same element. Uses the WCAG 2.1 contrast ratio with a
+    ///    threshold of 3.0 (AA for large text, deliberately lenient to
+    ///    avoid false positives on buttons with subtle hover tints).
+    /// 2. CSS rule blocks inside `<style>` tags that declare both color
+    ///    and background on the same selector. Same threshold.
+    /// 3. **Cascaded pair check**: when a rule declares `color` but no
+    ///    `background`, pair it with the body/html/:root's effective
+    ///    background (or vice versa). Catches the common pattern of
+    ///    `body { background: #0a0a0a; }` paired with `.label { color:
+    ///    #555; }` in a separate rule — each rule is individually fine
+    ///    by the pair-in-same-block check, but the effective text-on-
+    ///    background combination is unreadable.
+    /// 4. Theme-breaking hard-coded body color: if `body` declares
+    ///    `color: white` / `#fff` (or analogous near-max-luminance
+    ///    values) and `background: Canvas` (or no background), the
+    ///    text is unreadable in light mode. Same for black on Canvas
+    ///    in dark mode.
+    ///
+    /// Theme-aware values (`CanvasText`, `Canvas`, `currentColor`,
+    /// `inherit`, `transparent`, `color-mix(...)` anchored to system
+    /// colors) are treated as legible-by-construction and skipped.
+    private static func checkTextContrast(html: String) -> [Issue] {
+        var issues: [Issue] = []
+
+        // (1) Inline style pairs on a single element.
+        let inlineRegex = try? NSRegularExpression(
+            pattern: #"\bstyle\s*=\s*["']([^"']+)["']"#,
+            options: [.caseInsensitive]
+        )
+        if let regex = inlineRegex {
+            let ns = html as NSString
+            let matches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+            for match in matches where match.numberOfRanges >= 2 {
+                let style = ns.substring(with: match.range(at: 1))
+                if let issue = contrastIssueForStyleBlock(
+                    style, selector: "inline style", location: "ui/index.html"
+                ) {
+                    issues.append(issue)
+                }
+            }
+        }
+
+        // (2 + 3 + 4) CSS rule blocks inside <style> tags. Resolve the
+        // "page-level" color/background from body / html / :root first,
+        // then use it as the implied cascade ancestor when a descendant
+        // rule declares just one side of the pair.
+        let rules = extractCSSRules(from: html)
+        let pageLevel = resolvePageLevelColors(rules: rules)
+
+        for ruleBlock in rules {
+            if let issue = contrastIssueForStyleBlock(
+                ruleBlock.declarations,
+                selector: ruleBlock.selector,
+                location: "ui/index.html"
+            ) {
+                issues.append(issue)
+            }
+            // (3) Cascaded pair check. Skip body/html/:root rules — they
+            // supply the cascade base and would otherwise self-check
+            // against their own declarations.
+            if !isPageLevelSelector(ruleBlock.selector),
+               let issue = cascadedContrastIssueForRule(
+                ruleBlock,
+                pageLevel: pageLevel,
+                location: "ui/index.html"
+               ) {
+                issues.append(issue)
+            }
+            // (4) Body-level theme-breaking: hard-coded color against
+            // `background: Canvas` (or no background) means the text is
+            // illegible in one of the two system color schemes.
+            if ruleBlock.selector.lowercased().contains("body") {
+                if let issue = themeMismatchIssueForBody(ruleBlock.declarations) {
+                    issues.append(issue)
+                }
+            }
+        }
+
+        return issues
+    }
+
+    /// Effective "body / page" color + background as resolved from
+    /// `body`, `html`, or `:root` rules, used as the cascade base for
+    /// descendant rules that only declare one side of the color/background
+    /// pair.
+    private struct PageLevelColors {
+        /// Raw CSS value string for the base foreground (e.g. "white",
+        /// "#fff", "rgb(...)"), nil if no page-level rule declares one.
+        let colorRaw: String?
+        /// Raw CSS value string for the base background.
+        let backgroundRaw: String?
+    }
+
+    private static func resolvePageLevelColors(rules: [CSSRule]) -> PageLevelColors {
+        var color: String?
+        var bg: String?
+        for rule in rules where isPageLevelSelector(rule.selector) {
+            let decls = parseDeclarations(rule.declarations)
+            if color == nil, let c = decls["color"] { color = c }
+            if bg == nil,
+               let b = decls["background-color"] ?? decls["background"] {
+                bg = b
+            }
+        }
+        return PageLevelColors(colorRaw: color, backgroundRaw: bg)
+    }
+
+    private static func isPageLevelSelector(_ selector: String) -> Bool {
+        let norm = selector
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        // Match exact body/html/:root or the very common combinations
+        // like "html, body" or ":root, body". Anything more elaborate
+        // (a compound selector like `body.dark`) intentionally falls
+        // through so we don't misread it as the cascade base.
+        let tokens = norm
+            .split(whereSeparator: { $0 == "," })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        return tokens.allSatisfy { $0 == "body" || $0 == "html" || $0 == ":root" }
+    }
+
+    /// Pair a descendant rule's color (or background) with the page-
+    /// level base of the opposite side and contrast-check. Returns nil
+    /// when the rule already declares both (the in-block pair check
+    /// handles it), when the pair can't be resolved to RGB, when
+    /// either side is theme-aware, or when contrast is above the
+    /// threshold.
+    private static func cascadedContrastIssueForRule(
+        _ rule: CSSRule,
+        pageLevel: PageLevelColors,
+        location: String
+    ) -> Issue? {
+        let decls = parseDeclarations(rule.declarations)
+        let ownColor = decls["color"]
+        let ownBG = decls["background-color"] ?? decls["background"]
+
+        // In-block pair already handled by contrastIssueForStyleBlock.
+        if ownColor != nil && ownBG != nil { return nil }
+
+        let effectiveColor: String?
+        let effectiveBG: String?
+        let missing: String  // what's cascading from the page level
+        if let c = ownColor, ownBG == nil {
+            effectiveColor = c
+            effectiveBG = pageLevel.backgroundRaw
+            missing = "background (inherited from body)"
+        } else if let b = ownBG, ownColor == nil {
+            effectiveColor = pageLevel.colorRaw
+            effectiveBG = b
+            missing = "color (inherited from body)"
+        } else {
+            return nil  // rule declares neither
+        }
+
+        guard let fgStr = effectiveColor, let bgStr = effectiveBG else { return nil }
+        guard !isThemeAwareColor(fgStr), !isThemeAwareColor(bgStr) else { return nil }
+        guard let fg = parseColor(fgStr), let bg = parseColor(bgStr) else { return nil }
+        let ratio = contrastRatio(fg, bg)
+        guard ratio < 3.0 else { return nil }
+        return Issue(
+            severity: .warn,
+            check: "text_contrast_low",
+            file: location,
+            message: String(
+                format: "Low text contrast on %@: color %@ on %@ (%@) has a contrast ratio of %.2f (WCAG AA large-text threshold is 3.0).",
+                rule.selector.trimmingCharacters(in: .whitespacesAndNewlines),
+                fgStr.trimmingCharacters(in: .whitespaces),
+                bgStr.trimmingCharacters(in: .whitespaces),
+                missing, ratio
+            ),
+            suggestion: "Either give this rule its own background/color that pairs well, or bump the body-level \(missing.contains("background") ? "background" : "color") to contrast with descendant text."
+        )
+    }
+
+    /// If the given CSS declaration block defines both a text color and a
+    /// background color and their contrast ratio is below the threshold,
+    /// return a warning; otherwise nil.
+    private static func contrastIssueForStyleBlock(
+        _ declarations: String,
+        selector: String,
+        location: String
+    ) -> Issue? {
+        let decls = parseDeclarations(declarations)
+        guard let colorStr = decls["color"] ?? decls["Color"] else { return nil }
+        let bgStr = decls["background-color"]
+            ?? decls["background"]
+            ?? decls["Background"]
+            ?? decls["Background-color"]
+        guard let bg = bgStr else { return nil }
+        guard let fgRGB = parseColor(colorStr),
+              let bgRGB = parseColor(bg) else { return nil }
+        let ratio = contrastRatio(fgRGB, bgRGB)
+        // 3.0 is the WCAG AA threshold for large text. We pick it over
+        // the stricter 4.5 to leave authors room for deliberate stylistic
+        // choices (faded subheaders, etc.) and flag only the genuinely
+        // unreadable cases.
+        guard ratio < 3.0 else { return nil }
+        return Issue(
+            severity: .warn,
+            check: "text_contrast_low",
+            file: location,
+            message: String(
+                format: "Low text contrast on %@: color %@ on background %@ has a contrast ratio of %.2f (WCAG AA large-text threshold is 3.0).",
+                selector, colorStr.trimmingCharacters(in: .whitespaces),
+                bg.trimmingCharacters(in: .whitespaces), ratio
+            ),
+            suggestion: "Prefer `color: CanvasText` and `background: Canvas` (theme-aware). If you must hard-code, pick a dark text on a light background or vice versa."
+        )
+    }
+
+    /// Flag body rules that set `color: white|#fff|…` or `color: black|#000|…`
+    /// alongside `background: Canvas` (or no explicit background) — the
+    /// hard-coded color is unreadable in one of the two system color
+    /// schemes.
+    private static func themeMismatchIssueForBody(_ declarations: String) -> Issue? {
+        let decls = parseDeclarations(declarations)
+        guard let colorStr = decls["color"] else { return nil }
+        let bgRaw = decls["background"] ?? decls["background-color"]
+        let bgIsThemeAware = bgRaw == nil || isThemeAwareColor(bgRaw ?? "")
+        guard bgIsThemeAware else { return nil }  // handled by the pair check
+        guard let fg = parseColor(colorStr) else { return nil }
+        let lum = luminance(fg)
+        // Extreme colors (near-white / near-black) clash with the
+        // opposite theme. 0.8+ is effectively white, <0.1 is black.
+        let problem: String?
+        if lum > 0.8 {
+            problem = "light"
+        } else if lum < 0.1 {
+            problem = "dark"
+        } else {
+            problem = nil
+        }
+        guard let mode = problem else { return nil }
+        return Issue(
+            severity: .warn,
+            check: "theme_breaking_body_color",
+            file: "ui/index.html",
+            message: "body has hard-coded \(mode) `color: \(colorStr.trimmingCharacters(in: .whitespaces))` against a theme-aware background — text will be unreadable in \(mode == "light" ? "light" : "dark") mode.",
+            suggestion: "Use `color: CanvasText` so the text color follows the host's light/dark mode. If you need a specific palette, set an explicit theme-matching background color too."
+        )
+    }
+
+    // MARK: - CSS parsing helpers
+
+    private struct CSSRule {
+        let selector: String
+        let declarations: String
+    }
+
+    /// Extract `selector { declarations }` blocks from the HTML's
+    /// `<style>` tags. Pragmatic — not a real CSS parser; skips @-rules
+    /// and nested blocks. Good enough for flat preset UIs.
+    private static func extractCSSRules(from html: String) -> [CSSRule] {
+        var rules: [CSSRule] = []
+        // Extract <style>...</style> contents.
+        let styleTagRegex = try? NSRegularExpression(
+            pattern: #"<style[^>]*>([\s\S]*?)</style>"#,
+            options: [.caseInsensitive]
+        )
+        guard let styleRegex = styleTagRegex else { return [] }
+        let ns = html as NSString
+        let styleMatches = styleRegex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+        for match in styleMatches where match.numberOfRanges >= 2 {
+            let styleContent = ns.substring(with: match.range(at: 1))
+            // Strip @-blocks (e.g. @media, @supports) crudely to avoid
+            // their selectors confusing the flat parser. We don't try
+            // to recurse into them in this pass.
+            let stripped = removeAtBlocks(styleContent)
+            // Flat "selector { ... }" extraction.
+            let ruleRegex = try? NSRegularExpression(
+                pattern: #"([^{}]+)\{([^{}]*)\}"#,
+                options: []
+            )
+            guard let rr = ruleRegex else { continue }
+            let rns = stripped as NSString
+            let ruleMatches = rr.matches(in: stripped, range: NSRange(location: 0, length: rns.length))
+            for rm in ruleMatches where rm.numberOfRanges >= 3 {
+                let selector = rns.substring(with: rm.range(at: 1))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let decls = rns.substring(with: rm.range(at: 2))
+                guard !selector.isEmpty else { continue }
+                rules.append(CSSRule(selector: selector, declarations: decls))
+            }
+        }
+        return rules
+    }
+
+    /// Crudely remove `@rule { ... }` blocks from CSS. Balanced-brace
+    /// scanning so nested rules inside a `@media` don't leak out.
+    private static func removeAtBlocks(_ css: String) -> String {
+        var out = ""
+        var i = css.startIndex
+        while i < css.endIndex {
+            let c = css[i]
+            if c == "@" {
+                // Skip until matching closing brace.
+                if let openIdx = css[i...].firstIndex(of: "{") {
+                    var depth = 1
+                    var j = css.index(after: openIdx)
+                    while j < css.endIndex && depth > 0 {
+                        if css[j] == "{" { depth += 1 }
+                        else if css[j] == "}" { depth -= 1 }
+                        j = css.index(after: j)
+                    }
+                    i = j
+                    continue
+                } else {
+                    // Unterminated @-rule; bail.
+                    break
+                }
+            }
+            out.append(c)
+            i = css.index(after: i)
+        }
+        return out
+    }
+
+    /// Parse a flat `key: value; key: value;` declaration block into a
+    /// dictionary. Keys are lowercased; values retain case. Multiple
+    /// assignments to the same key resolve to the last one (matches
+    /// CSS cascade for a single rule block).
+    private static func parseDeclarations(_ block: String) -> [String: String] {
+        var out: [String: String] = [:]
+        for rawDecl in block.split(separator: ";") {
+            let parts = rawDecl.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let key = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            out[key] = value
+        }
+        return out
+    }
+
+    // MARK: - Color parsing + luminance
+
+    /// Theme-aware or insensitive values we don't try to compute contrast
+    /// for — they're either delegated to the OS (CanvasText/Canvas),
+    /// inherit from context (currentColor/inherit), or mean "no paint"
+    /// (transparent). Returning `true` means: skip the contrast check;
+    /// it's the author's deliberate theme-handling.
+    private static func isThemeAwareColor(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.hasPrefix("color-mix(") { return true }
+        let themeAwareKeywords: Set<String> = [
+            "canvastext", "canvas", "currentcolor", "inherit",
+            "transparent", "initial", "unset", "revert", "revert-layer",
+            "accentcolor", "accentcolortext", "buttontext", "buttonface",
+            "linktext", "visitedtext", "field", "fieldtext",
+            "highlighttext", "highlight", "graytext", "markertext",
+        ]
+        return themeAwareKeywords.contains(trimmed)
+    }
+
+    /// Parse a CSS color value into sRGB (0..1) components. Supports
+    /// hex `#rgb`/`#rrggbb`/`#rgba`/`#rrggbbaa`, `rgb(r, g, b)`,
+    /// `rgba(r, g, b, a)`, and a handful of common named colors.
+    /// Returns nil for theme-aware values (callers should check
+    /// `isThemeAwareColor` first to decide whether to treat nil as a
+    /// skip vs. an error).
+    private static func parseColor(_ raw: String) -> (r: Double, g: Double, b: Double)? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if isThemeAwareColor(value) { return nil }
+
+        // Hex.
+        if value.hasPrefix("#") {
+            let hex = String(value.dropFirst())
+            let expanded: String
+            switch hex.count {
+            case 3:
+                expanded = hex.map { "\($0)\($0)" }.joined()
+            case 4:
+                // #rgba -> #rrggbb (ignore alpha for contrast)
+                let trimmed = String(hex.prefix(3))
+                expanded = trimmed.map { "\($0)\($0)" }.joined()
+            case 6:
+                expanded = hex
+            case 8:
+                expanded = String(hex.prefix(6))
+            default:
+                return nil
+            }
+            guard expanded.count == 6,
+                  let r = Int(expanded.prefix(2), radix: 16),
+                  let g = Int(expanded.dropFirst(2).prefix(2), radix: 16),
+                  let b = Int(expanded.dropFirst(4).prefix(2), radix: 16)
+            else { return nil }
+            return (Double(r) / 255, Double(g) / 255, Double(b) / 255)
+        }
+
+        // rgb(...) / rgba(...)
+        if value.hasPrefix("rgb(") || value.hasPrefix("rgba(") {
+            let inside = value
+                .replacingOccurrences(of: "rgba(", with: "")
+                .replacingOccurrences(of: "rgb(", with: "")
+                .replacingOccurrences(of: ")", with: "")
+            let parts = inside.split(whereSeparator: { ",/ ".contains($0) })
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            guard parts.count >= 3 else { return nil }
+            func channel(_ s: String) -> Double? {
+                if s.hasSuffix("%") {
+                    guard let pct = Double(s.dropLast()) else { return nil }
+                    return max(0, min(1, pct / 100))
+                }
+                guard let n = Double(s) else { return nil }
+                return max(0, min(1, n / 255))
+            }
+            guard let r = channel(parts[0]),
+                  let g = channel(parts[1]),
+                  let b = channel(parts[2]) else { return nil }
+            return (r, g, b)
+        }
+
+        // hsl(...)/hsla(...) — parse by converting HSL to RGB.
+        if value.hasPrefix("hsl(") || value.hasPrefix("hsla(") {
+            let inside = value
+                .replacingOccurrences(of: "hsla(", with: "")
+                .replacingOccurrences(of: "hsl(", with: "")
+                .replacingOccurrences(of: ")", with: "")
+            let parts = inside.split(whereSeparator: { ",/ ".contains($0) })
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            guard parts.count >= 3 else { return nil }
+            guard let h = Double(parts[0].replacingOccurrences(of: "deg", with: "")),
+                  let s = Double(parts[1].replacingOccurrences(of: "%", with: "")),
+                  let l = Double(parts[2].replacingOccurrences(of: "%", with: "")) else { return nil }
+            return hslToRGB(h: h, s: s / 100, l: l / 100)
+        }
+
+        // Named colors (small table — we only care about the ones
+        // preset authors reach for).
+        return namedColorTable[value]
+    }
+
+    /// Luminance per WCAG 2.1 relative-luminance formula.
+    private static func luminance(_ c: (r: Double, g: Double, b: Double)) -> Double {
+        func lin(_ x: Double) -> Double {
+            x <= 0.03928 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+
+    /// WCAG 2.1 contrast ratio. Output range [1, 21]; 1 = identical,
+    /// 21 = pure white on pure black.
+    private static func contrastRatio(
+        _ a: (r: Double, g: Double, b: Double),
+        _ b: (r: Double, g: Double, b: Double)
+    ) -> Double {
+        let la = luminance(a), lb = luminance(b)
+        let (hi, lo) = la > lb ? (la, lb) : (lb, la)
+        return (hi + 0.05) / (lo + 0.05)
+    }
+
+    private static func hslToRGB(h: Double, s: Double, l: Double) -> (r: Double, g: Double, b: Double) {
+        let c = (1 - abs(2 * l - 1)) * s
+        let hp = (h.truncatingRemainder(dividingBy: 360)) / 60
+        let x = c * (1 - abs(hp.truncatingRemainder(dividingBy: 2) - 1))
+        var (r, g, b): (Double, Double, Double) = (0, 0, 0)
+        switch hp {
+        case 0..<1: (r, g, b) = (c, x, 0)
+        case 1..<2: (r, g, b) = (x, c, 0)
+        case 2..<3: (r, g, b) = (0, c, x)
+        case 3..<4: (r, g, b) = (0, x, c)
+        case 4..<5: (r, g, b) = (x, 0, c)
+        case 5..<6: (r, g, b) = (c, 0, x)
+        default: break
+        }
+        let m = l - c / 2
+        return (r + m, g + m, b + m)
+    }
+
+    /// The small set of CSS named colors preset authors actually use.
+    /// Skipping the full X11 palette intentionally — not worth the
+    /// surface area. If a preset uses an obscure named color we miss,
+    /// the contrast check silently skips it; the worst case is a
+    /// missed warning, not a false positive.
+    private static let namedColorTable: [String: (r: Double, g: Double, b: Double)] = [
+        "white":     (1, 1, 1),
+        "black":     (0, 0, 0),
+        "red":       (1, 0, 0),
+        "green":     (0, 0.5, 0),
+        "lime":      (0, 1, 0),
+        "blue":      (0, 0, 1),
+        "yellow":    (1, 1, 0),
+        "cyan":      (0, 1, 1),
+        "magenta":   (1, 0, 1),
+        "gray":      (0.5, 0.5, 0.5),
+        "grey":      (0.5, 0.5, 0.5),
+        "lightgray": (0.827, 0.827, 0.827),
+        "lightgrey": (0.827, 0.827, 0.827),
+        "darkgray":  (0.663, 0.663, 0.663),
+        "darkgrey":  (0.663, 0.663, 0.663),
+        "silver":    (0.753, 0.753, 0.753),
+        "gold":      (1, 0.843, 0),
+        "orange":    (1, 0.647, 0),
+        "pink":      (1, 0.753, 0.796),
+        "purple":    (0.502, 0, 0.502),
+        "brown":     (0.647, 0.165, 0.165),
+    ]
+
+    // MARK: - Helpers
+
+    /// Case-insensitive, underscore-and-space-insensitive comparison key.
+    /// Mirrors the loose matching cdp-ui.js uses when resolving `param="…"`
+    /// attributes against manifest metadata names, so this validator
+    /// produces the same resolution result the webview would.
+    private static func looseNormalize(_ s: String) -> String {
+        s.lowercased()
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: " ", with: "")
+    }
+
+    /// Pick the closest declared param name by simple Levenshtein, used
+    /// for "did you mean" suggestions. Only suggests when the distance is
+    /// small enough that it's plausibly a typo.
+    private static func nearestDeclaredName(
+        to query: String,
+        declared: [PresetManifest.ParamDecl]
+    ) -> String? {
+        let qn = looseNormalize(query)
+        var best: (name: String, dist: Int)?
+        for p in declared {
+            let d = levenshtein(qn, looseNormalize(p.name))
+            if best == nil || d < best!.dist {
+                best = (p.name, d)
+            }
+        }
+        guard let winner = best, winner.dist <= max(2, query.count / 3) else { return nil }
+        return winner.name
+    }
+
+    private static func levenshtein(_ a: String, _ b: String) -> Int {
+        let ac = Array(a), bc = Array(b)
+        if ac.isEmpty { return bc.count }
+        if bc.isEmpty { return ac.count }
+        var prev = Array(0...bc.count)
+        var curr = Array(repeating: 0, count: bc.count + 1)
+        for i in 1...ac.count {
+            curr[0] = i
+            for j in 1...bc.count {
+                let cost = ac[i - 1] == bc[j - 1] ? 0 : 1
+                curr[j] = min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
+            }
+            swap(&prev, &curr)
+        }
+        return prev[bc.count]
+    }
+}

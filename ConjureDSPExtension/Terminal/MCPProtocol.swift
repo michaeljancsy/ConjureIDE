@@ -153,13 +153,42 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "save_preset",
-            description: "Save the currently loaded script as a user preset.",
+            description: "Save the currently loaded script as a user preset bundle (.cdp directory). CRITICAL: this is also the tool you call to FORK a factory preset or to escape scratchpad (no current preset) state — factory bundles are read-only, so any time the user asks you to modify a factory preset's files, call save_preset FIRST with a meaningful new name before you try write_bundle_file. When the current preset is a factory bundle, save_preset automatically clones the factory's entire .cdp/ tree (manifest.json + ui/ + assets) into the new user bundle so your follow-up write_bundle_file edits iterate on the factory's UI rather than a blank scaffold. The plugin auto-switches to the new bundle on success (`switched_current_preset: true` in the response). Pass scaffold_ui=true ONLY when starting from a factory without a UI (or from scratchpad) and you want a starter ui/index.html; scaffold_ui is ignored when cloning from a factory that already ships one.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "name": PropertySchema(type: "string", description: "Name for the preset.")
+                    "name": PropertySchema(type: "string", description: "Name for the preset. If a user bundle with this name already exists, save_preset re-saves into it (entry script overwritten, existing ui/ + manifest preserved)."),
+                    "scaffold_ui": PropertySchema(type: "boolean", description: "When true AND the source doesn't already supply a UI, creates a starter ui/index.html. Ignored when cloning from a factory-with-UI (that UI is inherited). Default: false."),
                 ],
                 required: ["name"]
+            )
+        ),
+        ToolDefinition(
+            name: "get_bundle_info",
+            description: "Introspect the currently-loaded preset bundle. Returns the bundle's name and root path, whether it ships a custom HTML/JS UI, the manifest's UI block (width/height/fps/audioFrames), and every editable text file inside (path + kind). Use before read_bundle_file / write_bundle_file to discover what's editable. Returns bundle=null when the active preset is legacy single-file (pre-bundle).",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
+        ToolDefinition(
+            name: "read_bundle_file",
+            description: "Read any text file inside the current preset bundle — e.g. 'process.py', 'manifest.json', 'ui/index.html', 'ui/assets/style.css'. Relative paths only; absolute paths are rejected. Factory bundles are readable; user/repo bundles are also readable. Use get_bundle_info first to discover paths.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "path": PropertySchema(type: "string", description: "Path relative to the bundle root (e.g. 'ui/index.html')."),
+                ],
+                required: ["path"]
+            )
+        ),
+        ToolDefinition(
+            name: "write_bundle_file",
+            description: "Write a text file inside the current preset bundle. Use to author the custom HTML/JS UI: set manifest.json's 'ui' block, write ui/index.html, add ui/assets/style.css. The plugin's file watcher picks up the change and hot-reloads the custom UI within ~300ms. Writes are REJECTED for factory presets (read-only resources in the app bundle) — if you're on a factory preset, call save_preset FIRST with a new name; save_preset clones the factory bundle (including its ui/ subtree) into a writable user bundle and switches the plugin to it, so follow-up write_bundle_file calls land. Same applies to scratchpad state (no current preset). The DSP script itself (manifest.entry) is writable but the DAW won't pick up the new code until compile_and_run runs it — for DSP edits, prefer compile_and_run which also re-loads the kernel. When the write touches ui/ or manifest.json, the response includes a `validation` block (same shape as validate_bundle) so you see unresolved param= refs, CSP violations, missing ui blocks, low text contrast, etc. on the same turn — inspect it before moving on. For runtime failures that static validation can't see (JS errors, custom elements that fail to upgrade, param bindings that silently don't resolve at runtime), follow up with `smoke_test_ui` before claiming done.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "path": PropertySchema(type: "string", description: "Path relative to the bundle root (e.g. 'ui/index.html')."),
+                    "content": PropertySchema(type: "string", description: "UTF-8 text to write. Overwrites any existing file at that path. Parent directories are created automatically."),
+                ],
+                required: ["path", "content"]
             )
         ),
         ToolDefinition(
@@ -168,12 +197,22 @@ enum MCPProtocol {
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
         ToolDefinition(
+            name: "validate_bundle",
+            description: "Run a static validator over the currently-loaded bundle's manifest.json + ui/index.html. Catches unresolved param= references, CSP-blocked external fetches, missing manifest.ui block, Canvas 2D using CSS system colors it can't parse, and UIs that declare parameters but expose zero controls. Returns {status: \"pass\"|\"warn\"|\"fail\", issues: [{severity, check, file?, message, suggestion?}]}. write_bundle_file runs the same validator automatically on ui/ or manifest.json edits and inlines the report in its response, so you only need this tool for an explicit re-check or to validate without writing.",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
+        ToolDefinition(
+            name: "smoke_test_ui",
+            description: "RUNTIME smoke test for the current bundle's custom UI. Loads ui/index.html in an offscreen WKWebView with the same scheme handler + bridge + cdp-ui.js injection the live plugin uses, then reports (1) whether window.ConjureDSP.ready fired within 3s, (2) every JavaScript error / unhandledrejection / console.error captured during load, (3) per-component binding state for every <cdp-slider> / <cdp-toggle> / <cdp-choice> / <cdp-xy> — did it actually resolve its `param=` attribute at runtime, or is it silently inert? and (4) per-declared-parameter coverage (does every AU parameter have at least one working UI control?). Use this AFTER write_bundle_file to confirm the edits produce a working UI — static validation (validate_bundle) can't see JS errors that only manifest at runtime, custom elements that failed to upgrade, or parameter bindings broken by subtle name mismatches that slip past loose matching. Returns {status: \"pass\"|\"warn\"|\"fail\", ready_fired, ready_time_ms, js_errors[], components[], params[]}.",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
+        ToolDefinition(
             name: "get_docs",
-            description: "Get detailed API reference for the conjuredsp library. Use this when you need exact method signatures, parameter types, default values, or usage details beyond what's in your system prompt.",
+            description: "Get detailed API reference for the conjuredsp library. Use this when you need exact method signatures, parameter types, default values, or usage details beyond what's in your system prompt. The \"ui\" topic documents the cdp-ui component library (cdp-slider, cdp-toggle, cdp-choice, cdp-xy, cdp-panel) and the window.ConjureDSP bridge — call it before authoring any ui/index.html.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "topic": PropertySchema(type: "string", description: "Documentation topic: \"params\", \"filters\", \"delays\", \"oscillators\", \"utilities\", \"accel\", \"nam\", or \"all\".")
+                    "topic": PropertySchema(type: "string", description: "Documentation topic: \"params\", \"filters\", \"delays\", \"oscillators\", \"utilities\", \"accel\", \"nam\", \"ui\", or \"all\".")
                 ],
                 required: ["topic"]
             )

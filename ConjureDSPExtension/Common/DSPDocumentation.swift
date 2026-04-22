@@ -463,15 +463,374 @@ enum DSPDocumentation {
     - Use list_tones tool to see downloaded tones and their tone3000:// paths
     """
 
+    static let ui = """
+    # Custom HTML/JS UIs — cdp-ui component library
+
+    When a preset bundle's manifest declares a `ui` block and ships a
+    `ui/index.html`, the plugin renders that HTML in a WKWebView instead
+    of the auto-generated slider panel. The webview is pre-injected with:
+
+    - `window.ConjureDSP` bridge (from `customui-bridge.js`) — parameters,
+      theme, audio frames
+    - `cdp-ui.js` component library — the widgets below
+
+    You DO NOT include `<script src="...">` for either. Both are already
+    loaded before your document-start scripts run. Just use the tags.
+
+    ## Manifest ui block
+
+    Add to manifest.json alongside `entry`:
+
+    ```json
+    {
+        "schemaVersion": 2,
+        "entry": "process.py",
+        "language": "python",
+        "params": [ ... ],
+        "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 520,
+            "height": 380,
+            "fps": 30,
+            "audioFrames": false
+        }
+    }
+    ```
+
+    - `entryHTML` — path relative to the bundle root.
+    - `width` / `height` — pt; the webview is pinned to this height, so
+      authors control vertical space. Window is user-resizable horizontally.
+    - `fps` — tick rate hint for `window.ConjureDSP.audio.onFrame`.
+    - `audioFrames` — set true if your UI subscribes to audio frames (RMS/
+      peak/FFT). Toggles the capture consumer so the pipeline isn't
+      computing frames for nothing.
+
+    When `schemaVersion: 2` ships `params: [...]`, the AU parameter tree
+    is populated from the manifest BEFORE the DSP script compiles —
+    meaning the custom UI can render with correct defaults during a slow
+    Rust compile. Always prefer v2 + `params` over relying on DSP-extracted
+    metadata.
+
+    ## Components
+
+    All web components; use them as custom elements in HTML:
+
+    ```html
+    <cdp-slider param="cutoff"></cdp-slider>
+    <cdp-toggle param="bypass_eq"></cdp-toggle>
+    <cdp-choice param="mode"></cdp-choice>
+    <cdp-xy param-x="cutoff" param-y="resonance" invert-y></cdp-xy>
+    <cdp-panel auto></cdp-panel>   <!-- renders one control per param -->
+    ```
+
+    - `<cdp-slider>` — honors `curve:"log"` metadata automatically;
+      renders `label | track | value` in a row. Set `--cdp-label-width: 0`
+      and `--cdp-value-width: 0` to collapse to a bare track.
+    - `<cdp-toggle>` — for `style:"toggle"` params. Renders as a switch.
+    - `<cdp-choice>` — for `style:"choice"` params. Segmented control
+      (≤2 options) or dropdown (3+), driven by manifest `options`.
+    - `<cdp-xy>` — 2D pad. `invert-y` flips so low Y = bottom (standard
+      graph orientation — omit for "screen" orientation where top = 0).
+    - `<cdp-panel auto>` — fallback layout that mirrors the stock slider
+      panel. Useful as a one-liner when you just want themed sliders.
+
+    ## Author JS API (`window.ConjureDSP.ui`)
+
+    For preset JS beyond the components:
+
+    ```js
+    const { control, formatValue, denormalize, normalize } = ConjureDSP.ui;
+
+    const cutoff = control(idx);        // { value, setValue(v), metadata,
+                                        //   onChange(cb), normalize, denormalize }
+    cutoff.onChange(v => draw(v));
+    cutoff.setValue(2500);              // writes actual value (curve-aware)
+
+    formatValue(1000, cutoff.metadata)  // "1.00 kHz"
+    denormalize(0.5, cutoff.metadata)   // 0..1 -> actual (log curve: ~632 Hz)
+    normalize(1000, cutoff.metadata)    // actual -> 0..1
+    ```
+
+    `ConjureDSP.ui.requireVersion(n)` — throws if the library is older
+    than `n`. Bump when adding features your UI depends on.
+
+    ## Param-name resolution
+
+    Components accept `param=` as an index OR a name. Name matching is
+    loose — case-insensitive, underscores and spaces are ignored. That
+    means a SINGLE ui/index.html works with both the Python variant
+    (`"low_gain"`, lowercase dict keys) and the Rust variant (`"Low Gain"`,
+    Title Case from `params!()`'s `push_title_case`). Don't duplicate
+    UIs per language.
+
+    ## Theming
+
+    Everything reads system colors (`CanvasText`, `Canvas`) so the UI
+    tracks the host's light/dark mode automatically. Override at host level:
+
+    ```css
+    cdp-slider {
+        --cdp-accent: #00d8ff;
+        --cdp-track-bg: #2a2a2a;
+        --cdp-thumb-size: 14px;
+        --cdp-label-width: 90px;
+        --cdp-value-width: 72px;
+        --cdp-radius: 6px;
+        --cdp-font-size: 12px;
+    }
+    cdp-xy::part(pad)   { border-radius: 10px; height: 220px; }
+    cdp-xy::part(puck)  { width: 18px; height: 18px; }
+    ```
+
+    Exposed `::part()` names: `label`, `value`, `track`, `thumb`, `pad`,
+    `puck`, `option`.
+
+    ## Audio frames (opt-in, for visualizers)
+
+    When `manifest.ui.audioFrames: true`, subscribe in JS:
+
+    ```js
+    ConjureDSP.audio.onFrame(frame => {
+        // frame = { peakIn, peakOut, rmsIn, rmsOut, fft? }
+        drawMeter(frame.peakOut);
+    });
+    ```
+
+    Pass `{ fft: true }` as a second arg to opt in to FFT (heavier
+    payload; default payload is ~80 bytes).
+
+    ## Canvas pattern
+
+    Canvas 2D can't parse `color-mix()` or the `CanvasText` keyword. To
+    get a theme-correct stroke color:
+
+    ```js
+    function resolveFG() {
+        const probe = document.createElement('span');
+        probe.style.cssText = 'color: CanvasText; position: absolute; visibility: hidden;';
+        document.body.appendChild(probe);
+        const c = getComputedStyle(probe).color;
+        probe.remove();
+        return c;
+    }
+    ```
+
+    Re-resolve on the `themechange` event.
+
+    ## Network & sandbox
+
+    The WebView runs with a strict CSP (`default-src 'self' 'unsafe-inline'
+    data:; connect-src 'none';`) and a content rule list. fetch/XHR/
+    WebSocket egress is blocked. All assets must live inside the bundle
+    (`ui/index.html`, `ui/assets/*`). Use the `conjuredsp-preset://preset/...`
+    scheme for cross-file references, or relative paths.
+
+    ## Gotchas
+
+    - Metadata is late-binding: on preset switch the components may render
+      with a placeholder before `params` arrive. Components re-bind
+      automatically; any custom JS should listen to `ConjureDSP.ready(cb)`
+      before reading `parameters.get(i)` at startup.
+    - Dragging a cdp-slider with param changes does NOT fire `onAnyChange`
+      for the dragging UI's own writes (avoids feedback loops). If you
+      need continuous redraw-on-drag, run a rAF tick.
+    - The same bundle's UI also renders inside an exported standalone AU
+      via `ExportCustomUIWebView`. Don't rely on devtools or host-only
+      APIs.
+
+    ## Common failures and how to avoid them
+
+    Each of these has broken past custom UIs. The static validator
+    (invoked automatically by write_bundle_file, or explicitly via
+    validate_bundle) catches most of them. Prevent them at author time
+    by using these recipes.
+
+    ### NaN in readouts / dead sliders
+
+    The #1 custom-UI bug. Cause: hand-rolling param math against assumed
+    metadata field names (`meta.min`, `meta.range`, etc.) instead of
+    using the control helpers.
+
+    WRONG:
+    ```js
+    // Invented math — metadata doesn't have a `range` field, so this
+    // produces NaN that propagates to every downstream calculation.
+    const v = meta.min + fraction * meta.range;
+    ```
+
+    RIGHT:
+    ```js
+    const c = ConjureDSP.ui.control(idx);
+    c.setValue(c.denormalize(fraction));   // 0..1 -> actual, curve-aware
+    const t = c.normalize(c.value);        // actual -> 0..1, curve-aware
+    const label = ConjureDSP.ui.formatValue(c.value, c.metadata);
+    ```
+
+    The helpers respect `curve: "log"`, unit formatting, toggle vs slider
+    vs choice styles — all the metadata shapes you'd otherwise have to
+    special-case.
+
+    ### SVG drag regions that don't respond to the mouse
+
+    When you attach a `pointerdown` listener to an SVG `<g>`, the
+    decorative children inside it can swallow the pointer event before
+    it reaches the group's handler. Two rules:
+
+    1. Give the group an invisible hit pad as its **first** child
+       (first = behind, so siblings render on top but still pass events
+       through). A transparent `<rect>` the size of the interactive
+       bounding box works.
+    2. Apply `pointer-events: none` to every decorative child in the
+       group. Leave it UNSET on the hit pad.
+
+    ```html
+    <g id="ghost" onpointerdown="startDrag(event)">
+        <rect x="0" y="0" width="80" height="120" fill="rgba(0,0,0,0.001)" />
+        <path d="..." pointer-events="none" fill="white" opacity="0.8" />
+        <circle cx="40" cy="30" r="4" pointer-events="none" />
+    </g>
+    ```
+
+    Also: if the group is layered behind another element in document
+    order, that other element will steal pointer events regardless of
+    the hit pad. Keep interactive regions on top, or apply
+    `pointer-events: none` to the overlays.
+
+    ### Canvas 2D fillStyle = "CanvasText" silently paints black
+
+    Canvas 2D's parser doesn't understand CSS system-color keywords or
+    `color-mix()`. It falls back to black (or whatever was previously
+    set), defeating the theme-aware intent.
+
+    Resolve via a getComputedStyle probe on a hidden element:
+
+    ```js
+    function resolveFG() {
+        const probe = document.createElement('span');
+        probe.style.cssText = 'color: CanvasText; position: absolute; visibility: hidden;';
+        document.body.appendChild(probe);
+        const c = getComputedStyle(probe).color;   // "rgb(232, 232, 232)" or similar
+        probe.remove();
+        return c;
+    }
+    let FG = resolveFG();
+    window.addEventListener('themechange', () => { FG = resolveFG(); redraw(); });
+    ```
+
+    ### Decorative UI with no way to change parameters
+
+    A UI that looks great but offers zero controls leaves users stuck.
+    At minimum, include one of:
+
+    - `<cdp-panel auto></cdp-panel>` — catch-all that renders one
+      control per declared param, themed to match the rest of the UI.
+    - A per-param `<cdp-slider>` / `<cdp-toggle>` / `<cdp-choice>` /
+      `<cdp-xy>`, even if hidden behind a toggle button.
+
+    The validator warns when the HTML has zero interactive elements AND
+    the manifest declares at least one param.
+
+    ### External scripts, stylesheets, fonts, fetch calls
+
+    The webview's CSP is `default-src 'self' 'unsafe-inline' data:;
+    connect-src 'none';`. Any of these silently fail:
+
+    - `<script src="https://cdn.jsdelivr.net/...">`
+    - `<link rel="stylesheet" href="https://fonts.googleapis.com/...">`
+    - `@import url("https://...");`
+    - `fetch("https://api.example.com/...")`
+    - `new WebSocket("wss://...")`
+
+    All assets must live inside the bundle. Inline small scripts/styles
+    directly in `ui/index.html`. Ship larger assets under
+    `ui/assets/*.{css,js,png,woff2}` and reference with relative paths.
+
+    ### Illegible text: low contrast or hard-coded colors against Canvas
+
+    Two related traps:
+
+    1. **Low contrast**: `color: #222` on `background: #333` is
+       unreadable. The validator flags contrast ratios below 3.0 (WCAG
+       AA large-text threshold). Pick colors that differ enough in
+       luminance.
+    2. **Theme-breaking hard-coded body color**: `body { color: white;
+       background: Canvas; }` looks fine in dark mode — and disappears
+       completely in light mode, where `Canvas` resolves to white. The
+       reverse with `color: black` is invisible in dark mode.
+
+    The cleanest pattern: let the OS do the work.
+
+    ```css
+    body {
+        color: CanvasText;       /* resolves to black in light, white in dark */
+        background: Canvas;      /* resolves to white in light, near-black in dark */
+    }
+    ```
+
+    If you need a specific palette, commit to it fully — pair a
+    hard-coded text color with a hard-coded background color that
+    contrasts, and skip `Canvas`/`CanvasText` entirely for that element.
+    Don't mix (hard-coded text, theme-aware background).
+
+    ### UI renders once, breaks on hot reload
+
+    The file watcher calls `webView.reload()` after every file change.
+    The whole document is rebuilt from scratch each time. Don't capture
+    DOM nodes or listeners in module-level state expecting them to
+    survive reloads — they won't.
+
+    The cdp-ui components re-bind automatically on reload. Author JS
+    should do all DOM queries inside `ConjureDSP.ready(...)` or on
+    `DOMContentLoaded`, not at script top level before the document is
+    parsed.
+
+    ## Minimal example
+
+    ```html
+    <!doctype html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body { margin: 0; padding: 14px 16px;
+                   font: 12px -apple-system, system-ui, sans-serif;
+                   background: Canvas; color: CanvasText; }
+            cdp-slider { display: block; margin: 4px 0; }
+        </style>
+    </head>
+    <body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <cdp-slider param="resonance"></cdp-slider>
+    </body>
+    </html>
+    ```
+
+    That's a complete, themed, DAW-ready UI. No script, no imports, no
+    build.
+
+    ## Reference presets to copy patterns from
+
+    - `preset_svf` — XY pad driving cutoff + resonance, Canvas response
+      curve, dB Y-axis labels.
+    - `preset_compressor` — stacked sliders with labels/values, transfer-
+      curve Canvas, GR meter column, audio-frame subscription.
+    - `preset_wavefolder` — transfer curve Canvas with absolute-positioned
+      wrap to avoid feedback sizing loops.
+    - `preset_acid_sermon` — percent-based controls, no Canvas.
+    - `preset_eq3` — three dB bands with toggles.
+
+    Read them with `read_bundle_file` when you need a template.
+    """
+
     /// All sections joined (excludes NAM — requires knowing downloaded tones).
     static var allDocs: String {
-        [params, filters, delays, oscillators, utilities, accel]
+        [params, filters, delays, oscillators, utilities, accel, ui]
             .joined(separator: "\n\n")
     }
 
     /// All sections including NAM (for the MCP get_docs "all" topic).
     static var allDocsWithNam: String {
-        [params, filters, delays, oscillators, utilities, accel, nam]
+        [params, filters, delays, oscillators, utilities, accel, nam, ui]
             .joined(separator: "\n\n")
     }
 }

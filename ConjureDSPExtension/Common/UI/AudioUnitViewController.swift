@@ -150,7 +150,10 @@ pub extern "C" fn process(
 
 	deinit {
         runtimePollTimer?.invalidate()
-        captureManager?.isActive = false
+        captureManager?.setConsumer(id: "spectrogram", active: false)
+        // Custom-UI audio consumer is owned by CustomUIWebView.Coordinator
+        // and deregistered in dismantleNSView — the ID is per-coordinator
+        // (`"customUI-<hash>"`), so any call from here wouldn't match.
         processProfiler?.stop()
         memoryMonitor?.stop()
         terminalServer?.stop()
@@ -332,11 +335,19 @@ pub extern "C" fn process(
                 .sink { [weak ps] names in
                     ps?.paramNames = names
                 }
+            // No `.receive(on: DispatchQueue.main)` here — the sink must
+            // run SYNCHRONOUSLY from `paramMetadataDidChange.send(...)`
+            // so that `ParameterState.paramMetadata` is up to date by
+            // the time the closure returns. Custom-UI webviews that
+            // race to post 'ready' during a preset switch would
+            // otherwise see the previous preset's metadata in
+            // `makeInitPayload`. All senders are on main; the
+            // subscription assertion below catches any future caller
+            // that isn't.
             paramMetadataCancellable = au.paramMetadataDidChange
-                .receive(on: DispatchQueue.main)
                 .sink { [weak ps, weak au] metadata in
+                    MainActor.assertIsolated("paramMetadataDidChange must be sent on main")
                     ps?.paramMetadata = metadata
-                    // Re-attach to the parameter tree since it was rebuilt
                     if let tree = au?.parameterTree {
                         ps?.attach(to: tree)
                     }
@@ -431,9 +442,17 @@ pub extern "C" fn process(
 
                 let commitMessage = userCommitMessage ?? gc?.defaultMessage(for: .update(name: saved.name))
                 let commitURL = saved.fileURL
-                let doCommit: (Bool) -> Void = { success in
+                let doCommit: (Bool) -> Void = { [weak pm] success in
                     guard success, let gc, let fileURL = commitURL, let message = commitMessage else { return }
-                    Task { _ = await gc.recordSave(paths: [fileURL], message: message) }
+                    Task { @MainActor in
+                        let result = await gc.recordSave(paths: [fileURL], message: message)
+                        // Clear the dirty set only on commit success —
+                        // otherwise the Save button needs to stay enabled
+                        // so the user can retry.
+                        if case .success = result {
+                            pm?.clearDirtyFiles()
+                        }
+                    }
                 }
 
                 switch language {
@@ -454,12 +473,12 @@ pub extern "C" fn process(
         }
 
         // Save As: create a new user preset, hot-reload, then commit.
-        let onSaveAsPreset: (_ name: String, _ source: String, _ language: ScriptLanguage, _ userCommitMessage: String?) -> ScriptSaveResult = { [weak au, weak pm, weak gc] name, source, language, userCommitMessage in
+        let onSaveAsPreset: (_ name: String, _ source: String, _ language: ScriptLanguage, _ userCommitMessage: String?, _ includeCustomUI: Bool) -> ScriptSaveResult = { [weak au, weak pm, weak gc] name, source, language, userCommitMessage, includeCustomUI in
             guard let au, let pm else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
             do {
-                let saved: Preset = try pm.savePreset(name: name, source: source, language: language)
+                let saved: Preset = try pm.savePreset(name: name, source: source, language: language, scaffoldUI: includeCustomUI)
                 Analytics.track(.presetSave, properties: [
                     "preset_name": name,
                     "is_new": true,
@@ -526,25 +545,74 @@ pub extern "C" fn process(
             }
         }
 
-        // New: reset to default template for the selected language
+        // New Preset: writes a fresh .cdp bundle to disk with the chosen
+        // language + UI type, commits via the git coordinator, then switches
+        // the current preset to it. No scratchpad — every preset exists on
+        // disk from the moment of creation, so Cmd+S is always a commit.
+        // Returns nil on success, or an error string for the popover to
+        // display inline (disk write failed, git refused the commit, etc.).
         let extensionBundle = Bundle(for: type(of: self))
-        let onNew: (ScriptLanguage) -> ScriptSaveResult = { [weak au, weak pm] language in
+        let onNew: (_ name: String, _ language: ScriptLanguage, _ includeCustomUI: Bool) -> String? = { [weak au, weak pm, weak gc] name, language, includeCustomUI in
             guard let au, let pm else {
-                return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
+                return "Audio unit not available"
             }
             let source = language == .rust ? Self.newRustTemplate : Self.newPythonTemplate
-            switch language {
-            case .python:
-                let result = au.reloadScript(source: source)
-                pm.setCurrentPreset(nil, source: source)
-                au.scriptSourceDidChange.send(ConjureDSPExtensionAudioUnit.ScriptSourceChange(source: source))
-                return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
-            case .rust:
-                // Don't compile on New — just show the template
-                au.currentScriptLanguage = .rust
-                pm.setCurrentPreset(nil, source: source)
-                au.scriptSourceDidChange.send(ConjureDSPExtensionAudioUnit.ScriptSourceChange(source: source))
-                return ScriptSaveResult(success: true, error: nil, processTimeMs: nil, budgetMs: nil)
+            do {
+                let saved: Preset = try pm.savePreset(
+                    name: name,
+                    source: source,
+                    language: language,
+                    scaffoldUI: includeCustomUI
+                )
+                Analytics.track(.presetSave, properties: [
+                    "preset_name": name,
+                    "is_new": true,
+                    "language": language.rawValue,
+                    "from": "new_preset",
+                    "include_custom_ui": includeCustomUI,
+                ])
+                Analytics.flush()
+
+                // Always use the default "Add <name>" message — the New
+                // Preset dialog deliberately doesn't ask for a commit
+                // message. Users control commit text via Cmd+S after the
+                // bundle exists; the first commit is routine.
+                let commitMessage = gc?.defaultMessage(for: .add(name: saved.name))
+                let commitURL = saved.fileURL
+                let doCommit: (Bool) -> Void = { success in
+                    guard success, let gc, let fileURL = commitURL, let message = commitMessage else { return }
+                    Task { _ = await gc.recordSave(paths: [fileURL], message: message) }
+                }
+
+                switch language {
+                case .python:
+                    let result = au.reloadScript(source: source)
+                    pm.setCurrentPreset(saved, source: source)
+                    // Propagate the new source to the Monaco editor.
+                    // Without this, the editor stays on the previous
+                    // preset's code while the custom UI renders the
+                    // newly-compiled metadata — the "script says width,
+                    // UI says Gain" mismatch.
+                    au.scriptSourceDidChange.send(
+                        ConjureDSPExtensionAudioUnit.ScriptSourceChange(source: source)
+                    )
+                    doCommit(result.success)
+                    if !result.success {
+                        return result.error ?? "Failed to load new preset"
+                    }
+                    return nil
+                case .rust:
+                    // Don't compile on create — user hits Run when ready.
+                    au.currentScriptLanguage = .rust
+                    pm.setCurrentPreset(saved, source: source)
+                    au.scriptSourceDidChange.send(
+                        ConjureDSPExtensionAudioUnit.ScriptSourceChange(source: source)
+                    )
+                    doCommit(true)
+                    return nil
+                }
+            } catch {
+                return error.localizedDescription
             }
         }
 
@@ -585,6 +653,33 @@ pub extern "C" fn process(
             let exportDir = appGroupURL.appendingPathComponent("PendingExports")
             try? FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
 
+            // When the active preset is a bundle with a present custom UI,
+            // tell the exporter to carry it forward. `hasCustomUI` already
+            // verifies the manifest declares a ui block AND `ui/index.html`
+            // exists on disk, so there's no need to stat again here.
+            let customUIPayload: ExportManager.CustomUIPayload? = {
+                guard let bundle = au.presetManager.currentBundle,
+                      bundle.hasCustomUI,
+                      let uiDir = bundle.uiDirectoryURL else { return nil }
+                let uiMeta = bundle.manifest.ui
+                // `uiEntryHTMLPath` is bundle-root-relative ("ui/index.html").
+                // The exporter copies the bundle's `ui/` directory verbatim
+                // into `.appex/Contents/Resources/ui/`, so we only need the
+                // path relative to that directory — strip the leading "ui/".
+                let entryHTML: String = {
+                    let p = bundle.manifest.uiEntryHTMLPath
+                    return p.hasPrefix("ui/") ? String(p.dropFirst(3)) : p
+                }()
+                return ExportManager.CustomUIPayload(
+                    directory: uiDir,
+                    entryHTML: entryHTML,
+                    width: uiMeta?.width,
+                    height: uiMeta?.height,
+                    fps: bundle.manifest.resolvedFPS,
+                    audioFrames: bundle.manifest.audioFramesEnabled
+                )
+            }()
+
             do {
                 let exportManager = ExportManager()
                 let appURL = try exportManager.exportPreset(
@@ -597,7 +692,8 @@ pub extern "C" fn process(
                     skipSigning: true,
                     paramNames: au.currentParamNames,
                     paramMetadata: au.currentParamMetadata,
-                    latencySamples: au._latencySamples
+                    latencySamples: au._latencySamples,
+                    customUI: customUIPayload
                 )
                 log.info("Staged preset '\(name, privacy: .public)' to App Group at \(appURL.path, privacy: .public)")
 
