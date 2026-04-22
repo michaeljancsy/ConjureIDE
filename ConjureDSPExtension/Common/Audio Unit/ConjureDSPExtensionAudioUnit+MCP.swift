@@ -439,7 +439,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             return (jsonStr(["error": "Missing required parameter: topic"]), true)
         }
 
-        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "accel", "nam", "all"]
+        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "accel", "nam", "ui", "all"]
         guard validTopics.contains(topic) else {
             return (jsonStr(["error": "Invalid topic: \(topic). Valid topics: \(validTopics.joined(separator: ", "))"]), true)
         }
@@ -452,6 +452,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         if topic == "utilities" || topic == "all" { sections.append(DSPDocumentation.utilities) }
         if topic == "accel" || topic == "all" { sections.append(DSPDocumentation.accel) }
         if topic == "nam" || topic == "all" { sections.append(DSPDocumentation.nam) }
+        if topic == "ui" || topic == "all" { sections.append(DSPDocumentation.ui) }
 
         return (jsonStr(["topic": topic, "docs": sections.joined(separator: "\n\n")]), false)
     }

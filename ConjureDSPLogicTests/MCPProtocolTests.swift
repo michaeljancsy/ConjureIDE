@@ -229,11 +229,12 @@ struct MCPToolDefinitionTests {
         #expect(expectedTools.contains("list_tones"))
     }
 
-    @Test("get_docs valid topics include nam")
+    @Test("get_docs valid topics include nam and ui")
     func getDocsNamTopic() {
-        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "nam", "all"]
+        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "accel", "nam", "ui", "all"]
         #expect(validTopics.contains("nam"), "NAM should be a valid docs topic")
-        #expect(validTopics.contains("all"), "all should include NAM")
+        #expect(validTopics.contains("ui"), "ui should be a valid docs topic (cdp-ui component library)")
+        #expect(validTopics.contains("all"), "all should include every topic")
     }
 
     @Test("list_tones has no required parameters")

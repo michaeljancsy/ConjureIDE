@@ -463,15 +463,228 @@ enum DSPDocumentation {
     - Use list_tones tool to see downloaded tones and their tone3000:// paths
     """
 
+    static let ui = """
+    # Custom HTML/JS UIs — cdp-ui component library
+
+    When a preset bundle's manifest declares a `ui` block and ships a
+    `ui/index.html`, the plugin renders that HTML in a WKWebView instead
+    of the auto-generated slider panel. The webview is pre-injected with:
+
+    - `window.ConjureDSP` bridge (from `customui-bridge.js`) — parameters,
+      theme, audio frames
+    - `cdp-ui.js` component library — the widgets below
+
+    You DO NOT include `<script src="...">` for either. Both are already
+    loaded before your document-start scripts run. Just use the tags.
+
+    ## Manifest ui block
+
+    Add to manifest.json alongside `entry`:
+
+    ```json
+    {
+        "schemaVersion": 2,
+        "entry": "process.py",
+        "language": "python",
+        "params": [ ... ],
+        "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 520,
+            "height": 380,
+            "fps": 30,
+            "audioFrames": false
+        }
+    }
+    ```
+
+    - `entryHTML` — path relative to the bundle root.
+    - `width` / `height` — pt; the webview is pinned to this height, so
+      authors control vertical space. Window is user-resizable horizontally.
+    - `fps` — tick rate hint for `window.ConjureDSP.audio.onFrame`.
+    - `audioFrames` — set true if your UI subscribes to audio frames (RMS/
+      peak/FFT). Toggles the capture consumer so the pipeline isn't
+      computing frames for nothing.
+
+    When `schemaVersion: 2` ships `params: [...]`, the AU parameter tree
+    is populated from the manifest BEFORE the DSP script compiles —
+    meaning the custom UI can render with correct defaults during a slow
+    Rust compile. Always prefer v2 + `params` over relying on DSP-extracted
+    metadata.
+
+    ## Components
+
+    All web components; use them as custom elements in HTML:
+
+    ```html
+    <cdp-slider param="cutoff"></cdp-slider>
+    <cdp-toggle param="bypass_eq"></cdp-toggle>
+    <cdp-choice param="mode"></cdp-choice>
+    <cdp-xy param-x="cutoff" param-y="resonance" invert-y></cdp-xy>
+    <cdp-panel auto></cdp-panel>   <!-- renders one control per param -->
+    ```
+
+    - `<cdp-slider>` — honors `curve:"log"` metadata automatically;
+      renders `label | track | value` in a row. Set `--cdp-label-width: 0`
+      and `--cdp-value-width: 0` to collapse to a bare track.
+    - `<cdp-toggle>` — for `style:"toggle"` params. Renders as a switch.
+    - `<cdp-choice>` — for `style:"choice"` params. Segmented control
+      (≤2 options) or dropdown (3+), driven by manifest `options`.
+    - `<cdp-xy>` — 2D pad. `invert-y` flips so low Y = bottom (standard
+      graph orientation — omit for "screen" orientation where top = 0).
+    - `<cdp-panel auto>` — fallback layout that mirrors the stock slider
+      panel. Useful as a one-liner when you just want themed sliders.
+
+    ## Author JS API (`window.ConjureDSP.ui`)
+
+    For preset JS beyond the components:
+
+    ```js
+    const { control, formatValue, denormalize, normalize } = ConjureDSP.ui;
+
+    const cutoff = control(idx);        // { value, setValue(v), metadata,
+                                        //   onChange(cb), normalize, denormalize }
+    cutoff.onChange(v => draw(v));
+    cutoff.setValue(2500);              // writes actual value (curve-aware)
+
+    formatValue(1000, cutoff.metadata)  // "1.00 kHz"
+    denormalize(0.5, cutoff.metadata)   // 0..1 -> actual (log curve: ~632 Hz)
+    normalize(1000, cutoff.metadata)    // actual -> 0..1
+    ```
+
+    `ConjureDSP.ui.requireVersion(n)` — throws if the library is older
+    than `n`. Bump when adding features your UI depends on.
+
+    ## Param-name resolution
+
+    Components accept `param=` as an index OR a name. Name matching is
+    loose — case-insensitive, underscores and spaces are ignored. That
+    means a SINGLE ui/index.html works with both the Python variant
+    (`"low_gain"`, lowercase dict keys) and the Rust variant (`"Low Gain"`,
+    Title Case from `params!()`'s `push_title_case`). Don't duplicate
+    UIs per language.
+
+    ## Theming
+
+    Everything reads system colors (`CanvasText`, `Canvas`) so the UI
+    tracks the host's light/dark mode automatically. Override at host level:
+
+    ```css
+    cdp-slider {
+        --cdp-accent: #00d8ff;
+        --cdp-track-bg: #2a2a2a;
+        --cdp-thumb-size: 14px;
+        --cdp-label-width: 90px;
+        --cdp-value-width: 72px;
+        --cdp-radius: 6px;
+        --cdp-font-size: 12px;
+    }
+    cdp-xy::part(pad)   { border-radius: 10px; height: 220px; }
+    cdp-xy::part(puck)  { width: 18px; height: 18px; }
+    ```
+
+    Exposed `::part()` names: `label`, `value`, `track`, `thumb`, `pad`,
+    `puck`, `option`.
+
+    ## Audio frames (opt-in, for visualizers)
+
+    When `manifest.ui.audioFrames: true`, subscribe in JS:
+
+    ```js
+    ConjureDSP.audio.onFrame(frame => {
+        // frame = { peakIn, peakOut, rmsIn, rmsOut, fft? }
+        drawMeter(frame.peakOut);
+    });
+    ```
+
+    Pass `{ fft: true }` as a second arg to opt in to FFT (heavier
+    payload; default payload is ~80 bytes).
+
+    ## Canvas pattern
+
+    Canvas 2D can't parse `color-mix()` or the `CanvasText` keyword. To
+    get a theme-correct stroke color:
+
+    ```js
+    function resolveFG() {
+        const probe = document.createElement('span');
+        probe.style.cssText = 'color: CanvasText; position: absolute; visibility: hidden;';
+        document.body.appendChild(probe);
+        const c = getComputedStyle(probe).color;
+        probe.remove();
+        return c;
+    }
+    ```
+
+    Re-resolve on the `themechange` event.
+
+    ## Network & sandbox
+
+    The WebView runs with a strict CSP (`default-src 'self' 'unsafe-inline'
+    data:; connect-src 'none';`) and a content rule list. fetch/XHR/
+    WebSocket egress is blocked. All assets must live inside the bundle
+    (`ui/index.html`, `ui/assets/*`). Use the `conjuredsp-preset://preset/...`
+    scheme for cross-file references, or relative paths.
+
+    ## Gotchas
+
+    - Metadata is late-binding: on preset switch the components may render
+      with a placeholder before `params` arrive. Components re-bind
+      automatically; any custom JS should listen to `ConjureDSP.ready(cb)`
+      before reading `parameters.get(i)` at startup.
+    - Dragging a cdp-slider with param changes does NOT fire `onAnyChange`
+      for the dragging UI's own writes (avoids feedback loops). If you
+      need continuous redraw-on-drag, run a rAF tick.
+    - The same bundle's UI also renders inside an exported standalone AU
+      via `ExportCustomUIWebView`. Don't rely on devtools or host-only
+      APIs.
+
+    ## Minimal example
+
+    ```html
+    <!doctype html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body { margin: 0; padding: 14px 16px;
+                   font: 12px -apple-system, system-ui, sans-serif;
+                   background: Canvas; color: CanvasText; }
+            cdp-slider { display: block; margin: 4px 0; }
+        </style>
+    </head>
+    <body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <cdp-slider param="resonance"></cdp-slider>
+    </body>
+    </html>
+    ```
+
+    That's a complete, themed, DAW-ready UI. No script, no imports, no
+    build.
+
+    ## Reference presets to copy patterns from
+
+    - `preset_svf` — XY pad driving cutoff + resonance, Canvas response
+      curve, dB Y-axis labels.
+    - `preset_compressor` — stacked sliders with labels/values, transfer-
+      curve Canvas, GR meter column, audio-frame subscription.
+    - `preset_wavefolder` — transfer curve Canvas with absolute-positioned
+      wrap to avoid feedback sizing loops.
+    - `preset_acid_sermon` — percent-based controls, no Canvas.
+    - `preset_eq3` — three dB bands with toggles.
+
+    Read them with `read_bundle_file` when you need a template.
+    """
+
     /// All sections joined (excludes NAM — requires knowing downloaded tones).
     static var allDocs: String {
-        [params, filters, delays, oscillators, utilities, accel]
+        [params, filters, delays, oscillators, utilities, accel, ui]
             .joined(separator: "\n\n")
     }
 
     /// All sections including NAM (for the MCP get_docs "all" topic).
     static var allDocsWithNam: String {
-        [params, filters, delays, oscillators, utilities, accel, nam]
+        [params, filters, delays, oscillators, utilities, accel, nam, ui]
             .joined(separator: "\n\n")
     }
 }
