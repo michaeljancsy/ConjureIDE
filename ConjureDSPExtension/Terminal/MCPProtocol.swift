@@ -181,7 +181,7 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "write_bundle_file",
-            description: "Write a text file inside the current preset bundle. Use to author the custom HTML/JS UI: set manifest.json's 'ui' block, write ui/index.html, add ui/assets/style.css. The plugin's file watcher picks up the change and hot-reloads the custom UI within ~300ms. Writes are rejected for factory presets (read-only resources in the app bundle). The DSP script itself (manifest.entry) is writable but the DAW won't pick up the new code until compile_and_run runs it — for DSP edits, prefer compile_and_run which also re-loads the kernel.",
+            description: "Write a text file inside the current preset bundle. Use to author the custom HTML/JS UI: set manifest.json's 'ui' block, write ui/index.html, add ui/assets/style.css. The plugin's file watcher picks up the change and hot-reloads the custom UI within ~300ms. Writes are rejected for factory presets (read-only resources in the app bundle). The DSP script itself (manifest.entry) is writable but the DAW won't pick up the new code until compile_and_run runs it — for DSP edits, prefer compile_and_run which also re-loads the kernel. When the write touches ui/ or manifest.json, the response includes a `validation` block (same shape as validate_bundle) so you see unresolved param= refs, CSP violations, missing ui blocks, etc. on the same turn — inspect it before moving on.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -194,6 +194,11 @@ enum MCPProtocol {
         ToolDefinition(
             name: "toggle_bypass",
             description: "Toggle bypass mode. When bypassed, audio passes through unprocessed (useful for A/B comparison).",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
+        ToolDefinition(
+            name: "validate_bundle",
+            description: "Run a static validator over the currently-loaded bundle's manifest.json + ui/index.html. Catches unresolved param= references, CSP-blocked external fetches, missing manifest.ui block, Canvas 2D using CSS system colors it can't parse, and UIs that declare parameters but expose zero controls. Returns {status: \"pass\"|\"warn\"|\"fail\", issues: [{severity, check, file?, message, suggestion?}]}. write_bundle_file runs the same validator automatically on ui/ or manifest.json edits and inlines the report in its response, so you only need this tool for an explicit re-check or to validate without writing.",
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
         ToolDefinition(

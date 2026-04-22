@@ -638,6 +638,125 @@ enum DSPDocumentation {
       via `ExportCustomUIWebView`. Don't rely on devtools or host-only
       APIs.
 
+    ## Common failures and how to avoid them
+
+    Each of these has broken past custom UIs. The static validator
+    (invoked automatically by write_bundle_file, or explicitly via
+    validate_bundle) catches most of them. Prevent them at author time
+    by using these recipes.
+
+    ### NaN in readouts / dead sliders
+
+    The #1 custom-UI bug. Cause: hand-rolling param math against assumed
+    metadata field names (`meta.min`, `meta.range`, etc.) instead of
+    using the control helpers.
+
+    WRONG:
+    ```js
+    // Invented math — metadata doesn't have a `range` field, so this
+    // produces NaN that propagates to every downstream calculation.
+    const v = meta.min + fraction * meta.range;
+    ```
+
+    RIGHT:
+    ```js
+    const c = ConjureDSP.ui.control(idx);
+    c.setValue(c.denormalize(fraction));   // 0..1 -> actual, curve-aware
+    const t = c.normalize(c.value);        // actual -> 0..1, curve-aware
+    const label = ConjureDSP.ui.formatValue(c.value, c.metadata);
+    ```
+
+    The helpers respect `curve: "log"`, unit formatting, toggle vs slider
+    vs choice styles — all the metadata shapes you'd otherwise have to
+    special-case.
+
+    ### SVG drag regions that don't respond to the mouse
+
+    When you attach a `pointerdown` listener to an SVG `<g>`, the
+    decorative children inside it can swallow the pointer event before
+    it reaches the group's handler. Two rules:
+
+    1. Give the group an invisible hit pad as its **first** child
+       (first = behind, so siblings render on top but still pass events
+       through). A transparent `<rect>` the size of the interactive
+       bounding box works.
+    2. Apply `pointer-events: none` to every decorative child in the
+       group. Leave it UNSET on the hit pad.
+
+    ```html
+    <g id="ghost" onpointerdown="startDrag(event)">
+        <rect x="0" y="0" width="80" height="120" fill="rgba(0,0,0,0.001)" />
+        <path d="..." pointer-events="none" fill="white" opacity="0.8" />
+        <circle cx="40" cy="30" r="4" pointer-events="none" />
+    </g>
+    ```
+
+    Also: if the group is layered behind another element in document
+    order, that other element will steal pointer events regardless of
+    the hit pad. Keep interactive regions on top, or apply
+    `pointer-events: none` to the overlays.
+
+    ### Canvas 2D fillStyle = "CanvasText" silently paints black
+
+    Canvas 2D's parser doesn't understand CSS system-color keywords or
+    `color-mix()`. It falls back to black (or whatever was previously
+    set), defeating the theme-aware intent.
+
+    Resolve via a getComputedStyle probe on a hidden element:
+
+    ```js
+    function resolveFG() {
+        const probe = document.createElement('span');
+        probe.style.cssText = 'color: CanvasText; position: absolute; visibility: hidden;';
+        document.body.appendChild(probe);
+        const c = getComputedStyle(probe).color;   // "rgb(232, 232, 232)" or similar
+        probe.remove();
+        return c;
+    }
+    let FG = resolveFG();
+    window.addEventListener('themechange', () => { FG = resolveFG(); redraw(); });
+    ```
+
+    ### Decorative UI with no way to change parameters
+
+    A UI that looks great but offers zero controls leaves users stuck.
+    At minimum, include one of:
+
+    - `<cdp-panel auto></cdp-panel>` — catch-all that renders one
+      control per declared param, themed to match the rest of the UI.
+    - A per-param `<cdp-slider>` / `<cdp-toggle>` / `<cdp-choice>` /
+      `<cdp-xy>`, even if hidden behind a toggle button.
+
+    The validator warns when the HTML has zero interactive elements AND
+    the manifest declares at least one param.
+
+    ### External scripts, stylesheets, fonts, fetch calls
+
+    The webview's CSP is `default-src 'self' 'unsafe-inline' data:;
+    connect-src 'none';`. Any of these silently fail:
+
+    - `<script src="https://cdn.jsdelivr.net/...">`
+    - `<link rel="stylesheet" href="https://fonts.googleapis.com/...">`
+    - `@import url("https://...");`
+    - `fetch("https://api.example.com/...")`
+    - `new WebSocket("wss://...")`
+
+    All assets must live inside the bundle. Inline small scripts/styles
+    directly in `ui/index.html`. Ship larger assets under
+    `ui/assets/*.{css,js,png,woff2}` and reference with relative paths.
+
+    ### UI renders once, breaks on hot reload
+
+    The file watcher calls `webView.reload()` after every file change.
+    The whole document is rebuilt from scratch each time. Don't capture
+    DOM nodes or listeners in module-level state expecting them to
+    survive reloads — they won't.
+
+    The cdp-ui components re-bind automatically on reload. Author JS
+    should do all DOM queries inside `ConjureDSP.ready(...)` or on
+    `DOMContentLoaded`, not at script top level before the document is
+    parsed.
+
     ## Minimal example
 
     ```html

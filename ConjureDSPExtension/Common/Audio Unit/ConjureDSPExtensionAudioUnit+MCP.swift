@@ -104,6 +104,11 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 let result = self.mcpWriteBundleFile(input: input)
                 completion(result.0, result.1)
             }
+        case "validate_bundle":
+            Task { @MainActor in
+                let result = self.mcpValidateBundle()
+                completion(result.0, result.1)
+            }
         default:
             completion(jsonStr(["error": "Unknown tool: \(name)"]), true)
         }
@@ -419,11 +424,57 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         if url.lastPathComponent == PresetManifest.filename {
             presetManager.refreshPresets()
         }
-        return (jsonStr([
+
+        // For edits that could affect the custom UI (ui/*, manifest.json),
+        // run the static validator and include its report in the response
+        // so the agent sees warnings on the same turn it wrote the file —
+        // no separate tool call required for the common case.
+        var response: [String: Any] = [
             "success": true,
             "path": input["path"] ?? "",
             "bytes_written": content.utf8.count,
-        ]), false)
+        ]
+        let pathStr = (input["path"] as? String) ?? ""
+        let touchesUISurface = pathStr.hasPrefix("ui/")
+            || pathStr == PresetManifest.filename
+            || url.lastPathComponent == PresetManifest.filename
+        if touchesUISurface,
+           let refreshed = presetManager.currentPreset.flatMap({ presetManager.loadBundle(for: $0) }) {
+            response["validation"] = validationReportAsJSON(BundleUIValidator.validate(refreshed))
+        }
+        return (jsonStr(response), false)
+    }
+
+    @MainActor
+    private func mcpValidateBundle() -> (String, Bool) {
+        guard let preset = presetManager.currentPreset else {
+            return (jsonStr(["error": "No current preset."]), true)
+        }
+        guard let bundle = presetManager.loadBundle(for: preset) else {
+            return (jsonStr(["error": "Could not load bundle for current preset."]), true)
+        }
+        let report = BundleUIValidator.validate(bundle)
+        return (jsonStr(validationReportAsJSON(report)), false)
+    }
+
+    /// JSON-friendly shape for inclusion in tool responses. Mirrors
+    /// `BundleUIValidator.Report` — kept explicit because `jsonStr` works
+    /// on `[String: Any]`, not `Encodable`.
+    private func validationReportAsJSON(_ report: BundleUIValidator.Report) -> [String: Any] {
+        let issues: [[String: Any]] = report.issues.map { issue in
+            var d: [String: Any] = [
+                "severity": issue.severity.rawValue,
+                "check": issue.check,
+                "message": issue.message,
+            ]
+            if let file = issue.file { d["file"] = file }
+            if let suggestion = issue.suggestion { d["suggestion"] = suggestion }
+            return d
+        }
+        return [
+            "status": report.status.rawValue,
+            "issues": issues,
+        ]
     }
 
     @MainActor

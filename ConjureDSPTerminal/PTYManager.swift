@@ -595,6 +595,24 @@ final class PTYManager {
     Working examples to copy from: `read_bundle_file` on `preset_svf`, \
     `preset_compressor`, `preset_wavefolder`, `preset_mockingbird_at_night_rust`.
 
+    **Validation protocol (mandatory before claiming done on a UI task):**
+
+    - Every `write_bundle_file` to `ui/*` or `manifest.json` returns a \
+    `validation` block with a `status` (`pass` / `warn` / `fail`) and an \
+    `issues` array. Read it. If `status: "fail"`, fix the failures before \
+    continuing — the UI is broken in a way the user will notice.
+    - Common failures the validator catches: unresolved `param="X"` \
+    references, external `<script src>` / `fetch()` / `WebSocket` calls \
+    that the CSP blocks, missing manifest.ui block, Canvas 2D fillStyle \
+    set to a CSS system color keyword that won't parse, and UIs that \
+    declare parameters but expose zero interactive controls.
+    - When you're done with a UI task, call `validate_bundle` as an \
+    explicit re-check. Don't say "done" until it returns `status: "pass"` \
+    (or "warn" with issues you've read and deliberately accepted).
+    - Do NOT try to validate a UI by asking yourself whether the code \
+    looks right — this has produced NaN readouts, dead sliders, and \
+    pointer-event ghosts in past sessions. Run the validator.
+
     ## Latency Reporting
 
     Scripts that introduce algorithmic latency (lookahead, FFT windowing, oversampling) \
