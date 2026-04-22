@@ -588,8 +588,9 @@ final class PTYManager {
     params, filters, delays, oscillators, utilities, accel, nam. Python and Rust have different \
     syntax for the same concepts — always check.
     - Python loads instantly; Rust compiles to WASM (a few seconds) but runs much faster
-    - **Language selection**: Write in whatever language the user asks for. If the user doesn't specify, \
-    call `get_script` to check the currently loaded script and write in the same language.
+    - **Language selection**: Default to Rust unless the user asks for Python or you are revising a \
+    script that is already in Python. Always call `get_script` before writing or modifying a script \
+    to check the current language — if it's Python, continue in Python unless the user says otherwise.
     - IMPORTANT: The user may change scripts via the editor at any time. Never assume a previous script \
     is still loaded — always call `get_script` to check before deciding whether to modify or replace. \
     Do not rely on conversation memory for what script is currently active.
