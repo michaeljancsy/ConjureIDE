@@ -451,6 +451,11 @@ class PresetManager: ObservableObject {
         let manifestURL = bundle.rootURL.appendingPathComponent(PresetManifest.filename)
         let updatedManifest: PresetManifest = {
             if bundle.manifest.ui != nil { return bundle.manifest }
+            // IMPORTANT: pass `params` through. The memberwise init
+            // defaults optional fields to nil when omitted, so forgetting
+            // this here silently drops manifest-v2 param declarations
+            // and the bundle reverts to the v1 DSP-extraction path on
+            // the next load.
             return PresetManifest(
                 schemaVersion: bundle.manifest.schemaVersion,
                 entry: bundle.manifest.entry,
@@ -462,6 +467,7 @@ class PresetManager: ObservableObject {
                     fps: 30,
                     audioFrames: false
                 ),
+                params: bundle.manifest.params,
                 meta: bundle.manifest.meta
             )
         }()

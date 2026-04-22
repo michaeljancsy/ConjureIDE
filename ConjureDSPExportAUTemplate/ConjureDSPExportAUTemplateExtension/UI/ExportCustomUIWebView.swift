@@ -40,6 +40,11 @@ struct ExportCustomUIWebView: NSViewRepresentable {
     /// and passes it down so multiple webview re-creations share capture
     /// state.
     var captureManager: ExportAudioCaptureManager
+    /// Mirrors `runtime-config.json.ui.audioFrames`. When false (the
+    /// default), `subscribeAudioFrames` messages from the webview are
+    /// ignored. Matches the main extension's CustomUIWebView and the
+    /// documented manifest contract.
+    var audioFramesAllowed: Bool = false
 
     fileprivate static let bundleScheme = "conjuredsp-preset"
 
@@ -109,11 +114,17 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         context.coordinator.webView = webView
         context.coordinator.parameterState = parameterState
         context.coordinator.captureManager = captureManager
+        context.coordinator.audioFramesAllowed = audioFramesAllowed
         context.coordinator.subscribe(to: parameterState)
         context.coordinator.observeWindowVisibility()
 
         let entry = entryHTMLPath.hasPrefix("ui/") ? entryHTMLPath : "ui/\(entryHTMLPath)"
-        if let url = URL(string: "\(Self.bundleScheme)://preset/\(entry)") {
+        // Percent-encode to survive bundle paths containing spaces or
+        // unicode — matches the main extension's CustomUIWebView.
+        let encodedEntry = entry
+            .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+            ?? entry
+        if let url = URL(string: "\(Self.bundleScheme)://preset/\(encodedEntry)") {
             webView.load(URLRequest(url: url))
         } else {
             log.error("Could not form custom UI URL for entry \(entry, privacy: .public)")
@@ -211,6 +222,10 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         /// Matches the main extension's default cadence so authored UIs
         /// see the same visual rate in-plugin and exported.
         private var audioFPS: Int = 30
+        /// Mirrors `ExportCustomUIWebView.audioFramesAllowed`, set by the
+        /// view from `runtime-config.json.ui.audioFrames`. When false, the
+        /// webview's `subscribeAudioFrames` message is dropped.
+        var audioFramesAllowed: Bool = false
         private var lastForwardTime: CFTimeInterval = 0
 
         /// Bound the outstanding main-thread work — if the previous
@@ -426,6 +441,14 @@ struct ExportCustomUIWebView: NSViewRepresentable {
                 log.info("[preset-ui] \(text, privacy: .public)")
 
             case "subscribeAudioFrames":
+                // Manifest gate mirrors the main extension: the exported
+                // runtime-config declares whether this bundle wanted audio
+                // frames. Drop subscriptions from presets that didn't
+                // opt in.
+                guard audioFramesAllowed else {
+                    log.info("[customui] subscribeAudioFrames ignored — runtime-config.ui.audioFrames is not true")
+                    break
+                }
                 // JS passes `{ fft: true }` to opt into FFT bins; absence
                 // means RMS/peak-only frames. Idempotent — re-subscribing
                 // with a different flag just updates capture state.

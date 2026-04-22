@@ -98,8 +98,15 @@ final class ExportParameterState: ObservableObject {
     /// via `implementorValueObserver`.
     func binding(for index: Int) -> Binding<Float> {
         Binding<Float>(
-            get: { self.values[index] },
+            get: {
+                // Bounds-check: custom-UI JS (`parameters.get(i)`) can
+                // pass any integer. Don't crash the exported appex on a
+                // misbehaving UI.
+                guard index >= 0, index < self.values.count else { return 0 }
+                return self.values[index]
+            },
             set: { newValue in
+                guard index >= 0, index < self.values.count else { return }
                 self.values[index] = newValue
                 if let param = self.parameterTree?.parameter(
                     withAddress: AUParameterAddress(index)

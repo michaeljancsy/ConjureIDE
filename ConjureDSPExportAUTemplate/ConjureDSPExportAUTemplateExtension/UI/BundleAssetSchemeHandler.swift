@@ -98,9 +98,40 @@ final class BundleAssetSchemeHandler: NSObject, WKURLSchemeHandler {
 
     // MARK: - WKURLSchemeHandler
 
+    // See the main extension's BundleAssetSchemeHandler for the rationale
+    // — WebKit can call `stop:` on a different thread while `start:` is
+    // in-flight (window close / navigation mid-load), and calling
+    // didReceive/didFinish on a stopped task raises
+    // NSInternalInconsistencyException.
+    private let stoppedTasksLock = NSLock()
+    private var stoppedTasks: Set<ObjectIdentifier> = []
+
+    private func isStopped(_ task: WKURLSchemeTask) -> Bool {
+        stoppedTasksLock.lock()
+        defer { stoppedTasksLock.unlock() }
+        return stoppedTasks.contains(ObjectIdentifier(task))
+    }
+
+    private func markStopped(_ task: WKURLSchemeTask) {
+        stoppedTasksLock.lock()
+        stoppedTasks.insert(ObjectIdentifier(task))
+        stoppedTasksLock.unlock()
+    }
+
+    private func clearStopped(_ task: WKURLSchemeTask) {
+        stoppedTasksLock.lock()
+        stoppedTasks.remove(ObjectIdentifier(task))
+        stoppedTasksLock.unlock()
+    }
+
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
+        func fail(_ error: Error) {
+            if isStopped(urlSchemeTask) { clearStopped(urlSchemeTask); return }
+            urlSchemeTask.didFailWithError(error)
+        }
+
         guard let requestURL = urlSchemeTask.request.url else {
-            urlSchemeTask.didFailWithError(Self.nsError(.badURL, "missing request URL"))
+            fail(Self.nsError(.badURL, "missing request URL"))
             return
         }
 
@@ -109,16 +140,16 @@ final class BundleAssetSchemeHandler: NSObject, WKURLSchemeHandler {
             asset = try resolve(requestURL: requestURL)
         } catch ResolveError.outsideBundle {
             log.error("Scheme handler rejected out-of-bundle request: \(requestURL.path, privacy: .public)")
-            urlSchemeTask.didFailWithError(Self.nsError(.unsupportedURL, "outside bundle"))
+            fail(Self.nsError(.unsupportedURL, "outside bundle"))
             return
         } catch ResolveError.notFound {
-            urlSchemeTask.didFailWithError(Self.nsError(.fileDoesNotExist, requestURL.path))
+            fail(Self.nsError(.fileDoesNotExist, requestURL.path))
             return
         } catch ResolveError.ioError(let detail) {
-            urlSchemeTask.didFailWithError(Self.nsError(.cannotOpenFile, detail))
+            fail(Self.nsError(.cannotOpenFile, detail))
             return
         } catch {
-            urlSchemeTask.didFailWithError(error)
+            fail(error)
             return
         }
 
@@ -132,13 +163,16 @@ final class BundleAssetSchemeHandler: NSObject, WKURLSchemeHandler {
         let response = HTTPURLResponse(url: requestURL, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)
             ?? URLResponse(url: requestURL, mimeType: asset.mimeType, expectedContentLength: asset.data.count, textEncodingName: nil) as URLResponse
 
+        if isStopped(urlSchemeTask) { clearStopped(urlSchemeTask); return }
         urlSchemeTask.didReceive(response)
+        if isStopped(urlSchemeTask) { clearStopped(urlSchemeTask); return }
         urlSchemeTask.didReceive(asset.data)
+        if isStopped(urlSchemeTask) { clearStopped(urlSchemeTask); return }
         urlSchemeTask.didFinish()
     }
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
-        // All reads are synchronous; nothing to cancel.
+        markStopped(urlSchemeTask)
     }
 
     // MARK: - Internals

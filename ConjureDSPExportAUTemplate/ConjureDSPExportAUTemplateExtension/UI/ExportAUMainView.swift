@@ -64,7 +64,8 @@ struct ExportAUMainView: View {
                         uiDirectoryURL: entryURL.deletingLastPathComponent(),
                         entryHTMLPath: entryURL.lastPathComponent,
                         theme: colorScheme,
-                        captureManager: captureManager
+                        captureManager: captureManager,
+                        audioFramesAllowed: config?.ui?.audioFrames ?? false
                     )
                     .frame(minHeight: CGFloat(config?.ui?.height ?? 220))
                 } else {

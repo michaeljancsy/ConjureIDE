@@ -98,9 +98,48 @@ final class BundleAssetSchemeHandler: NSObject, WKURLSchemeHandler {
 
     // MARK: - WKURLSchemeHandler
 
+    /// Tasks WebKit has told us to stop. Calling `didReceive()` or
+    /// `didFinish()` on a stopped task raises
+    /// `NSInternalInconsistencyException`. `start:` reads from disk
+    /// synchronously on its worker thread, and WebKit may call `stop:`
+    /// on a different thread at any point during that window (window
+    /// close, navigation away, webview teardown). Track stopped task
+    /// identities so the tail of `start:` can bail cleanly instead of
+    /// crashing. Keyed by `ObjectIdentifier` on the task; entries are
+    /// removed by `start:` when it's done with a task and by `stop:`
+    /// unconditionally.
+    private let stoppedTasksLock = NSLock()
+    private var stoppedTasks: Set<ObjectIdentifier> = []
+
+    private func isStopped(_ task: WKURLSchemeTask) -> Bool {
+        stoppedTasksLock.lock()
+        defer { stoppedTasksLock.unlock() }
+        return stoppedTasks.contains(ObjectIdentifier(task))
+    }
+
+    private func markStopped(_ task: WKURLSchemeTask) {
+        stoppedTasksLock.lock()
+        stoppedTasks.insert(ObjectIdentifier(task))
+        stoppedTasksLock.unlock()
+    }
+
+    private func clearStopped(_ task: WKURLSchemeTask) {
+        stoppedTasksLock.lock()
+        stoppedTasks.remove(ObjectIdentifier(task))
+        stoppedTasksLock.unlock()
+    }
+
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
+        // Wrap every didReceive/didFail/didFinish call to skip it when
+        // WebKit has already told us to stop the task. Without this the
+        // appex crashes on window-close-during-load races.
+        func fail(_ error: Error) {
+            if isStopped(urlSchemeTask) { clearStopped(urlSchemeTask); return }
+            urlSchemeTask.didFailWithError(error)
+        }
+
         guard let requestURL = urlSchemeTask.request.url else {
-            urlSchemeTask.didFailWithError(Self.nsError(.badURL, "missing request URL"))
+            fail(Self.nsError(.badURL, "missing request URL"))
             return
         }
 
@@ -109,16 +148,16 @@ final class BundleAssetSchemeHandler: NSObject, WKURLSchemeHandler {
             asset = try resolve(requestURL: requestURL)
         } catch ResolveError.outsideBundle {
             log.error("Scheme handler rejected out-of-bundle request: \(requestURL.path, privacy: .public)")
-            urlSchemeTask.didFailWithError(Self.nsError(.unsupportedURL, "outside bundle"))
+            fail(Self.nsError(.unsupportedURL, "outside bundle"))
             return
         } catch ResolveError.notFound {
-            urlSchemeTask.didFailWithError(Self.nsError(.fileDoesNotExist, requestURL.path))
+            fail(Self.nsError(.fileDoesNotExist, requestURL.path))
             return
         } catch ResolveError.ioError(let detail) {
-            urlSchemeTask.didFailWithError(Self.nsError(.cannotOpenFile, detail))
+            fail(Self.nsError(.cannotOpenFile, detail))
             return
         } catch {
-            urlSchemeTask.didFailWithError(error)
+            fail(error)
             return
         }
 
@@ -132,13 +171,20 @@ final class BundleAssetSchemeHandler: NSObject, WKURLSchemeHandler {
         let response = HTTPURLResponse(url: requestURL, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)
             ?? URLResponse(url: requestURL, mimeType: asset.mimeType, expectedContentLength: asset.data.count, textEncodingName: nil) as URLResponse
 
+        if isStopped(urlSchemeTask) { clearStopped(urlSchemeTask); return }
         urlSchemeTask.didReceive(response)
+        if isStopped(urlSchemeTask) { clearStopped(urlSchemeTask); return }
         urlSchemeTask.didReceive(asset.data)
+        if isStopped(urlSchemeTask) { clearStopped(urlSchemeTask); return }
         urlSchemeTask.didFinish()
     }
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
-        // All reads are synchronous; nothing to cancel.
+        // Reads are synchronous, but WebKit can still call `stop` from
+        // another thread while `start` is in flight (e.g. window close
+        // during load). Mark the task so the tail of `start` bails
+        // instead of raising NSInternalInconsistencyException.
+        markStopped(urlSchemeTask)
     }
 
     // MARK: - Internals

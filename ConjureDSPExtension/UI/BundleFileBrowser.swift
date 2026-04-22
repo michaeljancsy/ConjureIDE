@@ -269,7 +269,12 @@ struct BundleFileBrowser: View {
     @ViewBuilder
     private func row(_ node: BundleFileNode, depth: Int) -> some View {
         let isSelected = node.relativePath == selectedRelativePath
-        let hasChildren = !node.children.isEmpty || node.kind == .uiFolder || node.kind == .folder
+        // Align triangle visibility with the DFS traversal in
+        // `flattenedVisibleRows`, which only emits children when
+        // `children.isEmpty == false`. Previously we'd show a triangle
+        // for every folder — including empty ones — so tapping it
+        // flipped the chevron state without revealing anything.
+        let hasChildren = !node.children.isEmpty
 
         HStack(spacing: 4) {
             // Indent

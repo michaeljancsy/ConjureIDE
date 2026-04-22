@@ -428,13 +428,21 @@
         connectedCallback() {
             adoptTheme(this);
             whenReady(() => this._bind());
-            this._sw.addEventListener('click', () => this._flip());
+            // AbortController so disconnectedCallback can clean these up
+            // in one line — otherwise each reconnect stacks another pair
+            // of listeners on the same `.switch` element.
+            this._connectController = new AbortController();
+            var sig = this._connectController.signal;
+            this._sw.addEventListener('click', () => this._flip(), { signal: sig });
             this._sw.addEventListener('keydown', (e) => {
                 if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); this._flip(); }
-            });
+            }, { signal: sig });
         }
         attributeChangedCallback() { if (this.isConnected) this._bind(); }
-        disconnectedCallback() { if (this._offChange) this._offChange(); }
+        disconnectedCallback() {
+            if (this._offChange) this._offChange();
+            if (this._connectController) { this._connectController.abort(); this._connectController = null; }
+        }
 
         _flip() {
             if (!this._ctrl) return;
@@ -449,9 +457,10 @@
             if (idx < 0) { this._label.textContent = 'unknown'; return; }
             this._ctrl = control(idx);
             var meta = this._ctrl.metadata || {};
-            if (!this._label.textContent.trim()) {
-                this._label.textContent = meta.name || ('Param ' + idx);
-            }
+            // Unconditional update — mirrors CdpSlider. Guarding on
+            // `this._label.textContent.trim()` sticks at 'unknown' on
+            // the second bind when metadata finally arrives.
+            this._label.textContent = meta.name || ('Param ' + idx);
             this._render(this._ctrl.value);
             this._offChange = this._ctrl.onChange((v) => this._render(v));
         }
@@ -529,9 +538,10 @@
             this._ctrl = control(idx);
             var meta = this._ctrl.metadata || {};
             var opts = Array.isArray(meta.options) ? meta.options : [];
-            if (!this._label.textContent.trim()) {
-                this._label.textContent = meta.name || ('Param ' + idx);
-            }
+            // Unconditional update — mirrors CdpSlider. Guarding on
+            // trim() meant a first bind at idx<0 stamped 'unknown' and
+            // a later re-bind with real metadata couldn't overwrite it.
+            this._label.textContent = meta.name || ('Param ' + idx);
             this._slotMount.innerHTML = '';
             if (opts.length <= 2 && opts.length > 0) {
                 this._mountSegmented(opts);
@@ -642,13 +652,16 @@
         connectedCallback() {
             adoptTheme(this);
             whenReady(() => this._bind());
-            this._pad.addEventListener('pointerdown', (e) => this._startDrag(e));
-            this._pad.addEventListener('keydown', (e) => this._onKey(e));
+            this._connectController = new AbortController();
+            var sig = this._connectController.signal;
+            this._pad.addEventListener('pointerdown', (e) => this._startDrag(e), { signal: sig });
+            this._pad.addEventListener('keydown', (e) => this._onKey(e), { signal: sig });
         }
         attributeChangedCallback() { if (this.isConnected) this._bind(); }
         disconnectedCallback() {
             if (this._offX) this._offX();
             if (this._offY) this._offY();
+            if (this._connectController) { this._connectController.abort(); this._connectController = null; }
         }
 
         _bind() {

@@ -128,8 +128,20 @@ final class ParameterState: ObservableObject {
     /// the originator kills that feedback loop at the source.
     func binding(for index: Int) -> Binding<Float> {
         Binding<Float>(
-            get: { self.values[index] },
+            get: {
+                // Bounds-check on read too — custom-UI JS can call
+                // `parameters.get(i)` with any integer and we shouldn't
+                // crash the appex on a misbehaving UI. Returning 0 is a
+                // safe neutral value across every unit we ship.
+                guard index >= 0, index < self.values.count else { return 0 }
+                return self.values[index]
+            },
             set: { newValue in
+                // Custom-UI JS (and MCP set_parameter) route through
+                // this setter with indices we don't fully control, so
+                // guard before the array write. `paramCount` is 16 but
+                // `values.count` is authoritative.
+                guard index >= 0, index < self.values.count else { return }
                 // paramFlow.notice("[4.swift.binding.set] idx=\(index, privacy: .public) v=\(newValue, privacy: .public) hasToken=\(self.observerToken != nil, privacy: .public)")
                 self.values[index] = newValue
                 if let param = self.parameterTree?.parameter(

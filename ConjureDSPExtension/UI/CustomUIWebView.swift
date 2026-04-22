@@ -109,12 +109,21 @@ struct CustomUIWebView: NSViewRepresentable {
         context.coordinator.parameterState = parameterState
         context.coordinator.captureManager = captureManager
         context.coordinator.audioFPS = bundle.manifest.resolvedFPS
+        context.coordinator.audioFramesAllowed = bundle.manifest.audioFramesEnabled
         context.coordinator.subscribe(to: parameterState)
         context.coordinator.observeWindowAndReload()
 
+        // Percent-encode the path before interpolating into the URL
+        // string — bundle directories with spaces or unicode (e.g.
+        // a user-saved "My Preset.cdp" or "ñ.html") would otherwise fail
+        // `URL(string:)` parsing and the webview would silently stay
+        // blank.
         let entryPath = bundle.manifest.uiEntryHTMLPath
-        if let url = URL(string: "\(Self.bundleScheme)://preset/\(entryPath)") {
-            log.info("Loading custom UI from \(Self.bundleScheme)://preset/\(entryPath, privacy: .public)")
+        let encodedPath = entryPath
+            .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+            ?? entryPath
+        if let url = URL(string: "\(Self.bundleScheme)://preset/\(encodedPath)") {
+            log.info("Loading custom UI from \(Self.bundleScheme)://preset/\(encodedPath, privacy: .public)")
             webView.load(URLRequest(url: url))
         } else {
             log.error("Could not form custom UI URL for entry \(entryPath, privacy: .public)")
@@ -232,6 +241,11 @@ struct CustomUIWebView: NSViewRepresentable {
         /// that arrive sooner than `1/fps` after the last forwarded one
         /// are dropped before JSON encode + evaluateJavaScript.
         var audioFPS: Int = 30
+        /// Mirrors `manifest.audioFramesEnabled`. When false (the default —
+        /// the manifest's `ui.audioFrames` is nil or false) we drop any
+        /// `subscribeAudioFrames` request from the webview on the floor.
+        /// Matches the contract documented in PresetManifest.swift.
+        var audioFramesAllowed: Bool = false
         private var lastForwardTime: CFTimeInterval = 0
 
         /// True when any subscriber asked for FFT bins in the frame payload.
@@ -494,6 +508,15 @@ struct CustomUIWebView: NSViewRepresentable {
                 log.notice("[preset-ui] \(text, privacy: .public)")
 
             case "subscribeAudioFrames":
+                // Manifest gate: ignore the subscription when the bundle
+                // hasn't opted in via `ui.audioFrames: true`. This matches
+                // the PresetManifest contract and keeps the audio capture
+                // pipeline silent for presets that don't declare they
+                // want frames.
+                guard audioFramesAllowed else {
+                    log.info("[customui] subscribeAudioFrames ignored — manifest.ui.audioFrames is not true")
+                    break
+                }
                 // JS may (re-)post with `{ fft: true }` to request FFT bins.
                 // Absence means RMS/peak only. This is idempotent — re-
                 // subscribing with a different flag just updates state.

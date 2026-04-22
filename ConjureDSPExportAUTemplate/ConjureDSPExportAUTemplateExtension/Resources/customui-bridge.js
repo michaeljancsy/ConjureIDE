@@ -50,6 +50,7 @@
     var _readyHandlers = [];        // [callback] (queued until _init)
     var _audioHandlers = [];        // [{cb, wantsFft}]
     var _audioFftOn = false;        // last FFT flag sent to Swift
+    var _audioSubscribed = false;   // true after a subscribeAudioFrames post, false after unsubscribe
 
     // No echo-filtering state here by design. Swift side only forwards
     // EXTERNAL parameter changes to JS (DAW automation, MIDI, MCP,
@@ -80,9 +81,13 @@
     // changes (empty→non-empty, non-empty→empty, FFT flag flipped).
     function _syncAudioSubscription() {
         if (_audioHandlers.length === 0) {
-            if (_audioFftOn || _audioHandlers.length === 0) {
+            // Only unsubscribe if we'd previously subscribed — avoids
+            // posting spurious unsubscribes when handlers are added and
+            // removed before the first frame ever arrives.
+            if (_audioSubscribed) {
                 postTo('unsubscribeAudioFrames', {});
                 _audioFftOn = false;
+                _audioSubscribed = false;
             }
             return;
         }
@@ -94,6 +99,7 @@
         // idempotent state sync. Cheap.
         postTo('subscribeAudioFrames', { fft: wantsFft });
         _audioFftOn = wantsFft;
+        _audioSubscribed = true;
     }
 
     var ConjureDSP = {
