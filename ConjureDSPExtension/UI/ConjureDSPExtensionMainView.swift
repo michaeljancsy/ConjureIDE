@@ -81,6 +81,7 @@ struct ConjureDSPExtensionMainView: View {
     /// Flips true the first time keyboard input reaches the terminal's
     /// WebSocket — exposed as a hidden accessibility element for UI tests.
     @State private var terminalFirstInputReceived: Bool = false
+    @State private var terminalClaudeNotInstalled: Bool = false
     @State private var showAIPromptTab: Bool = false
     @State private var chatWidth: CGFloat = 280
     @State private var isExporting: Bool = false
@@ -261,7 +262,8 @@ struct ConjureDSPExtensionMainView: View {
                                     colorScheme: colorScheme,
                                     appGroupContainerURL: appGroupContainerURL,
                                     instanceID: instanceID,
-                                    onFirstInput: { terminalFirstInputReceived = true }
+                                    onFirstInput: { terminalFirstInputReceived = true },
+                                    onClaudeNotInstalled: { terminalClaudeNotInstalled = true }
                                 )
                                     .accessibilityIdentifier("terminalPanel")
                                     .opacity(showAIPromptTab ? 0 : 1)
@@ -273,6 +275,12 @@ struct ConjureDSPExtensionMainView: View {
                                                 .frame(width: 1, height: 1)
                                                 .accessibilityIdentifier("terminalFirstInputReceived")
                                                 .accessibilityLabel("terminalFirstInputReceived")
+                                        }
+                                        if terminalClaudeNotInstalled {
+                                            Color.clear
+                                                .frame(width: 1, height: 1)
+                                                .accessibilityIdentifier("terminalClaudeNotInstalled")
+                                                .accessibilityLabel("terminalClaudeNotInstalled")
                                         }
                                     }
                             } else {

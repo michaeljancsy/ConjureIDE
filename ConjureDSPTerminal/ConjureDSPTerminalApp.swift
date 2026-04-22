@@ -256,6 +256,14 @@ class TerminalAppServer {
             ws?.broadcast(data)
         }
 
+        p.onControlMessage = { [weak ws] dict in
+            if let ws, ws.clientCount > 0 {
+                ws.broadcastJSON(dict)
+            } else if let data = try? JSONSerialization.data(withJSONObject: dict) {
+                ws?.pendingControlMessage = data
+            }
+        }
+
         p.onDisplayText = { [weak ws] text in
             // If no clients are connected yet, queue the banner for the first connection.
             if let ws, ws.clientCount > 0 {

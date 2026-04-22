@@ -17,6 +17,7 @@ struct TerminalView: NSViewRepresentable {
     var appGroupContainerURL: URL?
     var instanceID: String
     var onFirstInput: (() -> Void)? = nil
+    var onClaudeNotInstalled: (() -> Void)? = nil
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -64,7 +65,7 @@ struct TerminalView: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(appGroupContainerURL: appGroupContainerURL, instanceID: instanceID, onFirstInput: onFirstInput)
+        Coordinator(appGroupContainerURL: appGroupContainerURL, instanceID: instanceID, onFirstInput: onFirstInput, onClaudeNotInstalled: onClaudeNotInstalled)
     }
 
     // MARK: - Coordinator
@@ -78,13 +79,15 @@ struct TerminalView: NSViewRepresentable {
         let appGroupContainerURL: URL?
         let instanceID: String
         let onFirstInput: (() -> Void)?
+        let onClaudeNotInstalled: (() -> Void)?
         private var lastConnectedPort: UInt16?
         private var portPollTask: Task<Void, Never>?
 
-        init(appGroupContainerURL: URL?, instanceID: String, onFirstInput: (() -> Void)? = nil) {
+        init(appGroupContainerURL: URL?, instanceID: String, onFirstInput: (() -> Void)? = nil, onClaudeNotInstalled: (() -> Void)? = nil) {
             self.appGroupContainerURL = appGroupContainerURL
             self.instanceID = instanceID
             self.onFirstInput = onFirstInput
+            self.onClaudeNotInstalled = onClaudeNotInstalled
         }
 
         func disconnect() {
@@ -122,6 +125,9 @@ struct TerminalView: NSViewRepresentable {
             case "firstInput":
                 Analytics.track(.terminalFirstInput)
                 onFirstInput?()
+
+            case "claudeNotInstalled":
+                onClaudeNotInstalled?()
 
             case "error":
                 let message = data["message"] as? String ?? "unknown"

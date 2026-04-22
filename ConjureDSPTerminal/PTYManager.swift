@@ -39,6 +39,9 @@ final class PTYManager {
     /// Called to display text directly in the terminal (bypasses the PTY).
     var onDisplayText: ((String) -> Void)?
 
+    /// Called to send a JSON control message to the terminal JS bridge.
+    var onControlMessage: (([String: Any]) -> Void)?
+
     /// The MCP server port that Claude Code should connect to.
     var mcpServerPort: UInt16?
 
@@ -214,6 +217,7 @@ final class PTYManager {
                 let cmd = modeSetup + "\n" + aliasCmd + "\n"
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                     self?.write(cmd)
+                    self?.onControlMessage?(["type": "claudeNotInstalled"])
                     self?.onDisplayText?(banner)
                 }
             }

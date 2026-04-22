@@ -274,7 +274,18 @@
                     if (event.data instanceof ArrayBuffer) {
                         terminal.write(new Uint8Array(event.data));
                     } else {
-                        terminal.write(event.data);
+                        // Check for JSON control messages before passing to xterm.
+                        var handled = false;
+                        if (typeof event.data === 'string' && event.data.charCodeAt(0) === 123) {
+                            try {
+                                var msg = JSON.parse(event.data);
+                                if (msg.type === 'claudeNotInstalled') {
+                                    postToSwift('claudeNotInstalled', {});
+                                    handled = true;
+                                }
+                            } catch (e) { /* not JSON, fall through */ }
+                        }
+                        if (!handled) { terminal.write(event.data); }
                     }
                 }
             };

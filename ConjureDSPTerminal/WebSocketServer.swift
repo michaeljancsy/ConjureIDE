@@ -30,6 +30,9 @@ final class WebSocketServer {
     /// Text to send to the first client that connects (e.g. welcome banner).
     var pendingBanner: String?
 
+    /// JSON control message to send to the first client that connects (alongside pendingBanner).
+    var pendingControlMessage: Data?
+
     private var listener: NWListener?
     private var clients: [ObjectIdentifier: NWConnection] = [:]
 
@@ -95,6 +98,21 @@ final class WebSocketServer {
         }
     }
 
+    /// Send a JSON control message to all connected clients.
+    func broadcastJSON(_ dict: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        let context = NWConnection.ContentContext(identifier: "ws", metadata: [metadata])
+        for (id, client) in clients {
+            client.send(content: data, contentContext: context, completion: .contentProcessed { [weak self] error in
+                if let error {
+                    wsLog.debug("Failed to send JSON to client: \(error.localizedDescription, privacy: .public)")
+                    DispatchQueue.main.async { self?.removeClient(id) }
+                }
+            })
+        }
+    }
+
     /// Send a text message to all connected clients.
     func broadcastText(_ text: String) {
         guard let data = text.data(using: .utf8) else { return }
@@ -150,12 +168,16 @@ final class WebSocketServer {
         }
 
         connection.start(queue: .main)
+        let textMeta = NWProtocolWebSocket.Metadata(opcode: .text)
+        let textCtx = NWConnection.ContentContext(identifier: "ws", metadata: [textMeta])
+        if let ctrl = pendingControlMessage {
+            pendingControlMessage = nil
+            connection.send(content: ctrl, contentContext: textCtx, completion: .idempotent)
+        }
         if let banner = pendingBanner {
             pendingBanner = nil
             if let data = banner.data(using: .utf8) {
-                let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
-                let ctx = NWConnection.ContentContext(identifier: "ws", metadata: [metadata])
-                connection.send(content: data, contentContext: ctx, completion: .idempotent)
+                connection.send(content: data, contentContext: textCtx, completion: .idempotent)
             }
         }
         receiveFromClient(connection, id: id)
