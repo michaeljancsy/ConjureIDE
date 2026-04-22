@@ -27,6 +27,9 @@ final class WebSocketServer {
     /// Called when the listener is ready and the port is available.
     var onReady: ((UInt16) -> Void)?
 
+    /// Text to send to the first client that connects (e.g. welcome banner).
+    var pendingBanner: String?
+
     private var listener: NWListener?
     private var clients: [ObjectIdentifier: NWConnection] = [:]
 
@@ -147,6 +150,14 @@ final class WebSocketServer {
         }
 
         connection.start(queue: .main)
+        if let banner = pendingBanner {
+            pendingBanner = nil
+            if let data = banner.data(using: .utf8) {
+                let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+                let ctx = NWConnection.ContentContext(identifier: "ws", metadata: [metadata])
+                connection.send(content: data, contentContext: ctx, completion: .idempotent)
+            }
+        }
         receiveFromClient(connection, id: id)
     }
 
