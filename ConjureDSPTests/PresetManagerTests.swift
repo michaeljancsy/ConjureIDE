@@ -1049,166 +1049,45 @@ struct PresetManagerTests {
         #expect(!manager.hasPendingChanges)
     }
 
-    // MARK: - savePreset(cloneFrom:) — factory fork path
+    // MARK: - savePreset: fresh bundle, no implicit inheritance
     //
-    // These exercise the branch used by MCP `save_preset` when the
-    // current preset is a factory bundle with a custom UI: the new
-    // user bundle should inherit the factory's UI + manifest, with
-    // only the entry script overwritten by the provided source.
+    // save_preset always produces a fresh user bundle. When the agent
+    // wants to carry content over from another preset, it reads +
+    // writes those files explicitly — the handler does not clone.
 
-    @MainActor
-    private static func makeFactoryLikeBundle(at root: URL) throws -> PresetBundle {
-        let rootDir = root.appendingPathComponent("SourceFactory.cdp", isDirectory: true)
-        let uiDir = rootDir.appendingPathComponent("ui", isDirectory: true)
-        let assetsDir = uiDir.appendingPathComponent("assets", isDirectory: true)
-        try FileManager.default.createDirectory(at: assetsDir, withIntermediateDirectories: true)
-
-        let manifest = """
-        {
-            "schemaVersion": 2,
-            "entry": "process.py",
-            "language": "python",
-            "params": [
-                { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }
-            ],
-            "ui": {
-                "entryHTML": "ui/index.html",
-                "width": 520,
-                "height": 380,
-                "fps": 30,
-                "audioFrames": false
-            },
-            "meta": { "author": "Factory", "category": "filter" }
-        }
-        """
-        try manifest.write(
-            to: rootDir.appendingPathComponent("manifest.json"),
-            atomically: true, encoding: .utf8
-        )
-        try "# original factory script\n".write(
-            to: rootDir.appendingPathComponent("process.py"),
-            atomically: true, encoding: .utf8
-        )
-        try "<!doctype html><html><body>factory UI</body></html>\n".write(
-            to: uiDir.appendingPathComponent("index.html"),
-            atomically: true, encoding: .utf8
-        )
-        try "body { background: black; }\n".write(
-            to: assetsDir.appendingPathComponent("style.css"),
-            atomically: true, encoding: .utf8
-        )
-
-        guard let bundle = PresetBundle.load(from: rootDir) else {
-            throw TestError("Failed to load factory-like bundle from \(rootDir.path)")
-        }
-        return bundle
-    }
-
-    @Test @MainActor func savePresetWithCloneFromCopiesUITree() throws {
+    @Test @MainActor func savePresetFromScratchDoesNotInheritFromCurrent() throws {
+        // Seed an unrelated user bundle with its own UI. save_preset
+        // with a different name must NOT pull anything from it.
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
-        let sourceBundle = try Self.makeFactoryLikeBundle(at: tempDir)
 
         _ = try manager.savePreset(
-            name: "Forked Preset",
-            source: "# agent wrote this\n",
-            language: .python,
-            cloneFrom: sourceBundle
+            name: "Existing", source: "# existing\n",
+            language: .python, scaffoldUI: true
         )
-
-        // The new bundle should contain the factory's ui/ subtree.
-        let newBundleDir = manager.presetsURL
-            .appendingPathComponent("Forked Preset.cdp", isDirectory: true)
-        let uiIndexURL = newBundleDir.appendingPathComponent("ui/index.html")
-        let assetCSSURL = newBundleDir.appendingPathComponent("ui/assets/style.css")
-        #expect(FileManager.default.fileExists(atPath: uiIndexURL.path),
-                "ui/index.html should be copied from the source factory bundle")
-        #expect(FileManager.default.fileExists(atPath: assetCSSURL.path),
-                "ui/assets/style.css should be copied from the source factory bundle")
-
-        // Contents survived the copy verbatim.
-        let copiedIndexHTML = try String(contentsOf: uiIndexURL, encoding: .utf8)
-        #expect(copiedIndexHTML.contains("factory UI"),
-                "ui/index.html contents should match the source bundle")
-    }
-
-    @Test @MainActor func savePresetWithCloneFromPreservesManifest() throws {
-        let (manager, tempDir) = try Self.makeManager()
-        defer { Self.cleanup(tempDir) }
-        let sourceBundle = try Self.makeFactoryLikeBundle(at: tempDir)
+        let existingUIURL = manager.presetsURL
+            .appendingPathComponent("Existing.cdp/ui/index.html")
+        try "<html>EXISTING_UI</html>".write(
+            to: existingUIURL, atomically: true, encoding: .utf8
+        )
 
         _ = try manager.savePreset(
-            name: "Forked Preset",
-            source: "# agent wrote this\n",
-            language: .python,
-            cloneFrom: sourceBundle
+            name: "Fresh", source: "# fresh\n",
+            language: .python, scaffoldUI: false
         )
+        let freshBundleDir = manager.presetsURL
+            .appendingPathComponent("Fresh.cdp", isDirectory: true)
+        let freshUIURL = freshBundleDir.appendingPathComponent("ui/index.html")
 
-        let newBundleDir = manager.presetsURL
-            .appendingPathComponent("Forked Preset.cdp", isDirectory: true)
-        let manifestURL = newBundleDir.appendingPathComponent("manifest.json")
-        let manifestData = try Data(contentsOf: manifestURL)
+        #expect(!FileManager.default.fileExists(atPath: freshUIURL.path),
+                "scaffoldUI=false with no inheritance must leave ui/ absent")
+
+        let freshManifestURL = freshBundleDir.appendingPathComponent("manifest.json")
+        let manifestData = try Data(contentsOf: freshManifestURL)
         let manifest = try JSONDecoder().decode(PresetManifest.self, from: manifestData)
-
-        // Everything from the source manifest survives verbatim:
-        // schemaVersion, params, ui block, meta.
-        #expect(manifest.schemaVersion == 2)
-        #expect(manifest.params?.count == 1)
-        #expect(manifest.params?.first?.name == "cutoff")
-        #expect(manifest.ui?.width == 520)
-        #expect(manifest.ui?.audioFrames == false)
-        #expect(manifest.meta?.author == "Factory")
-
-        // Entry script contents, however, are the new source — not the
-        // factory's original — so the agent's edits are reflected.
-        let scriptURL = newBundleDir.appendingPathComponent(manifest.entry)
-        let scriptBody = try String(contentsOf: scriptURL, encoding: .utf8)
-        #expect(scriptBody == "# agent wrote this\n")
-    }
-
-    @Test @MainActor func savePresetWithCloneFromRespectsExistingTarget() throws {
-        // When the target user bundle already exists, the re-save branch
-        // runs — existing manifest/ui stays as-is, only the entry script
-        // is updated. `cloneFrom` must NOT overwrite the user's state.
-        let (manager, tempDir) = try Self.makeManager()
-        defer { Self.cleanup(tempDir) }
-
-        // Seed an existing user bundle with its own UI.
-        _ = try manager.savePreset(
-            name: "Already Exists",
-            source: "# original user\n",
-            language: .python,
-            scaffoldUI: true
-        )
-        let existingBundleDir = manager.presetsURL
-            .appendingPathComponent("Already Exists.cdp", isDirectory: true)
-        let existingIndexURL = existingBundleDir.appendingPathComponent("ui/index.html")
-        try "<html>USER_ORIGINAL</html>".write(
-            to: existingIndexURL, atomically: true, encoding: .utf8
-        )
-
-        // Build an unrelated factory-like bundle to attempt to clone
-        // from — its UI should NOT land, because the target exists.
-        let sourceBundle = try Self.makeFactoryLikeBundle(at: tempDir)
-
-        _ = try manager.savePreset(
-            name: "Already Exists",
-            source: "# re-saved user\n",
-            language: .python,
-            cloneFrom: sourceBundle
-        )
-
-        // UI survived — not replaced by the factory's "factory UI" string.
-        let finalIndexHTML = try String(contentsOf: existingIndexURL, encoding: .utf8)
-        #expect(finalIndexHTML.contains("USER_ORIGINAL"),
-                "re-save into an existing bundle must preserve its ui/index.html")
-        #expect(!finalIndexHTML.contains("factory UI"),
-                "cloneFrom must NOT overwrite an existing user bundle's ui/")
-
-        // Entry script got the new content.
-        let scriptURL = existingBundleDir.appendingPathComponent("process.py")
-        let scriptBody = try String(contentsOf: scriptURL, encoding: .utf8)
-        #expect(scriptBody == "# re-saved user\n",
-                "re-save must update the entry script")
+        #expect(manifest.ui == nil,
+                "fresh bundle must not inherit a ui block")
+        #expect((manifest.params?.isEmpty ?? true),
+                "fresh bundle must not inherit params from any other preset")
     }
 }

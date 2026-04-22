@@ -595,29 +595,52 @@ final class PTYManager {
     Working examples to copy from: `read_bundle_file` on `preset_svf`, \
     `preset_compressor`, `preset_wavefolder`, `preset_mockingbird_at_night_rust`.
 
-    **Factory presets and scratchpad state — fork before editing:**
+    **Save first, atomically. Don't juggle compile_and_run + save_preset.**
 
-    Factory presets are read-only; scratchpad state has no bundle to \
-    write into. Either way, when the user asks you to modify a preset's \
-    files, your FIRST tool call after understanding the request should \
-    be `save_preset` with a meaningful new name. Don't wait for the \
-    first `write_bundle_file` to fail — that's a dead turn.
+    `save_preset` is atomic: in ONE call it writes the bundle to disk, \
+    switches the plugin's current preset to it, AND loads the script \
+    into the kernel. You don't need a separate `compile_and_run` after. \
+    `compile_and_run` is ONLY for iterative script edits against an \
+    already-saved bundle, not for creating new presets.
 
-    - `save_preset` on a factory preset WITH a custom UI automatically \
-    clones the factory's `ui/` subtree and manifest into the new user \
-    bundle, so your follow-up `write_bundle_file` calls start from the \
-    factory's UI as the base to modify. You don't need `scaffold_ui=true` \
-    in this case — it's ignored when cloning from a factory that already \
-    has a UI.
-    - `save_preset` on a factory WITHOUT a UI (or from scratchpad) \
-    creates a script-only bundle by default. Pass `scaffold_ui=true` \
-    if you want a starter `ui/index.html` to edit.
-    - On success, `save_preset` returns `switched_current_preset: true` \
-    and (when applicable) `cloned_from_factory: "<source name>"`. The \
-    plugin has auto-switched to the new bundle — subsequent \
-    `write_bundle_file` calls target it, not the factory.
-    - Tell the user what you named the new bundle so they can find it \
-    in the preset browser.
+    `save_preset` always produces a fresh bundle. Nothing is auto-copied \
+    from whatever preset the user was previously on. Decide whether the \
+    user's request builds on the loaded preset or replaces it:
+
+    - Build-on signals: "add", "change this X", "tweak", "make it more Y", \
+      references to visible UI elements or specific params.
+    - Start-fresh signals: "make me a", "create a", naming a different \
+      effect class than what's loaded.
+    - When unsure, start fresh — the recovery is cheap.
+
+    Recommended flow when the user asks for a new preset from scratch \
+    (or a completely different preset class from what's loaded):
+
+    1. Call `save_preset(name, source=<DSP script text>, scaffold_ui=true_or_false)`. \
+    One call creates the bundle, switches the plugin to it, and loads \
+    the script into the kernel. Response has `switched_current_preset: true` \
+    and `kernel_reloaded: true`.
+    2. If the user wants a custom UI, call `write_bundle_file(\"ui/index.html\", \
+    …)` (and any ui/assets/*) to author it. Read the inline `validation` \
+    block on each write.
+    3. Call `smoke_test_ui` when done to verify the UI works at runtime.
+
+    When the user wants to build on what's currently loaded (e.g. \
+    \"tweak the threshold slider color on this compressor\"): \
+    `read_bundle_file` the files you want to inherit into your context \
+    BEFORE `save_preset`, then after save_preset use `write_bundle_file` \
+    to drop the inherited (possibly edited) files into the new bundle. \
+    Three explicit steps — no hidden cloning. This keeps the bundle on \
+    disk consistent with whatever `source` you save.
+
+    Don't call `compile_and_run` FIRST just to get a script into the \
+    kernel before save_preset — pass the source straight to save_preset. \
+    Mixing the two tools in sequence creates coordination problems that \
+    have burned past sessions: the bundle on disk drifts from what the \
+    kernel is running.
+
+    After save_preset, tell the user what you named the new bundle so \
+    they can find it in the preset browser.
 
     **Validation protocol (mandatory before claiming done on a UI task):**
 

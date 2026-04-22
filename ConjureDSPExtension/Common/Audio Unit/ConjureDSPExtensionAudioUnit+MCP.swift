@@ -70,7 +70,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             }
         case "save_preset":
             Task { @MainActor in
-                let result = self.mcpSavePresetImpl(input: input)
+                let result = await self.mcpSavePresetImpl(input: input)
                 completion(result.0, result.1)
             }
         case "toggle_bypass":
@@ -275,34 +275,50 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     }
 
     @MainActor
-    private func mcpSavePresetImpl(input: [String: Any]) -> (String, Bool) {
+    private func mcpSavePresetImpl(input: [String: Any]) async -> (String, Bool) {
         guard let name = input["name"] as? String else {
             return (jsonStr(["error": "Missing required parameter: name"]), true)
         }
-        guard let source = scriptSource else {
-            return (jsonStr(["error": "No script loaded to save"]), true)
+
+        // Source precedence: explicit `source` param from the caller >
+        // kernel's current scriptSource > error. The explicit-source
+        // path lets the agent save from scratchpad state ("make me a
+        // compressor") in a single call without a prior
+        // compile_and_run. The fallback preserves today's "fork what's
+        // loaded" behavior (UI Save As, save from a loaded preset).
+        let suppliedSource = input["source"] as? String
+        let source = suppliedSource ?? scriptSource
+        guard let source else {
+            return (
+                jsonStr(["error": "Missing `source` parameter and no script is loaded in the kernel yet — pass the DSP source text you want the new preset to contain, or call compile_and_run first to load one."]),
+                true
+            )
         }
+
+        // Language precedence mirrors source: explicit > detect from
+        // source text > kernel's current language.
+        let language: ScriptLanguage = {
+            if let langStr = input["language"] as? String,
+               let parsed = ScriptLanguage(rawValue: langStr) {
+                return parsed
+            }
+            if suppliedSource != nil {
+                // New source text — detect from heuristics (fn process
+                // = rust, def process = python, etc.) so the bundle's
+                // entry extension matches the content.
+                return ScriptLanguage.detect(from: source)
+            }
+            return currentScriptLanguage
+        }()
+
         let scaffoldUI = (input["scaffold_ui"] as? Bool) ?? false
         let pm = presetManager
-
-        // Factory-only clone scope: if the user is currently on a factory
-        // preset, copy its entire .cdp/ tree (manifest + ui/ + assets)
-        // into the new user bundle so the agent inherits the factory's
-        // custom UI as a starting point for further write_bundle_file
-        // edits. User-preset flows get nil here and keep today's
-        // fresh-or-resave behavior.
-        let cloneFrom: PresetBundle? = {
-            guard let current = pm.currentPreset, current.isFactory else { return nil }
-            return pm.loadBundle(for: current)
-        }()
-        let factorySourceName: String? = cloneFrom.map { _ in pm.currentPreset?.name ?? "" }
 
         do {
             let preset = try pm.savePreset(
                 name: name, source: source,
-                language: currentScriptLanguage,
-                scaffoldUI: scaffoldUI,
-                cloneFrom: cloneFrom
+                language: language,
+                scaffoldUI: scaffoldUI
             )
 
             // Switch the plugin to the new bundle so follow-up
@@ -315,15 +331,41 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // factory name alongside the new user bundle.
             clearDAWCurrentPreset()
 
+            // If the caller handed us a new `source` that's different
+            // from what's already in the kernel, load it. Keeps disk
+            // and kernel coherent — the bundle's entry script is the
+            // one that's actually running.
+            //
+            // On success, fan the new source out to Monaco via
+            // `scriptSourceDidChange`. Without this, the editor keeps
+            // showing the previous preset's source while the kernel
+            // runs the new DSP — the next ⌘R would silently overwrite
+            // the agent's change with the stale buffer. Mirrors the
+            // explicit publish in the `compile_and_run` MCP dispatch.
+            var kernelReloaded = false
+            var kernelError: String?
+            if suppliedSource != nil, source != scriptSource {
+                let result = await compileAndRun(source: source)
+                kernelReloaded = result.success
+                if !result.success { kernelError = result.error }
+                if result.success {
+                    var change = ScriptSourceChange(source: source, origin: .mcp)
+                    change.processTimeMs = result.processTimeMs
+                    change.budgetMs = result.budgetMs
+                    scriptSourceDidChange.send(change)
+                }
+            }
+
             var response: [String: Any] = [
                 "success": true,
                 "name": preset.name,
                 "switched_current_preset": true,
+                "kernel_reloaded": kernelReloaded,
             ]
-            if let src = factorySourceName, !src.isEmpty {
-                response["cloned_from_factory"] = src
-                response["note"] = "Copied the factory bundle's manifest + ui/ subtree. Edit ui/index.html via write_bundle_file to iterate on the inherited UI."
-            } else if scaffoldUI {
+            if let err = kernelError {
+                response["kernel_error"] = err
+            }
+            if scaffoldUI {
                 response["scaffolded_ui"] = true
                 response["note"] = "Starter ui/index.html written. Edit it via write_bundle_file to customize the custom HTML/JS UI."
             }
