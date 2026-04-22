@@ -109,6 +109,11 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 let result = self.mcpValidateBundle()
                 completion(result.0, result.1)
             }
+        case "smoke_test_ui":
+            Task { @MainActor in
+                let result = await self.mcpSmokeTestUI()
+                completion(result.0, result.1)
+            }
         default:
             completion(jsonStr(["error": "Unknown tool: \(name)"]), true)
         }
@@ -475,6 +480,47 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             response["validation"] = validationReportAsJSON(BundleUIValidator.validate(refreshed))
         }
         return (jsonStr(response), false)
+    }
+
+    @MainActor
+    private func mcpSmokeTestUI() async -> (String, Bool) {
+        guard let preset = presetManager.currentPreset,
+              let bundle = presetManager.loadBundle(for: preset) else {
+            return (jsonStr(["error": "No current preset with a loadable bundle."]), true)
+        }
+        guard bundle.hasCustomUI else {
+            return (jsonStr([
+                "status": "pass",
+                "note": "Bundle has no custom UI; nothing to smoke-test.",
+            ]), false)
+        }
+
+        // `currentParamNames` is [Int: String]? — the kernel/manifest
+        // fills it in, may be nil before any preset loads.
+        let names = currentParamNames ?? [:]
+        let count = ConjureDSPExtensionAudioUnit.paramCount
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: names,
+            hostParameterCount: count
+        )
+        return (encodeReport(report), false)
+    }
+
+    /// Structured Codable → [String: Any] → jsonStr. Keeps the MCP
+    /// response wire format consistent with the other handlers that
+    /// build dicts by hand.
+    private func encodeReport<T: Encodable>(_ report: T) -> String {
+        do {
+            let data = try JSONEncoder().encode(report)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return jsonStr(["error": "Report serialization produced non-object JSON"])
+            }
+            return jsonStr(obj)
+        } catch {
+            return jsonStr(["error": "Report encode failed: \(error.localizedDescription)"])
+        }
     }
 
     @MainActor

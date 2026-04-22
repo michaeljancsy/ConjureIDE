@@ -1,0 +1,1 @@
+../ConjureDSPExtension/Model/BundleUISmokeTester.swift

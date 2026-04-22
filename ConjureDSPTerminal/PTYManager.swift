@@ -621,21 +621,38 @@ final class PTYManager {
 
     **Validation protocol (mandatory before claiming done on a UI task):**
 
+    Two tools, used in sequence. Static lint first (catches authoring \
+    mistakes in the source text), then the runtime smoke test (catches \
+    failures that only manifest when the UI actually renders).
+
     - Every `write_bundle_file` to `ui/*` or `manifest.json` returns a \
     `validation` block with a `status` (`pass` / `warn` / `fail`) and an \
     `issues` array. Read it. If `status: "fail"`, fix the failures before \
     continuing — the UI is broken in a way the user will notice.
-    - Common failures the validator catches: unresolved `param="X"` \
-    references, external `<script src>` / `fetch()` / `WebSocket` calls \
-    that the CSP blocks, missing manifest.ui block, Canvas 2D fillStyle \
-    set to a CSS system color keyword that won't parse, and UIs that \
-    declare parameters but expose zero interactive controls.
-    - When you're done with a UI task, call `validate_bundle` as an \
-    explicit re-check. Don't say "done" until it returns `status: "pass"` \
-    (or "warn" with issues you've read and deliberately accepted).
+    - Common failures the static validator catches: unresolved `param="X"` \
+    references (including when manifest.params is missing entirely), \
+    external `<script src>` / `fetch()` / `WebSocket` calls that the CSP \
+    blocks, missing manifest.ui block, Canvas 2D fillStyle set to a CSS \
+    system color keyword that won't parse, UIs that declare parameters \
+    but expose zero interactive controls, and low text contrast — \
+    including cross-rule cases like `body { background: #0a0a0a; }` \
+    paired with `.label { color: #555; }` in a separate rule.
+    - When you're done with a UI task, call `smoke_test_ui` as a runtime \
+    check. It loads the UI in an offscreen WKWebView using the same \
+    bridge + cdp-ui.js injection the live plugin uses, then reports: \
+    whether `ConjureDSP.ready` fired, every JS error (including ones \
+    thrown inside `ready(cb)` that the bridge catches), per-component \
+    binding state ("did every cdp-slider actually resolve its param= \
+    attribute at runtime?"), and per-declared-parameter coverage ("does \
+    every AU parameter have at least one working UI control?"). Don't \
+    say "done" until `smoke_test_ui` returns `status: "pass"` (or "warn" \
+    with issues you've read and deliberately accepted).
+    - The static `validate_bundle` tool re-runs the same lint sweep on \
+    demand. Use it when you want to re-check without another write.
     - Do NOT try to validate a UI by asking yourself whether the code \
-    looks right — this has produced NaN readouts, dead sliders, and \
-    pointer-event ghosts in past sessions. Run the validator.
+    looks right — this has produced NaN readouts, dead sliders, dark \
+    text on dark backgrounds, and pointer-event ghosts in past sessions. \
+    Run the tools.
 
     ## Latency Reporting
 

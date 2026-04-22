@@ -463,6 +463,148 @@ struct BundleUIValidatorTests {
         #expect(!report.issues.contains { $0.check == "text_contrast_low" })
     }
 
+    // MARK: - params_referenced_in_ui — no-manifest-params branch
+
+    @Test func namedParamRefWithoutManifestParamsFlagged() throws {
+        // UI has `param="cutoff"` but manifest is v1 (no params block).
+        // Every cdp-slider will render with an "unknown" label until the
+        // user adds a manifest.params declaration — the exact failure
+        // mode the live-plugin screenshot showed.
+        let manifest = """
+        {
+          "schemaVersion": 1,
+          "entry": "process.py",
+          "language": "python",
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <cdp-slider param="resonance"></cdp-slider>
+          <cdp-xy param-x="lfo_rate" param-y="depth"></cdp-xy>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let issue = report.issues.first { $0.check == "params_referenced_in_ui" }
+        #expect(issue != nil, "named param refs with no manifest.params should be flagged")
+        #expect(issue?.severity == .fail)
+        // The message should mention the refs that can't be resolved.
+        let msg = issue?.message ?? ""
+        #expect(msg.contains("\"cutoff\"") || msg.contains("\"resonance\"") ||
+                msg.contains("\"lfo_rate\"") || msg.contains("\"depth\""))
+    }
+
+    @Test func numericParamRefWithoutManifestParamsNotFlagged() throws {
+        // param="0", param="1" bind by index — no manifest.params lookup
+        // required, so no flag regardless of whether params is declared.
+        let manifest = """
+        {
+          "schemaVersion": 1,
+          "entry": "process.py",
+          "language": "python",
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="0"></cdp-slider>
+          <cdp-slider param="1"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "params_referenced_in_ui" })
+    }
+
+    // MARK: - text_contrast_low — cascaded (cross-rule) pair check
+
+    @Test func cascadedDarkColorOnDarkBodyFlagged() throws {
+        // The screenshot-from-the-wild case: body has a dark background
+        // declared in its own rule, a descendant has a dark color in a
+        // separate rule. Same-block check misses this; cascade check
+        // catches it.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { background: #0a0a0a; }
+          .label { color: #555; }
+        </style></head>
+        <body><cdp-slider param="cutoff"></cdp-slider><span class="label">Mix</span></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let issue = report.issues.first { $0.check == "text_contrast_low" }
+        #expect(issue != nil, "cross-rule dark-on-dark should be flagged")
+        // Message should mention the inherited side.
+        #expect(issue?.message.contains("inherited from body") == true)
+    }
+
+    @Test func cascadedLightOnLightFlagged() throws {
+        // Symmetric: body's light hardcoded background + descendant's
+        // light hardcoded text.
+        let ui = """
+        <!doctype html><html><head><style>
+          html, body { background: #f8f8f8; }
+          .subtle { color: #e0e0e0; }
+        </style></head>
+        <body><cdp-slider param="cutoff"></cdp-slider><span class="subtle">x</span></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "text_contrast_low" })
+    }
+
+    @Test func cascadedBackgroundOnlyFlaggedAgainstBodyColor() throws {
+        // Reverse side of the cascade: body declares a text color and a
+        // descendant declares a clashing background without its own color.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { color: #eeeeee; }
+          .card { background: #f5f5f5; }
+        </style></head>
+        <body><cdp-slider param="cutoff"></cdp-slider><div class="card">x</div></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "text_contrast_low" })
+    }
+
+    @Test func cascadedContrastSkipsThemeAwareBase() throws {
+        // If the body background is theme-aware (Canvas), we can't know
+        // the resolved luminance statically — skip the pair check. The
+        // theme_breaking_body_color rule handles obvious body-level
+        // failures; descendant-only clashes against Canvas fall through
+        // deliberately.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { background: Canvas; }
+          .label { color: #555; }
+        </style></head>
+        <body><cdp-slider param="cutoff"></cdp-slider><span class="label">x</span></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "text_contrast_low" },
+                "cascaded check should not fire when base is theme-aware")
+    }
+
+    @Test func cascadedContrastSkipsBodyItself() throws {
+        // The page-level rule's own color/background pair is covered by
+        // the in-block pair check. Don't double-flag it via the cascade
+        // branch.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { color: white; background: #111; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let contrast = report.issues.filter { $0.check == "text_contrast_low" }
+        // white on #111 is ~18:1 — neither branch should flag this.
+        #expect(contrast.isEmpty)
+    }
+
     @Test func statusWarnIfOnlyWarnings() throws {
         // v1 schema + working UI → only the v2-recommended warning.
         let manifest = """

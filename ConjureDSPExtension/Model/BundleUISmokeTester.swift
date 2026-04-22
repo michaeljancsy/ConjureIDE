@@ -1,0 +1,609 @@
+import AppKit
+import Foundation
+import os
+import WebKit
+
+private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "BundleUISmokeTester")
+
+/// Runtime ("Tier 3") validator that loads a preset bundle's custom UI
+/// in an offscreen WKWebView and reports on:
+///
+///   - Whether the bridge fired `ready` within the timeout window
+///   - Any JavaScript errors / unhandled promise rejections / console.error
+///     output produced during load
+///   - Per-component binding status (did every `cdp-slider` /
+///     `cdp-toggle` / `cdp-choice` / `cdp-xy` successfully resolve its
+///     `param=` attribute against the host's parameter metadata?)
+///   - Per-parameter coverage (does every declared param have at least
+///     one component that's bound to it?)
+///
+/// The Tier 1 / Tier 2 static validator (`BundleUIValidator`) catches
+/// everything that's knowable from the source text alone. This harness
+/// catches the rest — the runtime-only failures where HTML looks
+/// reasonable but the rendered webview is silently broken: JS throws
+/// during init, shadow-DOM custom elements fail to upgrade because
+/// `cdp-ui.js` can't parse them, `param=` references exist in the
+/// manifest but don't resolve because of a case/underscore/space quirk
+/// we didn't think of, or the UI has zero interactive elements bound
+/// to any declared param.
+///
+/// Invoked via MCP's `smoke_test_ui` tool so the embedded agent can
+/// call it after every `write_bundle_file` to ui/ and confirm the
+/// edits actually work at runtime before declaring done.
+///
+/// Budget: ~3s per run (1.5s load, 0.5s ready handshake, 1s probe).
+/// Runs fully async on the main actor — the WKWebView lifecycle and
+/// window management have to live there anyway.
+@MainActor
+final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+
+    // MARK: - Public entry point
+
+    /// Run the smoke test against `bundle` and return a structured
+    /// report. Completes within `timeout` seconds regardless of whether
+    /// the UI actually reaches a steady state — that's the point of a
+    /// smoke test: if `ready` doesn't fire in time, that's itself a
+    /// failure the caller wants to know about.
+    static func run(
+        bundle: PresetBundle,
+        hostParameterNames: [Int: String],
+        hostParameterCount: Int,
+        timeout: TimeInterval = 3.0,
+        resourceBundle: Bundle? = nil
+    ) async -> Report {
+        let tester = BundleUISmokeTester()
+        tester.resourceBundle = resourceBundle ?? Bundle(for: BundleUISmokeTester.self)
+        return await withCheckedContinuation { cont in
+            tester.start(
+                bundle: bundle,
+                hostParameterNames: hostParameterNames,
+                hostParameterCount: hostParameterCount,
+                timeout: timeout
+            ) { report in
+                cont.resume(returning: report)
+            }
+        }
+    }
+
+    // MARK: - Report shape
+
+    enum ReportStatus: String, Encodable {
+        case pass   // ready fired, no JS errors, all components bound, every declared param covered
+        case warn   // minor issues (e.g. declared param with no UI binding, but UI otherwise works)
+        case fail   // ready didn't fire, JS errors, or unbound components
+    }
+
+    struct JSLogEntry: Encodable, Equatable {
+        let kind: String          // "error", "unhandledrejection", "console.error", "console.warn"
+        let message: String
+        let atMs: Double          // performance.now() when captured
+
+        enum CodingKeys: String, CodingKey {
+            case kind, message
+            case atMs = "at_ms"
+        }
+    }
+
+    struct ComponentReport: Encodable, Equatable {
+        let tag: String                   // "cdp-slider", "cdp-xy", ...
+        let param: String?                // `param` attribute value, if any
+        let paramX: String?               // `param-x` for cdp-xy
+        let paramY: String?               // `param-y` for cdp-xy
+        let bound: Bool
+        let reason: String?               // why bound=false, when applicable
+
+        enum CodingKeys: String, CodingKey {
+            case tag, param
+            case paramX = "param_x"
+            case paramY = "param_y"
+            case bound, reason
+        }
+    }
+
+    struct ParamCoverage: Encodable, Equatable {
+        let index: Int
+        let name: String
+        let hasInteractiveBinding: Bool
+        let reason: String?
+
+        enum CodingKeys: String, CodingKey {
+            case index, name
+            case hasInteractiveBinding = "has_interactive_binding"
+            case reason
+        }
+    }
+
+    struct Report: Encodable {
+        let status: ReportStatus
+        let readyFired: Bool
+        let readyTimeMs: Double?          // time from load to `ready`, nil if it didn't fire
+        let loadError: String?            // WKNavigationDelegate didFail*
+        let jsErrors: [JSLogEntry]
+        let components: [ComponentReport]
+        let params: [ParamCoverage]
+
+        enum CodingKeys: String, CodingKey {
+            case status
+            case readyFired = "ready_fired"
+            case readyTimeMs = "ready_time_ms"
+            case loadError = "load_error"
+            case jsErrors = "js_errors"
+            case components
+            case params
+        }
+    }
+
+    // MARK: - Private state
+
+    private var window: NSWindow?
+    private var webView: WKWebView?
+    private var schemeHandler: BundleAssetSchemeHandler?
+    private var completion: ((Report) -> Void)?
+    private var didComplete = false
+    private var loadStart: TimeInterval = 0
+    private var readyAtMs: Double?
+    private var loadError: String?
+    private var hostParameterNames: [Int: String] = [:]
+    private var hostParameterCount: Int = 0
+    private var timeoutTask: DispatchWorkItem?
+    /// Messages posted through the bridge's `log` channel. The bridge
+    /// funnels user-callback exceptions through here via `safeInvoke`,
+    /// so anything landing in this list is either author debug output
+    /// or a caught-and-reformatted error.
+    private var bridgeLogs: [(String, Double)] = []
+    /// Where to look for `customui-bridge.js` + `cdp-ui.js`. In
+    /// production this is the extension's own bundle (via
+    /// `Bundle(for: Self.self)`). Tests override with the appex's
+    /// Resources bundle since the test target doesn't include them.
+    fileprivate var resourceBundle: Bundle = Bundle(for: BundleUISmokeTester.self)
+
+    fileprivate static let bundleScheme = "conjuredsp-preset"
+
+    // MARK: - Lifecycle
+
+    private func start(
+        bundle: PresetBundle,
+        hostParameterNames: [Int: String],
+        hostParameterCount: Int,
+        timeout: TimeInterval,
+        completion: @escaping (Report) -> Void
+    ) {
+        self.completion = completion
+        self.hostParameterNames = hostParameterNames
+        self.hostParameterCount = hostParameterCount
+
+        // Offscreen invisible host window. WKWebView needs to be in a
+        // window for rendering + JS event loop to behave normally; we
+        // don't ever show it.
+        let w = NSWindow(
+            contentRect: NSRect(x: -10000, y: -10000, width: 1, height: 1),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        w.alphaValue = 0
+        w.ignoresMouseEvents = true
+        window = w
+
+        let config = WKWebViewConfiguration()
+        let handler = BundleAssetSchemeHandler(rootURL: bundle.rootURL)
+        config.setURLSchemeHandler(handler, forURLScheme: Self.bundleScheme)
+        schemeHandler = handler
+
+        // Inject the bridge, the component library, AND an
+        // instrumentation shim that captures JS errors + wraps the
+        // bridge's parameters.set so the probe can count writes.
+        if let bridgeSource = bridgeSource() {
+            config.userContentController.addUserScript(
+                WKUserScript(source: bridgeSource, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+            )
+        }
+        if let uiLibSource = uiLibrarySource() {
+            config.userContentController.addUserScript(
+                WKUserScript(source: uiLibSource, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+            )
+        }
+        config.userContentController.addUserScript(
+            WKUserScript(source: Self.instrumentationShim, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        )
+        config.userContentController.add(self, name: "smokeReady")
+        // The bridge's `safeInvoke` wraps every user callback (ready,
+        // onChange, onAnyChange, audio.onFrame, etc.) in a try/catch
+        // and posts any exception through `postTo('log', ...)`. Those
+        // never reach window.onerror. Register a `log` handler so we
+        // can surface those errors too — otherwise a throw inside
+        // `ConjureDSP.ready(cb)` silently vanishes.
+        config.userContentController.add(self, name: "log")
+
+        let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 240), configuration: config)
+        wv.navigationDelegate = self
+        w.contentView = NSView()
+        w.contentView?.addSubview(wv)
+        webView = wv
+
+        // 3 s hard timeout. If the webview hangs (infinite loop, non-
+        // terminating load), return a fail report anyway so the MCP
+        // caller doesn't hang.
+        let timeoutWork = DispatchWorkItem { [weak self] in
+            self?.finish(reason: "timeout after \(timeout)s")
+        }
+        timeoutTask = timeoutWork
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: timeoutWork)
+
+        loadStart = CFAbsoluteTimeGetCurrent()
+        let entryPath = bundle.manifest.uiEntryHTMLPath
+        let encoded = entryPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? entryPath
+        guard let url = URL(string: "\(Self.bundleScheme)://preset/\(encoded)") else {
+            log.error("smoke test: bad entry URL for \(entryPath, privacy: .public)")
+            finish(reason: "invalid entry URL")
+            return
+        }
+        wv.load(URLRequest(url: url))
+    }
+
+    /// One-shot completion — subsequent calls are no-ops so timeout +
+    /// ready + load-failure can all race without double-resuming the
+    /// continuation.
+    private func finish(reason: String? = nil) {
+        guard !didComplete else { return }
+        didComplete = true
+        timeoutTask?.cancel()
+        timeoutTask = nil
+
+        // The probe script is synchronous; run it even on timeout so we
+        // capture whatever errors/components exist at that moment.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let report = await self.collectReport(timeoutReason: reason)
+            self.teardown()
+            self.completion?(report)
+            self.completion = nil
+        }
+    }
+
+    private func teardown() {
+        if let wv = webView {
+            wv.configuration.userContentController.removeAllUserScripts()
+            wv.configuration.userContentController.removeScriptMessageHandler(forName: "smokeReady")
+            wv.configuration.userContentController.removeScriptMessageHandler(forName: "log")
+            wv.navigationDelegate = nil
+            wv.removeFromSuperview()
+        }
+        webView = nil
+        window?.close()
+        window = nil
+    }
+
+    // MARK: - Report collection
+
+    private func collectReport(timeoutReason: String?) async -> Report {
+        // Ask the probe for its current state. Works even without the
+        // ready signal — captures JS errors from a UI that failed to
+        // initialize.
+        let probeJSON: String = await withCheckedContinuation { cont in
+            guard let wv = webView else { cont.resume(returning: "{}"); return }
+            wv.evaluateJavaScript(Self.probeScript) { result, _ in
+                cont.resume(returning: (result as? String) ?? "{}")
+            }
+        }
+
+        var jsErrors: [JSLogEntry] = []
+        var componentsRaw: [ComponentReport] = []
+        if let data = probeJSON.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let errs = obj["errors"] as? [[String: Any]] {
+                for e in errs {
+                    jsErrors.append(JSLogEntry(
+                        kind: (e["kind"] as? String) ?? "error",
+                        message: (e["message"] as? String) ?? "",
+                        atMs: (e["atMs"] as? Double) ?? 0
+                    ))
+                }
+            }
+            if let comps = obj["components"] as? [[String: Any]] {
+                for c in comps {
+                    componentsRaw.append(ComponentReport(
+                        tag: (c["tag"] as? String) ?? "",
+                        param: c["param"] as? String,
+                        paramX: c["paramX"] as? String,
+                        paramY: c["paramY"] as? String,
+                        bound: (c["bound"] as? Bool) ?? false,
+                        reason: c["reason"] as? String
+                    ))
+                }
+            }
+        }
+
+        // Per-param coverage: for each declared parameter in the host,
+        // check whether at least one component's attribute resolves to
+        // it (via the same loose matching cdp-ui uses).
+        let declaredParams: [(Int, String)] = (0..<hostParameterCount).compactMap { i in
+            guard let name = hostParameterNames[i] else { return nil }
+            return (i, name)
+        }
+        let boundAttrs: Set<String> = Set(componentsRaw.compactMap { comp -> [String]? in
+            guard comp.bound else { return nil }
+            return [comp.param, comp.paramX, comp.paramY].compactMap { $0 }
+        }.flatMap { $0 }.map(Self.looseNormalize))
+        let paramCoverage = declaredParams.map { (index, name) -> ParamCoverage in
+            let norm = Self.looseNormalize(name)
+            let hasBinding = boundAttrs.contains(norm) || boundAttrs.contains(String(index))
+            return ParamCoverage(
+                index: index,
+                name: name,
+                hasInteractiveBinding: hasBinding,
+                reason: hasBinding ? nil
+                    : "No cdp-* component has a `param=\"\(name)\"` (or index) that resolves at runtime. Users can't edit this parameter via the custom UI."
+            )
+        }
+
+        let readyFired = readyAtMs != nil
+        var combinedErrors = jsErrors
+        // bridge log channel — every entry is a `safeInvoke` catch
+        // (ready(cb), onChange cb, onAnyChange cb, audio.onFrame cb,
+        // etc.) that would otherwise vanish because the bridge
+        // swallows the exception to keep subsequent handlers alive.
+        for (text, t) in bridgeLogs {
+            combinedErrors.append(
+                JSLogEntry(kind: "callback_exception", message: text, atMs: t)
+            )
+        }
+        if let reason = timeoutReason {
+            combinedErrors.insert(
+                JSLogEntry(kind: "harness", message: reason, atMs: 0),
+                at: 0
+            )
+        }
+        if let le = loadError {
+            combinedErrors.insert(
+                JSLogEntry(kind: "load", message: le, atMs: 0),
+                at: 0
+            )
+        }
+
+        // Aggregate status.
+        let failureKinds: Set<String> = [
+            "error", "unhandledrejection", "load", "harness", "callback_exception"
+        ]
+        let status: ReportStatus
+        if !readyFired
+            || combinedErrors.contains(where: { failureKinds.contains($0.kind) })
+            || componentsRaw.contains(where: { !$0.bound })
+        {
+            status = .fail
+        } else if paramCoverage.contains(where: { !$0.hasInteractiveBinding }) {
+            status = .warn
+        } else {
+            status = .pass
+        }
+
+        return Report(
+            status: status,
+            readyFired: readyFired,
+            readyTimeMs: readyAtMs,
+            loadError: loadError,
+            jsErrors: combinedErrors,
+            components: componentsRaw,
+            params: paramCoverage
+        )
+    }
+
+    // MARK: - WKScriptMessageHandler
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        switch message.name {
+        case "smokeReady":
+            readyAtMs = (CFAbsoluteTimeGetCurrent() - loadStart) * 1000.0
+            // Give the UI a beat to finish any deferred bind() calls
+            // (cdp-ui's whenReady -> _bind hop), then collect the probe.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.finish()
+            }
+        case "log":
+            let text = (message.body as? String) ?? String(describing: message.body)
+            let t = (CFAbsoluteTimeGetCurrent() - loadStart) * 1000.0
+            bridgeLogs.append((text, t))
+        default:
+            break
+        }
+    }
+
+    // MARK: - WKNavigationDelegate
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // The bridge's `ready(cb)` contract is gated on Swift calling
+        // `_init(...)` first — in the real CustomUIWebView, that happens
+        // when the webview posts the "ready" message back. We don't have
+        // that handshake here (our shim listens for `ConjureDSP.ready`
+        // directly), so we forward an `_init` payload after navigation
+        // completes so the bridge's metadata is populated and every
+        // `whenReady` callback in cdp-ui.js fires. Without this every
+        // cdp-* component's _bind returns early (resolveParamAttr finds
+        // no metadata) and reports as unbound.
+        sendInitPayload()
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        loadError = error.localizedDescription
+        finish(reason: "webview didFail: \(error.localizedDescription)")
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        loadError = error.localizedDescription
+        finish(reason: "webview didFailProvisional: \(error.localizedDescription)")
+    }
+
+    private func sendInitPayload() {
+        guard let wv = webView else { return }
+        // Build a minimal metadata array from the names the caller gave
+        // us. We don't have min/max/unit here — the bridge only needs
+        // `name` for loose matching to succeed, and defaults cover the
+        // rest. Components that dereference meta.min / meta.max / meta.unit
+        // get reasonable placeholders.
+        let declared: [(Int, String)] = (0..<hostParameterCount).compactMap { i in
+            guard let name = hostParameterNames[i] else { return nil }
+            return (i, name)
+        }
+        let metadata: [[String: Any]] = declared.map { (_, name) in
+            [
+                "name": name,
+                "min": 0.0,
+                "max": 1.0,
+                "default": 0.0,
+                "unit": "",
+                "curve": "linear",
+                "style": "slider",
+            ]
+        }
+        let values: [Double] = Array(repeating: 0.0, count: declared.count)
+        let payload: [String: Any] = [
+            "metadata": metadata,
+            "values": values,
+            "theme": "light",
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else { return }
+        wv.evaluateJavaScript("window.ConjureDSP && window.ConjureDSP._init(\(json));") { _, _ in }
+    }
+
+    // MARK: - Source helpers (mirror CustomUIWebView)
+
+    private func bridgeSource() -> String? {
+        guard let url = resourceBundle.url(
+            forResource: "customui-bridge", withExtension: "js"
+        ) else {
+            log.error("smoke test: customui-bridge.js not found in extension Resources")
+            return nil
+        }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func uiLibrarySource() -> String? {
+        guard let url = resourceBundle.url(
+            forResource: "cdp-ui", withExtension: "js"
+        ) else {
+            log.error("smoke test: cdp-ui.js not found in extension Resources")
+            return nil
+        }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    private static func looseNormalize(_ s: String) -> String {
+        s.lowercased()
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: " ", with: "")
+    }
+
+    // MARK: - Injected JS
+
+    /// Installed at document-start, before any user script runs. Captures
+    /// error + unhandledrejection + console.error/warn into a shared
+    /// `window.__cdpSmokeTest` object that the probe reads later. Also
+    /// signals the Swift side when `ConjureDSP.ready` fires.
+    private static let instrumentationShim = """
+    (function () {
+        var state = {
+            errors: [],
+            ready: false,
+        };
+        window.__cdpSmokeTest = state;
+
+        function capture(kind, message) {
+            state.errors.push({
+                kind: kind,
+                message: String(message == null ? '' : message),
+                atMs: (performance && performance.now) ? performance.now() : 0
+            });
+        }
+
+        window.addEventListener('error', function (e) {
+            capture('error', (e && e.message) ? e.message : (e && e.error ? String(e.error) : 'error'));
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+            var reason = e && e.reason;
+            var msg = reason && (reason.message || reason.toString) ? (reason.message || reason.toString()) : String(reason);
+            capture('unhandledrejection', msg);
+        });
+        var origErr = console.error;
+        console.error = function () {
+            capture('console.error', Array.prototype.slice.call(arguments).map(String).join(' '));
+            if (origErr) { origErr.apply(console, arguments); }
+        };
+        var origWarn = console.warn;
+        console.warn = function () {
+            capture('console.warn', Array.prototype.slice.call(arguments).map(String).join(' '));
+            if (origWarn) { origWarn.apply(console, arguments); }
+        };
+
+        // Poll for the bridge's ready contract, then notify Swift.
+        function waitReady() {
+            var CDP = window.ConjureDSP;
+            if (!CDP || !CDP.ready) { return setTimeout(waitReady, 10); }
+            CDP.ready(function () {
+                state.ready = true;
+                try {
+                    window.webkit.messageHandlers.smokeReady.postMessage({});
+                } catch (_) { /* harness may have torn down */ }
+            });
+        }
+        waitReady();
+    })();
+    """
+
+    /// Run after ready fires (or on timeout). Enumerates cdp-* custom
+    /// elements, reports each one's binding state, collects any captured
+    /// JS errors. Serialized to a JSON string because WKWebView's
+    /// `evaluateJavaScript` can only return primitive/JSON-compatible
+    /// values — strings are the most portable.
+    private static let probeScript = """
+    (function () {
+        var state = window.__cdpSmokeTest || { errors: [], ready: false };
+        var report = {
+            errors: state.errors || [],
+            components: [],
+        };
+        var tags = ['cdp-slider', 'cdp-toggle', 'cdp-choice', 'cdp-xy', 'cdp-panel'];
+        tags.forEach(function (tag) {
+            var nodes = document.querySelectorAll(tag);
+            for (var i = 0; i < nodes.length; i++) {
+                var el = nodes[i];
+                var param = el.getAttribute('param');
+                var paramX = el.getAttribute('param-x');
+                var paramY = el.getAttribute('param-y');
+                var bound = true;
+                var reason = null;
+                if (tag === 'cdp-panel') {
+                    // cdp-panel auto-renders every param; no single-
+                    // param binding to verify. Treat as always bound.
+                } else if (tag === 'cdp-xy') {
+                    // cdp-xy stores its bindings as _cx + _cy. Both
+                    // must be present for drags to actually move a
+                    // parameter.
+                    if (!el._cx || !el._cy) {
+                        bound = false;
+                        reason = 'cdp-xy never bound — param-x and/or param-y unresolved';
+                    }
+                } else {
+                    // cdp-slider / cdp-toggle / cdp-choice all store
+                    // their resolved handle as _ctrl. Absence means
+                    // resolveParamAttr returned -1 (typoed name, no
+                    // manifest.params to search) and the component is
+                    // left with a disabled input and an 'unknown' label.
+                    if (!el._ctrl) {
+                        bound = false;
+                        reason = 'param=\"' + (param || '') + '\" did not resolve to any registered parameter';
+                    }
+                }
+                report.components.push({
+                    tag: tag, param: param, paramX: paramX, paramY: paramY,
+                    bound: bound, reason: reason
+                });
+            }
+        });
+        return JSON.stringify(report);
+    })();
+    """
+}

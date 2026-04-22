@@ -168,14 +168,14 @@ enum BundleUIValidator {
     /// must resolve to a parameter in the manifest (or, as a last resort,
     /// a numeric index string). Loose match mirrors cdp-ui.js: ignore
     /// case, underscores, and spaces.
+    ///
+    /// When `manifest.params` is nil or empty, named references can't be
+    /// resolved against anything AT ALL — the components will render with
+    /// "unknown" labels and no user-visible way to bind them, even after
+    /// the DSP compiles (resolveParamAttr doesn't late-bind to DSP-
+    /// extracted metadata by name, only by index). Flag that explicitly
+    /// so the agent adds a manifest.params block.
     private static func checkParamReferences(html: String, bundle: PresetBundle) -> [Issue] {
-        guard let declared = bundle.manifest.params, !declared.isEmpty else {
-            // No params in the manifest — we can't check references against
-            // anything. Not an error; legacy presets fall through here.
-            return []
-        }
-        let declaredNorms = Set(declared.map { looseNormalize($0.name) })
-
         var issues: [Issue] = []
         let attrRegex = try? NSRegularExpression(
             pattern: #"param(?:-x|-y)?\s*=\s*["']([^"']+)["']"#,
@@ -184,11 +184,40 @@ enum BundleUIValidator {
         guard let regex = attrRegex else { return [] }
         let ns = html as NSString
         let matches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length))
-        var seenUnresolved: Set<String> = []
+
+        // Collect every named (non-numeric) reference in the HTML so the
+        // two branches below can reason about them.
+        var namedRefs: [String] = []
         for match in matches where match.numberOfRanges >= 2 {
             let value = ns.substring(with: match.range(at: 1))
-            // Numeric index like "0" is a valid way to bind — only flag names.
-            if Int(value) != nil { continue }
+            if Int(value) != nil { continue }  // numeric index binds don't need a name lookup
+            namedRefs.append(value)
+        }
+
+        // Branch 1: no manifest.params. Any named reference is unresolvable.
+        let declared = bundle.manifest.params ?? []
+        guard !declared.isEmpty else {
+            guard !namedRefs.isEmpty else { return [] }
+            let unique = Array(Set(namedRefs)).sorted()
+            let preview = unique.prefix(3).map { "\"\($0)\"" }.joined(separator: ", ")
+            let andMore = unique.count > 3 ? " and \(unique.count - 3) more" : ""
+            issues.append(
+                Issue(
+                    severity: .fail,
+                    check: "params_referenced_in_ui",
+                    file: "ui/index.html",
+                    message: "UI has \(unique.count) named param reference\(unique.count == 1 ? "" : "s") (\(preview)\(andMore)) but manifest.json has no `params` block — every component that looks these up will render with an \"unknown\" label and stay disabled.",
+                    suggestion: "Add a `params: [{name, min, max, default, unit?, curve?, ...}]` array to manifest.json (schema v2). See get_docs(\"ui\")."
+                )
+            )
+            return issues
+        }
+
+        // Branch 2: manifest.params exists. Flag each name that doesn't
+        // match a declared param (loose match).
+        let declaredNorms = Set(declared.map { looseNormalize($0.name) })
+        var seenUnresolved: Set<String> = []
+        for value in namedRefs {
             let norm = looseNormalize(value)
             if declaredNorms.contains(norm) { continue }
             if seenUnresolved.contains(value) { continue }
@@ -314,7 +343,7 @@ enum BundleUIValidator {
     }
 
     /// Scan the UI for text whose color and background are both dark
-    /// or both light — unreadable. Two sub-checks:
+    /// or both light — unreadable. Four sub-checks:
     ///
     /// 1. Inline `style="color: X; background[-color]: Y; …"` pairs on
     ///    the same element. Uses the WCAG 2.1 contrast ratio with a
@@ -322,7 +351,14 @@ enum BundleUIValidator {
     ///    avoid false positives on buttons with subtle hover tints).
     /// 2. CSS rule blocks inside `<style>` tags that declare both color
     ///    and background on the same selector. Same threshold.
-    /// 3. Theme-breaking hard-coded body color: if `body` declares
+    /// 3. **Cascaded pair check**: when a rule declares `color` but no
+    ///    `background`, pair it with the body/html/:root's effective
+    ///    background (or vice versa). Catches the common pattern of
+    ///    `body { background: #0a0a0a; }` paired with `.label { color:
+    ///    #555; }` in a separate rule — each rule is individually fine
+    ///    by the pair-in-same-block check, but the effective text-on-
+    ///    background combination is unreadable.
+    /// 4. Theme-breaking hard-coded body color: if `body` declares
     ///    `color: white` / `#fff` (or analogous near-max-luminance
     ///    values) and `background: Canvas` (or no background), the
     ///    text is unreadable in light mode. Same for black on Canvas
@@ -352,8 +388,14 @@ enum BundleUIValidator {
             }
         }
 
-        // (2) CSS rule blocks inside <style> tags.
-        for ruleBlock in extractCSSRules(from: html) {
+        // (2 + 3 + 4) CSS rule blocks inside <style> tags. Resolve the
+        // "page-level" color/background from body / html / :root first,
+        // then use it as the implied cascade ancestor when a descendant
+        // rule declares just one side of the pair.
+        let rules = extractCSSRules(from: html)
+        let pageLevel = resolvePageLevelColors(rules: rules)
+
+        for ruleBlock in rules {
             if let issue = contrastIssueForStyleBlock(
                 ruleBlock.declarations,
                 selector: ruleBlock.selector,
@@ -361,7 +403,18 @@ enum BundleUIValidator {
             ) {
                 issues.append(issue)
             }
-            // (3) Body-level theme-breaking: hard-coded color against
+            // (3) Cascaded pair check. Skip body/html/:root rules — they
+            // supply the cascade base and would otherwise self-check
+            // against their own declarations.
+            if !isPageLevelSelector(ruleBlock.selector),
+               let issue = cascadedContrastIssueForRule(
+                ruleBlock,
+                pageLevel: pageLevel,
+                location: "ui/index.html"
+               ) {
+                issues.append(issue)
+            }
+            // (4) Body-level theme-breaking: hard-coded color against
             // `background: Canvas` (or no background) means the text is
             // illegible in one of the two system color schemes.
             if ruleBlock.selector.lowercased().contains("body") {
@@ -372,6 +425,99 @@ enum BundleUIValidator {
         }
 
         return issues
+    }
+
+    /// Effective "body / page" color + background as resolved from
+    /// `body`, `html`, or `:root` rules, used as the cascade base for
+    /// descendant rules that only declare one side of the color/background
+    /// pair.
+    private struct PageLevelColors {
+        /// Raw CSS value string for the base foreground (e.g. "white",
+        /// "#fff", "rgb(...)"), nil if no page-level rule declares one.
+        let colorRaw: String?
+        /// Raw CSS value string for the base background.
+        let backgroundRaw: String?
+    }
+
+    private static func resolvePageLevelColors(rules: [CSSRule]) -> PageLevelColors {
+        var color: String?
+        var bg: String?
+        for rule in rules where isPageLevelSelector(rule.selector) {
+            let decls = parseDeclarations(rule.declarations)
+            if color == nil, let c = decls["color"] { color = c }
+            if bg == nil,
+               let b = decls["background-color"] ?? decls["background"] {
+                bg = b
+            }
+        }
+        return PageLevelColors(colorRaw: color, backgroundRaw: bg)
+    }
+
+    private static func isPageLevelSelector(_ selector: String) -> Bool {
+        let norm = selector
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        // Match exact body/html/:root or the very common combinations
+        // like "html, body" or ":root, body". Anything more elaborate
+        // (a compound selector like `body.dark`) intentionally falls
+        // through so we don't misread it as the cascade base.
+        let tokens = norm
+            .split(whereSeparator: { $0 == "," })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        return tokens.allSatisfy { $0 == "body" || $0 == "html" || $0 == ":root" }
+    }
+
+    /// Pair a descendant rule's color (or background) with the page-
+    /// level base of the opposite side and contrast-check. Returns nil
+    /// when the rule already declares both (the in-block pair check
+    /// handles it), when the pair can't be resolved to RGB, when
+    /// either side is theme-aware, or when contrast is above the
+    /// threshold.
+    private static func cascadedContrastIssueForRule(
+        _ rule: CSSRule,
+        pageLevel: PageLevelColors,
+        location: String
+    ) -> Issue? {
+        let decls = parseDeclarations(rule.declarations)
+        let ownColor = decls["color"]
+        let ownBG = decls["background-color"] ?? decls["background"]
+
+        // In-block pair already handled by contrastIssueForStyleBlock.
+        if ownColor != nil && ownBG != nil { return nil }
+
+        let effectiveColor: String?
+        let effectiveBG: String?
+        let missing: String  // what's cascading from the page level
+        if let c = ownColor, ownBG == nil {
+            effectiveColor = c
+            effectiveBG = pageLevel.backgroundRaw
+            missing = "background (inherited from body)"
+        } else if let b = ownBG, ownColor == nil {
+            effectiveColor = pageLevel.colorRaw
+            effectiveBG = b
+            missing = "color (inherited from body)"
+        } else {
+            return nil  // rule declares neither
+        }
+
+        guard let fgStr = effectiveColor, let bgStr = effectiveBG else { return nil }
+        guard !isThemeAwareColor(fgStr), !isThemeAwareColor(bgStr) else { return nil }
+        guard let fg = parseColor(fgStr), let bg = parseColor(bgStr) else { return nil }
+        let ratio = contrastRatio(fg, bg)
+        guard ratio < 3.0 else { return nil }
+        return Issue(
+            severity: .warn,
+            check: "text_contrast_low",
+            file: location,
+            message: String(
+                format: "Low text contrast on %@: color %@ on %@ (%@) has a contrast ratio of %.2f (WCAG AA large-text threshold is 3.0).",
+                rule.selector.trimmingCharacters(in: .whitespacesAndNewlines),
+                fgStr.trimmingCharacters(in: .whitespaces),
+                bgStr.trimmingCharacters(in: .whitespaces),
+                missing, ratio
+            ),
+            suggestion: "Either give this rule its own background/color that pairs well, or bump the body-level \(missing.contains("background") ? "background" : "color") to contrast with descendant text."
+        )
     }
 
     /// If the given CSS declaration block defines both a text color and a
