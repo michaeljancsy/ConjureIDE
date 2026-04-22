@@ -199,5 +199,6 @@ enum FactoryPresetRegistry {
         Entry(name: "Hailstorm Lullaby (Rust)", number: 100, resourceName: "preset_hailstorm_lullaby_rust", language: .rust, category: .other),
         Entry(name: "Methane Sea (Python)", number: 101, resourceName: "preset_methane_sea", language: .python, category: .other),
         Entry(name: "Methane Sea (Rust)", number: 102, resourceName: "preset_methane_sea_rust", language: .rust, category: .other),
+        Entry(name: "Mockingbird at Night (Rust)", number: 103, resourceName: "preset_mockingbird_at_night_rust", language: .rust, category: .other),
     ]
 }
