@@ -265,7 +265,7 @@ class TerminalAppServer {
         }
 
         p.onDisplayText = { [weak ws] text in
-            // If no clients are connected yet, queue the banner for the first connection.
+            // If no verified clients are connected yet, queue the banner.
             if let ws, ws.clientCount > 0 {
                 ws.broadcastText(text)
             } else {
