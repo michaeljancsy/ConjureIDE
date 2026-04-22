@@ -61,6 +61,7 @@
     // --- State ---
     let terminal = null;
     let fitAddon = null;
+    let inputProxy = null;
     let socket = null;
     let currentTheme = 'dark';
     let reconnectAttempts = 0;
@@ -149,7 +150,7 @@
         // input from WebKit, forwards it to the WebSocket, then clears itself.
         // Special keys (Enter, Escape, arrows, etc.) are handled via keydown.
         // xterm.js handles display — all output comes back through the WebSocket.
-        var inputProxy = document.getElementById('input-proxy');
+        inputProxy = document.getElementById('input-proxy');
 
         // Focus the proxy on terminal click (pointer-events:none means we
         // must focus programmatically — mouse events pass through to xterm.js)
@@ -252,8 +253,11 @@
                 hideStatus();
                 postToSwift('connected', {});
 
-                // Focus terminal so it receives keyboard input
-                if (terminal) terminal.focus();
+                // Focus the contentEditable input proxy — xterm's hidden
+                // textarea does NOT trigger NSTextInputClient through the AU
+                // ViewBridge, so focusing `terminal` here would silently
+                // drop all keyboard input until the user clicks the terminal.
+                if (inputProxy) inputProxy.focus();
 
                 // Send initial terminal size
                 if (terminal) {
@@ -373,7 +377,7 @@
             if (terminal) terminal.clear();
         },
         focus: function() {
-            if (terminal) terminal.focus();
+            if (inputProxy) inputProxy.focus();
         },
     };
 

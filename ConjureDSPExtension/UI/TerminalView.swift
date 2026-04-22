@@ -16,6 +16,7 @@ struct TerminalView: NSViewRepresentable {
     var colorScheme: ColorScheme
     var appGroupContainerURL: URL?
     var instanceID: String
+    var onFirstInput: (() -> Void)? = nil
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -63,7 +64,7 @@ struct TerminalView: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(appGroupContainerURL: appGroupContainerURL, instanceID: instanceID)
+        Coordinator(appGroupContainerURL: appGroupContainerURL, instanceID: instanceID, onFirstInput: onFirstInput)
     }
 
     // MARK: - Coordinator
@@ -76,12 +77,14 @@ struct TerminalView: NSViewRepresentable {
         var pendingTheme: ColorScheme?
         let appGroupContainerURL: URL?
         let instanceID: String
+        let onFirstInput: (() -> Void)?
         private var lastConnectedPort: UInt16?
         private var portPollTask: Task<Void, Never>?
 
-        init(appGroupContainerURL: URL?, instanceID: String) {
+        init(appGroupContainerURL: URL?, instanceID: String, onFirstInput: (() -> Void)? = nil) {
             self.appGroupContainerURL = appGroupContainerURL
             self.instanceID = instanceID
+            self.onFirstInput = onFirstInput
         }
 
         func disconnect() {
@@ -118,6 +121,7 @@ struct TerminalView: NSViewRepresentable {
 
             case "firstInput":
                 Analytics.track(.terminalFirstInput)
+                onFirstInput?()
 
             case "error":
                 let message = data["message"] as? String ?? "unknown"
