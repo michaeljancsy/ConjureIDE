@@ -17,6 +17,11 @@ final class PopoverUITests: XCTestCase {
         super.setUp()
         sharedApp = XCUIApplication()
         sharedApp.launch()
+        // Wait for the AU extension to finish initializing before any test runs.
+        // Without this, the extension may still be loading Python when the first
+        // test queries the accessibility tree, caching AX tokens that become stale
+        // once init completes and the view rebuilds.
+        _ = sharedApp.buttons["saveAsButton"].waitForExistence(timeout: 15)
     }
 
     override class func tearDown() {

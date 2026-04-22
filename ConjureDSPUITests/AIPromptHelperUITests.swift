@@ -18,6 +18,7 @@ final class AIPromptHelperUITests: XCTestCase {
         super.setUp()
         sharedApp = XCUIApplication()
         sharedApp.launch()
+        _ = sharedApp.buttons["chatToggleButton"].waitForExistence(timeout: 15)
     }
 
     override class func tearDown() {
@@ -47,11 +48,10 @@ final class AIPromptHelperUITests: XCTestCase {
     /// Open the terminal panel by clicking the chat toggle button.
     @MainActor
     private func openTerminalPanel(app: XCUIApplication) throws {
-        let toggle = app.buttons["chatToggleButton"]
-        guard toggle.waitForExistence(timeout: 10) else {
+        guard app.buttons["chatToggleButton"].waitForExistence(timeout: 10) else {
             throw XCTSkip("Chat toggle button not found")
         }
-        toggle.click()
+        app.buttons["chatToggleButton"].click()
         // Wait for the panel to appear
         usleep(500_000) // 0.5s
     }
@@ -76,17 +76,15 @@ final class AIPromptHelperUITests: XCTestCase {
         let showingTerminal = terminal.exists
 
         // Switch to AI Prompt tab
-        let aiPromptTab = anyElement(in: app, id: "aiPromptTabButton")
-        try XCTSkipUnless(aiPromptTab.waitForExistence(timeout: 5),
+        try XCTSkipUnless(anyElement(in: app, id: "aiPromptTabButton").waitForExistence(timeout: 5),
                           "AI Prompt tab button not accessible through AU ViewBridge")
-        aiPromptTab.click()
+        anyElement(in: app, id: "aiPromptTabButton").click()
         usleep(300_000)
 
         // Switch back to Claude Code tab
-        let claudeCodeTab = anyElement(in: app, id: "claudeCodeTabButton")
-        XCTAssertTrue(claudeCodeTab.waitForExistence(timeout: 3),
+        XCTAssertTrue(anyElement(in: app, id: "claudeCodeTabButton").waitForExistence(timeout: 3),
                       "Claude Code tab button should exist")
-        claudeCodeTab.click()
+        anyElement(in: app, id: "claudeCodeTabButton").click()
         usleep(300_000)
 
         // The same view that was visible before the tab switch must still be visible
@@ -105,12 +103,8 @@ final class AIPromptHelperUITests: XCTestCase {
 
         try openTerminalPanel(app: app)
 
-        // Look for the tab buttons by their accessibility identifiers
-        let claudeCodeTab = anyElement(in: app, id: "claudeCodeTabButton")
-        let aiPromptTab = anyElement(in: app, id: "aiPromptTabButton")
-
-        try assertExistsOrSkip(claudeCodeTab, label: "Claude Code tab button")
-        XCTAssertTrue(aiPromptTab.waitForExistence(timeout: 3),
+        try assertExistsOrSkip(anyElement(in: app, id: "claudeCodeTabButton"), label: "Claude Code tab button")
+        XCTAssertTrue(anyElement(in: app, id: "aiPromptTabButton").waitForExistence(timeout: 3),
                       "AI Prompt tab button should exist")
     }
 
@@ -123,17 +117,14 @@ final class AIPromptHelperUITests: XCTestCase {
         try openTerminalPanel(app: app)
 
         // Switch to AI Prompt tab
-        let aiPromptTab = anyElement(in: app, id: "aiPromptTabButton")
-        try XCTSkipUnless(aiPromptTab.waitForExistence(timeout: 5),
+        try XCTSkipUnless(anyElement(in: app, id: "aiPromptTabButton").waitForExistence(timeout: 5),
                           "AI Prompt tab button not accessible through AU ViewBridge")
-        aiPromptTab.click()
+        anyElement(in: app, id: "aiPromptTabButton").click()
         usleep(300_000) // 0.3s
 
-        let descriptionField = anyElement(in: app, id: "aiPromptDescriptionField")
-        try assertExistsOrSkip(descriptionField, label: "AI Prompt description field")
+        try assertExistsOrSkip(anyElement(in: app, id: "aiPromptDescriptionField"), label: "AI Prompt description field")
 
-        let copyButton = anyElement(in: app, id: "aiPromptCopyButton")
-        XCTAssertTrue(copyButton.waitForExistence(timeout: 3),
+        XCTAssertTrue(anyElement(in: app, id: "aiPromptCopyButton").waitForExistence(timeout: 3),
                       "Copy Prompt button should exist")
     }
 
@@ -144,18 +135,17 @@ final class AIPromptHelperUITests: XCTestCase {
         try openTerminalPanel(app: app)
 
         // Switch to AI Prompt tab
-        let aiPromptTab = anyElement(in: app, id: "aiPromptTabButton")
-        try XCTSkipUnless(aiPromptTab.waitForExistence(timeout: 5),
+        try XCTSkipUnless(anyElement(in: app, id: "aiPromptTabButton").waitForExistence(timeout: 5),
                           "AI Prompt tab button not accessible through AU ViewBridge")
-        aiPromptTab.click()
+        anyElement(in: app, id: "aiPromptTabButton").click()
         usleep(300_000) // 0.3s
 
         let descriptionField = anyElement(in: app, id: "aiPromptDescriptionField")
         try XCTSkipUnless(descriptionField.waitForExistence(timeout: 5),
                           "AI Prompt description field not accessible through AU ViewBridge")
 
-        descriptionField.click()
-        descriptionField.typeText("A tremolo effect")
+        anyElement(in: app, id: "aiPromptDescriptionField").click()
+        anyElement(in: app, id: "aiPromptDescriptionField").typeText("A tremolo effect")
 
         // TextEditor value access can be unreliable through ViewBridge,
         // so just verify the field still exists after typing

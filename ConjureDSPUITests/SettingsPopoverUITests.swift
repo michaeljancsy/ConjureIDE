@@ -22,6 +22,7 @@ final class SettingsPopoverUITests: XCTestCase {
         super.setUp()
         sharedApp = XCUIApplication()
         sharedApp.launch()
+        _ = sharedApp.buttons["settingsButton"].waitForExistence(timeout: 15)
     }
 
     override class func tearDown() {
@@ -47,11 +48,10 @@ final class SettingsPopoverUITests: XCTestCase {
     /// Open the settings popover and return it, or skip if not accessible.
     @MainActor
     private func openSettingsPopover(app: XCUIApplication) throws {
-        let settingsButton = app.buttons["settingsButton"]
-        guard settingsButton.waitForExistence(timeout: 10) else {
+        guard app.buttons["settingsButton"].waitForExistence(timeout: 10) else {
             throw XCTSkip("Settings button not found")
         }
-        settingsButton.click()
+        app.buttons["settingsButton"].click()
     }
 
     // MARK: - Subscription Status Display
