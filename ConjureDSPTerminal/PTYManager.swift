@@ -562,54 +562,38 @@ final class PTYManager {
     even though WASM I/O buffers are f32. In Rust, cast to/from f64 when interfacing with \
     library types. In Python, this is handled automatically.
 
-    ## Custom HTML/JS UIs
+    ## Custom HTML/JS UIs (only when the user asks for one)
 
-    Bundles can ship a `ui/index.html` that replaces the auto-generated \
-    slider panel with a real web UI. When the user asks for a "custom UI," \
-    "visualization," "XY pad," or similar — or when they ask to make the \
-    plugin look better — you're authoring HTML/JS/CSS that ships in the \
-    bundle alongside the DSP script.
+    The extension renders a stock slider panel for every preset \
+    automatically. Don't touch UI unless the user specifically asks for \
+    one — phrases like "custom UI," "visualization," "XY pad," "make it \
+    look like X," "skin this," "animated UI." Plain DSP tasks ("write a \
+    compressor," "change the attack time," "fix this bug in the script") \
+    do NOT need UI work; the stock sliders already cover them.
 
-    Key facts:
+    When the user IS asking for a custom UI, FIRST call `get_docs` with \
+    topic `"ui"` for the full component reference, Canvas patterns, \
+    audio-frame API, theming hooks, and gotchas. Don't guess the \
+    component API from memory — the most common failure mode of \
+    custom UIs is hand-rolling param math against invented metadata \
+    field names, producing NaN readouts and dead sliders.
 
-    - The webview is pre-injected with `window.ConjureDSP` (param bridge, \
-      theme, audio frames) AND `cdp-ui.js` (component library). DO NOT \
-      include `<script src="...">` for either — both are already loaded.
-    - Components: `<cdp-slider param="cutoff">`, `<cdp-toggle param="bypass">`, \
-      `<cdp-choice param="mode">`, `<cdp-xy param-x="a" param-y="b">`, \
-      `<cdp-panel auto>` (fallback that mirrors the stock slider panel).
-    - Param names resolve loosely: the same `ui/index.html` works for both \
-      the Python variant (`"low_gain"`) and Rust variant (`"Low Gain"`) of \
-      a preset. Don't duplicate UIs per language.
-    - The manifest needs a `ui` block: `{"entryHTML": "ui/index.html", \
-      "width": 520, "height": 380, "fps": 30, "audioFrames": false}`. \
-      Required — without it, the plugin falls back to stock sliders even \
-      if `ui/index.html` exists.
-    - When the user wants defaults to appear before the DSP compiles \
-      (especially relevant for slow Rust compiles), use manifest schema \
-      v2 with a `params: [...]` array. That populates the AU parameter \
-      tree BEFORE compile, so the custom UI has correct metadata to \
-      render against.
-    - Theming is automatic: components read `CanvasText`/`Canvas` so \
-      light/dark mode follows the host. Override with CSS custom \
-      properties like `--cdp-accent`, `--cdp-thumb-size`, `--cdp-label-width`.
+    Quick orientation (full details in the docs):
+
+    - Bundles ship `ui/index.html` + optional `ui/assets/*`; the manifest \
+      needs a `ui` block pointing at entryHTML.
+    - The webview is pre-injected with `window.ConjureDSP` and \
+      `cdp-ui.js`. DO NOT include `<script src="...">` for either.
+    - Components available: `<cdp-slider>`, `<cdp-toggle>`, `<cdp-choice>`, \
+      `<cdp-xy>`, `<cdp-panel auto>`.
     - The webview's CSP blocks fetch/XHR/WebSocket. All assets must live \
       inside the bundle — no CDN imports, no external fonts.
+    - File watcher hot-reloads ~300ms after every `write_bundle_file`, so \
+      iterate quickly. To scaffold a new bundle with a starter UI, pass \
+      `scaffold_ui=true` to `save_preset`.
 
-    Before writing ANY `ui/index.html`, call `get_docs` with topic `"ui"` \
-    to get the full component reference, Canvas patterns, audio-frame API, \
-    theming hooks, and gotchas. Don't guess the component API from memory.
-
-    To see working examples: `read_bundle_file` on `preset_svf`, \
-    `preset_compressor`, or `preset_wavefolder` (all ship custom UIs). \
-    SVF shows an XY pad + response curve; compressor shows stacked \
-    sliders + transfer curve + GR meter with audio frames; wavefolder \
-    shows a single-param transfer visualization.
-
-    File watcher hot-reloads the custom UI ~300ms after every \
-    `write_bundle_file` — you can iterate quickly. To create a new \
-    bundle with a scaffolded UI already dropped in, pass \
-    `scaffold_ui=true` to `save_preset`.
+    Working examples to copy from: `read_bundle_file` on `preset_svf`, \
+    `preset_compressor`, `preset_wavefolder`, `preset_mockingbird_at_night_rust`.
 
     ## Latency Reporting
 
@@ -636,8 +620,11 @@ final class PTYManager {
     - Before writing a script, call `get_docs` for the language-specific API reference. Topics: \
     params, filters, delays, oscillators, utilities, accel, nam. Python and Rust have different \
     syntax for the same concepts — always check.
-    - Before writing a custom HTML/JS UI (`ui/index.html`), call `get_docs` with topic `"ui"` \
-    for the cdp-ui component reference and the window.ConjureDSP bridge API.
+    - Ignore the custom UI surface entirely unless the user explicitly asks for a custom UI \
+    (phrases like "custom UI", "visualization", "XY pad", "make it look like X"). The \
+    extension renders stock sliders automatically. If the user IS asking for a custom UI, \
+    call `get_docs` with topic `"ui"` before writing any `ui/index.html` — the cdp-ui \
+    component API and the window.ConjureDSP bridge aren't guessable from memory.
     - Python loads instantly; Rust compiles to WASM (a few seconds) but runs much faster
     - **Language selection**: Write in whatever language the user asks for. If the user doesn't specify, \
     call `get_script` to check the currently loaded script and write in the same language.
