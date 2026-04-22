@@ -5,20 +5,66 @@
   <title>Compressor</title>
   <style>
     :root { color-scheme: light dark; }
-    html, body { margin: 0; padding: 0; height: 100%; font: 12px -apple-system, system-ui, sans-serif; background: Canvas; color: CanvasText; }
-    body { display: grid; grid-template-columns: 1fr 48px; grid-template-rows: auto 1fr; gap: 12px; padding: 14px 16px; box-sizing: border-box; }
-    .head { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: baseline; }
-    .title { font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; font-size: 0.75em; opacity: 0.55; }
-    .gr-readout { font-variant-numeric: tabular-nums; font-size: 1.1em; }
-    #curve { width: 100%; height: 100%; display: block; border-radius: 6px; background: color-mix(in srgb, CanvasText 6%, Canvas); }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      font: 12px -apple-system, system-ui, sans-serif;
+      background: Canvas; color: CanvasText;
+    }
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      align-content: start;
+      gap: 10px;
+      padding: 14px 16px; box-sizing: border-box;
+    }
+    .head { display: flex; justify-content: space-between; align-items: baseline; }
+    .title {
+      font-weight: 600; letter-spacing: 0.02em;
+      text-transform: uppercase; font-size: 0.75em; opacity: 0.55;
+    }
+    .gr-readout { font-variant-numeric: tabular-nums; font-size: 1.05em; opacity: 0.85; }
+
+    /* Curve area: transfer-function canvas on the left, GR meter column on
+       the right so they share a fixed height and align baselines. */
+    .curve-row {
+      display: grid;
+      grid-template-columns: 1fr 26px;
+      gap: 10px;
+      min-height: 0;
+    }
+    .curve-wrap { position: relative; min-height: 0; }
+    #curve {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%; display: block;
+      border-radius: 6px;
+      background: color-mix(in srgb, CanvasText 6%, Canvas);
+    }
     .meter { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-    .meter-bar { position: relative; width: 16px; flex: 1 1 0; background: color-mix(in srgb, CanvasText 8%, Canvas); border-radius: 4px; overflow: hidden; }
-    .meter-fill { position: absolute; left: 0; right: 0; top: 0; background: color-mix(in srgb, CanvasText 65%, transparent); transition: height 60ms linear; }
-    .meter-label { font-size: 0.7em; opacity: 0.55; text-transform: uppercase; letter-spacing: 0.05em; }
-    .controls { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
-    .ctrl { display: flex; flex-direction: column; gap: 2px; }
-    .ctrl label { font-size: 0.75em; opacity: 0.6; }
-    .ctrl cdp-slider { --cdp-label-width: 0; --cdp-value-width: 0; }
+    .meter-bar {
+      position: relative; width: 12px; flex: 1 1 0;
+      background: color-mix(in srgb, CanvasText 8%, Canvas);
+      border-radius: 3px; overflow: hidden;
+    }
+    .meter-fill {
+      position: absolute; left: 0; right: 0; top: 0;
+      background: color-mix(in srgb, CanvasText 65%, transparent);
+      transition: height 60ms linear;
+    }
+    .meter-label {
+      font-size: 0.7em; opacity: 0.55;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+
+    /* Parameter rows use cdp-slider's native label | track | value grid so
+       every row's columns line up — labels left-aligned, tracks in the
+       middle, values right-aligned. Cleaner than the previous 5-up grid of
+       mini-sliders, and reads top-down like every other compressor UI. */
+    .controls { display: flex; flex-direction: column; gap: 2px; }
+    .controls cdp-slider {
+      --cdp-label-width: 90px;
+      --cdp-value-width: 72px;
+      --cdp-font-size: 12px;
+    }
   </style>
 </head>
 <body>
@@ -26,17 +72,21 @@
     <span class="title">Transfer curve</span>
     <span class="gr-readout" id="grReadout">GR 0.0 dB</span>
   </div>
-  <canvas id="curve" width="800" height="500"></canvas>
-  <div class="meter">
-    <div class="meter-bar"><div class="meter-fill" id="grFill"></div></div>
-    <div class="meter-label">GR</div>
+  <div class="curve-row">
+    <div class="curve-wrap">
+      <canvas id="curve" width="800" height="500"></canvas>
+    </div>
+    <div class="meter">
+      <div class="meter-bar"><div class="meter-fill" id="grFill"></div></div>
+      <div class="meter-label">GR</div>
+    </div>
   </div>
   <div class="controls">
-    <div class="ctrl"><label>Threshold</label><cdp-slider param="threshold"></cdp-slider></div>
-    <div class="ctrl"><label>Ratio</label><cdp-slider param="ratio"></cdp-slider></div>
-    <div class="ctrl"><label>Attack</label><cdp-slider param="attack"></cdp-slider></div>
-    <div class="ctrl"><label>Release</label><cdp-slider param="release"></cdp-slider></div>
-    <div class="ctrl"><label>Makeup</label><cdp-slider param="makeup"></cdp-slider></div>
+    <cdp-slider param="threshold"></cdp-slider>
+    <cdp-slider param="ratio"></cdp-slider>
+    <cdp-slider param="attack"></cdp-slider>
+    <cdp-slider param="release"></cdp-slider>
+    <cdp-slider param="makeup"></cdp-slider>
   </div>
   <script>
   (function () {
@@ -61,9 +111,6 @@
     const IN_MIN = -60, IN_MAX = 0;
     const OUT_MIN = -60, OUT_MAX = 6;
 
-    // Canvas 2D can't parse `color-mix()` or the `CanvasText` keyword,
-    // so we resolve the foreground color via getComputedStyle and use
-    // globalAlpha for transparency.
     // Resolve CanvasText to an actual rgb() string via a hidden probe;
     // canvas 2D can't parse the `CanvasText` keyword directly, and
     // CDP.theme isn't always reliable (WebView can be in dark mode even
@@ -77,32 +124,52 @@
       return c;
     }
     let FG = resolveFG();
-    window.addEventListener('themechange', () => { FG = resolveFG(); schedule(); });
+    window.addEventListener('themechange', () => { FG = resolveFG(); scheduleCurve(); });
 
     function drawCurve() {
       const w = canvas.width = canvas.clientWidth * devicePixelRatio;
       const h = canvas.height = canvas.clientHeight * devicePixelRatio;
       if (w === 0 || h === 0) return;
       ctx.clearRect(0, 0, w, h);
-      const pad = 10 * devicePixelRatio;
-      const iw = w - pad * 2, ih = h - pad * 2;
+      const padL = 28 * devicePixelRatio;   // left gutter for Y labels
+      const padR = 10 * devicePixelRatio;
+      const padT = 10 * devicePixelRatio;
+      const padB = 18 * devicePixelRatio;   // bottom for X labels
+      const iw = w - padL - padR, ih = h - padT - padB;
 
-      const xAt = (db) => pad + iw * (db - IN_MIN) / (IN_MAX - IN_MIN);
-      const yAt = (db) => pad + ih * (1 - (db - OUT_MIN) / (OUT_MAX - OUT_MIN));
+      const xAt = (db) => padL + iw * (db - IN_MIN) / (IN_MAX - IN_MIN);
+      const yAt = (db) => padT + ih * (1 - (db - OUT_MIN) / (OUT_MAX - OUT_MIN));
 
-      // Grid every 12 dB.
+      // Grid every 12 dB, with axis labels along the edges.
       ctx.strokeStyle = FG;
+      ctx.fillStyle = FG;
       ctx.lineWidth = 1;
+      ctx.font = (10 * devicePixelRatio) + 'px -apple-system, system-ui, sans-serif';
+      ctx.textBaseline = 'middle';
+
       ctx.globalAlpha = 0.1;
       for (let db = IN_MIN; db <= IN_MAX; db += 12) {
-        ctx.beginPath(); ctx.moveTo(xAt(db), pad); ctx.lineTo(xAt(db), h - pad); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(xAt(db), padT); ctx.lineTo(xAt(db), h - padB); ctx.stroke();
       }
       for (let db = OUT_MIN; db <= OUT_MAX; db += 12) {
-        ctx.beginPath(); ctx.moveTo(pad, yAt(db)); ctx.lineTo(w - pad, yAt(db)); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(padL, yAt(db)); ctx.lineTo(w - padR, yAt(db)); ctx.stroke();
       }
+      ctx.globalAlpha = 0.55;
+      // Y-axis labels — output dB at each horizontal grid line.
+      ctx.textAlign = 'right';
+      for (let db = OUT_MIN; db <= OUT_MAX; db += 12) {
+        ctx.fillText(String(db), padL - 4 * devicePixelRatio, yAt(db));
+      }
+      // X-axis labels — just the endpoints, to stay uncluttered.
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(IN_MIN + ' dB in', xAt(IN_MIN) + 12 * devicePixelRatio, h - padB + 3 * devicePixelRatio);
+      ctx.fillText(IN_MAX + ' dB in', xAt(IN_MAX) - 12 * devicePixelRatio, h - padB + 3 * devicePixelRatio);
+      ctx.textBaseline = 'middle';
+      ctx.globalAlpha = 1;
 
       // 1:1 reference.
-      ctx.globalAlpha = 0.2;
+      ctx.globalAlpha = 0.22;
       ctx.setLineDash([4, 4]);
       ctx.beginPath(); ctx.moveTo(xAt(IN_MIN), yAt(IN_MIN)); ctx.lineTo(xAt(IN_MAX), yAt(IN_MAX)); ctx.stroke();
       ctx.setLineDash([]);
@@ -130,12 +197,10 @@
       // Threshold marker.
       ctx.globalAlpha = 0.45;
       ctx.setLineDash([2, 3]);
-      ctx.beginPath(); ctx.moveTo(xAt(threshold), pad); ctx.lineTo(xAt(threshold), h - pad); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(xAt(threshold), padT); ctx.lineTo(xAt(threshold), h - padB); ctx.stroke();
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
     }
-
-    function formatDb(v) { return (v >= 0 ? '+' : '') + v.toFixed(1) + ' dB'; }
 
     const grFill = document.getElementById('grFill');
     const grReadout = document.getElementById('grReadout');
@@ -155,7 +220,7 @@
       smoothedGR = smoothedGR * 0.7 + gr * 0.3;
       const clamped = Math.min(24, smoothedGR);
       grFill.style.height = (clamped / 24 * 100) + '%';
-      grReadout.textContent = 'GR -' + smoothedGR.toFixed(1) + ' dB';
+      grReadout.textContent = 'GR −' + smoothedGR.toFixed(1) + ' dB';
     }
 
     let raf = 0;
