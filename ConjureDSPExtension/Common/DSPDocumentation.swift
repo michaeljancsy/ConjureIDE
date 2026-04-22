@@ -745,6 +745,33 @@ enum DSPDocumentation {
     directly in `ui/index.html`. Ship larger assets under
     `ui/assets/*.{css,js,png,woff2}` and reference with relative paths.
 
+    ### Illegible text: low contrast or hard-coded colors against Canvas
+
+    Two related traps:
+
+    1. **Low contrast**: `color: #222` on `background: #333` is
+       unreadable. The validator flags contrast ratios below 3.0 (WCAG
+       AA large-text threshold). Pick colors that differ enough in
+       luminance.
+    2. **Theme-breaking hard-coded body color**: `body { color: white;
+       background: Canvas; }` looks fine in dark mode — and disappears
+       completely in light mode, where `Canvas` resolves to white. The
+       reverse with `color: black` is invisible in dark mode.
+
+    The cleanest pattern: let the OS do the work.
+
+    ```css
+    body {
+        color: CanvasText;       /* resolves to black in light, white in dark */
+        background: Canvas;      /* resolves to white in light, near-black in dark */
+    }
+    ```
+
+    If you need a specific palette, commit to it fully — pair a
+    hard-coded text color with a hard-coded background color that
+    contrasts, and skip `Canvas`/`CanvasText` entirely for that element.
+    Don't mix (hard-coded text, theme-aware background).
+
     ### UI renders once, breaks on hot reload
 
     The file watcher calls `webView.reload()` after every file change.

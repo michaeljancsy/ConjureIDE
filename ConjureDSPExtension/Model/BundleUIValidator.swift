@@ -91,6 +91,7 @@ enum BundleUIValidator {
             issues.append(contentsOf: checkNoExternalNetwork(html: html))
             issues.append(contentsOf: checkNoSystemColorInCanvas(html: html))
             issues.append(contentsOf: checkHasInteractiveSurface(html: html, bundle: bundle))
+            issues.append(contentsOf: checkTextContrast(html: html))
         }
 
         let status: ReportStatus
@@ -311,6 +312,393 @@ enum BundleUIValidator {
             )
         ]
     }
+
+    /// Scan the UI for text whose color and background are both dark
+    /// or both light — unreadable. Two sub-checks:
+    ///
+    /// 1. Inline `style="color: X; background[-color]: Y; …"` pairs on
+    ///    the same element. Uses the WCAG 2.1 contrast ratio with a
+    ///    threshold of 3.0 (AA for large text, deliberately lenient to
+    ///    avoid false positives on buttons with subtle hover tints).
+    /// 2. CSS rule blocks inside `<style>` tags that declare both color
+    ///    and background on the same selector. Same threshold.
+    /// 3. Theme-breaking hard-coded body color: if `body` declares
+    ///    `color: white` / `#fff` (or analogous near-max-luminance
+    ///    values) and `background: Canvas` (or no background), the
+    ///    text is unreadable in light mode. Same for black on Canvas
+    ///    in dark mode.
+    ///
+    /// Theme-aware values (`CanvasText`, `Canvas`, `currentColor`,
+    /// `inherit`, `transparent`, `color-mix(...)` anchored to system
+    /// colors) are treated as legible-by-construction and skipped.
+    private static func checkTextContrast(html: String) -> [Issue] {
+        var issues: [Issue] = []
+
+        // (1) Inline style pairs on a single element.
+        let inlineRegex = try? NSRegularExpression(
+            pattern: #"\bstyle\s*=\s*["']([^"']+)["']"#,
+            options: [.caseInsensitive]
+        )
+        if let regex = inlineRegex {
+            let ns = html as NSString
+            let matches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+            for match in matches where match.numberOfRanges >= 2 {
+                let style = ns.substring(with: match.range(at: 1))
+                if let issue = contrastIssueForStyleBlock(
+                    style, selector: "inline style", location: "ui/index.html"
+                ) {
+                    issues.append(issue)
+                }
+            }
+        }
+
+        // (2) CSS rule blocks inside <style> tags.
+        for ruleBlock in extractCSSRules(from: html) {
+            if let issue = contrastIssueForStyleBlock(
+                ruleBlock.declarations,
+                selector: ruleBlock.selector,
+                location: "ui/index.html"
+            ) {
+                issues.append(issue)
+            }
+            // (3) Body-level theme-breaking: hard-coded color against
+            // `background: Canvas` (or no background) means the text is
+            // illegible in one of the two system color schemes.
+            if ruleBlock.selector.lowercased().contains("body") {
+                if let issue = themeMismatchIssueForBody(ruleBlock.declarations) {
+                    issues.append(issue)
+                }
+            }
+        }
+
+        return issues
+    }
+
+    /// If the given CSS declaration block defines both a text color and a
+    /// background color and their contrast ratio is below the threshold,
+    /// return a warning; otherwise nil.
+    private static func contrastIssueForStyleBlock(
+        _ declarations: String,
+        selector: String,
+        location: String
+    ) -> Issue? {
+        let decls = parseDeclarations(declarations)
+        guard let colorStr = decls["color"] ?? decls["Color"] else { return nil }
+        let bgStr = decls["background-color"]
+            ?? decls["background"]
+            ?? decls["Background"]
+            ?? decls["Background-color"]
+        guard let bg = bgStr else { return nil }
+        guard let fgRGB = parseColor(colorStr),
+              let bgRGB = parseColor(bg) else { return nil }
+        let ratio = contrastRatio(fgRGB, bgRGB)
+        // 3.0 is the WCAG AA threshold for large text. We pick it over
+        // the stricter 4.5 to leave authors room for deliberate stylistic
+        // choices (faded subheaders, etc.) and flag only the genuinely
+        // unreadable cases.
+        guard ratio < 3.0 else { return nil }
+        return Issue(
+            severity: .warn,
+            check: "text_contrast_low",
+            file: location,
+            message: String(
+                format: "Low text contrast on %@: color %@ on background %@ has a contrast ratio of %.2f (WCAG AA large-text threshold is 3.0).",
+                selector, colorStr.trimmingCharacters(in: .whitespaces),
+                bg.trimmingCharacters(in: .whitespaces), ratio
+            ),
+            suggestion: "Prefer `color: CanvasText` and `background: Canvas` (theme-aware). If you must hard-code, pick a dark text on a light background or vice versa."
+        )
+    }
+
+    /// Flag body rules that set `color: white|#fff|…` or `color: black|#000|…`
+    /// alongside `background: Canvas` (or no explicit background) — the
+    /// hard-coded color is unreadable in one of the two system color
+    /// schemes.
+    private static func themeMismatchIssueForBody(_ declarations: String) -> Issue? {
+        let decls = parseDeclarations(declarations)
+        guard let colorStr = decls["color"] else { return nil }
+        let bgRaw = decls["background"] ?? decls["background-color"]
+        let bgIsThemeAware = bgRaw == nil || isThemeAwareColor(bgRaw ?? "")
+        guard bgIsThemeAware else { return nil }  // handled by the pair check
+        guard let fg = parseColor(colorStr) else { return nil }
+        let lum = luminance(fg)
+        // Extreme colors (near-white / near-black) clash with the
+        // opposite theme. 0.8+ is effectively white, <0.1 is black.
+        let problem: String?
+        if lum > 0.8 {
+            problem = "light"
+        } else if lum < 0.1 {
+            problem = "dark"
+        } else {
+            problem = nil
+        }
+        guard let mode = problem else { return nil }
+        return Issue(
+            severity: .warn,
+            check: "theme_breaking_body_color",
+            file: "ui/index.html",
+            message: "body has hard-coded \(mode) `color: \(colorStr.trimmingCharacters(in: .whitespaces))` against a theme-aware background — text will be unreadable in \(mode == "light" ? "light" : "dark") mode.",
+            suggestion: "Use `color: CanvasText` so the text color follows the host's light/dark mode. If you need a specific palette, set an explicit theme-matching background color too."
+        )
+    }
+
+    // MARK: - CSS parsing helpers
+
+    private struct CSSRule {
+        let selector: String
+        let declarations: String
+    }
+
+    /// Extract `selector { declarations }` blocks from the HTML's
+    /// `<style>` tags. Pragmatic — not a real CSS parser; skips @-rules
+    /// and nested blocks. Good enough for flat preset UIs.
+    private static func extractCSSRules(from html: String) -> [CSSRule] {
+        var rules: [CSSRule] = []
+        // Extract <style>...</style> contents.
+        let styleTagRegex = try? NSRegularExpression(
+            pattern: #"<style[^>]*>([\s\S]*?)</style>"#,
+            options: [.caseInsensitive]
+        )
+        guard let styleRegex = styleTagRegex else { return [] }
+        let ns = html as NSString
+        let styleMatches = styleRegex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+        for match in styleMatches where match.numberOfRanges >= 2 {
+            let styleContent = ns.substring(with: match.range(at: 1))
+            // Strip @-blocks (e.g. @media, @supports) crudely to avoid
+            // their selectors confusing the flat parser. We don't try
+            // to recurse into them in this pass.
+            let stripped = removeAtBlocks(styleContent)
+            // Flat "selector { ... }" extraction.
+            let ruleRegex = try? NSRegularExpression(
+                pattern: #"([^{}]+)\{([^{}]*)\}"#,
+                options: []
+            )
+            guard let rr = ruleRegex else { continue }
+            let rns = stripped as NSString
+            let ruleMatches = rr.matches(in: stripped, range: NSRange(location: 0, length: rns.length))
+            for rm in ruleMatches where rm.numberOfRanges >= 3 {
+                let selector = rns.substring(with: rm.range(at: 1))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let decls = rns.substring(with: rm.range(at: 2))
+                guard !selector.isEmpty else { continue }
+                rules.append(CSSRule(selector: selector, declarations: decls))
+            }
+        }
+        return rules
+    }
+
+    /// Crudely remove `@rule { ... }` blocks from CSS. Balanced-brace
+    /// scanning so nested rules inside a `@media` don't leak out.
+    private static func removeAtBlocks(_ css: String) -> String {
+        var out = ""
+        var i = css.startIndex
+        while i < css.endIndex {
+            let c = css[i]
+            if c == "@" {
+                // Skip until matching closing brace.
+                if let openIdx = css[i...].firstIndex(of: "{") {
+                    var depth = 1
+                    var j = css.index(after: openIdx)
+                    while j < css.endIndex && depth > 0 {
+                        if css[j] == "{" { depth += 1 }
+                        else if css[j] == "}" { depth -= 1 }
+                        j = css.index(after: j)
+                    }
+                    i = j
+                    continue
+                } else {
+                    // Unterminated @-rule; bail.
+                    break
+                }
+            }
+            out.append(c)
+            i = css.index(after: i)
+        }
+        return out
+    }
+
+    /// Parse a flat `key: value; key: value;` declaration block into a
+    /// dictionary. Keys are lowercased; values retain case. Multiple
+    /// assignments to the same key resolve to the last one (matches
+    /// CSS cascade for a single rule block).
+    private static func parseDeclarations(_ block: String) -> [String: String] {
+        var out: [String: String] = [:]
+        for rawDecl in block.split(separator: ";") {
+            let parts = rawDecl.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let key = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            out[key] = value
+        }
+        return out
+    }
+
+    // MARK: - Color parsing + luminance
+
+    /// Theme-aware or insensitive values we don't try to compute contrast
+    /// for — they're either delegated to the OS (CanvasText/Canvas),
+    /// inherit from context (currentColor/inherit), or mean "no paint"
+    /// (transparent). Returning `true` means: skip the contrast check;
+    /// it's the author's deliberate theme-handling.
+    private static func isThemeAwareColor(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.hasPrefix("color-mix(") { return true }
+        let themeAwareKeywords: Set<String> = [
+            "canvastext", "canvas", "currentcolor", "inherit",
+            "transparent", "initial", "unset", "revert", "revert-layer",
+            "accentcolor", "accentcolortext", "buttontext", "buttonface",
+            "linktext", "visitedtext", "field", "fieldtext",
+            "highlighttext", "highlight", "graytext", "markertext",
+        ]
+        return themeAwareKeywords.contains(trimmed)
+    }
+
+    /// Parse a CSS color value into sRGB (0..1) components. Supports
+    /// hex `#rgb`/`#rrggbb`/`#rgba`/`#rrggbbaa`, `rgb(r, g, b)`,
+    /// `rgba(r, g, b, a)`, and a handful of common named colors.
+    /// Returns nil for theme-aware values (callers should check
+    /// `isThemeAwareColor` first to decide whether to treat nil as a
+    /// skip vs. an error).
+    private static func parseColor(_ raw: String) -> (r: Double, g: Double, b: Double)? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if isThemeAwareColor(value) { return nil }
+
+        // Hex.
+        if value.hasPrefix("#") {
+            let hex = String(value.dropFirst())
+            let expanded: String
+            switch hex.count {
+            case 3:
+                expanded = hex.map { "\($0)\($0)" }.joined()
+            case 4:
+                // #rgba -> #rrggbb (ignore alpha for contrast)
+                let trimmed = String(hex.prefix(3))
+                expanded = trimmed.map { "\($0)\($0)" }.joined()
+            case 6:
+                expanded = hex
+            case 8:
+                expanded = String(hex.prefix(6))
+            default:
+                return nil
+            }
+            guard expanded.count == 6,
+                  let r = Int(expanded.prefix(2), radix: 16),
+                  let g = Int(expanded.dropFirst(2).prefix(2), radix: 16),
+                  let b = Int(expanded.dropFirst(4).prefix(2), radix: 16)
+            else { return nil }
+            return (Double(r) / 255, Double(g) / 255, Double(b) / 255)
+        }
+
+        // rgb(...) / rgba(...)
+        if value.hasPrefix("rgb(") || value.hasPrefix("rgba(") {
+            let inside = value
+                .replacingOccurrences(of: "rgba(", with: "")
+                .replacingOccurrences(of: "rgb(", with: "")
+                .replacingOccurrences(of: ")", with: "")
+            let parts = inside.split(whereSeparator: { ",/ ".contains($0) })
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            guard parts.count >= 3 else { return nil }
+            func channel(_ s: String) -> Double? {
+                if s.hasSuffix("%") {
+                    guard let pct = Double(s.dropLast()) else { return nil }
+                    return max(0, min(1, pct / 100))
+                }
+                guard let n = Double(s) else { return nil }
+                return max(0, min(1, n / 255))
+            }
+            guard let r = channel(parts[0]),
+                  let g = channel(parts[1]),
+                  let b = channel(parts[2]) else { return nil }
+            return (r, g, b)
+        }
+
+        // hsl(...)/hsla(...) — parse by converting HSL to RGB.
+        if value.hasPrefix("hsl(") || value.hasPrefix("hsla(") {
+            let inside = value
+                .replacingOccurrences(of: "hsla(", with: "")
+                .replacingOccurrences(of: "hsl(", with: "")
+                .replacingOccurrences(of: ")", with: "")
+            let parts = inside.split(whereSeparator: { ",/ ".contains($0) })
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            guard parts.count >= 3 else { return nil }
+            guard let h = Double(parts[0].replacingOccurrences(of: "deg", with: "")),
+                  let s = Double(parts[1].replacingOccurrences(of: "%", with: "")),
+                  let l = Double(parts[2].replacingOccurrences(of: "%", with: "")) else { return nil }
+            return hslToRGB(h: h, s: s / 100, l: l / 100)
+        }
+
+        // Named colors (small table — we only care about the ones
+        // preset authors reach for).
+        return namedColorTable[value]
+    }
+
+    /// Luminance per WCAG 2.1 relative-luminance formula.
+    private static func luminance(_ c: (r: Double, g: Double, b: Double)) -> Double {
+        func lin(_ x: Double) -> Double {
+            x <= 0.03928 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+
+    /// WCAG 2.1 contrast ratio. Output range [1, 21]; 1 = identical,
+    /// 21 = pure white on pure black.
+    private static func contrastRatio(
+        _ a: (r: Double, g: Double, b: Double),
+        _ b: (r: Double, g: Double, b: Double)
+    ) -> Double {
+        let la = luminance(a), lb = luminance(b)
+        let (hi, lo) = la > lb ? (la, lb) : (lb, la)
+        return (hi + 0.05) / (lo + 0.05)
+    }
+
+    private static func hslToRGB(h: Double, s: Double, l: Double) -> (r: Double, g: Double, b: Double) {
+        let c = (1 - abs(2 * l - 1)) * s
+        let hp = (h.truncatingRemainder(dividingBy: 360)) / 60
+        let x = c * (1 - abs(hp.truncatingRemainder(dividingBy: 2) - 1))
+        var (r, g, b): (Double, Double, Double) = (0, 0, 0)
+        switch hp {
+        case 0..<1: (r, g, b) = (c, x, 0)
+        case 1..<2: (r, g, b) = (x, c, 0)
+        case 2..<3: (r, g, b) = (0, c, x)
+        case 3..<4: (r, g, b) = (0, x, c)
+        case 4..<5: (r, g, b) = (x, 0, c)
+        case 5..<6: (r, g, b) = (c, 0, x)
+        default: break
+        }
+        let m = l - c / 2
+        return (r + m, g + m, b + m)
+    }
+
+    /// The small set of CSS named colors preset authors actually use.
+    /// Skipping the full X11 palette intentionally — not worth the
+    /// surface area. If a preset uses an obscure named color we miss,
+    /// the contrast check silently skips it; the worst case is a
+    /// missed warning, not a false positive.
+    private static let namedColorTable: [String: (r: Double, g: Double, b: Double)] = [
+        "white":     (1, 1, 1),
+        "black":     (0, 0, 0),
+        "red":       (1, 0, 0),
+        "green":     (0, 0.5, 0),
+        "lime":      (0, 1, 0),
+        "blue":      (0, 0, 1),
+        "yellow":    (1, 1, 0),
+        "cyan":      (0, 1, 1),
+        "magenta":   (1, 0, 1),
+        "gray":      (0.5, 0.5, 0.5),
+        "grey":      (0.5, 0.5, 0.5),
+        "lightgray": (0.827, 0.827, 0.827),
+        "lightgrey": (0.827, 0.827, 0.827),
+        "darkgray":  (0.663, 0.663, 0.663),
+        "darkgrey":  (0.663, 0.663, 0.663),
+        "silver":    (0.753, 0.753, 0.753),
+        "gold":      (1, 0.843, 0),
+        "orange":    (1, 0.647, 0),
+        "pink":      (1, 0.753, 0.796),
+        "purple":    (0.502, 0, 0.502),
+        "brown":     (0.647, 0.165, 0.165),
+    ]
 
     // MARK: - Helpers
 

@@ -329,6 +329,140 @@ struct BundleUIValidatorTests {
         #expect(report.status == .fail)
     }
 
+    // MARK: - text_contrast_low / theme_breaking_body_color
+
+    @Test func lowContrastInlineStyleFlagged() throws {
+        // Dark gray text on dark gray background — clearly unreadable.
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <div style="color: #222; background: #333;">Illegible label</div>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "text_contrast_low" })
+    }
+
+    @Test func lowContrastCSSRuleFlagged() throws {
+        // White-on-white inside a <style> block.
+        let ui = """
+        <!doctype html><html><head><style>
+          .label { color: #fff; background-color: white; }
+        </style></head>
+        <body><cdp-slider param="cutoff"></cdp-slider><div class="label">Hi</div></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "text_contrast_low" })
+    }
+
+    @Test func rgbFunctionContrastFlagged() throws {
+        let ui = """
+        <!doctype html><html><head><style>
+          .note { color: rgb(40, 40, 40); background: rgb(50, 50, 50); }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider><span class="note">x</span></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "text_contrast_low" })
+    }
+
+    @Test func hslLowContrastFlagged() throws {
+        // Two very-dark HSLs with similar lightness.
+        let ui = """
+        <!doctype html><html><head><style>
+          .bad { color: hsl(0, 0%, 10%); background: hsl(0, 0%, 15%); }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider><span class="bad">x</span></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "text_contrast_low" })
+    }
+
+    @Test func goodContrastNotFlagged() throws {
+        // Black on white — WCAG 21:1, the gold standard.
+        let ui = """
+        <!doctype html><html><head><style>
+          .ok { color: black; background: white; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider><span class="ok">x</span></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "text_contrast_low" })
+    }
+
+    @Test func themeAwareColorsNotFlagged() throws {
+        // CanvasText on Canvas — the theme-correct pattern we recommend.
+        // Validator should skip (can't know resolved colors statically).
+        let ui = """
+        <!doctype html><html><head><style>
+          body { color: CanvasText; background: Canvas; }
+          .label { color: CanvasText; background-color: Canvas; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "text_contrast_low" })
+        #expect(!report.issues.contains { $0.check == "theme_breaking_body_color" })
+    }
+
+    @Test func themeBreakingHardcodedWhiteBodyFlagged() throws {
+        // body uses theme-aware `background: Canvas` but hard-codes
+        // light text — illegible in light mode.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { color: white; background: Canvas; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "theme_breaking_body_color" })
+    }
+
+    @Test func themeBreakingHardcodedBlackBodyFlagged() throws {
+        // And the reverse — black text against Canvas is invisible in
+        // dark mode.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { color: #000; background: Canvas; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "theme_breaking_body_color" })
+    }
+
+    @Test func themeBreakingNoBackgroundFlagged() throws {
+        // No background declared at all — still theme-aware by default
+        // (inherits Canvas). Same rule applies.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { color: white; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "theme_breaking_body_color" })
+    }
+
+    @Test func bodyWithExplicitMatchingBackgroundNotFlagged() throws {
+        // If the author hard-codes BOTH text and background in concert,
+        // that's a deliberate opt-out of theme-following — not a bug.
+        // The contrast check still verifies they're legible together.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { color: white; background: #111; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        // theme_breaking should NOT fire (bg isn't Canvas-aware),
+        // text_contrast_low should NOT fire (white on near-black is 20:1).
+        #expect(!report.issues.contains { $0.check == "theme_breaking_body_color" })
+        #expect(!report.issues.contains { $0.check == "text_contrast_low" })
+    }
+
     @Test func statusWarnIfOnlyWarnings() throws {
         // v1 schema + working UI → only the v2-recommended warning.
         let manifest = """
