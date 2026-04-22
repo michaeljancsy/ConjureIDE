@@ -120,12 +120,12 @@ Rust API overview:
 The code editor uses Monaco Editor (VS Code's editor) loaded in a WKWebView. It auto-detects Python vs Rust, applies light/dark themes, and communicates with Swift via `WKUserContentController` message handlers. Downloaded by `scripts/setup-monaco.sh` to `Resources/monaco/vs/` (gitignored).
 
 ### Claude Code Terminal
-An in-plugin terminal running Claude Code CLI via a companion app architecture. The AU extension runs an MCP server (HTTP, direct AU access) exposing 15 tools:
+An in-plugin terminal running Claude Code CLI via a companion app architecture. The AU extension runs an MCP server (HTTP, direct AU access) exposing 16 tools:
 
-- **DSP scripting:** `compile_and_run`, `get_script`, `get_error`, `get_docs`, `list_packages`
+- **DSP scripting:** `compile_and_run`, `get_script`, `get_error`, `get_docs` (topics: `params`, `filters`, `delays`, `oscillators`, `utilities`, `accel`, `nam`, `ui`, `all` — see `ConjureDSPExtension/Common/DSPDocumentation.swift`), `list_packages`
 - **Parameters + audio state:** `set_parameter`, `get_parameters`, `get_audio_state`, `toggle_bypass`
 - **Presets + tones:** `list_presets` (returns `is_bundle` + `has_custom_ui`), `save_preset` (accepts `scaffold_ui`), `list_tones`
-- **Custom UI authoring:** `get_bundle_info` (inspect the active bundle — files, manifest UI block, factory/editable status), `read_bundle_file`, `write_bundle_file` (for editing `ui/index.html`, `manifest.json`, `ui/assets/*.css`, etc.)
+- **Custom UI authoring:** `get_bundle_info` (inspect the active bundle — files, manifest UI block, factory/editable status), `read_bundle_file`, `write_bundle_file` (for editing `ui/index.html`, `manifest.json`, `ui/assets/*.css`, etc. — responses for ui/* and manifest.json edits include an inline `validation` block from `BundleUIValidator`), `validate_bundle` (explicit re-run of the same validator — returns `{status, issues[]}` covering orphan ui files, missing manifest.ui blocks, unresolved `param=` references, CSP-blocked external assets, Canvas 2D system-color literals, UIs with no interactive surface, low text contrast, and theme-breaking hard-coded body colors)
 
 The terminal UI uses xterm.js in a WKWebView with a contentEditable input proxy for keyboard input through the AU ViewBridge.
 
@@ -138,12 +138,14 @@ Every preset ships as a `.cdp` bundle directory containing `manifest.json` + an 
 
 ```
 MyPreset.cdp/
-  manifest.json          {schemaVersion, entry, language?, ui?:{entryHTML,width,height,fps,audioFrames}, meta?}
+  manifest.json          {schemaVersion, entry, language?, params?, ui?:{entryHTML,width,height,fps,audioFrames}, meta?}
   process.py | process.rs
   ui/
     index.html           # optional — when present + manifest declares `ui`, renders in place of generic sliders
     assets/              # CSS/JS/images/fonts
 ```
+
+**Manifest schema versions:** `schemaVersion: 1` bundles extract parameter metadata from the compiled DSP (after script load). `schemaVersion: 2` bundles declare a `params: [{name, min, max, default, unit?, curve?, style?, options?}]` array that populates the AU parameter tree BEFORE the script compiles — so custom UIs render with correct defaults during a slow Rust compile instead of showing placeholders. New presets should always use v2; v1 is preserved for backward compat. The validator warns on v1 bundles that ship a custom UI.
 
 **Where bundles live:**
 - **Factory:** `ConjureDSPExtension/Resources/presets/preset_<name>.cdp/`. Copied verbatim into the appex via `PBXFileSystemSynchronizedRootGroup.explicitFolders = ("Resources/presets")`. Read-only at runtime (the appex's Resources aren't writable under hardened runtime). When a user wants to modify a factory preset, they Save As to create an editable user bundle.
@@ -152,6 +154,10 @@ MyPreset.cdp/
 **Legacy flat-file migration:** on first load, `PresetManager.discoverPresets` wraps any pre-bundle `.py` / `.rs` files sitting in `Presets/` into `.cdp` bundles and deletes the flat file. This is a one-shot migration for users with data from a pre-bundle install; the steady state has zero flat files.
 
 **Custom UI render path:** when a bundle ships `ui/index.html` AND its manifest declares a `ui` block, `CustomUIWebView` renders the HTML in place of `ParameterSlidersView`. `BundleAssetSchemeHandler` (`WKURLSchemeHandler`) serves bundle files into the WebContent process via `conjuredsp-preset://preset/<path>` to avoid `kTCCServiceSystemPolicyAppData` prompts — WebContent doesn't inherit the appex's App Group entitlement, but the scheme handler runs in the appex process. Path standardization + `hasPrefix(rootURL.path)` enforce sandboxing. The scheme handler also sets `Content-Security-Policy: default-src 'self' 'unsafe-inline' data:; connect-src 'none';` on every response, blocking fetch/XHR/WebSocket egress from author JS. (An earlier `WKContentRuleList` layer was removed — `ignore-previous-rules` for custom schemes was unreliable and blanked exported webviews.)
+
+**Component library (`cdp-ui.js`):** injected into the webview alongside `customui-bridge.js` at document-start. Provides `<cdp-slider>`, `<cdp-toggle>`, `<cdp-choice>`, `<cdp-xy>`, `<cdp-panel>` web components plus helper functions under `window.ConjureDSP.ui` (`control(i)`, `formatValue`, `normalize`, `denormalize`). Themed via CSS custom properties + `::part()` hooks; loose param-name resolution (case / underscore / space insensitive) lets the same `ui/index.html` serve both the Python and Rust variant of a preset. Full reference: `docs/custom-ui-component-library.md` and `get_docs("ui")`.
+
+**Validation:** `BundleUIValidator` statically lints `manifest.json` + `ui/index.html` for the common authoring failures — orphan ui files with no manifest ui block, unresolved `param=` references (with Levenshtein "did you mean"), CSP-blocked external assets / `fetch` / `WebSocket`, Canvas 2D system-color literals that silently paint black, UIs that declare params but expose no interactive controls, low text contrast (WCAG < 3.0), and theme-breaking hard-coded body colors against `Canvas`. The MCP `write_bundle_file` handler runs the validator on every write that touches `ui/*` or `manifest.json` and inlines the report in its response, so the embedded agent sees warnings on the same turn it writes the file. `validate_bundle` MCP tool re-runs the sweep on demand.
 
 **JS bridge (`window.ConjureDSP`, injected by `customui-bridge.js` at `.atDocumentStart`):**
 - `apiVersion: 1`
