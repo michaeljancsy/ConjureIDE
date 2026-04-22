@@ -153,12 +153,12 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "save_preset",
-            description: "Save the currently loaded script as a user preset bundle (.cdp directory). Pass scaffold_ui=true to also drop in a starter ui/index.html that binds one slider per parameter — gives the user a working custom HTML/JS UI to build on.",
+            description: "Save the currently loaded script as a user preset bundle (.cdp directory). CRITICAL: this is also the tool you call to FORK a factory preset or to escape scratchpad (no current preset) state — factory bundles are read-only, so any time the user asks you to modify a factory preset's files, call save_preset FIRST with a meaningful new name before you try write_bundle_file. When the current preset is a factory bundle, save_preset automatically clones the factory's entire .cdp/ tree (manifest.json + ui/ + assets) into the new user bundle so your follow-up write_bundle_file edits iterate on the factory's UI rather than a blank scaffold. The plugin auto-switches to the new bundle on success (`switched_current_preset: true` in the response). Pass scaffold_ui=true ONLY when starting from a factory without a UI (or from scratchpad) and you want a starter ui/index.html; scaffold_ui is ignored when cloning from a factory that already ships one.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "name": PropertySchema(type: "string", description: "Name for the preset."),
-                    "scaffold_ui": PropertySchema(type: "boolean", description: "When true, creates ui/index.html alongside the script so the preset ships with a custom HTML/JS UI. Default: false."),
+                    "name": PropertySchema(type: "string", description: "Name for the preset. If a user bundle with this name already exists, save_preset re-saves into it (entry script overwritten, existing ui/ + manifest preserved)."),
+                    "scaffold_ui": PropertySchema(type: "boolean", description: "When true AND the source doesn't already supply a UI, creates a starter ui/index.html. Ignored when cloning from a factory-with-UI (that UI is inherited). Default: false."),
                 ],
                 required: ["name"]
             )
@@ -181,7 +181,7 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "write_bundle_file",
-            description: "Write a text file inside the current preset bundle. Use to author the custom HTML/JS UI: set manifest.json's 'ui' block, write ui/index.html, add ui/assets/style.css. The plugin's file watcher picks up the change and hot-reloads the custom UI within ~300ms. Writes are rejected for factory presets (read-only resources in the app bundle). The DSP script itself (manifest.entry) is writable but the DAW won't pick up the new code until compile_and_run runs it — for DSP edits, prefer compile_and_run which also re-loads the kernel. When the write touches ui/ or manifest.json, the response includes a `validation` block (same shape as validate_bundle) so you see unresolved param= refs, CSP violations, missing ui blocks, etc. on the same turn — inspect it before moving on.",
+            description: "Write a text file inside the current preset bundle. Use to author the custom HTML/JS UI: set manifest.json's 'ui' block, write ui/index.html, add ui/assets/style.css. The plugin's file watcher picks up the change and hot-reloads the custom UI within ~300ms. Writes are REJECTED for factory presets (read-only resources in the app bundle) — if you're on a factory preset, call save_preset FIRST with a new name; save_preset clones the factory bundle (including its ui/ subtree) into a writable user bundle and switches the plugin to it, so follow-up write_bundle_file calls land. Same applies to scratchpad state (no current preset). The DSP script itself (manifest.entry) is writable but the DAW won't pick up the new code until compile_and_run runs it — for DSP edits, prefer compile_and_run which also re-loads the kernel. When the write touches ui/ or manifest.json, the response includes a `validation` block (same shape as validate_bundle) so you see unresolved param= refs, CSP violations, missing ui blocks, etc. on the same turn — inspect it before moving on.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [

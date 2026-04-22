@@ -317,7 +317,8 @@ class PresetManager: ObservableObject {
         name: String,
         source: String,
         language: ScriptLanguage = .python,
-        scaffoldUI: Bool = false
+        scaffoldUI: Bool = false,
+        cloneFrom: PresetBundle? = nil
     ) throws -> Preset {
         let sanitized = sanitizeFilename(name)
         guard !sanitized.isEmpty else {
@@ -330,15 +331,22 @@ class PresetManager: ObservableObject {
 
         let bundleExists = fileManager.fileExists(atPath: bundleURL.path)
 
-        // For an existing bundle (Cmd+S on the current preset), preserve
-        // the user's manifest.json and ui/ as-is — only the entry script
-        // is what Cmd+S is actually updating. The old behavior wiped the
-        // whole bundle and regenerated manifest.json from defaults, which
-        // silently destroyed any width/height/fps edits the user made via
-        // the file browser.
+        // Three branches:
         //
-        // For a new bundle (New Preset or Save As), no preservation is
-        // possible — write the full default structure.
+        //  1. Target bundle already exists → re-save. Preserve manifest
+        //     and ui/; overwrite entry script only. `cloneFrom` is ignored
+        //     because the existing user bundle's state wins. Same as the
+        //     pre-cloneFrom behavior.
+        //  2. Target doesn't exist AND cloneFrom is non-nil → fork. Copy
+        //     the source bundle's .cdp/ tree verbatim, then overwrite its
+        //     entry script with `source`. `scaffoldUI` is ignored — the
+        //     source's ui/ is authoritative (present or absent).
+        //  3. Target doesn't exist AND cloneFrom is nil → fresh bundle
+        //     with manifest + script + optional starter ui/index.html.
+        //
+        // Only the MCP save_preset handler currently passes `cloneFrom`,
+        // and only when the current preset is a factory bundle; user-
+        // preset flows (UI Save As, Cmd+S) keep the nil default.
         if bundleExists {
             let manifestURL = bundleURL.appendingPathComponent(PresetManifest.filename)
             let existingManifest: PresetManifest? = {
@@ -380,6 +388,26 @@ class PresetManager: ObservableObject {
             }
 
             log.info("Updated user bundle (preserved manifest): \(bundleURL.path, privacy: .public)")
+        } else if let sourceBundle = cloneFrom {
+            // Fork: copy the whole .cdp/ tree (manifest, ui/, assets),
+            // then overwrite the entry script. This is how MCP
+            // save_preset forks a factory preset — the resulting user
+            // bundle starts with the factory's exact UI + manifest so
+            // subsequent write_bundle_file calls can iterate on it.
+            try copyBundleTree(from: sourceBundle.rootURL, to: bundleURL)
+            // Re-read the manifest from the copy to find the correct
+            // entry path (the factory may have used process.rs vs .py).
+            let clonedManifestURL = bundleURL.appendingPathComponent(PresetManifest.filename)
+            let clonedManifest: PresetManifest = {
+                guard let data = try? Data(contentsOf: clonedManifestURL),
+                      let m = try? JSONDecoder().decode(PresetManifest.self, from: data)
+                else { return PresetBundle.defaultManifest(language: language, includeUI: false) }
+                return m
+            }()
+            let scriptURL = bundleURL.appendingPathComponent(clonedManifest.entry)
+            try source.write(to: scriptURL, atomically: true, encoding: .utf8)
+            AppGroupContainer.stripQuarantine(at: scriptURL)
+            log.info("Forked bundle from \(sourceBundle.name, privacy: .public) → \(bundleURL.path, privacy: .public)")
         } else {
             try fileManager.createDirectory(at: bundleURL, withIntermediateDirectories: true)
             AppGroupContainer.stripQuarantine(at: bundleURL)
@@ -409,6 +437,14 @@ class PresetManager: ObservableObject {
             throw PresetManagerError.saveFailed
         }
         return preset
+    }
+
+    /// Copy a bundle directory tree in its entirety. Used by the fork
+    /// path in `savePreset(cloneFrom:)` and by `duplicateFactoryBundle`.
+    /// Caller is responsible for ensuring `dest` doesn't already exist.
+    private func copyBundleTree(from src: URL, to dest: URL) throws {
+        try fileManager.copyItem(at: src, to: dest)
+        AppGroupContainer.stripQuarantine(at: dest)
     }
 
     /// Drop a starter `ui/index.html` into an existing user bundle and return
@@ -747,7 +783,7 @@ class PresetManager: ObservableObject {
         guard !fileManager.fileExists(atPath: destURL.path) else {
             throw BundleFileError.alreadyExists
         }
-        try fileManager.copyItem(at: source.rootURL, to: destURL)
+        try copyBundleTree(from: source.rootURL, to: destURL)
         refreshPresets()
         guard let forked = PresetBundle.load(from: destURL) else {
             throw PresetManagerError.saveFailed

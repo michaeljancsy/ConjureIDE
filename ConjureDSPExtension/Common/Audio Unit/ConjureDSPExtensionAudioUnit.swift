@@ -1320,6 +1320,14 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		didChangeValue(forKey: "currentPreset")
 	}
 
+	/// Clear the DAW-facing currentPreset with KVO notification. Used
+	/// from non-file-scope callers (e.g. the MCP save_preset handler
+	/// in a separate extension file) when a fork moves us off of a
+	/// factory preset — no more factory number to advertise.
+	func clearDAWCurrentPreset() {
+		setCurrentPresetWithKVO(nil)
+	}
+
 	public override var currentPreset: AUAudioUnitPreset? {
 		get { return _currentPreset }
 		set {

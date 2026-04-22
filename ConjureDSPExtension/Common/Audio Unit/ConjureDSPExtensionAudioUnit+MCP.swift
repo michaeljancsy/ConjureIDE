@@ -279,14 +279,46 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         }
         let scaffoldUI = (input["scaffold_ui"] as? Bool) ?? false
         let pm = presetManager
+
+        // Factory-only clone scope: if the user is currently on a factory
+        // preset, copy its entire .cdp/ tree (manifest + ui/ + assets)
+        // into the new user bundle so the agent inherits the factory's
+        // custom UI as a starting point for further write_bundle_file
+        // edits. User-preset flows get nil here and keep today's
+        // fresh-or-resave behavior.
+        let cloneFrom: PresetBundle? = {
+            guard let current = pm.currentPreset, current.isFactory else { return nil }
+            return pm.loadBundle(for: current)
+        }()
+        let factorySourceName: String? = cloneFrom.map { _ in pm.currentPreset?.name ?? "" }
+
         do {
             let preset = try pm.savePreset(
                 name: name, source: source,
                 language: currentScriptLanguage,
-                scaffoldUI: scaffoldUI
+                scaffoldUI: scaffoldUI,
+                cloneFrom: cloneFrom
             )
-            var response: [String: Any] = ["success": true, "name": preset.name]
-            if scaffoldUI {
+
+            // Switch the plugin to the new bundle so follow-up
+            // write_bundle_file calls edit it (instead of continuing
+            // to hit "factory is read-only" or "no current preset").
+            // Mirrors onSaveAsPreset in AudioUnitViewController.
+            pm.setCurrentPreset(preset, source: source)
+            // User bundles don't have a factory preset number — clear
+            // the DAW's currentPreset so hosts don't show a stale
+            // factory name alongside the new user bundle.
+            clearDAWCurrentPreset()
+
+            var response: [String: Any] = [
+                "success": true,
+                "name": preset.name,
+                "switched_current_preset": true,
+            ]
+            if let src = factorySourceName, !src.isEmpty {
+                response["cloned_from_factory"] = src
+                response["note"] = "Copied the factory bundle's manifest + ui/ subtree. Edit ui/index.html via write_bundle_file to iterate on the inherited UI."
+            } else if scaffoldUI {
                 response["scaffolded_ui"] = true
                 response["note"] = "Starter ui/index.html written. Edit it via write_bundle_file to customize the custom HTML/JS UI."
             }

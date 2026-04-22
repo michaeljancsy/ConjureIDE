@@ -595,6 +595,30 @@ final class PTYManager {
     Working examples to copy from: `read_bundle_file` on `preset_svf`, \
     `preset_compressor`, `preset_wavefolder`, `preset_mockingbird_at_night_rust`.
 
+    **Factory presets and scratchpad state — fork before editing:**
+
+    Factory presets are read-only; scratchpad state has no bundle to \
+    write into. Either way, when the user asks you to modify a preset's \
+    files, your FIRST tool call after understanding the request should \
+    be `save_preset` with a meaningful new name. Don't wait for the \
+    first `write_bundle_file` to fail — that's a dead turn.
+
+    - `save_preset` on a factory preset WITH a custom UI automatically \
+    clones the factory's `ui/` subtree and manifest into the new user \
+    bundle, so your follow-up `write_bundle_file` calls start from the \
+    factory's UI as the base to modify. You don't need `scaffold_ui=true` \
+    in this case — it's ignored when cloning from a factory that already \
+    has a UI.
+    - `save_preset` on a factory WITHOUT a UI (or from scratchpad) \
+    creates a script-only bundle by default. Pass `scaffold_ui=true` \
+    if you want a starter `ui/index.html` to edit.
+    - On success, `save_preset` returns `switched_current_preset: true` \
+    and (when applicable) `cloned_from_factory: "<source name>"`. The \
+    plugin has auto-switched to the new bundle — subsequent \
+    `write_bundle_file` calls target it, not the factory.
+    - Tell the user what you named the new bundle so they can find it \
+    in the preset browser.
+
     **Validation protocol (mandatory before claiming done on a UI task):**
 
     - Every `write_bundle_file` to `ui/*` or `manifest.json` returns a \
