@@ -12,20 +12,57 @@
     }
     body {
       display: grid;
-      grid-template-rows: auto auto 1fr auto;
+      grid-template-rows: auto auto auto auto;
+      align-content: start;
       padding: 14px 16px; gap: 6px; box-sizing: border-box;
     }
     .title {
       font-weight: 600; letter-spacing: 0.02em;
       text-transform: uppercase; font-size: 0.75em; opacity: 0.55;
     }
-    canvas {
+    /* Response chart laid out with a left gutter for the dB Y-axis labels
+       so they sit alongside the canvas the way a conventional plot would. */
+    .response-grid {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 4px;
+      align-items: stretch;
+    }
+    .response-grid .yticks {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      font-size: 0.75em; opacity: 0.55;
+      text-align: right;
+      padding: 2px 0;
+      font-variant-numeric: tabular-nums;
+    }
+    canvas#response {
       width: 100%; height: 120px; display: block;
       border-radius: 6px;
       background: color-mix(in srgb, CanvasText 6%, Canvas);
     }
-    /* Pad: spans the full width, non-square, so cutoff (its X axis)
-       lines up with the frequency-response canvas above. */
+    /* Pad grid mirrors the response grid so X axes line up exactly. */
+    .pad-grid {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 4px;
+      align-items: stretch;
+    }
+    /* Fixed 180px matches cdp-xy::part(pad) height so 10/Q/0.5 line up
+       with the pad box, not the pad+readout stack beneath. */
+    .pad-grid .yticks {
+      display: flex; flex-direction: column;
+      justify-content: space-between;
+      height: 180px;
+      font-size: 0.75em; opacity: 0.6;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .pad-grid .yticks .ylabel {
+      text-transform: uppercase; letter-spacing: 0.08em;
+      opacity: 0.8;
+    }
     cdp-xy { display: block; width: 100%; }
     cdp-xy::part(pad) {
       aspect-ratio: auto;
@@ -33,23 +70,44 @@
       width: 100%;
       height: 180px;
     }
-    .axis {
+    /* X-axis row: empty gutter column + three-column label row matching
+       the pad width above it. */
+    .xaxis {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 4px;
+    }
+    .xaxis-ticks {
       display: grid;
       grid-template-columns: auto 1fr auto;
-      font-size: 0.85em; opacity: 0.6;
-      align-items: center;
+      font-size: 0.75em; opacity: 0.6;
+      font-variant-numeric: tabular-nums;
     }
-    .axis .mid { text-align: center; }
+    .xaxis-ticks .mid { text-align: center;
+      text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.8; }
   </style>
 </head>
 <body>
-  <div class="title">Frequency response</div>
-  <canvas id="response" width="800" height="240"></canvas>
-  <cdp-xy param-x="cutoff" param-y="resonance" invert-y></cdp-xy>
-  <div class="axis">
-    <span>20 Hz</span>
-    <span class="mid">Cutoff  •  Q ↑</span>
-    <span>20 kHz</span>
+  <div class="title">Frequency response (dB)</div>
+  <div class="response-grid">
+    <div class="yticks"><span>+24</span><span>0</span><span>−24</span></div>
+    <canvas id="response" width="800" height="240"></canvas>
+  </div>
+  <div class="pad-grid">
+    <div class="yticks">
+      <span>10</span>
+      <span class="ylabel">Q</span>
+      <span>0.5</span>
+    </div>
+    <cdp-xy param-x="cutoff" param-y="resonance" invert-y></cdp-xy>
+  </div>
+  <div class="xaxis">
+    <div></div>
+    <div class="xaxis-ticks">
+      <span>20 Hz</span>
+      <span class="mid">Cutoff</span>
+      <span>20 kHz</span>
+    </div>
   </div>
   <script>
   (function () {

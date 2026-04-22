@@ -6,22 +6,26 @@
   <style>
     :root { color-scheme: light dark; }
     html, body { margin: 0; padding: 0; height: 100%; font: 12px -apple-system, system-ui, sans-serif; background: Canvas; color: CanvasText; }
-    body { display: grid; grid-template-rows: 1fr auto; padding: 14px 16px; gap: 12px; box-sizing: border-box; }
+    body { display: grid; grid-template-rows: auto 1fr auto; padding: 14px 16px; gap: 12px; box-sizing: border-box; min-height: 0; }
     .head { display: flex; justify-content: space-between; align-items: baseline; }
     .title { font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; font-size: 0.75em; opacity: 0.55; }
     .drive-val { font-variant-numeric: tabular-nums; font-size: 1.1em; }
-    #xfer { width: 100%; height: 100%; display: block; border-radius: 6px; background: color-mix(in srgb, CanvasText 6%, Canvas); }
+    /* Canvas sits directly in the 1fr grid row with min-height: 0 so it
+       doesn't fight the grid for extra space (which produced an infinite
+       resize loop before). */
+    .xfer-wrap { position: relative; min-height: 0; }
+    #xfer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; border-radius: 6px; background: color-mix(in srgb, CanvasText 6%, Canvas); }
     .control { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
     .control label { font-size: 0.75em; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.05em; }
     .control cdp-slider { --cdp-label-width: 0; --cdp-value-width: 0; }
   </style>
 </head>
 <body>
-  <div>
-    <div class="head">
-      <span class="title">Fold function</span>
-      <span class="drive-val" id="driveVal">Drive 5.0×</span>
-    </div>
+  <div class="head">
+    <span class="title">Fold function — input (x) → output (y)</span>
+    <span class="drive-val" id="driveVal">Drive 5.0×</span>
+  </div>
+  <div class="xfer-wrap">
     <canvas id="xfer" width="800" height="500"></canvas>
   </div>
   <div class="control">
@@ -60,7 +64,19 @@
     // Canvas 2D can't parse `color-mix()` or the `CanvasText` keyword,
     // so we resolve the foreground color via getComputedStyle and use
     // globalAlpha for transparency.
-    function resolveFG() { return (CDP && CDP.theme === "dark") ? "rgb(232, 232, 232)" : "rgb(24, 24, 24)"; }
+    // Resolve CanvasText to an actual rgb() string via a hidden probe;
+    // canvas 2D can't parse the `CanvasText` keyword directly, and
+    // CDP.theme isn't always reliable (WebView can be in dark mode even
+    // when CDP reports 'light'). The probe always matches the real
+    // computed color-scheme.
+    function resolveFG() {
+      const probe = document.createElement('span');
+      probe.style.cssText = 'color: CanvasText; position: absolute; visibility: hidden;';
+      document.body.appendChild(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
+    }
     let FG = resolveFG();
     window.addEventListener('themechange', () => { FG = resolveFG(); schedule(); });
 

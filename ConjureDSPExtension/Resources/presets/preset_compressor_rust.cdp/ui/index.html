@@ -64,7 +64,18 @@
     // Canvas 2D can't parse `color-mix()` or the `CanvasText` keyword,
     // so we resolve the foreground color via getComputedStyle and use
     // globalAlpha for transparency.
-    function resolveFG() { return (CDP && CDP.theme === "dark") ? "rgb(232, 232, 232)" : "rgb(24, 24, 24)"; }
+    // Resolve CanvasText to an actual rgb() string via a hidden probe;
+    // canvas 2D can't parse the `CanvasText` keyword directly, and
+    // CDP.theme isn't always reliable (WebView can be in dark mode even
+    // when CDP reports 'light').
+    function resolveFG() {
+      const probe = document.createElement('span');
+      probe.style.cssText = 'color: CanvasText; position: absolute; visibility: hidden;';
+      document.body.appendChild(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
+    }
     let FG = resolveFG();
     window.addEventListener('themechange', () => { FG = resolveFG(); schedule(); });
 
