@@ -277,3 +277,224 @@ private struct ScriptSourceChangeMock {
     var processTimeMs: Double?
     var budgetMs: Double?
 }
+
+// =============================================================================
+// MARK: - JSON Schema draft 2020-12 wire-format regression tests
+//
+// Triggered by an Anthropic API rejection seen in the wild:
+//
+//   API Error: 400 tools.10.custom.input_schema: JSON schema is invalid.
+//   It must match JSON Schema draft 2020-12.
+//
+// Claude Code bundles every MCP-provided tool into the `tools` array of
+// each Anthropic API request and Anthropic rejects the whole request if
+// any `input_schema` is malformed. The most common ways to produce a
+// malformed schema from Swift Encodable:
+//
+//   - An `Int?` or `[String]?` field accidentally emitted as `null`
+//     instead of being omitted. The spec requires `minimum` to be a
+//     number and `required` to be an array; both reject `null`.
+//   - A numeric constraint (`minimum`/`maximum`) attached to a
+//     non-numeric type (e.g. `"type": "string", "minimum": 0`).
+//   - A type value that isn't one of the seven canonical keywords.
+//
+// These tests pin the encoding contract of `MCPProtocol.PropertySchema`
+// and `MCPProtocol.InputSchema`. The logic test target can't import the
+// AU extension, so we mirror those structs here with identical field
+// lists — Swift synthesizes Encodable the same way either side, so the
+// wire format is equivalent. When a field is added to the real structs,
+// mirror it here and extend these tests.
+// =============================================================================
+
+/// Local mirror of `MCPProtocol.PropertySchema`. Field list + Optional-
+/// ity must match exactly — that's the whole point of the pin.
+private struct PropertySchemaMirror: Encodable {
+    let type: String
+    let description: String
+    let minimum: Int?
+    let maximum: Int?
+}
+
+/// Local mirror of `MCPProtocol.InputSchema`.
+private struct InputSchemaMirror: Encodable {
+    let type: String
+    let properties: [String: PropertySchemaMirror]
+    let required: [String]?
+}
+
+/// Walk a decoded JSON tree and collect the key paths where a `NSNull`
+/// appears. Returns an empty array when there are no nulls anywhere,
+/// otherwise a human-readable dotted path per offense (e.g.
+/// `properties.index.minimum`).
+private func nullKeyPaths(in value: Any, prefix: String = "") -> [String] {
+    if value is NSNull { return [prefix.isEmpty ? "<root>" : prefix] }
+    if let dict = value as? [String: Any] {
+        return dict.flatMap { k, v in
+            nullKeyPaths(in: v, prefix: prefix.isEmpty ? k : "\(prefix).\(k)")
+        }
+    }
+    if let arr = value as? [Any] {
+        return arr.enumerated().flatMap { i, v in
+            nullKeyPaths(in: v, prefix: "\(prefix)[\(i)]")
+        }
+    }
+    return []
+}
+
+@Suite("MCP tool schemas — JSON Schema draft 2020-12 wire format")
+struct MCPSchemaWireFormatTests {
+
+    private func encodeAsJSON(_ value: any Encodable) throws -> [String: Any] {
+        let data = try JSONEncoder().encode(value)
+        let decoded = try JSONSerialization.jsonObject(with: data, options: [])
+        return try #require(decoded as? [String: Any])
+    }
+
+    // -- PropertySchema ------------------------------------------------
+
+    @Test("PropertySchema omits minimum/maximum when nil (draft 2020-12 rejects `null`)")
+    func propertyOmitsNilConstraints() throws {
+        let schema = PropertySchemaMirror(
+            type: "string", description: "anything", minimum: nil, maximum: nil
+        )
+        let json = try encodeAsJSON(schema)
+        #expect(json["type"] as? String == "string")
+        #expect(json["description"] as? String == "anything")
+        #expect(json["minimum"] == nil,
+                "minimum must be absent when unset — `null` is not a valid JSON Schema number")
+        #expect(json["maximum"] == nil,
+                "maximum must be absent when unset — `null` is not a valid JSON Schema number")
+        #expect(nullKeyPaths(in: json).isEmpty,
+                "no nulls allowed anywhere in a PropertySchema JSON tree")
+    }
+
+    @Test("PropertySchema emits numeric constraints when set")
+    func propertyEmitsNumericConstraints() throws {
+        let schema = PropertySchemaMirror(
+            type: "integer", description: "param index", minimum: 0, maximum: 15
+        )
+        let json = try encodeAsJSON(schema)
+        #expect(json["minimum"] as? Int == 0)
+        #expect(json["maximum"] as? Int == 15)
+    }
+
+    // -- InputSchema ---------------------------------------------------
+
+    @Test("InputSchema with no required fields omits the `required` key")
+    func inputOmitsNilRequired() throws {
+        let schema = InputSchemaMirror(
+            type: "object", properties: [:], required: nil
+        )
+        let json = try encodeAsJSON(schema)
+        #expect(json["type"] as? String == "object")
+        #expect(json["required"] == nil,
+                "required must be absent when unset — `null` is not a valid JSON Schema array")
+        #expect(nullKeyPaths(in: json).isEmpty)
+    }
+
+    @Test("InputSchema with required fields emits them as a JSON array")
+    func inputEmitsRequiredArray() throws {
+        let schema = InputSchemaMirror(
+            type: "object",
+            properties: [
+                "source": PropertySchemaMirror(type: "string", description: "code", minimum: nil, maximum: nil)
+            ],
+            required: ["source"]
+        )
+        let json = try encodeAsJSON(schema)
+        let req = try #require(json["required"] as? [String])
+        #expect(req == ["source"])
+    }
+
+    // -- Every real tool-shape we ship ---------------------------------
+    //
+    // Mirrors the fixture permutations actually present in
+    // MCPProtocol.tools. Each case produces a schema and asserts the
+    // encoded tree is null-free. Update when adding a new shape.
+
+    @Test("Every PropertySchema permutation we ship is null-free when encoded")
+    func allShapesAreNullFree() throws {
+        let fixtures: [PropertySchemaMirror] = [
+            // No constraints — used by most string/number/boolean props.
+            .init(type: "string", description: "preset name", minimum: nil, maximum: nil),
+            .init(type: "boolean", description: "scaffold UI", minimum: nil, maximum: nil),
+            .init(type: "number", description: "param value", minimum: nil, maximum: nil),
+            // With numeric constraints — used by set_parameter.index.
+            .init(type: "integer", description: "param index", minimum: 0, maximum: 15),
+        ]
+        for schema in fixtures {
+            let json = try encodeAsJSON(schema)
+            let nulls = nullKeyPaths(in: json)
+            #expect(nulls.isEmpty,
+                    "null leaked in PropertySchema(type=\(schema.type)) at: \(nulls)")
+        }
+    }
+
+    @Test("Every InputSchema shape we ship is null-free when encoded")
+    func allInputShapesAreNullFree() throws {
+        let scaffoldUI = PropertySchemaMirror(type: "boolean", description: "scaffold UI", minimum: nil, maximum: nil)
+        let paramName = PropertySchemaMirror(type: "string", description: "preset name", minimum: nil, maximum: nil)
+        let paramIndex = PropertySchemaMirror(type: "integer", description: "param index", minimum: 0, maximum: 15)
+        let paramValue = PropertySchemaMirror(type: "number", description: "value", minimum: nil, maximum: nil)
+        let topic = PropertySchemaMirror(type: "string", description: "docs topic", minimum: nil, maximum: nil)
+        let bundlePath = PropertySchemaMirror(type: "string", description: "bundle-relative path", minimum: nil, maximum: nil)
+        let fileContent = PropertySchemaMirror(type: "string", description: "file content", minimum: nil, maximum: nil)
+
+        let fixtures: [(String, InputSchemaMirror)] = [
+            // No-arg tools (list_presets, list_packages, etc.) — properties empty, required nil.
+            ("noArgs", .init(type: "object", properties: [:], required: nil)),
+
+            // Single required string — compile_and_run, get_docs, read_bundle_file.
+            ("singleString", .init(
+                type: "object",
+                properties: ["topic": topic],
+                required: ["topic"]
+            )),
+
+            // Required + optional — save_preset (name required, scaffold_ui optional).
+            ("reqAndOpt", .init(
+                type: "object",
+                properties: ["name": paramName, "scaffold_ui": scaffoldUI],
+                required: ["name"]
+            )),
+
+            // Two required strings — write_bundle_file (path + content).
+            ("twoStrings", .init(
+                type: "object",
+                properties: ["path": bundlePath, "content": fileContent],
+                required: ["path", "content"]
+            )),
+
+            // Numeric constraints — set_parameter (index has min/max, value is free number).
+            ("numericConstraints", .init(
+                type: "object",
+                properties: ["index": paramIndex, "value": paramValue],
+                required: ["index", "value"]
+            )),
+        ]
+
+        for (label, schema) in fixtures {
+            let json = try encodeAsJSON(schema)
+            let nulls = nullKeyPaths(in: json)
+            #expect(nulls.isEmpty,
+                    "null leaked in InputSchema fixture '\(label)' at: \(nulls)")
+            // Type must be "object" for every tool's input_schema (MCP requirement).
+            #expect(json["type"] as? String == "object")
+        }
+    }
+
+    @Test("`type` keyword is one of the draft 2020-12 canonical types")
+    func typesAreCanonical() throws {
+        let canonical: Set<String> = ["object", "string", "number", "integer", "boolean", "array", "null"]
+        let shapes: [PropertySchemaMirror] = [
+            .init(type: "string",  description: "s", minimum: nil, maximum: nil),
+            .init(type: "number",  description: "n", minimum: nil, maximum: nil),
+            .init(type: "integer", description: "i", minimum: 0,   maximum: 15),
+            .init(type: "boolean", description: "b", minimum: nil, maximum: nil),
+        ]
+        for s in shapes {
+            #expect(canonical.contains(s.type),
+                    "PropertySchema type \"\(s.type)\" is not a canonical JSON Schema type")
+        }
+    }
+}
