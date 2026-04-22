@@ -78,6 +78,9 @@ struct ConjureDSPExtensionMainView: View {
     @State private var showSpectrogram: Bool = false
     @State private var showChat: Bool = false
     @State private var terminalHasBeenOpened: Bool = false
+    /// Flips true the first time keyboard input reaches the terminal's
+    /// WebSocket — exposed as a hidden accessibility element for UI tests.
+    @State private var terminalFirstInputReceived: Bool = false
     @State private var showAIPromptTab: Bool = false
     @State private var chatWidth: CGFloat = 280
     @State private var isExporting: Bool = false
@@ -254,11 +257,24 @@ struct ConjureDSPExtensionMainView: View {
                             .accessibilityHidden(!showAIPromptTab)
 
                             if daemonChecker.isDaemonAvailable {
-                                TerminalView(colorScheme: colorScheme, appGroupContainerURL: appGroupContainerURL, instanceID: instanceID)
+                                TerminalView(
+                                    colorScheme: colorScheme,
+                                    appGroupContainerURL: appGroupContainerURL,
+                                    instanceID: instanceID,
+                                    onFirstInput: { terminalFirstInputReceived = true }
+                                )
                                     .accessibilityIdentifier("terminalPanel")
                                     .opacity(showAIPromptTab ? 0 : 1)
                                     .allowsHitTesting(!showAIPromptTab)
                                     .accessibilityHidden(showAIPromptTab)
+                                    .overlay(alignment: .topLeading) {
+                                        if terminalFirstInputReceived {
+                                            Color.clear
+                                                .frame(width: 1, height: 1)
+                                                .accessibilityIdentifier("terminalFirstInputReceived")
+                                                .accessibilityLabel("terminalFirstInputReceived")
+                                        }
+                                    }
                             } else {
                                 DaemonLaunchPromptView(colorScheme: colorScheme)
                                     .opacity(showAIPromptTab ? 0 : 1)
