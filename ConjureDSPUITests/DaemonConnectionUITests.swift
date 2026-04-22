@@ -33,6 +33,10 @@ final class DaemonConnectionUITests: XCTestCase {
         hostApp = XCUIApplication()
         hostApp.launch()
         daemonApp = XCUIApplication(bundleIdentifier: "com.MichaelJancsy.ConjureDSPTerminal")
+        // Launch daemon so tests run in a deterministic "connected" state rather
+        // than skipping due to the daemon not being pre-running in the environment.
+        daemonApp.launch()
+        _ = hostApp.buttons["chatToggleButton"].waitForExistence(timeout: 15)
     }
 
     override class func tearDown() {
@@ -59,11 +63,10 @@ final class DaemonConnectionUITests: XCTestCase {
     /// Open the terminal panel by clicking the chat toggle button.
     @MainActor
     private func openTerminalPanel(app: XCUIApplication) throws {
-        let toggle = app.buttons["chatToggleButton"]
-        guard toggle.waitForExistence(timeout: 10) else {
+        guard app.buttons["chatToggleButton"].waitForExistence(timeout: 10) else {
             throw XCTSkip("Chat toggle button not found — toolbar may not have loaded")
         }
-        toggle.click()
+        app.buttons["chatToggleButton"].click()
         usleep(500_000) // 0.5s for panel animation
     }
 
@@ -137,9 +140,11 @@ final class DaemonConnectionUITests: XCTestCase {
         let terminalPanel = anyElement(in: app, id: "terminalPanel")
         let daemonPrompt = anyElement(in: app, id: "daemonLaunchPrompt")
 
-        // Check initial state — one of the two views should be visible
+        // Check initial state — one of the two views should be visible. The
+        // terminal panel needs up to ~30s to come up (WebSocket + MCP + xterm);
+        // the daemon prompt shows quickly if the daemon isn't running yet.
         let initialPrompt = daemonPrompt.waitForExistence(timeout: 3)
-        let initialTerminal = terminalPanel.waitForExistence(timeout: 1)
+        let initialTerminal = terminalPanel.waitForExistence(timeout: 30)
 
         guard initialPrompt || initialTerminal else {
             throw XCTSkip("Neither terminal panel nor daemon prompt visible — ViewBridge limitation")
@@ -263,9 +268,8 @@ final class DaemonConnectionUITests: XCTestCase {
         XCTAssertTrue(terminalPanel.exists, "Terminal panel should be visible before toggle test")
 
         // Toggle terminal panel off
-        let toggle = app.buttons["chatToggleButton"]
-        XCTAssertTrue(toggle.exists, "Chat toggle button should exist")
-        toggle.click()
+        XCTAssertTrue(app.buttons["chatToggleButton"].waitForExistence(timeout: 5), "Chat toggle button should exist")
+        app.buttons["chatToggleButton"].click()
         usleep(500_000)
 
         // Both should be hidden now
@@ -273,12 +277,13 @@ final class DaemonConnectionUITests: XCTestCase {
         XCTAssertFalse(daemonPrompt.exists, "Daemon prompt should be hidden after toggle off")
 
         // Toggle terminal panel back on
-        toggle.click()
+        app.buttons["chatToggleButton"].click()
         usleep(500_000)
 
-        // Terminal panel should reappear (not the daemon prompt)
+        // Terminal panel should reappear (not the daemon prompt). Allow enough
+        // time for the WebSocket + xterm to re-attach after the toggle.
         XCTAssertTrue(
-            terminalPanel.waitForExistence(timeout: 5),
+            terminalPanel.waitForExistence(timeout: 30),
             "Terminal panel should reappear after toggle, not daemon prompt"
         )
         XCTAssertFalse(

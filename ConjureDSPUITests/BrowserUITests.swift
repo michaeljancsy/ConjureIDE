@@ -20,6 +20,7 @@ final class BrowserUITests: XCTestCase {
         super.setUp()
         sharedApp = XCUIApplication()
         sharedApp.launch()
+        _ = sharedApp.buttons["presetMenu"].waitForExistence(timeout: 15)
     }
 
     override class func tearDown() {

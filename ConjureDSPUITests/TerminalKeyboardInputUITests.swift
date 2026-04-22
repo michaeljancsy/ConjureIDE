@@ -26,6 +26,7 @@ final class TerminalKeyboardInputUITests: XCTestCase {
         hostApp = XCUIApplication()
         hostApp.launch()
         daemonApp = XCUIApplication(bundleIdentifier: "com.MichaelJancsy.ConjureDSPTerminal")
+        _ = hostApp.buttons["chatToggleButton"].waitForExistence(timeout: 15)
     }
 
     override class func tearDown() {
@@ -51,11 +52,10 @@ final class TerminalKeyboardInputUITests: XCTestCase {
         Self.daemonApp.launch()
 
         // Open the terminal panel
-        let toggle = app.buttons["chatToggleButton"]
-        guard toggle.waitForExistence(timeout: 10) else {
+        guard app.buttons["chatToggleButton"].waitForExistence(timeout: 10) else {
             throw XCTSkip("Chat toggle button not found — toolbar may not have loaded")
         }
-        toggle.click()
+        app.buttons["chatToggleButton"].click()
 
         let terminalPanel = app.descendants(matching: .any)["terminalPanel"].firstMatch
         guard terminalPanel.waitForExistence(timeout: 30) else {
@@ -90,6 +90,6 @@ final class TerminalKeyboardInputUITests: XCTestCase {
         )
 
         // Close panel to leave a clean state for other tests
-        if toggle.exists { toggle.click() }
+        if app.buttons["chatToggleButton"].exists { app.buttons["chatToggleButton"].click() }
     }
 }

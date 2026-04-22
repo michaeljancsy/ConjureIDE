@@ -13,11 +13,12 @@ extension XCTestCase {
 
     /// Click a toolbar button to open its popover, or skip if the button is not found.
     func openToolbarPopover(app: XCUIApplication, buttonId: String, timeout: TimeInterval = 10) throws {
-        let button = app.buttons[buttonId]
-        guard button.waitForExistence(timeout: timeout) else {
+        guard app.buttons[buttonId].waitForExistence(timeout: timeout) else {
             throw XCTSkip("\(buttonId) not found — toolbar may not have loaded")
         }
-        button.click()
+        // Re-query fresh so click() doesn't use the AX element token cached by
+        // waitForExistence — the AU extension may have rebuilt its view during init.
+        app.buttons[buttonId].click()
     }
 
     /// Dismiss any open popover by pressing Escape.

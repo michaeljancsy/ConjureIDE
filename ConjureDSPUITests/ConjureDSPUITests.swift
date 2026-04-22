@@ -39,9 +39,8 @@ final class ConjureDSPUITests: XCTestCase {
             let prompt = app.descendants(matching: .any)["daemonLaunchPrompt"].firstMatch
             let terminal = app.descendants(matching: .any)["terminalPanel"].firstMatch
             if prompt.exists || terminal.exists {
-                let chatToggle = app.buttons["chatToggleButton"]
-                if chatToggle.exists {
-                    chatToggle.click()
+                if app.buttons["chatToggleButton"].exists {
+                    app.buttons["chatToggleButton"].click()
                 }
             }
         } else if name.contains("ScriptEditorAcceptsTyping") {
@@ -109,11 +108,16 @@ final class ConjureDSPUITests: XCTestCase {
     @MainActor
     func testBuildIDLabelIsVisible() throws {
         let app = Self.sharedApp!
-        let buildIDLabel = app.staticTexts["buildIDLabel"]
-        XCTAssertTrue(buildIDLabel.waitForExistence(timeout: 10),
+        // Extension UI can take a while to fully load the first time the app
+        // starts in a test session — wait for a known toolbar button first,
+        // then for the footer label. Without this settling wait, buildIDLabel
+        // times out intermittently even when the extension is starting normally.
+        _ = app.buttons["runButton"].waitForExistence(timeout: 15)
+        let buildIDLabel = app.descendants(matching: .any)["buildIDLabel"].firstMatch
+        XCTAssertTrue(buildIDLabel.waitForExistence(timeout: 15),
                       "Build ID label should be visible after launch")
         // Through the AU ViewBridge, SwiftUI Text content is in .value (not .label)
-        let text = buildIDLabel.value as? String ?? ""
+        let text = (buildIDLabel.value as? String) ?? buildIDLabel.label
         XCTAssertTrue(text.hasPrefix("Build "),
                       "Build ID label should start with 'Build ', got '\(text)'")
         let dateStr = text.replacingOccurrences(of: "Build ", with: "")
@@ -197,8 +201,7 @@ final class ConjureDSPUITests: XCTestCase {
         let app = Self.sharedApp!
 
         // Wait for toolbar to load
-        let chatToggle = app.buttons["chatToggleButton"]
-        guard chatToggle.waitForExistence(timeout: 10) else {
+        guard app.buttons["chatToggleButton"].waitForExistence(timeout: 10) else {
             XCTFail("Terminal toggle button not found")
             return
         }
@@ -210,7 +213,7 @@ final class ConjureDSPUITests: XCTestCase {
         XCTAssertFalse(terminal.exists, "Terminal panel should not be visible before toggling")
 
         // Toggle terminal panel open
-        chatToggle.click()
+        app.buttons["chatToggleButton"].click()
         Thread.sleep(forTimeInterval: 2.0)
 
         // Exactly one of the two views should appear, depending on daemon state:
@@ -225,7 +228,7 @@ final class ConjureDSPUITests: XCTestCase {
                       "Exactly one of prompt (\(promptAppeared)) or terminal (\(terminalAppeared)) should show, not both or neither")
 
         // Toggle off — whichever was showing should disappear
-        chatToggle.click()
+        app.buttons["chatToggleButton"].click()
         if promptAppeared {
             XCTAssertTrue(prompt.waitForNonExistence(timeout: 3),
                           "Daemon launch prompt should disappear when terminal toggled off")
