@@ -36,12 +36,19 @@ Use the exact commands below for the chosen scope. Do not improvise paths.
 
 ### Terminal only
 
-Terminal/agent state lives under `~/Library/Application Support/ConjureDSP/` (not the App Group container — that's for presets, exports, bundled runtimes). See [PTYManager.swift:81-91](ConjureDSPTerminal/PTYManager.swift:81).
+Terminal/agent state is split between two locations:
+- **App Group container** (`~/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/`) — `startup-command` and `agent-mode`. Lives here because the sandboxed extension's Settings pane needs to read/write them, and the App Group container is the only path both the daemon and the sandboxed extension can touch.
+- **Application Support** (`~/Library/Application Support/ConjureDSP/`) — `agent-workspace/` (CLAUDE.md/GEMINI.md/AGENTS.md), `mcp-instances/`, `mcp-url.txt`. Daemon-only and agent-shell-only; the extension doesn't read them.
+
+The legacy locations of `startup-command`/`agent-mode` in Application Support are cleared too, in case you're resetting after a build that predates the sandbox fix.
 
 ```bash
+APP_GROUP="$HOME/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP"
 APP_SUPPORT="$HOME/Library/Application Support/ConjureDSP"
+rm -f  "$APP_GROUP/startup-command"   "$APP_GROUP/agent-mode"
 rm -f  "$APP_SUPPORT/startup-command" "$APP_SUPPORT/agent-mode"
 rm -rf "$APP_SUPPORT/mcp-instances"   "$APP_SUPPORT/agent-workspace"
+rm -f  "$APP_SUPPORT/mcp-url.txt"
 ```
 
 ### Terminal + per-agent MCP entries
@@ -49,9 +56,7 @@ Run the Terminal-only block above, then:
 ```bash
 claude mcp remove conjuredsp 2>/dev/null || true
 gemini mcp remove conjuredsp 2>/dev/null || true
-# codex: no reliable CLI for http servers yet — check ~/.codex/config.toml manually
-grep -l "mcp_servers.conjuredsp" ~/.codex/config.toml 2>/dev/null && \
-  echo "NOTE: edit ~/.codex/config.toml and remove [mcp_servers.conjuredsp] block"
+codex mcp remove conjuredsp 2>/dev/null || true
 ```
 
 ### Terminal + UserDefaults

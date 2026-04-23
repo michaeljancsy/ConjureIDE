@@ -15,7 +15,12 @@ enum MCPProtocol {
 
     struct JSONRPCRequest: Codable {
         let jsonrpc: String  // "2.0"
-        let id: JSONRPCId
+        /// Optional: JSON-RPC notifications (per the 2.0 spec) omit `id` and
+        /// expect NO reply. Codex's streamable-HTTP client sends
+        /// `notifications/initialized` this way after initialize. If the field
+        /// were non-optional, decoding would throw "parse error" and the
+        /// client would see its transport channel close.
+        let id: JSONRPCId?
         let method: String
         let params: [String: AnyCodable]?
     }
