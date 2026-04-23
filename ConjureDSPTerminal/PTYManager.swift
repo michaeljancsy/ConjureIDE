@@ -139,8 +139,25 @@ final class PTYManager {
         writeAgentWorkspace()
         catalog.migrateLegacyAgentModeIfNeeded()
 
+        // Detect agents and build setup BEFORE fork (pure FS ops — safe here, forbidden after fork).
+        // Injected via ZDOTDIR so setup sources silently as part of zsh's own startup;
+        // no PTY writes or echo manipulation needed.
+        let detected = catalog.detectAllAgents()
+        let resolution = catalog.resolveStartup(detected: detected)
+        let mcpURL = mcpServerPort.map { "http://localhost:\($0)/mcp" } ?? "http://localhost:<port>/mcp"
+        try? mcpURL.write(toFile: Self.mcpUrlFilePath, atomically: true, encoding: .utf8)
+        let modeSetup = buildModeSetupCommands(detected: detected)
+        let setupPath = NSTemporaryDirectory()
+            + "conjuredsp-setup-\(ProcessInfo.processInfo.processIdentifier)-\(UInt64.random(in: 0..<UInt64.max)).sh"
+        do {
+            try modeSetup.write(toFile: setupPath, atomically: true, encoding: .utf8)
+        } catch {
+            ptyLog.warning("Failed to write modeSetup file: \(error.localizedDescription, privacy: .public)")
+        }
+        let zdotdir = createZdotdir(setupPath: setupPath)
+
         // Determine user's shell
-        let env = buildEnvironment()
+        let env = buildEnvironment(zdotdir: zdotdir)
         let shellPath = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
 
         // Login shell: argv[0] prefixed with "-" tells the shell to source login profiles
@@ -221,40 +238,10 @@ final class PTYManager {
         catalog.writeDiagnostics(
             to: AppGroupContainer.url.appendingPathComponent("pty-diag.txt"),
             realHome: Self.realHomeDirectory)
-        let detected = catalog.detectAllAgents()
-        let resolution = catalog.resolveStartup(detected: detected)
-        let mcpURL = mcpServerPort.map { "http://localhost:\($0)/mcp" } ?? "http://localhost:<port>/mcp"
-        // Publish the URL for shell-side conjure-mcp-connect-* to read. The file
-        // is 0600 and rewritten every session.
-        try? mcpURL.write(toFile: Self.mcpUrlFilePath, atomically: true, encoding: .utf8)
-        let modeSetup = buildModeSetupCommands(detected: detected)
 
-        // Write modeSetup to a per-session tmp file and `source` it from the shell —
-        // much cleaner than pasting ~2KB of shell functions into the PTY (avoids TTY
-        // echo spam AND any zsh parser edge cases around complex function definitions).
-        let setupPath = NSTemporaryDirectory()
-            + "conjuredsp-setup-\(ProcessInfo.processInfo.processIdentifier)-\(UInt64.random(in: 0..<UInt64.max)).sh"
-        do {
-            try modeSetup.write(toFile: setupPath, atomically: true, encoding: .utf8)
-        } catch {
-            ptyLog.warning("Failed to write modeSetup file: \(error.localizedDescription, privacy: .public)")
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            guard let self else { return }
-            // Disable the TTY's input echo NOW (not earlier — zsh's login-shell
-            // initialization, /etc/zprofile etc., reapplies the default termios
-            // after forkpty, so a disable in start() gets overridden by the time
-            // we write here). Each launch/fallback line in applyResolution appends
-            // `stty echo` so the user's post-agent prompt has echo back on.
-            self.disablePTYEcho()
-            // Source the setup file silently (defines aliases + conjure-use-* + picker fn)
-            // then delete it. No `clear` here — it races with onDisplayText and would wipe
-            // the install/manual banner before the user sees it.
-            self.write("source \(self.shellQuote(setupPath)) 2>/dev/null; rm -f \(self.shellQuote(setupPath)) 2>/dev/null\n")
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                self?.applyResolution(resolution, mcpURL: mcpURL)
-            }
+        // Setup already injected via ZDOTDIR — apply resolution immediately.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.applyResolution(resolution, mcpURL: mcpURL)
         }
     }
 
@@ -276,24 +263,6 @@ final class PTYManager {
         launchQueue.flush()
     }
 
-    /// Turn off the ECHO flag on the master fd so writes from the daemon don't get
-    /// echoed back as if the user were typing them. Called once per session, right
-    /// before we begin writing setup/launch bytes. The shell-side `stty echo` that
-    /// each branch of `applyResolution` appends to its launch line is what eventually
-    /// restores echo for the post-agent prompt.
-    private func disablePTYEcho() {
-        guard masterFD >= 0 else { return }
-        var tios = termios()
-        guard tcgetattr(masterFD, &tios) == 0 else {
-            ptyLog.warning("tcgetattr failed: \(String(cString: strerror(errno)), privacy: .public)")
-            return
-        }
-        tios.c_lflag &= ~tcflag_t(ECHO | ECHOE | ECHOK | ECHONL)
-        if tcsetattr(masterFD, TCSANOW, &tios) != 0 {
-            ptyLog.warning("tcsetattr failed: \(String(cString: strerror(errno)), privacy: .public)")
-        }
-    }
-
     /// Execute the side-effects for a `StartupResolution`: emit banners and
     /// control messages, and write the launch command into the PTY. MCP
     /// wire-up for gemini/codex runs shell-side (via `conjure-mcp-connect-*`
@@ -301,10 +270,6 @@ final class PTYManager {
     /// node-shebang CLIs itself because launchd's PATH excludes the user's
     /// Node install. See `buildModeSetupCommands()` for the shell helpers.
     private func applyResolution(_ resolution: StartupResolution, mcpURL: String) {
-        // Shell fragment that restores TTY echo for the post-agent prompt.
-        // Appended to every command line we write while echo is disabled.
-        let restoreEcho = "stty echo 2>/dev/null"
-
         switch resolution {
         case .runCommand(let cmd, let firstTokenAgent):
             let connect = firstTokenAgent.map { "conjure-mcp-connect-\($0.name); " } ?? ""
@@ -315,7 +280,7 @@ final class PTYManager {
                     "agent": firstTokenAgent?.name ?? "custom",
                     "cmd": cmd,
                 ])
-                self?.writeLaunch("\(fullCmd); \(restoreEcho)\n")
+                self?.writeLaunch("\(fullCmd)\n")
             }
 
         case .autoLaunch(let agent):
@@ -323,21 +288,19 @@ final class PTYManager {
             let fullCmd = wrapInWorkspace("conjure-mcp-connect-\(agent.name); \(agent.name)", isExec: false)
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?(["type": "agentLaunching", "agent": agent.name, "cmd": agent.name])
-                self?.writeLaunch("\(fullCmd); \(restoreEcho)\n")
+                self?.writeLaunch("\(fullCmd)\n")
             }
 
         case .picker(let agents):
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?(["type": "agentPicker", "agents": agents.map { $0.name }])
-                // Picker needs echo on so the user can see what they type at the `> ` prompt.
-                self?.writeLaunch("\(restoreEcho); __conjuredsp_pick_agent\n")
+                self?.writeLaunch("__conjuredsp_pick_agent\n")
             }
 
         case .noAgents:
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.onControlMessage?(["type": "noAgentsInstalled"])
-                self.writeLaunch("\(restoreEcho)\n")
                 self.onDisplayText?(self.buildNoAgentsBanner(mcpURL: mcpURL))
             }
 
@@ -350,7 +313,6 @@ final class PTYManager {
                         "agents": newlyAvailable.map { $0.name },
                     ])
                 }
-                self.writeLaunch("\(restoreEcho)\n")
                 self.onDisplayText?(self.buildManualBanner(mcpURL: mcpURL, newlyAvailable: newlyAvailable))
             }
 
@@ -358,7 +320,6 @@ final class PTYManager {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.onControlMessage?(["type": "agentMissing", "agent": name])
-                self.writeLaunch("\(restoreEcho)\n")
                 self.onDisplayText?(self.buildAgentMissingBanner(
                     name: name, others: others, mcpURL: mcpURL))
             }
@@ -487,9 +448,40 @@ final class PTYManager {
         }
     }
 
+    // MARK: - ZDOTDIR injection
+
+    /// Create a temp ZDOTDIR containing a `.zshrc` that sources the user's real `~/.zshrc`
+    /// then our ConjureDSP setup, then self-destructs. Using ZDOTDIR lets setup run silently
+    /// as part of zsh's own startup — no PTY writes, no echo manipulation needed.
+    private func createZdotdir(setupPath: String) -> String? {
+        let dir = NSTemporaryDirectory()
+            + "conjuredsp-zdotdir-\(ProcessInfo.processInfo.processIdentifier)-\(UInt64.random(in: 0..<UInt64.max))"
+        do {
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: false)
+        } catch {
+            ptyLog.warning("Failed to create ZDOTDIR: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        let zshrc = """
+        [ -f "$HOME/.zshrc" ] && source "$HOME/.zshrc"
+        source \(shellQuote(setupPath)) 2>/dev/null
+        rm -f \(shellQuote(setupPath)) 2>/dev/null
+        rm -rf "$ZDOTDIR" 2>/dev/null
+        unset ZDOTDIR
+        """
+        do {
+            try zshrc.write(toFile: dir + "/.zshrc", atomically: true, encoding: .utf8)
+        } catch {
+            ptyLog.warning("Failed to write ZDOTDIR/.zshrc: \(error.localizedDescription, privacy: .public)")
+            try? FileManager.default.removeItem(atPath: dir)
+            return nil
+        }
+        return dir
+    }
+
     // MARK: - Environment
 
-    private func buildEnvironment() -> [String] {
+    private func buildEnvironment(zdotdir: String? = nil) -> [String] {
         var env: [String: String] = [:]
 
         let inheritKeys = ["USER", "PATH", "SHELL", "LANG", "TERM", "TMPDIR",
@@ -505,6 +497,10 @@ final class PTYManager {
 
         if env["PATH"] == nil {
             env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin"
+        }
+
+        if let zdotdir {
+            env["ZDOTDIR"] = zdotdir
         }
 
         return env.map { "\($0.key)=\($0.value)" }
