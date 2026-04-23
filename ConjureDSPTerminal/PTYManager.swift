@@ -202,11 +202,23 @@ final class PTYManager {
         let mcpURL = mcpServerPort.map { "http://localhost:\($0)/mcp" } ?? "http://localhost:<port>/mcp"
         let modeSetup = buildModeSetupCommands(detected: detected)
 
+        // Write modeSetup to a per-session tmp file and `source` it from the shell —
+        // much cleaner than pasting ~2KB of shell functions into the PTY (avoids TTY
+        // echo spam AND any zsh parser edge cases around complex function definitions).
+        let setupPath = NSTemporaryDirectory()
+            + "conjuredsp-setup-\(ProcessInfo.processInfo.processIdentifier)-\(UInt64.random(in: 0..<UInt64.max)).sh"
+        do {
+            try modeSetup.write(toFile: setupPath, atomically: true, encoding: .utf8)
+        } catch {
+            ptyLog.warning("Failed to write modeSetup file: \(error.localizedDescription, privacy: .public)")
+        }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }
-            self.write(modeSetup + "\n")
-            // Run MCP wire-up on a background queue so subprocess latency doesn't
-            // block the main queue.
+            // Source the setup file silently (defines aliases + conjure-use-* + picker fn)
+            // then delete it. No `clear` here — it races with onDisplayText and would wipe
+            // the install/manual banner before the user sees it.
+            self.write("source \(self.shellQuote(setupPath)) 2>/dev/null; rm -f \(self.shellQuote(setupPath)) 2>/dev/null\n")
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 self?.applyResolution(resolution, mcpURL: mcpURL)
             }
@@ -641,27 +653,34 @@ final class PTYManager {
         let useExternal = "conjure-use-external() { conjure-use-manual; }"
 
         // Interactive picker — numbered prompt that writes the choice and exec's the agent.
-        // Only includes options for agents we actually detected.
-        var cases: [String] = []
-        var options: [String] = []
+        // Only emit options for agents we actually detected.
+        //
+        // All options are rendered as a single `printf` argument so the function body
+        // is plain shell (no bare `1) claude` lines, which would read as case-pattern
+        // syntax outside a case block and break the function definition).
+        var menuLines: [String] = []
+        var caseLines: [String] = []
         var idx = 1
         for agent in detected {
-            options.append("  \(idx)) \(agent.name)")
-            cases.append("    \(idx)) conjure-use-\(agent.name) && cd \(workspace) && exec \(agent.name) ;;")
+            menuLines.append("  \(idx)) \(agent.name)")
+            caseLines.append("    \(idx)) conjure-use-\(agent.name) && cd \(workspace) && exec \(agent.name) ;;")
             idx += 1
         }
-        options.append("  \(idx)) just a shell")
-        cases.append("    \(idx)) conjure-use-manual ;;")
-        cases.append("    *) printf '\\033[33mUnknown choice — staying in shell.\\033[0m\\n'; conjure-use-manual ;;")
+        menuLines.append("  \(idx)) just a shell")
+        caseLines.append("    \(idx)) conjure-use-manual ;;")
+        caseLines.append("    *) printf '\\033[33mUnknown choice — staying in shell.\\033[0m\\n'; conjure-use-manual ;;")
 
+        // Build the picker as one printf of the full menu, then read + case. Each line
+        // of the function body is a single valid shell command, avoiding zsh's
+        // incremental parser tripping into `function quote>` continuations.
+        let menuStr = menuLines.joined(separator: "\\n") + "\\n"
+        let caseBody = caseLines.joined(separator: "\n")
         let pickerFn = """
         __conjuredsp_pick_agent() {
-          printf '\\033[1;36mMultiple agents detected — choose one:\\033[0m\\n'
-        \(options.joined(separator: "\n"))
-          printf '> '
+          printf '\\033[1;36mMultiple agents detected — choose one:\\033[0m\\n\(menuStr)> '
           read choice
           case "$choice" in
-        \(cases.joined(separator: "\n"))
+        \(caseBody)
           esac
         }
         """

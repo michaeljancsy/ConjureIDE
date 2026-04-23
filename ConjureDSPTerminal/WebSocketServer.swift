@@ -181,16 +181,15 @@ final class WebSocketServer {
         // Pending banner/control message flush is deferred until the client
         // sends its first WebSocket frame (verifying handshake complete).
         // See verifyAndFlushIfNeeded called from receiveFromClient.
+        //
+        // We do NOT force-evict un-verified clients on a timer: real xterm
+        // clients have taken longer than expected to send their first frame
+        // in some configurations, and killing them causes the extension to
+        // think the daemon is down. Zombies accumulate in the raw `clients`
+        // dict, but they're excluded from every broadcast (we only iterate
+        // `verifiedClients`), so their impact is bounded. They get cleaned
+        // up via the error path of subsequent send attempts.
         receiveFromClient(connection, id: id)
-
-        // Evict un-verified clients after 5s. Real xterm clients send a resize
-        // frame on socket.onopen (well under 5s); raw TCP probes never send
-        // anything and would otherwise sit in the clients dict forever.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-            guard let self, self.clients[id] != nil, !self.verifiedClients.contains(id) else { return }
-            wsLog.debug("Evicting un-verified client after 5s (likely a TCP probe)")
-            self.removeClient(id)
-        }
     }
 
     private func removeClient(_ id: ObjectIdentifier) {
