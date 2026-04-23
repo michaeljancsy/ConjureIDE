@@ -90,6 +90,14 @@ final class PTYManager {
     static let agentWorkspacePath: String =
         realHomeDirectory + "/Library/Application Support/ConjureDSP/agent-workspace"
 
+    /// Path the daemon writes the current session's MCP URL to on every `start()`.
+    /// Shell-side `conjure-mcp-connect-*` functions read this to wire up agent
+    /// MCP configs with the right port — the daemon cannot reliably run the
+    /// agent CLIs itself because those CLIs are node shebang scripts and the
+    /// daemon's launchd-inherited PATH does not include the user's Node install.
+    static let mcpUrlFilePath: String =
+        realHomeDirectory + "/Library/Application Support/ConjureDSP/mcp-url.txt"
+
     /// Detection + resolution delegate (testable in isolation via `AgentCatalog`).
     private lazy var catalog: AgentCatalog = AgentCatalog(
         agents: AgentCatalog.defaultAgents(homeDirectory: Self.realHomeDirectory),
@@ -213,6 +221,9 @@ final class PTYManager {
         let detected = catalog.detectAllAgents()
         let resolution = catalog.resolveStartup(detected: detected)
         let mcpURL = mcpServerPort.map { "http://localhost:\($0)/mcp" } ?? "http://localhost:<port>/mcp"
+        // Publish the URL for shell-side conjure-mcp-connect-* to read. The file
+        // is 0600 and rewritten every session.
+        try? mcpURL.write(toFile: Self.mcpUrlFilePath, atomically: true, encoding: .utf8)
         let modeSetup = buildModeSetupCommands(detected: detected)
 
         // Write modeSetup to a per-session tmp file and `source` it from the shell —
@@ -280,8 +291,12 @@ final class PTYManager {
         }
     }
 
-    /// Execute the side-effects for a `StartupResolution`: run any needed `mcp add`,
-    /// emit banners and control messages, and write the launch command into the PTY.
+    /// Execute the side-effects for a `StartupResolution`: emit banners and
+    /// control messages, and write the launch command into the PTY. MCP
+    /// wire-up for gemini/codex runs shell-side (via `conjure-mcp-connect-*`
+    /// functions defined in modeSetup) — the daemon cannot reliably spawn
+    /// node-shebang CLIs itself because launchd's PATH excludes the user's
+    /// Node install. See `buildModeSetupCommands()` for the shell helpers.
     private func applyResolution(_ resolution: StartupResolution, mcpURL: String) {
         // Shell fragment that restores TTY echo for the post-agent prompt.
         // Appended to every command line we write while echo is disabled.
@@ -289,10 +304,8 @@ final class PTYManager {
 
         switch resolution {
         case .runCommand(let cmd, let firstTokenAgent):
-            if let agent = firstTokenAgent {
-                ensureMCPConnected(agent: agent.name, binaryPath: agent.binaryPath, mcpURL: mcpURL)
-            }
-            let fullCmd = wrapInWorkspace(cmd, isExec: false)
+            let connect = firstTokenAgent.map { "conjure-mcp-connect-\($0.name); " } ?? ""
+            let fullCmd = wrapInWorkspace("\(connect)\(cmd)", isExec: false)
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?([
                     "type": "agentLaunching",
@@ -303,9 +316,8 @@ final class PTYManager {
             }
 
         case .autoLaunch(let agent):
-            ensureMCPConnected(agent: agent.name, binaryPath: agent.binaryPath, mcpURL: mcpURL)
             catalog.writeStartupCommand(agent.name)
-            let fullCmd = wrapInWorkspace(agent.name, isExec: false)
+            let fullCmd = wrapInWorkspace("conjure-mcp-connect-\(agent.name); \(agent.name)", isExec: false)
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?(["type": "agentLaunching", "agent": agent.name, "cmd": agent.name])
                 self?.writeLaunch("\(fullCmd); \(restoreEcho)\n")
@@ -438,54 +450,6 @@ final class PTYManager {
         childPID = 0
         state = .exited(exitCode)
         onStateChange?(.exited(exitCode))
-    }
-
-    // MARK: - MCP wire-up
-
-    /// Make sure the chosen agent has a ConjureDSP MCP entry pointing at our current URL.
-    /// Remove-then-add so the URL is fresh even if the port changed since last session.
-    /// Claude is handled per-invocation via --mcp-config so it short-circuits.
-    /// Errors are logged and ignored — launch continues regardless.
-    private func ensureMCPConnected(agent: String, binaryPath: String, mcpURL: String) {
-        switch agent {
-        case "claude":
-            return
-        case "gemini":
-            runSync([binaryPath, "mcp", "remove", "conjuredsp"])
-            let (ok, out) = runSync([binaryPath, "mcp", "add", "conjuredsp", mcpURL, "-t", "http"])
-            if !ok {
-                ptyLog.warning("gemini mcp add failed: \(out, privacy: .public)")
-            }
-        case "codex":
-            runSync([binaryPath, "mcp", "remove", "conjuredsp"])
-            let (ok, out) = runSync([binaryPath, "mcp", "add", "conjuredsp", "--url", mcpURL])
-            if !ok {
-                ptyLog.warning("codex mcp add failed: \(out, privacy: .public)")
-            }
-        default:
-            return
-        }
-    }
-
-    /// Run a subprocess to completion and return (success, combined stdout/stderr).
-    @discardableResult
-    private func runSync(_ argv: [String]) -> (ok: Bool, output: String) {
-        guard let first = argv.first else { return (false, "empty argv") }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: first)
-        process.arguments = Array(argv.dropFirst())
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        do {
-            try process.run()
-        } catch {
-            return (false, "launch failed: \(error.localizedDescription)")
-        }
-        process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8) ?? ""
-        return (process.terminationStatus == 0, output)
     }
 
     // MARK: - Workspace (CLAUDE.md / GEMINI.md / AGENTS.md)
@@ -685,6 +649,41 @@ final class PTYManager {
         let prefPath = shellQuote(Self.startupCommandFilePath)
         let prefDir = shellQuote((Self.startupCommandFilePath as NSString).deletingLastPathComponent)
         let workspace = shellQuote(Self.agentWorkspacePath)
+        let mcpUrlFile = shellQuote(Self.mcpUrlFilePath)
+
+        // conjure-mcp-connect-<name> shell functions. Called before each agent
+        // launch to refresh that agent's ConjureDSP MCP entry with the current
+        // session's URL. Runs in the user's shell so PATH is right (these CLIs
+        // are typically node shebang scripts, and the daemon cannot reliably
+        // find node itself). Failures print a diagnostic but do not block the
+        // agent launch — the agent just runs without MCP tools.
+        let connectFns = """
+        conjure-mcp-connect-claude() { : ; }
+        conjure-mcp-connect-gemini() {
+          local url
+          url=$(cat \(mcpUrlFile) 2>/dev/null)
+          if [ -z "$url" ]; then
+            printf '\\033[33mConjureDSP MCP URL not found — skipping gemini wire-up.\\033[0m\\n' >&2
+            return 0
+          fi
+          gemini mcp remove -s user conjuredsp >/dev/null 2>&1
+          if ! gemini mcp add -s user -t http conjuredsp "$url" >/dev/null 2>&1; then
+            printf '\\033[33mgemini mcp add failed — run `gemini mcp add -s user -t http conjuredsp %s` manually.\\033[0m\\n' "$url" >&2
+          fi
+        }
+        conjure-mcp-connect-codex() {
+          local url
+          url=$(cat \(mcpUrlFile) 2>/dev/null)
+          if [ -z "$url" ]; then
+            printf '\\033[33mConjureDSP MCP URL not found — skipping codex wire-up.\\033[0m\\n' >&2
+            return 0
+          fi
+          # codex CLI's `mcp add` is stdio-only in current releases. HTTP MCP
+          # for codex requires editing ~/.codex/config.toml directly. Surface
+          # the action to the user rather than guessing at file edits.
+          printf '\\033[33mcodex does not yet support HTTP MCP via CLI. Add the following to ~/.codex/config.toml:\\n[mcp_servers.conjuredsp]\\nurl = "%s"\\033[0m\\n' "$url" >&2
+        }
+        """
 
         // Aliases: resolve each agent to its full path so the shell finds it regardless
         // of PATH. Claude gets --mcp-config and --allowedTools baked in.
@@ -702,7 +701,7 @@ final class PTYManager {
         // Per-agent switch functions. Writes startup-command and prints a confirmation.
         func switcher(_ name: String) -> String {
             return """
-            conjure-use-\(name)() { mkdir -p \(prefDir); printf '%s\\n' '\(name)' > \(prefPath); printf '\\033[32m\(name) will auto-launch next session. Restart the terminal to apply.\\033[0m\\n'; }
+            conjure-use-\(name)() { mkdir -p \(prefDir); printf '%s\\n' '\(name)' > \(prefPath); printf '\\033[32m\(name) will auto-start next session. You can adjust this preference in Settings.\\033[0m\\n'; }
             """
         }
 
@@ -710,7 +709,7 @@ final class PTYManager {
         let useGemini = switcher("gemini")
         let useCodex = switcher("codex")
         let useManual = """
-        conjure-use-manual() { mkdir -p \(prefDir); printf '%s\\n' '\(catalog.manualSentinel)' > \(prefPath); printf '\\033[32mManual mode — no auto-launch next session. Restart the terminal to apply.\\033[0m\\n'; }
+        conjure-use-manual() { mkdir -p \(prefDir); printf '%s\\n' '\(catalog.manualSentinel)' > \(prefPath); printf '\\033[32mManual mode — no auto-start next session. You can adjust this preference in Settings.\\033[0m\\n'; }
         """
         // Back-compat alias for the old external name.
         let useExternal = "conjure-use-external() { conjure-use-manual; }"
@@ -726,7 +725,7 @@ final class PTYManager {
         var idx = 1
         for agent in detected {
             menuLines.append("  \(idx)) \(agent.name)")
-            caseLines.append("    \(idx)) conjure-use-\(agent.name) && cd \(workspace) && exec \(agent.name) ;;")
+            caseLines.append("    \(idx)) conjure-use-\(agent.name); conjure-mcp-connect-\(agent.name); cd \(workspace) && exec \(agent.name) ;;")
             idx += 1
         }
         menuLines.append("  \(idx)) just a shell")
@@ -748,7 +747,7 @@ final class PTYManager {
         }
         """
 
-        return (aliasLines + [useClaude, useGemini, useCodex, useManual, useExternal, pickerFn])
+        return (aliasLines + [connectFns, useClaude, useGemini, useCodex, useManual, useExternal, pickerFn])
             .joined(separator: "\n")
     }
 
