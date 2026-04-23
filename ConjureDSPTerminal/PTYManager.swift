@@ -687,7 +687,13 @@ final class PTYManager {
 
         // Aliases: resolve each agent to its full path so the shell finds it regardless
         // of PATH. Claude gets --mcp-config and --allowedTools baked in.
+        //
+        // Also record per-agent "launch strings" — the fully-expanded command used
+        // by the picker's `exec` call sites. `exec <alias-name>` inside a function
+        // body does NOT expand the alias (verified in zsh), so we can't rely on
+        // alias expansion at exec time. Inline the expanded form in the case line.
         var aliasLines: [String] = []
+        var launchStrings: [String: String] = [:]
         for agent in detected {
             let aliasValue: String
             if agent.name == "claude", let mcpPath = mcpConfigPath {
@@ -696,6 +702,7 @@ final class PTYManager {
                 aliasValue = shellQuote(agent.binaryPath)
             }
             aliasLines.append("alias \(agent.name)=\(shellQuote(aliasValue))")
+            launchStrings[agent.name] = aliasValue
         }
 
         // Per-agent switch functions. Writes startup-command and prints a confirmation.
@@ -725,7 +732,8 @@ final class PTYManager {
         var idx = 1
         for agent in detected {
             menuLines.append("  \(idx)) \(agent.name)")
-            caseLines.append("    \(idx)) conjure-use-\(agent.name); conjure-mcp-connect-\(agent.name); cd \(workspace) && exec \(agent.name) ;;")
+            let launch = launchStrings[agent.name] ?? shellQuote(agent.binaryPath)
+            caseLines.append("    \(idx)) conjure-use-\(agent.name); conjure-mcp-connect-\(agent.name); cd \(workspace) && exec \(launch) ;;")
             idx += 1
         }
         menuLines.append("  \(idx)) just a shell")
