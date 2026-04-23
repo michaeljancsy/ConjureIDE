@@ -90,7 +90,7 @@ struct ConjureDSPExtensionMainView: View {
     /// Each appears as a hidden `terminalAgentInstalled_<name>` marker for UI tests.
     @State private var terminalInstalledAgents: Set<String> = []
     @State private var showAIPromptTab: Bool = false
-    @State private var chatWidth: CGFloat = 280
+    @State private var chatWidth: CGFloat = 360
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
     @State private var showExportAlert: Bool = false
@@ -341,7 +341,7 @@ struct ConjureDSPExtensionMainView: View {
                     .gesture(
                         DragGesture()
                             .onChanged { value in
-                                chatWidth = max(200, min(450, chatWidth + value.translation.width))
+                                chatWidth = max(200, min(600, chatWidth + value.translation.width))
                             }
                     )
                     .onHover { hovering in
