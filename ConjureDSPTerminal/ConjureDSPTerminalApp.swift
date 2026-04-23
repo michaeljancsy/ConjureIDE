@@ -303,6 +303,14 @@ class TerminalAppServer {
             }
         }
 
+        // PTYManager queries verified-client count to decide whether to write the
+        // launch command now or queue it. Capturing `ws` weakly; if the server is
+        // gone the answer is "no client".
+        p.hasVerifiedClient = { [weak ws] in
+            guard let ws else { return false }
+            return ws.clientCount > 0
+        }
+
         ws.onClientCountChange = { [weak p] count in
             guard let p else { return }
             if count > 0 {
@@ -310,6 +318,11 @@ class TerminalAppServer {
                 case .idle, .exited(_):
                     p.start()
                 case .running:
+                    // A client just verified. Start the PTY if needed, OR if already
+                    // running flush any queued launch command (for the picker case
+                    // and banner cases where the launch was deferred until verify)
+                    // and SIGWINCH the child so it redraws.
+                    p.flushPendingLaunch()
                     p.sendSIGWINCH()
                 case .error:
                     break

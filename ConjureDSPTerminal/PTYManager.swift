@@ -38,11 +38,24 @@ final class PTYManager {
     /// Called to send a JSON control message to the terminal JS bridge.
     var onControlMessage: (([String: Any]) -> Void)?
 
+    /// Query: is at least one verified WebSocket client currently connected?
+    /// Used by applyResolution to decide whether to write the launch command
+    /// immediately or queue it until a client connects.
+    var hasVerifiedClient: (() -> Bool)?
+
     /// The MCP server port that agents should connect to.
     var mcpServerPort: UInt16?
 
     /// Path to the MCP config file for claude's --mcp-config flag.
     private var mcpConfigPath: String?
+
+    /// Queue for the launch command. Enqueuing routes to an immediate PTY
+    /// write if a verified xterm is connected, or parks the command until
+    /// `flushPendingLaunch()` is called. See LaunchQueue.swift for rationale.
+    private lazy var launchQueue: LaunchQueue = LaunchQueue(
+        isConnected: { [weak self] in self?.hasVerifiedClient?() ?? false },
+        deliver: { [weak self] cmd in self?.write(cmd) }
+    )
 
     private var masterFD: Int32 = -1
     private var childPID: pid_t = 0
@@ -231,6 +244,24 @@ final class PTYManager {
         }
     }
 
+    /// Route a launch command through the LaunchQueue — writes immediately
+    /// if a verified xterm is connected, queues otherwise.
+    private func writeLaunch(_ cmd: String) {
+        let wasPending = launchQueue.hasPending
+        launchQueue.enqueue(cmd)
+        if launchQueue.hasPending && !wasPending {
+            ptyLog.info("Launch command queued — waiting for xterm to verify")
+        }
+    }
+
+    /// Called by the TerminalApp wiring when a client verifies. Drains any
+    /// queued launch command. Idempotent.
+    func flushPendingLaunch() {
+        guard launchQueue.hasPending else { return }
+        ptyLog.info("Flushing queued launch command")
+        launchQueue.flush()
+    }
+
     /// Turn off the ECHO flag on the master fd so writes from the daemon don't get
     /// echoed back as if the user were typing them. Called once per session, right
     /// before we begin writing setup/launch bytes. The shell-side `stty echo` that
@@ -268,7 +299,7 @@ final class PTYManager {
                     "agent": firstTokenAgent?.name ?? "custom",
                     "cmd": cmd,
                 ])
-                self?.write("\(fullCmd); \(restoreEcho)\n")
+                self?.writeLaunch("\(fullCmd); \(restoreEcho)\n")
             }
 
         case .autoLaunch(let agent):
@@ -277,20 +308,20 @@ final class PTYManager {
             let fullCmd = wrapInWorkspace(agent.name, isExec: false)
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?(["type": "agentLaunching", "agent": agent.name, "cmd": agent.name])
-                self?.write("\(fullCmd); \(restoreEcho)\n")
+                self?.writeLaunch("\(fullCmd); \(restoreEcho)\n")
             }
 
         case .picker(let agents):
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?(["type": "agentPicker", "agents": agents.map { $0.name }])
                 // Picker needs echo on so the user can see what they type at the `> ` prompt.
-                self?.write("\(restoreEcho); __conjuredsp_pick_agent\n")
+                self?.writeLaunch("\(restoreEcho); __conjuredsp_pick_agent\n")
             }
 
         case .noAgents:
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?(["type": "noAgentsInstalled"])
-                self?.write("\(restoreEcho)\n")
+                self?.writeLaunch("\(restoreEcho)\n")
                 self?.onDisplayText?(self!.buildNoAgentsBanner(mcpURL: mcpURL))
             }
 
@@ -303,14 +334,14 @@ final class PTYManager {
                         "agents": newlyAvailable.map { $0.name },
                     ])
                 }
-                self.write("\(restoreEcho)\n")
+                self.writeLaunch("\(restoreEcho)\n")
                 self.onDisplayText?(self.buildManualBanner(mcpURL: mcpURL, newlyAvailable: newlyAvailable))
             }
 
         case .agentMissing(let name, let others):
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?(["type": "agentMissing", "agent": name])
-                self?.write("\(restoreEcho)\n")
+                self?.writeLaunch("\(restoreEcho)\n")
                 self?.onDisplayText?(self!.buildAgentMissingBanner(
                     name: name, others: others, mcpURL: mcpURL))
             }
