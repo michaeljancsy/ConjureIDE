@@ -23,31 +23,6 @@ final class PTYManager {
         case error(String)
     }
 
-    /// A CLI agent the daemon can launch.
-    struct DetectedAgent: Equatable {
-        let name: String        // "claude" / "gemini" / "codex"
-        let binaryPath: String  // resolved path
-    }
-
-    /// How the PTY should start once the shell is alive.
-    enum StartupResolution {
-        /// User (or an earlier session) persisted a startup command.
-        /// `firstTokenAgent` is set if the first token matches a known, installed agent.
-        case runCommand(String, firstTokenAgent: DetectedAgent?)
-        /// User persisted a startup command whose first token is a known agent that
-        /// isn't currently installed. `others` lists what IS installed.
-        case agentMissing(name: String, others: [DetectedAgent])
-        /// First-run, exactly one agent detected — auto-launch it.
-        case autoLaunch(DetectedAgent)
-        /// First-run, multiple agents detected — prompt the user in-terminal.
-        case picker([DetectedAgent])
-        /// First-run, no agents detected — show the install banner.
-        case noAgents
-        /// User explicitly chose manual mode. If agents got installed later,
-        /// `newlyAvailable` lists them so we can show a hint banner.
-        case manual(newlyAvailable: [DetectedAgent])
-    }
-
     /// Current state of the pty/process.
     private(set) var state: State = .idle
 
@@ -102,34 +77,13 @@ final class PTYManager {
     static let agentWorkspacePath: String =
         realHomeDirectory + "/Library/Application Support/ConjureDSP/agent-workspace"
 
-    /// Sentinel value in the startup-command file meaning "no auto-launch".
-    private static let manualSentinel = "__manual__"
-
-    // MARK: - Agent catalog
-
-    /// Known agents with their candidate binary paths. Order within each list
-    /// determines detection priority. `which` is used as a final fallback.
-    private static let agentCatalog: [(name: String, candidates: [String])] = {
-        let home = realHomeDirectory
-        return [
-            ("claude", [
-                "/usr/local/bin/claude",
-                "\(home)/.claude/local/claude",
-                "\(home)/.local/bin/claude",
-                "/opt/homebrew/bin/claude",
-            ]),
-            ("gemini", [
-                "/usr/local/bin/gemini",
-                "\(home)/.local/bin/gemini",
-                "/opt/homebrew/bin/gemini",
-            ]),
-            ("codex", [
-                "/usr/local/bin/codex",
-                "\(home)/.local/bin/codex",
-                "/opt/homebrew/bin/codex",
-            ]),
-        ]
-    }()
+    /// Detection + resolution delegate (testable in isolation via `AgentCatalog`).
+    private lazy var catalog: AgentCatalog = AgentCatalog(
+        agents: AgentCatalog.defaultAgents(homeDirectory: Self.realHomeDirectory),
+        startupCommandFilePath: Self.startupCommandFilePath,
+        agentModeFilePath: Self.agentModeFilePath,
+        testAgentsOverride: ProcessInfo.processInfo.environment["CONJUREDSP_TEST_AGENTS"]
+    )
 
     // MARK: - Lifecycle
 
@@ -159,7 +113,7 @@ final class PTYManager {
             writeMCPConfig(port: port)
         }
         writeAgentWorkspace()
-        migrateLegacyAgentModeIfNeeded()
+        catalog.migrateLegacyAgentModeIfNeeded()
 
         // Determine user's shell
         let env = buildEnvironment()
@@ -240,8 +194,11 @@ final class PTYManager {
         waitSrc.resume()
         waitSource = waitSrc
 
-        let detected = detectAllAgents()
-        let resolution = resolveStartup(detected: detected)
+        catalog.writeDiagnostics(
+            to: AppGroupContainer.url.appendingPathComponent("pty-diag.txt"),
+            realHome: Self.realHomeDirectory)
+        let detected = catalog.detectAllAgents()
+        let resolution = catalog.resolveStartup(detected: detected)
         let mcpURL = mcpServerPort.map { "http://localhost:\($0)/mcp" } ?? "http://localhost:<port>/mcp"
         let modeSetup = buildModeSetupCommands(detected: detected)
 
@@ -276,7 +233,7 @@ final class PTYManager {
 
         case .autoLaunch(let agent):
             ensureMCPConnected(agent: agent.name, binaryPath: agent.binaryPath, mcpURL: mcpURL)
-            writeStartupCommand(agent.name)
+            catalog.writeStartupCommand(agent.name)
             let fullCmd = wrapInWorkspace(agent.name, isExec: false)
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?(["type": "agentLaunching", "agent": agent.name, "cmd": agent.name])
@@ -406,141 +363,6 @@ final class PTYManager {
         childPID = 0
         state = .exited(exitCode)
         onStateChange?(.exited(exitCode))
-    }
-
-    // MARK: - Agent detection
-
-    /// Search for a specific agent's binary in the catalog-defined paths,
-    /// falling back to `which`. Returns nil if not found.
-    private func findAgentCLI(_ name: String, candidates: [String]) -> String? {
-        for path in candidates {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
-            }
-            if FileManager.default.fileExists(atPath: path) {
-                let resolved = (path as NSString).resolvingSymlinksInPath
-                if FileManager.default.isExecutableFile(atPath: resolved) {
-                    return resolved
-                }
-                // Sandbox may block executable check — trust existence.
-                return path
-            }
-        }
-
-        // Fallback: `which <name>`
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        process.arguments = [name]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
-        if process.terminationStatus == 0 {
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !path.isEmpty {
-                return path
-            }
-        }
-
-        return nil
-    }
-
-    /// Probe every agent in the catalog. Writes a diagnostic file listing what was checked.
-    private func detectAllAgents() -> [DetectedAgent] {
-        // Test-only override: CONJUREDSP_TEST_AGENTS="" → zero agents detected;
-        // CONJUREDSP_TEST_AGENTS="claude,gemini" → only those names, resolved to
-        // /usr/bin/true as a harmless stub binary so shell launches don't blow up.
-        // UI tests use this because their sandbox blocks renaming user binaries.
-        if let override = ProcessInfo.processInfo.environment["CONJUREDSP_TEST_AGENTS"] {
-            let names = override.split(separator: ",").map(String.init).filter { !$0.isEmpty }
-            return names.map { DetectedAgent(name: $0, binaryPath: "/usr/bin/true") }
-        }
-
-        var diag = "[PTY] detectAllAgents: home=\(Self.realHomeDirectory)\n"
-        var results: [DetectedAgent] = []
-        for (name, candidates) in Self.agentCatalog {
-            for path in candidates {
-                let exists = FileManager.default.fileExists(atPath: path)
-                let executable = FileManager.default.isExecutableFile(atPath: path)
-                diag += "  [\(name)] \(path): exists=\(exists), executable=\(executable)\n"
-            }
-            if let resolved = findAgentCLI(name, candidates: candidates) {
-                diag += "  [\(name)] resolved=\(resolved)\n"
-                results.append(DetectedAgent(name: name, binaryPath: resolved))
-            } else {
-                diag += "  [\(name)] NOT FOUND\n"
-            }
-        }
-        try? diag.write(
-            to: AppGroupContainer.url.appendingPathComponent("pty-diag.txt"),
-            atomically: true, encoding: .utf8)
-        return results
-    }
-
-    // MARK: - Startup resolution
-
-    /// Pick the StartupResolution based on persisted preference + current detection.
-    private func resolveStartup(detected: [DetectedAgent]) -> StartupResolution {
-        let savedRaw = (try? String(contentsOfFile: Self.startupCommandFilePath, encoding: .utf8))?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        // Sentinel: user explicitly chose no-auto-launch.
-        if savedRaw == Self.manualSentinel {
-            return .manual(newlyAvailable: detected)
-        }
-
-        // Non-empty saved command → runCommand (with optional first-token → agent mapping).
-        if !savedRaw.isEmpty {
-            let firstToken = savedRaw.split(separator: " ").first.map(String.init) ?? savedRaw
-            if Self.agentCatalog.contains(where: { $0.name == firstToken }) {
-                if let agent = detected.first(where: { $0.name == firstToken }) {
-                    return .runCommand(savedRaw, firstTokenAgent: agent)
-                } else {
-                    return .agentMissing(name: firstToken, others: detected)
-                }
-            } else {
-                return .runCommand(savedRaw, firstTokenAgent: nil)
-            }
-        }
-
-        // First run: saved is empty.
-        switch detected.count {
-        case 0: return .noAgents
-        case 1: return .autoLaunch(detected[0])
-        default: return .picker(detected)
-        }
-    }
-
-    /// Persist the startup command (or delete the file if `nil`).
-    private func writeStartupCommand(_ value: String?) {
-        let fm = FileManager.default
-        let dir = (Self.startupCommandFilePath as NSString).deletingLastPathComponent
-        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        if let value {
-            try? value.write(toFile: Self.startupCommandFilePath, atomically: true, encoding: .utf8)
-        } else {
-            try? fm.removeItem(atPath: Self.startupCommandFilePath)
-        }
-    }
-
-    /// If only the legacy `agent-mode` file exists, convert it to `startup-command`.
-    private func migrateLegacyAgentModeIfNeeded() {
-        let fm = FileManager.default
-        guard !fm.fileExists(atPath: Self.startupCommandFilePath) else { return }
-        guard let raw = try? String(contentsOfFile: Self.agentModeFilePath, encoding: .utf8) else { return }
-        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch value {
-        case "claude":
-            writeStartupCommand("claude")
-        case "manual":
-            writeStartupCommand(Self.manualSentinel)
-        default:
-            return
-        }
-        try? fm.removeItem(atPath: Self.agentModeFilePath)
-        ptyLog.info("Migrated legacy agent-mode=\(value, privacy: .public) to startup-command")
     }
 
     // MARK: - MCP wire-up
@@ -813,7 +635,7 @@ final class PTYManager {
         let useGemini = switcher("gemini")
         let useCodex = switcher("codex")
         let useManual = """
-        conjure-use-manual() { mkdir -p \(prefDir); printf '%s\\n' '\(Self.manualSentinel)' > \(prefPath); printf '\\033[32mManual mode — no auto-launch next session. Restart the terminal to apply.\\033[0m\\n'; }
+        conjure-use-manual() { mkdir -p \(prefDir); printf '%s\\n' '\(catalog.manualSentinel)' > \(prefPath); printf '\\033[32mManual mode — no auto-launch next session. Restart the terminal to apply.\\033[0m\\n'; }
         """
         // Back-compat alias for the old external name.
         let useExternal = "conjure-use-external() { conjure-use-manual; }"
