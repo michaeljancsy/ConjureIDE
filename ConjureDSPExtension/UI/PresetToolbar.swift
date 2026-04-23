@@ -556,6 +556,8 @@ struct PresetToolbar: View {
                     Divider()
                     EditorSettingsView()
                     Divider()
+                    TerminalSettingsView()
+                    Divider()
                     ThirdPartyLicensesView()
                 }
                 .padding()

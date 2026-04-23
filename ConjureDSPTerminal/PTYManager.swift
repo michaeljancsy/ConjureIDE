@@ -3,8 +3,9 @@
 //  ConjureDSP
 //
 //  Manages a pseudo-terminal (pty) running the user's shell.
-//  Auto-launches Claude Code CLI on startup; the shell remains
-//  usable after Claude exits.
+//  Detects supported AI CLI agents (claude, gemini, codex) and either
+//  auto-launches the selected one, asks the user to pick, or drops to a
+//  plain shell. The shell remains usable after the agent exits.
 //
 
 import Foundation
@@ -12,7 +13,7 @@ import os.log
 
 private let ptyLog = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "PTYManager")
 
-/// Manages a pseudo-terminal running the user's shell, with optional auto-launch of Claude Code.
+/// Manages a pseudo-terminal running the user's shell, with optional auto-launch of an AI agent.
 final class PTYManager {
 
     enum State {
@@ -22,9 +23,29 @@ final class PTYManager {
         case error(String)
     }
 
-    enum AgentMode: String {
-        case claude   // auto-launch Claude Code if found (default)
-        case manual   // open shell only; user manages their own MCP agent
+    /// A CLI agent the daemon can launch.
+    struct DetectedAgent: Equatable {
+        let name: String        // "claude" / "gemini" / "codex"
+        let binaryPath: String  // resolved path
+    }
+
+    /// How the PTY should start once the shell is alive.
+    enum StartupResolution {
+        /// User (or an earlier session) persisted a startup command.
+        /// `firstTokenAgent` is set if the first token matches a known, installed agent.
+        case runCommand(String, firstTokenAgent: DetectedAgent?)
+        /// User persisted a startup command whose first token is a known agent that
+        /// isn't currently installed. `others` lists what IS installed.
+        case agentMissing(name: String, others: [DetectedAgent])
+        /// First-run, exactly one agent detected — auto-launch it.
+        case autoLaunch(DetectedAgent)
+        /// First-run, multiple agents detected — prompt the user in-terminal.
+        case picker([DetectedAgent])
+        /// First-run, no agents detected — show the install banner.
+        case noAgents
+        /// User explicitly chose manual mode. If agents got installed later,
+        /// `newlyAvailable` lists them so we can show a hint banner.
+        case manual(newlyAvailable: [DetectedAgent])
     }
 
     /// Current state of the pty/process.
@@ -42,13 +63,10 @@ final class PTYManager {
     /// Called to send a JSON control message to the terminal JS bridge.
     var onControlMessage: (([String: Any]) -> Void)?
 
-    /// The MCP server port that Claude Code should connect to.
+    /// The MCP server port that agents should connect to.
     var mcpServerPort: UInt16?
 
-    /// Path to the context file for --append-system-prompt-file.
-    private var contextFilePath: String?
-
-    /// Path to the MCP config file for --mcp-config.
+    /// Path to the MCP config file for claude's --mcp-config flag.
     private var mcpConfigPath: String?
 
     private var masterFD: Int32 = -1
@@ -61,9 +79,61 @@ final class PTYManager {
         stop()
     }
 
+    // MARK: - Paths
+
+    /// The real user home directory (not the sandbox container).
+    static let realHomeDirectory: String = {
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            return String(cString: dir)
+        }
+        return NSHomeDirectory()
+    }()
+
+    /// Path to the startup-command preference file (current format).
+    static let startupCommandFilePath: String =
+        realHomeDirectory + "/Library/Application Support/ConjureDSP/startup-command"
+
+    /// Path to the legacy agent-mode preference file (migrated lazily).
+    static let agentModeFilePath: String =
+        realHomeDirectory + "/Library/Application Support/ConjureDSP/agent-mode"
+
+    /// Directory the daemon cd's into before launching an agent. Contains CLAUDE.md,
+    /// GEMINI.md, and AGENTS.md with the DSP guidance each CLI auto-reads.
+    static let agentWorkspacePath: String =
+        realHomeDirectory + "/Library/Application Support/ConjureDSP/agent-workspace"
+
+    /// Sentinel value in the startup-command file meaning "no auto-launch".
+    private static let manualSentinel = "__manual__"
+
+    // MARK: - Agent catalog
+
+    /// Known agents with their candidate binary paths. Order within each list
+    /// determines detection priority. `which` is used as a final fallback.
+    private static let agentCatalog: [(name: String, candidates: [String])] = {
+        let home = realHomeDirectory
+        return [
+            ("claude", [
+                "/usr/local/bin/claude",
+                "\(home)/.claude/local/claude",
+                "\(home)/.local/bin/claude",
+                "/opt/homebrew/bin/claude",
+            ]),
+            ("gemini", [
+                "/usr/local/bin/gemini",
+                "\(home)/.local/bin/gemini",
+                "/opt/homebrew/bin/gemini",
+            ]),
+            ("codex", [
+                "/usr/local/bin/codex",
+                "\(home)/.local/bin/codex",
+                "/opt/homebrew/bin/codex",
+            ]),
+        ]
+    }()
+
     // MARK: - Lifecycle
 
-    /// Start the user's shell in a pty, then auto-launch Claude Code.
+    /// Start the user's shell in a pty and kick off the agent-resolution flow.
     func start() {
         switch state {
         case .idle, .exited(_):
@@ -73,9 +143,7 @@ final class PTYManager {
             return
         }
 
-        // Clean up stale dispatch sources from a previous session (e.g. restarting
-        // from .exited state). Close the old fd eagerly BEFORE cancelling the source,
-        // since the cancel handler runs async and would race with the new session's fd.
+        // Clean up stale dispatch sources from a previous session.
         if masterFD >= 0 {
             close(masterFD)
             masterFD = -1
@@ -86,14 +154,12 @@ final class PTYManager {
         waitSource = nil
         sessionGeneration &+= 1
 
-        // Write MCP config and context file BEFORE fork — Foundation APIs are not fork-safe
+        // Write MCP config and workspace files BEFORE fork — Foundation APIs are not fork-safe.
         if let port = mcpServerPort {
             writeMCPConfig(port: port)
         }
-        writeContextFile()
-
-        // Find claude CLI for auto-launch (non-fatal if missing — shell still starts)
-        let claudePath = findClaudeCLI()
+        writeAgentWorkspace()
+        migrateLegacyAgentModeIfNeeded()
 
         // Determine user's shell
         let env = buildEnvironment()
@@ -126,13 +192,13 @@ final class PTYManager {
         }
 
         if pid == 0 {
-            // Child process — only fork-safe calls (no Foundation, no Swift allocations)
+            // Child process — only fork-safe calls
             execve(cPath, cArgs, cEnv)
             perror("execve")
             _exit(127)
         }
 
-        // Parent process — clean up strdup'd memory
+        // Parent
         free(cPath)
         cArgs.forEach { if let p = $0 { free(p) } }
         cEnv.forEach { if let p = $0 { free(p) } }
@@ -146,7 +212,7 @@ final class PTYManager {
         let flags = fcntl(masterFD, F_GETFL)
         fcntl(masterFD, F_SETFL, flags | O_NONBLOCK)
 
-        // Read output from pty — capture generation to detect fd reuse across sessions
+        // Read output from pty
         let fd = masterFD
         let gen = sessionGeneration
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global(qos: .userInteractive))
@@ -154,8 +220,6 @@ final class PTYManager {
             self?.readFromPTY()
         }
         source.setCancelHandler { [weak self] in
-            // Close if self is deallocated (deinit path) or this is still the active session.
-            // Using generation counter instead of fd comparison to handle fd number reuse.
             guard let self else {
                 close(fd)
                 return
@@ -176,63 +240,83 @@ final class PTYManager {
         waitSrc.resume()
         waitSource = waitSrc
 
-        // Build the full Claude launch command (with MCP flags) used in both claude-mode branches.
-        func buildClaudeFullCmd(path: String) -> String {
-            var cmd = "\(shellQuote(path)) --allowedTools 'mcp__conjuredsp__*'"
-            if let contextPath = contextFilePath {
-                cmd += " --append-system-prompt-file \(shellQuote(contextPath))"
-            }
-            if let mcpPath = mcpConfigPath {
-                cmd += " --mcp-config \(shellQuote(mcpPath))"
-            }
-            return cmd
-        }
-
+        let detected = detectAllAgents()
+        let resolution = resolveStartup(detected: detected)
         let mcpURL = mcpServerPort.map { "http://localhost:\($0)/mcp" } ?? "http://localhost:<port>/mcp"
-        let modeSetup = buildModeSetupCommands()
+        let modeSetup = buildModeSetupCommands(detected: detected)
 
-        switch readAgentMode() {
-        case .claude:
-            if let claudePath {
-                // Auto-launch Claude Code; alias lets the user re-launch after exit.
-                let fullCmd = buildClaudeFullCmd(path: claudePath)
-                let aliasCmd = "alias claude=\(shellQuote(fullCmd))"
-                let cmd = modeSetup + "\n" + aliasCmd + "\nclaude\n"
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                    self?.write(cmd)
-                }
-            } else {
-                ptyLog.warning("Claude Code CLI not found — showing install prompt")
-                // Build alias with `command claude` unquoted — shellQuote(path:) is for file
-                // paths only; applying it to "command claude" would produce a broken alias.
-                var aliasValue = "command claude --allowedTools 'mcp__conjuredsp__*'"
-                if let contextPath = contextFilePath {
-                    aliasValue += " --append-system-prompt-file \(shellQuote(contextPath))"
-                }
-                if let mcpPath = mcpConfigPath {
-                    aliasValue += " --mcp-config \(shellQuote(mcpPath))"
-                }
-                let aliasCmd = "alias claude=\(shellQuote(aliasValue))"
-                let banner = buildWelcomeBanner(mcpURL: mcpURL)
-                let cmd = modeSetup + "\n" + aliasCmd + "\n"
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                    self?.write(cmd)
-                    self?.onControlMessage?(["type": "claudeNotInstalled"])
-                    self?.onDisplayText?(banner)
-                }
-            }
-        case .manual:
-            ptyLog.info("External agent mode — skipping Claude auto-launch")
-            let banner = buildExternalAgentBanner(mcpURL: mcpURL)
-            let cmd = modeSetup + "\n"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.write(cmd)
-                self?.onDisplayText?(banner)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self else { return }
+            self.write(modeSetup + "\n")
+            // Run MCP wire-up on a background queue so subprocess latency doesn't
+            // block the main queue.
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                self?.applyResolution(resolution, mcpURL: mcpURL)
             }
         }
     }
 
-    /// Stop the Claude Code process.
+    /// Execute the side-effects for a `StartupResolution`: run any needed `mcp add`,
+    /// emit banners and control messages, and write the launch command into the PTY.
+    private func applyResolution(_ resolution: StartupResolution, mcpURL: String) {
+        switch resolution {
+        case .runCommand(let cmd, let firstTokenAgent):
+            if let agent = firstTokenAgent {
+                ensureMCPConnected(agent: agent.name, binaryPath: agent.binaryPath, mcpURL: mcpURL)
+            }
+            let fullCmd = wrapInWorkspace(cmd, isExec: false)
+            DispatchQueue.main.async { [weak self] in
+                self?.onControlMessage?([
+                    "type": "agentLaunching",
+                    "agent": firstTokenAgent?.name ?? "custom",
+                    "cmd": cmd,
+                ])
+                self?.write(fullCmd + "\n")
+            }
+
+        case .autoLaunch(let agent):
+            ensureMCPConnected(agent: agent.name, binaryPath: agent.binaryPath, mcpURL: mcpURL)
+            writeStartupCommand(agent.name)
+            let fullCmd = wrapInWorkspace(agent.name, isExec: false)
+            DispatchQueue.main.async { [weak self] in
+                self?.onControlMessage?(["type": "agentLaunching", "agent": agent.name, "cmd": agent.name])
+                self?.write(fullCmd + "\n")
+            }
+
+        case .picker(let agents):
+            DispatchQueue.main.async { [weak self] in
+                self?.onControlMessage?(["type": "agentPicker", "agents": agents.map { $0.name }])
+                self?.write("__conjuredsp_pick_agent\n")
+            }
+
+        case .noAgents:
+            DispatchQueue.main.async { [weak self] in
+                self?.onControlMessage?(["type": "noAgentsInstalled"])
+                self?.onDisplayText?(self!.buildNoAgentsBanner(mcpURL: mcpURL))
+            }
+
+        case .manual(let newlyAvailable):
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if !newlyAvailable.isEmpty {
+                    self.onControlMessage?([
+                        "type": "newAgentHint",
+                        "agents": newlyAvailable.map { $0.name },
+                    ])
+                }
+                self.onDisplayText?(self.buildManualBanner(mcpURL: mcpURL, newlyAvailable: newlyAvailable))
+            }
+
+        case .agentMissing(let name, let others):
+            DispatchQueue.main.async { [weak self] in
+                self?.onControlMessage?(["type": "agentMissing", "agent": name])
+                self?.onDisplayText?(self!.buildAgentMissingBanner(
+                    name: name, others: others, mcpURL: mcpURL))
+            }
+        }
+    }
+
+    /// Stop the agent process.
     func stop() {
         readSource?.cancel()
         readSource = nil
@@ -243,37 +327,31 @@ final class PTYManager {
             let pid = childPID
             childPID = 0
             kill(pid, SIGTERM)
-            // Reap child in background: wait up to 2s for graceful exit, then SIGKILL
             DispatchQueue.global().async {
                 var status: Int32 = 0
                 var waited = false
-                // Poll for up to 2 seconds
                 for _ in 0..<20 {
                     let result = waitpid(pid, &status, WNOHANG)
                     if result == pid {
                         waited = true
                         break
                     }
-                    usleep(100_000) // 100ms
+                    usleep(100_000)
                 }
                 if !waited {
                     kill(pid, SIGKILL)
-                    waitpid(pid, &status, 0) // blocking wait after SIGKILL
+                    waitpid(pid, &status, 0)
                 }
             }
         }
-
-        // masterFD is closed by the readSource cancel handler — don't close here
-        // to avoid a double-close race with the async cancel handler.
 
         state = .idle
         onStateChange?(.idle)
     }
 
-    /// Restart the Claude Code process.
+    /// Restart the agent process.
     func restart() {
         stop()
-        // Small delay to let cleanup finish
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.start()
         }
@@ -281,7 +359,6 @@ final class PTYManager {
 
     // MARK: - I/O
 
-    /// Write data to the pty (user input from terminal UI).
     func write(_ data: Data) {
         guard masterFD >= 0 else { return }
         data.withUnsafeBytes { buffer in
@@ -290,22 +367,18 @@ final class PTYManager {
         }
     }
 
-    /// Write a string to the pty.
     func write(_ string: String) {
         if let data = string.data(using: .utf8) {
             write(data)
         }
     }
 
-    /// Resize the pty window.
     func resize(cols: UInt16, rows: UInt16) {
         guard masterFD >= 0 else { return }
         var winSize = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
         ioctl(masterFD, TIOCSWINSZ, &winSize)
     }
 
-    /// Send SIGWINCH to the child process to force a screen redraw.
-    /// Used when a new xterm.js client connects to an already-running PTY.
     func sendSIGWINCH() {
         guard childPID > 0 else { return }
         kill(childPID, SIGWINCH)
@@ -327,7 +400,6 @@ final class PTYManager {
     private func handleProcessExit() {
         var status: Int32 = 0
         waitpid(childPID, &status, WNOHANG)
-        // WIFEXITED/WEXITSTATUS are C macros not available in Swift — inline the logic
         let normalExit = (status & 0x7f) == 0
         let exitCode: Int32 = normalExit ? ((status >> 8) & 0xff) : -1
         ptyLog.info("Shell exited with code \(exitCode)")
@@ -336,27 +408,12 @@ final class PTYManager {
         onStateChange?(.exited(exitCode))
     }
 
-    /// Find the claude CLI in common locations.
-    private func findClaudeCLI() -> String? {
-        let home = Self.realHomeDirectory
-        var diag = "[PTY] findClaudeCLI: realHomeDirectory = \(home)\n"
-        let candidates = [
-            "/usr/local/bin/claude",
-            "\(home)/.claude/local/claude",
-            "\(home)/.local/bin/claude",
-            "/opt/homebrew/bin/claude",
-        ]
-        for path in candidates {
-            let exists = FileManager.default.fileExists(atPath: path)
-            let executable = FileManager.default.isExecutableFile(atPath: path)
-            diag += "  \(path): exists=\(exists), executable=\(executable)\n"
-        }
-        // Write diagnostics to App Group container (readable from both processes)
-        try? diag.write(to: AppGroupContainer.url.appendingPathComponent("pty-diag.txt"), atomically: true, encoding: .utf8)
+    // MARK: - Agent detection
 
+    /// Search for a specific agent's binary in the catalog-defined paths,
+    /// falling back to `which`. Returns nil if not found.
+    private func findAgentCLI(_ name: String, candidates: [String]) -> String? {
         for path in candidates {
-            // Check the path directly, and also resolve symlinks — the sandbox may
-            // block isExecutableFile on symlinks but allow it on the resolved target.
             if FileManager.default.isExecutableFile(atPath: path) {
                 return path
             }
@@ -365,15 +422,15 @@ final class PTYManager {
                 if FileManager.default.isExecutableFile(atPath: resolved) {
                     return resolved
                 }
-                // File exists but can't verify executable — trust it (sandbox limitation)
+                // Sandbox may block executable check — trust existence.
                 return path
             }
         }
 
-        // Try `which claude` as fallback
+        // Fallback: `which <name>`
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        process.arguments = ["claude"]
+        process.arguments = [name]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -390,33 +447,185 @@ final class PTYManager {
         return nil
     }
 
-    /// The real user home directory (not the sandbox container).
-    /// `NSHomeDirectory()` returns the container path in sandboxed extensions;
-    /// `getpwuid` returns the actual `/Users/<name>` path.
-    static let realHomeDirectory: String = {
-        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-            return String(cString: dir)
+    /// Probe every agent in the catalog. Writes a diagnostic file listing what was checked.
+    private func detectAllAgents() -> [DetectedAgent] {
+        // Test-only override: CONJUREDSP_TEST_AGENTS="" → zero agents detected;
+        // CONJUREDSP_TEST_AGENTS="claude,gemini" → only those names, resolved to
+        // /usr/bin/true as a harmless stub binary so shell launches don't blow up.
+        // UI tests use this because their sandbox blocks renaming user binaries.
+        if let override = ProcessInfo.processInfo.environment["CONJUREDSP_TEST_AGENTS"] {
+            let names = override.split(separator: ",").map(String.init).filter { !$0.isEmpty }
+            return names.map { DetectedAgent(name: $0, binaryPath: "/usr/bin/true") }
         }
-        return NSHomeDirectory()
-    }()
 
-    /// Path to the agent mode preference file.
-    static let agentModeFilePath: String =
-        realHomeDirectory + "/Library/Application Support/ConjureDSP/agent-mode"
-
-    /// Read the persisted agent mode. Defaults to `.claude` if file is absent or unrecognised.
-    private func readAgentMode() -> AgentMode {
-        guard let raw = try? String(contentsOfFile: Self.agentModeFilePath, encoding: .utf8) else {
-            return .claude
+        var diag = "[PTY] detectAllAgents: home=\(Self.realHomeDirectory)\n"
+        var results: [DetectedAgent] = []
+        for (name, candidates) in Self.agentCatalog {
+            for path in candidates {
+                let exists = FileManager.default.fileExists(atPath: path)
+                let executable = FileManager.default.isExecutableFile(atPath: path)
+                diag += "  [\(name)] \(path): exists=\(exists), executable=\(executable)\n"
+            }
+            if let resolved = findAgentCLI(name, candidates: candidates) {
+                diag += "  [\(name)] resolved=\(resolved)\n"
+                results.append(DetectedAgent(name: name, binaryPath: resolved))
+            } else {
+                diag += "  [\(name)] NOT FOUND\n"
+            }
         }
-        return AgentMode(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines)) ?? .claude
+        try? diag.write(
+            to: AppGroupContainer.url.appendingPathComponent("pty-diag.txt"),
+            atomically: true, encoding: .utf8)
+        return results
     }
 
-    /// Build environment variables for the child process.
+    // MARK: - Startup resolution
+
+    /// Pick the StartupResolution based on persisted preference + current detection.
+    private func resolveStartup(detected: [DetectedAgent]) -> StartupResolution {
+        let savedRaw = (try? String(contentsOfFile: Self.startupCommandFilePath, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        // Sentinel: user explicitly chose no-auto-launch.
+        if savedRaw == Self.manualSentinel {
+            return .manual(newlyAvailable: detected)
+        }
+
+        // Non-empty saved command → runCommand (with optional first-token → agent mapping).
+        if !savedRaw.isEmpty {
+            let firstToken = savedRaw.split(separator: " ").first.map(String.init) ?? savedRaw
+            if Self.agentCatalog.contains(where: { $0.name == firstToken }) {
+                if let agent = detected.first(where: { $0.name == firstToken }) {
+                    return .runCommand(savedRaw, firstTokenAgent: agent)
+                } else {
+                    return .agentMissing(name: firstToken, others: detected)
+                }
+            } else {
+                return .runCommand(savedRaw, firstTokenAgent: nil)
+            }
+        }
+
+        // First run: saved is empty.
+        switch detected.count {
+        case 0: return .noAgents
+        case 1: return .autoLaunch(detected[0])
+        default: return .picker(detected)
+        }
+    }
+
+    /// Persist the startup command (or delete the file if `nil`).
+    private func writeStartupCommand(_ value: String?) {
+        let fm = FileManager.default
+        let dir = (Self.startupCommandFilePath as NSString).deletingLastPathComponent
+        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        if let value {
+            try? value.write(toFile: Self.startupCommandFilePath, atomically: true, encoding: .utf8)
+        } else {
+            try? fm.removeItem(atPath: Self.startupCommandFilePath)
+        }
+    }
+
+    /// If only the legacy `agent-mode` file exists, convert it to `startup-command`.
+    private func migrateLegacyAgentModeIfNeeded() {
+        let fm = FileManager.default
+        guard !fm.fileExists(atPath: Self.startupCommandFilePath) else { return }
+        guard let raw = try? String(contentsOfFile: Self.agentModeFilePath, encoding: .utf8) else { return }
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch value {
+        case "claude":
+            writeStartupCommand("claude")
+        case "manual":
+            writeStartupCommand(Self.manualSentinel)
+        default:
+            return
+        }
+        try? fm.removeItem(atPath: Self.agentModeFilePath)
+        ptyLog.info("Migrated legacy agent-mode=\(value, privacy: .public) to startup-command")
+    }
+
+    // MARK: - MCP wire-up
+
+    /// Make sure the chosen agent has a ConjureDSP MCP entry pointing at our current URL.
+    /// Remove-then-add so the URL is fresh even if the port changed since last session.
+    /// Claude is handled per-invocation via --mcp-config so it short-circuits.
+    /// Errors are logged and ignored — launch continues regardless.
+    private func ensureMCPConnected(agent: String, binaryPath: String, mcpURL: String) {
+        switch agent {
+        case "claude":
+            return
+        case "gemini":
+            runSync([binaryPath, "mcp", "remove", "conjuredsp"])
+            let (ok, out) = runSync([binaryPath, "mcp", "add", "conjuredsp", mcpURL, "-t", "http"])
+            if !ok {
+                ptyLog.warning("gemini mcp add failed: \(out, privacy: .public)")
+            }
+        case "codex":
+            runSync([binaryPath, "mcp", "remove", "conjuredsp"])
+            let (ok, out) = runSync([binaryPath, "mcp", "add", "conjuredsp", "--url", mcpURL])
+            if !ok {
+                ptyLog.warning("codex mcp add failed: \(out, privacy: .public)")
+            }
+        default:
+            return
+        }
+    }
+
+    /// Run a subprocess to completion and return (success, combined stdout/stderr).
+    @discardableResult
+    private func runSync(_ argv: [String]) -> (ok: Bool, output: String) {
+        guard let first = argv.first else { return (false, "empty argv") }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: first)
+        process.arguments = Array(argv.dropFirst())
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+        } catch {
+            return (false, "launch failed: \(error.localizedDescription)")
+        }
+        process.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        return (process.terminationStatus == 0, output)
+    }
+
+    // MARK: - Workspace (CLAUDE.md / GEMINI.md / AGENTS.md)
+
+    /// Write the agent-workspace directory with one context file per agent convention.
+    /// Called on every PTY start — idempotent, cheap.
+    private func writeAgentWorkspace() {
+        let dir = URL(fileURLWithPath: Self.agentWorkspacePath)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            for filename in ["CLAUDE.md", "GEMINI.md", "AGENTS.md"] {
+                let path = dir.appendingPathComponent(filename)
+                try Self.contextContent.write(to: path, atomically: true, encoding: .utf8)
+            }
+            ptyLog.info("Wrote agent workspace to \(dir.path, privacy: .public)")
+        } catch {
+            ptyLog.warning("Failed to write agent workspace: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Launch command construction
+
+    /// Wrap a shell command so it runs with PWD = agent workspace (subshell → no CWD leak).
+    private func wrapInWorkspace(_ cmd: String, isExec: Bool) -> String {
+        let quoted = shellQuote(Self.agentWorkspacePath)
+        if isExec {
+            return "cd \(quoted) && exec \(cmd)"
+        } else {
+            return "(cd \(quoted) && \(cmd))"
+        }
+    }
+
+    // MARK: - Environment
+
     private func buildEnvironment() -> [String] {
         var env: [String: String] = [:]
 
-        // Inherit useful environment variables
         let inheritKeys = ["USER", "PATH", "SHELL", "LANG", "TERM", "TMPDIR",
                            "ANTHROPIC_API_KEY", "CLAUDE_CODE_MAX_TURNS"]
         for key in inheritKeys {
@@ -425,14 +634,9 @@ final class PTYManager {
             }
         }
 
-        // Use the real home directory, not the sandbox container.
-        // Claude Code needs access to ~/.claude/ for config, auth, and settings.
         env["HOME"] = Self.realHomeDirectory
-
-        // Set TERM for proper terminal emulation
         env["TERM"] = "xterm-256color"
 
-        // Ensure a reasonable PATH
         if env["PATH"] == nil {
             env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin"
         }
@@ -440,33 +644,29 @@ final class PTYManager {
         return env.map { "\($0.key)=\($0.value)" }
     }
 
-    /// Write the DSP context file that gives Claude Code project awareness.
-    private func writeContextFile() {
-        // Use the real home directory (not sandbox container) so the child process
-        // can read the file path we pass via --append-system-prompt-file.
-        let home = Self.realHomeDirectory
-        let dir = URL(fileURLWithPath: home + "/Library/Application Support/ConjureDSP")
-        let path = dir.appendingPathComponent("claude-context.md")
+    // MARK: - DSP guide content
 
-        do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try Self.contextContent.write(to: path, atomically: true, encoding: .utf8)
-            contextFilePath = path.path
-            ptyLog.info("Wrote context file to \(path.path, privacy: .public)")
-        } catch {
-            ptyLog.warning("Failed to write context file: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    // MARK: - Static Context Content
-
-    /// DSP scripting guide injected into Claude Code's system prompt via --append-system-prompt-file.
+    /// DSP scripting guide. Written to CLAUDE.md / GEMINI.md / AGENTS.md so each agent
+    /// picks it up as project memory from its own convention.
     private static let contextContent = """
-    You are inside ConjureDSP, a macOS AUv3 audio effect plugin. You write and modify \
-    real-time DSP scripts that process live audio. Scripts can be Python (runs instantly) \
-    or Rust (compiled to WASM, takes a few seconds). Both languages have a `conjuredsp` \
-    library with identical DSP building blocks. Use the MCP tools to compile scripts, \
-    adjust parameters, and test your work.
+    You are a coding assistant running inside ConjureDSP, a macOS AUv3 audio effect plugin. \
+    The user writes and modifies real-time DSP scripts that process live audio. Scripts can \
+    be Python (runs instantly) or Rust (compiled to WASM, takes a few seconds). Both languages \
+    have a `conjuredsp` library with identical DSP building blocks. Use the MCP tools exposed \
+    under `conjuredsp__*` to compile scripts, adjust parameters, and test the user's work.
+
+    ## Operating rules
+
+    - Scripts run on the real-time audio thread. The `process()` function must not allocate, \
+    perform file I/O, or make network calls.
+    - Up to 16 parameters per script.
+    - Always call `get_script` before modifying a script — the user may have edited it since the \
+    last turn. Never rely on conversation memory for what's currently loaded.
+    - Default to Rust unless the user asks for Python or you're revising a script that is already \
+    in Python.
+    - Call `get_docs` with a topic (params, filters, delays, oscillators, utilities, accel, nam) \
+    before writing conjuredsp-library code — Python and Rust have different syntax for the same concepts.
+    - Call `list_packages` before assuming a Python package is unavailable.
 
     ## Python DSP Scripts
 
@@ -533,12 +733,10 @@ final class PTYManager {
     ## Standard Library
 
     Both languages have a `conjuredsp` library with equivalent DSP building blocks. \
-    The APIs differ in syntax between Python and Rust — once you know which language \
-    you're writing, call `get_docs` with the relevant topic to get exact signatures and usage.
+    Call `get_docs` with the relevant topic to see exact signatures and usage for the current language.
 
     **Parameter builders** — `freq`, `db`, `time_ms`, `mix`, `pct`, `toggle`, `ratio`, `param`. \
-    Python also has `choice` for dropdown menus. Customization syntax differs between languages — \
-    call `get_docs` with topic "params" for details.
+    Python also has `choice` for dropdown menus.
 
     **DelayLine** — circular buffer with linear and cubic interpolation.
 
@@ -552,110 +750,188 @@ final class PTYManager {
 
     **Accelerated math** (`accel` module) — hardware-accelerated vectorized operations \
     backed by Apple Accelerate (vDSP/vecLib) via WASM host imports. Functions: `matmul`, \
-    `vec_add`, `vec_mul`, `vec_tanh`, `vec_sigmoid`, `vec_add_scalar`. In Rust: \
-    `use conjuredsp::accel;` then `accel::matmul(a, b, out, m, k, n)`. In Python: \
-    `from conjuredsp.accel import matmul, vec_add, ...`. Used internally by NAM inference \
-    but available to any preset for batch math operations. Call `get_docs` with topic \
-    "accel" for full API reference.
+    `vec_add`, `vec_mul`, `vec_tanh`, `vec_sigmoid`, `vec_add_scalar`.
 
-    **NAM tone models** — Neural Amp Modeling inference for guitar amp/pedal emulation. \
-    Call `list_tones` to see available tone models, then use `load_model("tone3000://...")` \
-    in a Python script. Call `get_docs` with topic "nam" for usage details.
+    **NAM tone models** — Neural Amp Modeling inference. Call `list_tones` to discover \
+    available models, then `load_model("tone3000://...")` in a Python script.
 
-    **Internal precision** — All conjuredsp library types use f64 internally for precision, \
-    even though WASM I/O buffers are f32. In Rust, cast to/from f64 when interfacing with \
-    library types. In Python, this is handled automatically.
+    **Internal precision** — All conjuredsp library types use f64 internally even though WASM \
+    I/O buffers are f32. In Rust, cast to/from f64 at library boundaries. In Python, automatic.
 
     ## Latency Reporting
 
-    Scripts that introduce algorithmic latency (lookahead, FFT windowing, oversampling) \
-    should declare it so the DAW can compensate by delaying other tracks.
+    Scripts that introduce algorithmic latency (lookahead, FFT windowing, oversampling) must \
+    declare it so the DAW can compensate.
 
-    **Python:** `LATENCY = 256` (module-level constant, in samples)
-    **Rust:** `latency!(256);` (macro that generates a WASM export)
+    - **Python:** `LATENCY = 256` (module-level constant, in samples)
+    - **Rust:** `latency!(256);` (macro)
 
-    Do NOT declare latency for creative delay effects (delay lines, chorus, reverb) — \
-    those are intentional and should not be compensated.
+    Do NOT declare latency for creative delay effects (delay, chorus, reverb) — those are \
+    intentional and must not be compensated.
 
-    Example: a lookahead limiter delays input by 256 samples to detect peaks before they \
-    arrive, enabling transparent gain reduction. The DAW delays other tracks by 256 samples \
-    to keep everything in sync.
+    ## MCP tool reference
 
-    ## Conventions
+    Tools are exposed under the `conjuredsp__` namespace. The core set:
 
-    - No file I/O or network calls in process() — runs on the real-time audio thread
-    - Up to 16 parameters per script
-    - Use `compile_and_run` to load scripts, `get_parameters` to check state, `toggle_bypass` for A/B
-    - Call `list_packages` to see what Python packages are available for import (built-in and user-installed). \
-    Do not assume a package is unavailable — always check first.
-    - Before writing a script, call `get_docs` for the language-specific API reference. Topics: \
-    params, filters, delays, oscillators, utilities, accel, nam. Python and Rust have different \
-    syntax for the same concepts — always check.
-    - Python loads instantly; Rust compiles to WASM (a few seconds) but runs much faster
-    - **Language selection**: Default to Rust unless the user asks for Python or you are revising a \
-    script that is already in Python. Always call `get_script` before writing or modifying a script \
-    to check the current language — if it's Python, continue in Python unless the user says otherwise.
-    - IMPORTANT: The user may change scripts via the editor at any time. Never assume a previous script \
-    is still loaded — always call `get_script` to check before deciding whether to modify or replace. \
-    Do not rely on conversation memory for what script is currently active.
+    - `get_script`, `compile_and_run`, `get_error`, `get_parameters`, `set_parameter`, `toggle_bypass`
+    - `get_audio_state`, `list_presets`, `save_preset`, `list_packages`, `list_tones`
+    - `get_docs` — language-specific conjuredsp API reference by topic
     """
 
-    /// Shell function definitions for switching agent mode, written on every terminal start.
-    /// The functions write to the preference file and print a confirmation message.
-    private func buildModeSetupCommands() -> String {
-        let prefPath = shellQuote(Self.agentModeFilePath)
-        let prefDir  = shellQuote((Self.agentModeFilePath as NSString).deletingLastPathComponent)
-        let useClaude   = "conjure-use-claude()   { mkdir -p \(prefDir); echo claude > \(prefPath); printf '\\033[32mClaude Code will auto-launch next session. Restart the terminal to apply.\\033[0m\\n'; }"
-        let useExternal = "conjure-use-external() { mkdir -p \(prefDir); echo manual > \(prefPath); printf '\\033[32mExternal agent mode set. Claude will not auto-launch next session.\\033[0m\\n'; }"
-        return useClaude + "\n" + useExternal
+    // MARK: - Shell helpers (conjure-use-* + picker)
+
+    /// Shell function definitions written at every terminal start. Includes:
+    ///   - aliases for every detected agent (full path + MCP flags for claude),
+    ///   - `conjure-use-*` switchers that persist the choice,
+    ///   - `__conjuredsp_pick_agent` interactive picker.
+    private func buildModeSetupCommands(detected: [DetectedAgent]) -> String {
+        let prefPath = shellQuote(Self.startupCommandFilePath)
+        let prefDir = shellQuote((Self.startupCommandFilePath as NSString).deletingLastPathComponent)
+        let workspace = shellQuote(Self.agentWorkspacePath)
+
+        // Aliases: resolve each agent to its full path so the shell finds it regardless
+        // of PATH. Claude gets --mcp-config and --allowedTools baked in.
+        var aliasLines: [String] = []
+        for agent in detected {
+            let aliasValue: String
+            if agent.name == "claude", let mcpPath = mcpConfigPath {
+                aliasValue = "\(shellQuote(agent.binaryPath)) --allowedTools 'mcp__conjuredsp__*' --mcp-config \(shellQuote(mcpPath))"
+            } else {
+                aliasValue = shellQuote(agent.binaryPath)
+            }
+            aliasLines.append("alias \(agent.name)=\(shellQuote(aliasValue))")
+        }
+
+        // Per-agent switch functions. Writes startup-command and prints a confirmation.
+        func switcher(_ name: String) -> String {
+            return """
+            conjure-use-\(name)() { mkdir -p \(prefDir); printf '%s\\n' '\(name)' > \(prefPath); printf '\\033[32m\(name) will auto-launch next session. Restart the terminal to apply.\\033[0m\\n'; }
+            """
+        }
+
+        let useClaude = switcher("claude")
+        let useGemini = switcher("gemini")
+        let useCodex = switcher("codex")
+        let useManual = """
+        conjure-use-manual() { mkdir -p \(prefDir); printf '%s\\n' '\(Self.manualSentinel)' > \(prefPath); printf '\\033[32mManual mode — no auto-launch next session. Restart the terminal to apply.\\033[0m\\n'; }
+        """
+        // Back-compat alias for the old external name.
+        let useExternal = "conjure-use-external() { conjure-use-manual; }"
+
+        // Interactive picker — numbered prompt that writes the choice and exec's the agent.
+        // Only includes options for agents we actually detected.
+        var cases: [String] = []
+        var options: [String] = []
+        var idx = 1
+        for agent in detected {
+            options.append("  \(idx)) \(agent.name)")
+            cases.append("    \(idx)) conjure-use-\(agent.name) && cd \(workspace) && exec \(agent.name) ;;")
+            idx += 1
+        }
+        options.append("  \(idx)) just a shell")
+        cases.append("    \(idx)) conjure-use-manual ;;")
+        cases.append("    *) printf '\\033[33mUnknown choice — staying in shell.\\033[0m\\n'; conjure-use-manual ;;")
+
+        let pickerFn = """
+        __conjuredsp_pick_agent() {
+          printf '\\033[1;36mMultiple agents detected — choose one:\\033[0m\\n'
+        \(options.joined(separator: "\n"))
+          printf '> '
+          read choice
+          case "$choice" in
+        \(cases.joined(separator: "\n"))
+          esac
+        }
+        """
+
+        return (aliasLines + [useClaude, useGemini, useCodex, useManual, useExternal, pickerFn])
+            .joined(separator: "\n")
     }
 
-    /// ANSI banner shown when Claude Code is not found (sent directly to xterm.js via WebSocket).
-    private func buildWelcomeBanner(mcpURL: String) -> String {
+    // MARK: - Banners
+
+    private func buildNoAgentsBanner(mcpURL: String) -> String {
         let esc = "\u{1b}"
         return [
             "",
-            "\(esc)[1;36m  ConjureDSP - AI Terminal\(esc)[0m",
+            "\(esc)[1;36m  ConjureDSP — AI Terminal\(esc)[0m",
             "  -----------------------------------------",
             "",
-            "  Claude Code CLI was not found.",
-            "  This terminal connects an AI coding agent to ConjureDSP via MCP,",
-            "  enabling it to compile scripts, adjust parameters, and test audio.",
+            "  No AI coding agent was found.",
+            "  This terminal connects an agent to ConjureDSP via MCP,",
+            "  so it can compile scripts, adjust parameters, and test audio.",
             "",
-            "  \(esc)[1mTo install Claude Code (requires Node.js):\(esc)[0m",
+            "  \(esc)[1mSupported agents:\(esc)[0m",
+            "    claude    https://claude.com/code",
+            "    gemini    https://github.com/google-gemini/gemini-cli",
+            "    codex     https://github.com/openai/codex",
             "",
-            "    npm install -g @anthropic-ai/claude-code",
+            "  Install one, then reopen this terminal.",
             "",
-            "  After installing, type claude to start.",
-            "",
-            "  \(esc)[2mUsing a different MCP-compatible agent? Connect it to:\(esc)[0m",
+            "  \(esc)[2mAlready have an MCP-capable agent elsewhere? Connect it to:\(esc)[0m",
             "  \(esc)[2m  \(mcpURL)\(esc)[0m",
-            "  \(esc)[2mThen type conjure-use-external to disable this message.\(esc)[0m",
+            "  \(esc)[2mThen type conjure-use-manual to silence this banner.\(esc)[0m",
             "",
         ].joined(separator: "\r\n") + "\r\n"
     }
 
-    /// ANSI banner for external agent mode (sent directly to xterm.js via WebSocket).
-    private func buildExternalAgentBanner(mcpURL: String) -> String {
+    private func buildManualBanner(mcpURL: String, newlyAvailable: [DetectedAgent]) -> String {
         let esc = "\u{1b}"
-        return [
+        var lines = [
             "",
-            "\(esc)[1;36m  ConjureDSP - AI Terminal  \(esc)[2m[external agent mode]\(esc)[0m",
+            "\(esc)[1;36m  ConjureDSP — AI Terminal  \(esc)[2m[manual mode]\(esc)[0m",
             "  -----------------------------------------",
             "",
             "  \(esc)[32mMCP server: \(mcpURL)\(esc)[0m",
             "",
-            "  \(esc)[2mType conjure-use-claude to switch back to Claude Code auto-launch.\(esc)[0m",
-            "",
-        ].joined(separator: "\r\n") + "\r\n"
+        ]
+        if !newlyAvailable.isEmpty {
+            let names = newlyAvailable.map { $0.name }.joined(separator: ", ")
+            lines.append("  \(esc)[33m\(names) \(newlyAvailable.count == 1 ? "is" : "are") now installed.\(esc)[0m")
+            for agent in newlyAvailable {
+                lines.append("  \(esc)[2mRun `conjure-use-\(agent.name)` to auto-launch it next session.\(esc)[0m")
+            }
+            lines.append("")
+        } else {
+            lines.append("  \(esc)[2mType conjure-use-claude / -gemini / -codex to re-enable auto-launch.\(esc)[0m")
+            lines.append("")
+        }
+        return lines.joined(separator: "\r\n") + "\r\n"
     }
 
-    /// Shell-escape a path by wrapping in single quotes (handles spaces, parens, etc.).
+    private func buildAgentMissingBanner(name: String, others: [DetectedAgent], mcpURL: String) -> String {
+        let esc = "\u{1b}"
+        var lines = [
+            "",
+            "\(esc)[1;36m  ConjureDSP — AI Terminal\(esc)[0m",
+            "  -----------------------------------------",
+            "",
+            "  Your startup command is `\(name)`, but `\(name)` isn't installed.",
+            "",
+        ]
+        if others.isEmpty {
+            lines.append("  \(esc)[2mNo other agents detected. Install one or run conjure-use-manual.\(esc)[0m")
+        } else {
+            lines.append("  \(esc)[1mAvailable agents:\(esc)[0m")
+            for agent in others {
+                lines.append("    conjure-use-\(agent.name)")
+            }
+            lines.append("")
+            lines.append("  \(esc)[2mOr run conjure-use-manual to drop to a plain shell.\(esc)[0m")
+        }
+        lines.append("")
+        return lines.joined(separator: "\r\n") + "\r\n"
+    }
+
+    // MARK: - Utilities
+
     private func shellQuote(_ path: String) -> String {
         "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    /// Write a temporary MCP config file for Claude Code to discover the local MCP server.
+    // MARK: - MCP config (claude per-invocation)
+
+    /// Write ~/.claude/conjuredsp-mcp.json for claude's --mcp-config flag.
     private func writeMCPConfig(port: UInt16) {
         let configDir = Self.realHomeDirectory + "/.claude"
         let configPath = configDir + "/conjuredsp-mcp.json"

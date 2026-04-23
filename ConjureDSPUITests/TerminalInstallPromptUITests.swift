@@ -2,23 +2,44 @@
 //  TerminalInstallPromptUITests.swift
 //  ConjureDSPUITests
 //
-//  Verifies that the "Claude Code not installed" install prompt appears when
-//  the claude CLI binary is absent from all search paths. Simulates this by
-//  renaming the binary before launching, then restoring it in tearDown.
+//  Integration test that verifies the "no agents installed" banner reaches the
+//  extension UI (via the `terminalClaudeNotInstalled` accessibility marker).
+//
+//  Simulation strategy: rename each candidate CLI binary to a `.uitest-disabled`
+//  suffix before launching. The UI test runner's sandbox blocks writes to
+//  `~/.local/bin`, so if the rename fails we skip the test — the unit-test
+//  suite (ConjureDSPLogicTests/AgentDetectionTests) covers the same detection
+//  logic without the sandbox limitation.
 //
 
+import Darwin
 import XCTest
 
 final class TerminalInstallPromptUITests: XCTestCase {
 
     private static var hostApp: XCUIApplication!
     private static var daemonApp: XCUIApplication!
+    private static var renamedPaths: [String] = []
 
-    private static let claudePaths: [String] = [
-        "\(NSHomeDirectory())/.local/bin/claude",
-        "\(NSHomeDirectory())/.claude/local/claude",
+    /// Real user home (XCUITest runner's `NSHomeDirectory()` returns a sandbox container).
+    private static let realHome: String = {
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            return String(cString: dir)
+        }
+        return NSHomeDirectory()
+    }()
+
+    private static let candidatePaths: [String] = [
+        "\(realHome)/.local/bin/claude",
+        "\(realHome)/.claude/local/claude",
         "/usr/local/bin/claude",
         "/opt/homebrew/bin/claude",
+        "\(realHome)/.local/bin/gemini",
+        "/usr/local/bin/gemini",
+        "/opt/homebrew/bin/gemini",
+        "\(realHome)/.local/bin/codex",
+        "/usr/local/bin/codex",
+        "/opt/homebrew/bin/codex",
     ]
 
     // MARK: - Class Lifecycle
@@ -26,11 +47,17 @@ final class TerminalInstallPromptUITests: XCTestCase {
     override class func setUp() {
         super.setUp()
 
-        // Rename all claude binaries so findClaudeCLI() returns nil.
-        for path in claudePaths {
+        // Rename candidate binaries so detection returns zero agents.
+        // If any rename fails (sandbox blocks write on most UI-test runners),
+        // we record it and every test will XCTSkip.
+        for path in candidatePaths {
+            guard FileManager.default.fileExists(atPath: path) else { continue }
             let disabled = path + ".uitest-disabled"
-            if FileManager.default.fileExists(atPath: path) {
-                try? FileManager.default.moveItem(atPath: path, toPath: disabled)
+            do {
+                try FileManager.default.moveItem(atPath: path, toPath: disabled)
+                renamedPaths.append(path)
+            } catch {
+                NSLog("ConjureDSP-test: cannot rename %@ (%@) — test will skip", path, error.localizedDescription)
             }
         }
 
@@ -47,28 +74,36 @@ final class TerminalInstallPromptUITests: XCTestCase {
         hostApp?.terminate()
         hostApp = nil
 
-        // Restore all renamed binaries.
-        for path in claudePaths {
+        for path in renamedPaths {
             let disabled = path + ".uitest-disabled"
-            if FileManager.default.fileExists(atPath: disabled) {
-                try? FileManager.default.moveItem(atPath: disabled, toPath: path)
-            }
+            try? FileManager.default.moveItem(atPath: disabled, toPath: path)
         }
+        renamedPaths.removeAll()
 
         super.tearDown()
     }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        // If the UI-test runner's sandbox prevented us from renaming any binary
+        // that actually exists, we can't simulate "no agents" at the binary level.
+        // Fall back to the logic-level tests.
+        for path in Self.candidatePaths {
+            if FileManager.default.fileExists(atPath: path) {
+                throw XCTSkip("""
+                    UI-test sandbox could not rename \(path) — `no agents` state cannot be simulated. \
+                    See ConjureDSPLogicTests/AgentDetectionTests for the equivalent logic-level test.
+                    """)
+            }
+        }
     }
 
     // MARK: - Tests
 
-    /// When no claude binary is found, opening the terminal panel must fire the
-    /// claudeNotInstalled JS event, which sets the terminalClaudeNotInstalled
-    /// accessibility marker.
+    /// When the daemon reports zero agents, opening the terminal panel fires the
+    /// noAgentsInstalled control message → `terminalClaudeNotInstalled` marker.
     @MainActor
-    func testInstallPromptAppearsWhenClaudeNotInstalled() throws {
+    func testInstallPromptAppearsWhenNoAgents() throws {
         let app = Self.hostApp!
 
         guard app.buttons["chatToggleButton"].waitForExistence(timeout: 10) else {
@@ -87,7 +122,6 @@ final class TerminalInstallPromptUITests: XCTestCase {
             "terminalClaudeNotInstalled marker never appeared — install prompt may not have been sent"
         )
 
-        // Close panel
         if app.buttons["chatToggleButton"].exists { app.buttons["chatToggleButton"].click() }
     }
 }

@@ -12,12 +12,23 @@ import WebKit
 
 private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExtension", category: "TerminalView")
 
+/// Status messages the daemon sends to the extension about agent detection / launch.
+/// Matches the `type` field of the JSON control messages emitted by `PTYManager.applyResolution`.
+enum AgentStatus: Equatable {
+    case noAgentsInstalled            // scenario: zero agents detected on first run
+    case claudeNotInstalled           // legacy alias, still fired from the same path as noAgentsInstalled for UI-test back-compat
+    case picker(agents: [String])     // multi-agent picker showing
+    case launching(agent: String)     // auto-launched or picker-resolved
+    case agentMissing(name: String)   // startup-command references missing agent
+    case newAgentHint(agents: [String]) // manual mode + newly-installed agents
+}
+
 struct TerminalView: NSViewRepresentable {
     var colorScheme: ColorScheme
     var appGroupContainerURL: URL?
     var instanceID: String
     var onFirstInput: (() -> Void)? = nil
-    var onClaudeNotInstalled: (() -> Void)? = nil
+    var onAgentStatus: ((AgentStatus) -> Void)? = nil
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -65,7 +76,7 @@ struct TerminalView: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(appGroupContainerURL: appGroupContainerURL, instanceID: instanceID, onFirstInput: onFirstInput, onClaudeNotInstalled: onClaudeNotInstalled)
+        Coordinator(appGroupContainerURL: appGroupContainerURL, instanceID: instanceID, onFirstInput: onFirstInput, onAgentStatus: onAgentStatus)
     }
 
     // MARK: - Coordinator
@@ -79,15 +90,15 @@ struct TerminalView: NSViewRepresentable {
         let appGroupContainerURL: URL?
         let instanceID: String
         let onFirstInput: (() -> Void)?
-        let onClaudeNotInstalled: (() -> Void)?
+        let onAgentStatus: ((AgentStatus) -> Void)?
         private var lastConnectedPort: UInt16?
         private var portPollTask: Task<Void, Never>?
 
-        init(appGroupContainerURL: URL?, instanceID: String, onFirstInput: (() -> Void)? = nil, onClaudeNotInstalled: (() -> Void)? = nil) {
+        init(appGroupContainerURL: URL?, instanceID: String, onFirstInput: (() -> Void)? = nil, onAgentStatus: ((AgentStatus) -> Void)? = nil) {
             self.appGroupContainerURL = appGroupContainerURL
             self.instanceID = instanceID
             self.onFirstInput = onFirstInput
-            self.onClaudeNotInstalled = onClaudeNotInstalled
+            self.onAgentStatus = onAgentStatus
         }
 
         func disconnect() {
@@ -126,8 +137,10 @@ struct TerminalView: NSViewRepresentable {
                 Analytics.track(.terminalFirstInput)
                 onFirstInput?()
 
-            case "claudeNotInstalled":
-                onClaudeNotInstalled?()
+            case "agentStatus":
+                if let status = parseAgentStatus(data) {
+                    onAgentStatus?(status)
+                }
 
             case "error":
                 let message = data["message"] as? String ?? "unknown"
@@ -143,6 +156,31 @@ struct TerminalView: NSViewRepresentable {
 
             default:
                 break
+            }
+        }
+
+        /// Map a daemon control message (from terminal-bridge.js `agentStatus`) to a typed status.
+        private func parseAgentStatus(_ data: [String: Any]) -> AgentStatus? {
+            guard let type = data["type"] as? String else { return nil }
+            switch type {
+            case "noAgentsInstalled", "claudeNotInstalled":
+                // Both resolve to "no agents" for UI purposes; keep claudeNotInstalled
+                // alive for back-compat with the existing UI test.
+                return type == "claudeNotInstalled" ? .claudeNotInstalled : .noAgentsInstalled
+            case "agentPicker":
+                let agents = (data["agents"] as? [String]) ?? []
+                return .picker(agents: agents)
+            case "agentLaunching":
+                let agent = (data["agent"] as? String) ?? "unknown"
+                return .launching(agent: agent)
+            case "agentMissing":
+                let name = (data["agent"] as? String) ?? (data["name"] as? String) ?? "unknown"
+                return .agentMissing(name: name)
+            case "newAgentHint":
+                let agents = (data["agents"] as? [String]) ?? []
+                return .newAgentHint(agents: agents)
+            default:
+                return nil
             }
         }
 
