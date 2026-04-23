@@ -215,6 +215,12 @@ final class PTYManager {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }
+            // Disable the TTY's input echo NOW (not earlier — zsh's login-shell
+            // initialization, /etc/zprofile etc., reapplies the default termios
+            // after forkpty, so a disable in start() gets overridden by the time
+            // we write here). Each launch/fallback line in applyResolution appends
+            // `stty echo` so the user's post-agent prompt has echo back on.
+            self.disablePTYEcho()
             // Source the setup file silently (defines aliases + conjure-use-* + picker fn)
             // then delete it. No `clear` here — it races with onDisplayText and would wipe
             // the install/manual banner before the user sees it.
@@ -225,9 +231,31 @@ final class PTYManager {
         }
     }
 
+    /// Turn off the ECHO flag on the master fd so writes from the daemon don't get
+    /// echoed back as if the user were typing them. Called once per session, right
+    /// before we begin writing setup/launch bytes. The shell-side `stty echo` that
+    /// each branch of `applyResolution` appends to its launch line is what eventually
+    /// restores echo for the post-agent prompt.
+    private func disablePTYEcho() {
+        guard masterFD >= 0 else { return }
+        var tios = termios()
+        guard tcgetattr(masterFD, &tios) == 0 else {
+            ptyLog.warning("tcgetattr failed: \(String(cString: strerror(errno)), privacy: .public)")
+            return
+        }
+        tios.c_lflag &= ~tcflag_t(ECHO | ECHOE | ECHOK | ECHONL)
+        if tcsetattr(masterFD, TCSANOW, &tios) != 0 {
+            ptyLog.warning("tcsetattr failed: \(String(cString: strerror(errno)), privacy: .public)")
+        }
+    }
+
     /// Execute the side-effects for a `StartupResolution`: run any needed `mcp add`,
     /// emit banners and control messages, and write the launch command into the PTY.
     private func applyResolution(_ resolution: StartupResolution, mcpURL: String) {
+        // Shell fragment that restores TTY echo for the post-agent prompt.
+        // Appended to every command line we write while echo is disabled.
+        let restoreEcho = "stty echo 2>/dev/null"
+
         switch resolution {
         case .runCommand(let cmd, let firstTokenAgent):
             if let agent = firstTokenAgent {
@@ -240,7 +268,7 @@ final class PTYManager {
                     "agent": firstTokenAgent?.name ?? "custom",
                     "cmd": cmd,
                 ])
-                self?.write(fullCmd + "\n")
+                self?.write("\(fullCmd); \(restoreEcho)\n")
             }
 
         case .autoLaunch(let agent):
@@ -249,18 +277,20 @@ final class PTYManager {
             let fullCmd = wrapInWorkspace(agent.name, isExec: false)
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?(["type": "agentLaunching", "agent": agent.name, "cmd": agent.name])
-                self?.write(fullCmd + "\n")
+                self?.write("\(fullCmd); \(restoreEcho)\n")
             }
 
         case .picker(let agents):
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?(["type": "agentPicker", "agents": agents.map { $0.name }])
-                self?.write("__conjuredsp_pick_agent\n")
+                // Picker needs echo on so the user can see what they type at the `> ` prompt.
+                self?.write("\(restoreEcho); __conjuredsp_pick_agent\n")
             }
 
         case .noAgents:
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?(["type": "noAgentsInstalled"])
+                self?.write("\(restoreEcho)\n")
                 self?.onDisplayText?(self!.buildNoAgentsBanner(mcpURL: mcpURL))
             }
 
@@ -273,12 +303,14 @@ final class PTYManager {
                         "agents": newlyAvailable.map { $0.name },
                     ])
                 }
+                self.write("\(restoreEcho)\n")
                 self.onDisplayText?(self.buildManualBanner(mcpURL: mcpURL, newlyAvailable: newlyAvailable))
             }
 
         case .agentMissing(let name, let others):
             DispatchQueue.main.async { [weak self] in
                 self?.onControlMessage?(["type": "agentMissing", "agent": name])
+                self?.write("\(restoreEcho)\n")
                 self?.onDisplayText?(self!.buildAgentMissingBanner(
                     name: name, others: others, mcpURL: mcpURL))
             }
