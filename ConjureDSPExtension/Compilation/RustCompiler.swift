@@ -11,6 +11,9 @@ final class RustCompiler: ScriptCompiler {
 
     private var cachedRustcURL: URL?
     private var useBundledSysroot = false
+    /// Overrides `useBundledSysroot` when set. Points at the installed rustc
+    /// language module's root (the same layout as rustc-dist).
+    private var activeModuleSysroot: URL?
     private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "RustCompiler")
 
     func isAvailable() async -> Bool {
@@ -18,9 +21,23 @@ final class RustCompiler: ScriptCompiler {
     }
 
     func compile(source: String) async throws -> Data {
+        // If rustc only lives in the installed language module, the AU
+        // extension sandbox forbids exec'ing it directly — we have to
+        // proxy the compile through ConjureDSPTerminal (unsandboxed).
+        // Bundled rustc (Debug builds + legacy) still uses the in-process
+        // fast path, which is also what runs in the host app (no AU sandbox).
+        if bundledRustc() == nil, moduleRustc() != nil {
+            return try await compileViaTerminal(source: source)
+        }
+
         guard let rustc = findRustc() else {
             log.error("compile: findRustc returned nil")
             SentryHelper.capture("Rust compiler not found", level: .error, category: "compilation")
+            if bundledRustc() == nil {
+                throw CompilationError.rustcModuleRequired(
+                    "This Rust preset needs the Rust compiler (≈193 MB). "
+                        + "Open the Languages panel and install the Rust module to run it.")
+            }
             throw CompilationError.compilerNotFound(
                 "Rust compiler not found. The bundled compiler may be missing — "
                     + "run scripts/setup-rustc.sh and rebuild.")
@@ -48,8 +65,12 @@ final class RustCompiler: ScriptCompiler {
             inputFile.path,
         ]
 
-        // When using bundled compiler, set explicit sysroot and link conjuredsp rlib
-        if useBundledSysroot, let sysroot = bundledSysroot() {
+        // Resolve the sysroot to thread through rustc:
+        // 1. Installed language module (<AppGroup>/LanguageModules/rustc/)
+        // 2. Bundled rustc-dist inside the extension .appex (legacy, pre-Phase 3)
+        // 3. System rustc (fall-through — no explicit sysroot, let rustc find its own)
+        let resolvedSysroot: URL? = activeModuleSysroot ?? (useBundledSysroot ? bundledSysroot() : nil)
+        if let sysroot = resolvedSysroot {
             args = ["--sysroot", sysroot.path] + args
 
             // Link conjuredsp rlib if available
@@ -110,6 +131,20 @@ final class RustCompiler: ScriptCompiler {
     }
 
     // MARK: - Private
+
+    /// Find the installed rustc language module (if the user has downloaded it
+    /// via the Language Modules panel). Layout mirrors the bundled rustc-dist:
+    /// `<AppGroup>/LanguageModules/rustc/{bin,lib}/...`.
+    private func moduleSysroot() -> URL? {
+        let dir = LanguageModuleManager.moduleDirectory(for: "rustc")
+        let rustc = dir.appendingPathComponent("bin/rustc")
+        return FileManager.default.fileExists(atPath: rustc.path) ? dir : nil
+    }
+
+    private func moduleRustc() -> URL? {
+        guard let sysroot = moduleSysroot() else { return nil }
+        return sysroot.appendingPathComponent("bin/rustc")
+    }
 
     /// Find the bundled rustc-dist sysroot in the extension bundle's Resources.
     private func bundledSysroot() -> URL? {
@@ -174,11 +209,23 @@ final class RustCompiler: ScriptCompiler {
     private func findRustc() -> URL? {
         if let cached = cachedRustcURL { return cached }
 
-        // Prefer bundled compiler (works in sandbox)
+        // 1) Prefer an installed rustc language module. Once the bundled
+        // rustc-dist is stripped from the app (Phase 3 final step), this is
+        // the only source of a sandbox-safe rustc for user-authored Rust.
+        if let moduleRustc = moduleRustc(), let moduleRoot = moduleSysroot() {
+            log.info("findRustc: using language-module compiler at \(moduleRustc.path, privacy: .public)")
+            cachedRustcURL = moduleRustc
+            activeModuleSysroot = moduleRoot
+            useBundledSysroot = false
+            return cachedRustcURL
+        }
+
+        // 2) Fall back to the bundled compiler (works in sandbox)
         if let bundled = bundledRustc() {
             log.info("findRustc: using bundled compiler at \(bundled.path, privacy: .public)")
             cachedRustcURL = bundled
             useBundledSysroot = true
+            activeModuleSysroot = nil
             return cachedRustcURL
         }
 
@@ -203,5 +250,104 @@ final class RustCompiler: ScriptCompiler {
         log.error("findRustc: no rustc found (home=\(home, privacy: .public))")
         SentryHelper.capture("No rustc found in any search path", level: .error, category: "compilation")
         return nil
+    }
+
+    // MARK: - IPC compile path
+
+    /// Proxy a compile through ConjureDSPTerminal's CompileWorker. Used
+    /// whenever the only available rustc is the installed language module
+    /// — the AU sandbox blocks Process.run() on binaries outside the
+    /// extension's own signed bundle, so we can't exec it here.
+    private func compileViaTerminal(source: String) async throws -> Data {
+        let container = LanguageModuleManager.moduleDirectory(for: "rustc")
+            .deletingLastPathComponent() // .../LanguageModules
+            .deletingLastPathComponent() // App Group root
+
+        let requestId = UUID().uuidString
+        let moduleSysroot = LanguageModuleManager.moduleDirectory(for: "rustc")
+        let rlibPath = moduleSysroot.appendingPathComponent("lib/libconjuredsp.rlib").path
+        let userExterns = CrateInstallManager.externArgs()
+        let externs: [CompileExtern] = userExterns
+            .filter { $0.name != "conjuredsp" }
+            .map { CompileExtern(name: $0.name, path: $0.path) }
+        let cratesLibPath = userExterns.isEmpty ? nil : CrateInstallManager.cratesLibURL().path
+
+        let request = CompileRequest(
+            requestId: requestId,
+            language: "rust",
+            source: source,
+            conjuredspRlibPath: FileManager.default.fileExists(atPath: rlibPath) ? rlibPath : nil,
+            cratesLibPath: cratesLibPath,
+            externs: externs,
+            timestamp: Date().timeIntervalSince1970
+        )
+
+        let requestURL = container.appendingPathComponent(CompileIPC.requestFile)
+        let resultURL = container.appendingPathComponent(CompileIPC.resultFile)
+        // Clear any stale result from a prior request — our polling loop
+        // below matches on requestId, but a leftover file with a different
+        // ID would just add noise.
+        try? FileManager.default.removeItem(at: resultURL)
+
+        do {
+            let data = try JSONEncoder().encode(request)
+            try data.write(to: requestURL, options: .atomic)
+        } catch {
+            throw CompilationError.compilationFailed(
+                "Failed to queue compile for Terminal: \(error.localizedDescription)"
+            )
+        }
+
+        log.info("compile: queued via Terminal — requestId=\(requestId, privacy: .public)")
+
+        // Poll for result. Terminal's watch loop ticks ~every 500 ms, so
+        // 200 ms polling gives snappy pickup without burning CPU.
+        let deadline = Date().addingTimeInterval(CompileIPC.pollTimeoutSeconds)
+        while Date() < deadline {
+            try await Task.sleep(for: .milliseconds(200))
+
+            guard FileManager.default.fileExists(atPath: resultURL.path),
+                  let data = try? Data(contentsOf: resultURL),
+                  let result = try? JSONDecoder().decode(CompileResult.self, from: data),
+                  result.requestId == requestId
+            else { continue }
+
+            try? FileManager.default.removeItem(at: resultURL)
+
+            if !result.success {
+                let stderr = result.stderr ?? ""
+                let detail = result.errorMessage ?? "Unknown error"
+                if stderr.isEmpty {
+                    throw CompilationError.compilationFailed(detail)
+                } else {
+                    throw CompilationError.compilationFailed("\(detail)\n\n\(stderr)")
+                }
+            }
+
+            guard let wasmPath = result.wasmPath else {
+                throw CompilationError.compilationFailed(
+                    "Compile succeeded but Terminal returned no WASM path."
+                )
+            }
+
+            let wasmURL = URL(fileURLWithPath: wasmPath)
+            let wasm: Data
+            do {
+                wasm = try Data(contentsOf: wasmURL)
+            } catch {
+                throw CompilationError.compilationFailed(
+                    "Compile succeeded but WASM file is unreadable: \(error.localizedDescription)"
+                )
+            }
+            try? FileManager.default.removeItem(at: wasmURL)
+            return wasm
+        }
+
+        // Timed out — clean up so Terminal doesn't process the request after
+        // we've already bailed.
+        try? FileManager.default.removeItem(at: requestURL)
+        throw CompilationError.compilationFailed(
+            "Compile timed out after \(Int(CompileIPC.pollTimeoutSeconds))s. Is ConjureDSP Terminal running?"
+        )
     }
 }

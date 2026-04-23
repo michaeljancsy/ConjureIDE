@@ -71,7 +71,7 @@ xcodebuild archive \
     -archivePath "$ARCHIVE_PATH" \
     -destination "generic/platform=macOS" \
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
-    "${BETA_FLAGS[@]}" \
+    ${BETA_FLAGS[@]+"${BETA_FLAGS[@]}"} \
     | tail -1
 
 echo "=== Extracting app from archive ==="
@@ -203,18 +203,26 @@ if [ -d "$SPARKLE_FW" ]; then
     echo "Re-signed Sparkle framework"
 fi
 
-# Re-sign bundled Python distribution (.so and .dylib files)
+# Re-sign bundled Python distribution (.so and .dylib files). With
+# CD_BUNDLE_PYTHON=0 the directory might exist as an empty stub from the
+# synchronized file group — check for actual content, not just the dir.
 PYTHON_DIST="$APPEX_PATH/Contents/Resources/python-dist"
-if [ -d "$PYTHON_DIST" ]; then
+if [ -d "$PYTHON_DIST/lib" ]; then
     find "$PYTHON_DIST" \( -name '*.so' -o -name '*.dylib' \) -type f \
         -exec codesign --force --sign "$SIGN_ID" --options runtime --timestamp {} \;
     echo "Re-signed python-dist binaries"
+elif [ -d "$PYTHON_DIST" ]; then
+    rm -rf "$PYTHON_DIST"
+    echo "Removed empty python-dist stub (CD_BUNDLE_PYTHON=0)"
 fi
 
 # Re-sign rustc binaries with hardened runtime
 RUSTC_DST="$APPEX_PATH/Contents/Resources/rustc-dist"
 RUSTC_ENT="$PROJECT_DIR/scripts/rustc-entitlements.plist"
-if [ -d "$RUSTC_DST" ]; then
+# Test for the actual binary, not just the directory — with CD_BUNDLE_RUSTC=0
+# the synchronized file group still creates an empty rustc-dist/bin/ stub, so
+# -d "$RUSTC_DST" passes even when rustc isn't bundled.
+if [ -f "$RUSTC_DST/bin/rustc" ]; then
     # rustc needs disable-library-validation to dlopen proc-macro dylibs compiled by cargo
     codesign --force --sign "$SIGN_ID" --options runtime --timestamp --entitlements "$RUSTC_ENT" "$RUSTC_DST/bin/rustc"
     # Sign remaining executables (cargo, etc.) without the entitlement
@@ -224,18 +232,28 @@ if [ -d "$RUSTC_DST" ]; then
     codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$RUSTC_DST/lib/rustlib/aarch64-apple-darwin/bin/rust-lld"
     codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$RUSTC_DST/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/wasm-ld"
     echo "Re-signed rustc-dist binaries"
+else
+    # Clean up the empty stub directory — it's just noise in the bundle.
+    if [ -d "$RUSTC_DST" ]; then
+        rm -rf "$RUSTC_DST"
+        echo "Removed empty rustc-dist stub (CD_BUNDLE_RUSTC=0)"
+    fi
 fi
 
 # Re-sign embedded ConjureDSPTerminal.app
 if [ -d "$TERMINAL_PATH" ]; then
-    # Sign Python .so/.dylib files in terminal
-    if [ -d "$TERMINAL_RES/python-dist" ]; then
+    # Sign Python .so/.dylib files in terminal. Check for actual content
+    # (lib/ subdir), since CD_BUNDLE_PYTHON=0 may leave an empty stub.
+    if [ -d "$TERMINAL_RES/python-dist/lib" ]; then
         find "$TERMINAL_RES/python-dist" \( -name '*.so' -o -name '*.dylib' \) -type f \
             -exec codesign --force --sign "$SIGN_ID" --options runtime --timestamp {} \;
         # Sign python3 binary
         [ -f "$TERMINAL_RES/python-dist/bin/python3" ] && \
             codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$TERMINAL_RES/python-dist/bin/python3"
         echo "Re-signed terminal python-dist binaries"
+    elif [ -d "$TERMINAL_RES/python-dist" ]; then
+        rm -rf "$TERMINAL_RES/python-dist"
+        echo "Removed empty terminal python-dist stub (CD_BUNDLE_PYTHON=0)"
     fi
     # Sign uv binary
     [ -f "$TERMINAL_RES/uv" ] && \
@@ -260,6 +278,12 @@ echo "Re-signed extension and app"
 # Read version from the built app
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
+
+echo ""
+# Size guard: fail fast if a bundled runtime crept back in. Override the
+# default budget via CD_MAX_APP_MB for local experiments, but the baseline
+# committed here is what CI / release-pipeline should hold the line at.
+"$SCRIPT_DIR/check-release-size.sh" "$APP_PATH"
 
 echo ""
 if $NOTARIZE; then

@@ -75,6 +75,8 @@ class TerminalAppServer {
     private let healthCheckThreshold = 3
     private var packageInstaller: PackageInstaller?
     private var crateInstaller: CrateInstaller?
+    private var languageDownloader: LanguageDownloader?
+    private var compileWorker: CompileWorker?
     private var exportFinalizer: ExportFinalizer?
     private var gitWorker: GitWorker?
     private var exportNotificationObserver: NSObjectProtocol?
@@ -107,6 +109,28 @@ class TerminalAppServer {
                 } else {
                     log.warning("Crate installer not available — cargo not found in rustc-dist")
                 }
+
+                // Language module downloader — always succeeds; the App Group
+                // directory is self-provisioned. Phase 1: no modules catalogued yet.
+                self.languageDownloader = LanguageDownloader(appGroupURL: containerURL)
+                self.languageDownloader?.onModuleChanged = { moduleName in
+                    // Re-provision runtime-dependent state when the relevant
+                    // module changes. For Python, this means re-copying into
+                    // the shared PythonRuntime directory so the AU picks up
+                    // the new source on its next script load.
+                    if moduleName == "python" {
+                        DispatchQueue.global(qos: .utility).async {
+                            Self.installPythonRuntimeIfNeeded()
+                        }
+                    }
+                }
+                log.info("Language downloader ready")
+
+                // Compile worker — proxy for extension-initiated rustc compiles.
+                // Required because the AU extension sandbox forbids exec'ing
+                // rustc out of the App Group path; the Terminal runs it instead.
+                self.compileWorker = CompileWorker(appGroupURL: containerURL)
+                log.info("Compile worker ready")
 
                 self.exportFinalizer = ExportFinalizer(
                     appGroupURL: containerURL
@@ -157,6 +181,12 @@ class TerminalAppServer {
                 }
                 if let crateInst = self.crateInstaller {
                     await crateInst.checkForRequests()
+                }
+                if let langDownloader = self.languageDownloader {
+                    await langDownloader.checkForRequests()
+                }
+                if let worker = self.compileWorker {
+                    await worker.checkForRequests()
                 }
                 if let finalizer = self.exportFinalizer {
                     await finalizer.checkForPendingExports()
@@ -428,32 +458,61 @@ class TerminalAppServer {
 
     // MARK: - Python/UV/Rust provisioning
 
+    /// Resolve the Python-runtime source. Prefers a user-installed language
+    /// module at `<modulesRoot>/python/` over the bundled `python-dist`.
+    /// Returns (source URL, provenance token) where the token is used as the
+    /// `.source` marker so a source switch triggers re-provisioning.
+    ///
+    /// Parameters default to production paths but can be overridden in tests.
+    /// - `bundledBuildVersion` is threaded through so tests don't depend on
+    ///   `Bundle.main` infoDictionary access.
+    nonisolated static func resolvePythonSource(
+        modulesRoot: URL = AppGroupContainer.url.appendingPathComponent(LanguageModuleIPC.modulesDirectory),
+        bundledSource: URL? = Bundle.main.resourceURL?.appendingPathComponent("python-dist"),
+        bundledBuildVersion: String = appBuildVersion
+    ) -> (url: URL, provenance: String)? {
+        let fm = FileManager.default
+
+        // Preferred: user-installed Python language module.
+        let moduleDir = modulesRoot.appendingPathComponent("python")
+        let moduleManifest = moduleDir.appendingPathComponent(LanguageModuleIPC.manifestFile)
+        if fm.fileExists(atPath: moduleManifest.path),
+           let data = try? Data(contentsOf: moduleManifest),
+           let manifest = try? JSONDecoder().decode(InstalledLanguageModuleManifest.self, from: data),
+           fm.fileExists(atPath: moduleDir.appendingPathComponent("bin/python3").path) {
+            return (moduleDir, "module:\(manifest.version)")
+        }
+
+        // Fallback: bundled python-dist shipped with the Terminal app.
+        if let bundled = bundledSource,
+           fm.fileExists(atPath: bundled.path) {
+            return (bundled, "bundled:\(bundledBuildVersion)")
+        }
+
+        return nil
+    }
+
     nonisolated static func installPythonRuntimeIfNeeded() {
         let runtimeURL = pythonRuntimeURL
 
-        guard let bundledPythonDist = Bundle.main.resourceURL?.appendingPathComponent("python-dist"),
-              FileManager.default.fileExists(atPath: bundledPythonDist.path) else {
-            log.error("Bundled python-dist not found in Terminal app bundle")
-            SentryHelper.capture("Bundled python-dist not found", level: .error, category: "terminal.python")
+        guard let source = resolvePythonSource() else {
+            log.error("No Python source available (neither language module nor bundled python-dist)")
+            SentryHelper.capture("No Python source available", level: .error, category: "terminal.python")
             return
         }
 
-        if isProvisionedCurrent(at: runtimeURL) {
-            log.info("Shared Python runtime already installed and current at \(runtimeURL.path, privacy: .public)")
+        let pythonSource = source.url
+        let provenance = source.provenance
+
+        if isProvisionedCurrent(at: runtimeURL, provenance: provenance) {
+            log.info("Shared Python runtime already installed from \(provenance, privacy: .public) at \(runtimeURL.path, privacy: .public)")
         } else {
             do {
                 let fm = FileManager.default
 
-                let srcBin = bundledPythonDist.appendingPathComponent("bin/python3")
-                let dstBin = runtimeURL.appendingPathComponent("bin")
-                try fm.createDirectory(at: dstBin, withIntermediateDirectories: true)
-                let dstPython = dstBin.appendingPathComponent("python3")
-                if fm.fileExists(atPath: dstPython.path) {
-                    try fm.removeItem(at: dstPython)
-                }
-                try fm.copyItem(at: srcBin, to: dstPython)
+                try Self.copyPythonBinaries(from: pythonSource, to: runtimeURL)
 
-                let srcDylib = bundledPythonDist.appendingPathComponent("lib/libpython3.14t.dylib")
+                let srcDylib = pythonSource.appendingPathComponent("lib/libpython3.14t.dylib")
                 let dstLib = runtimeURL.appendingPathComponent("lib")
                 try fm.createDirectory(at: dstLib, withIntermediateDirectories: true)
                 let dstDylib = dstLib.appendingPathComponent("libpython3.14t.dylib")
@@ -462,15 +521,12 @@ class TerminalAppServer {
                 }
                 try fm.copyItem(at: srcDylib, to: dstDylib)
 
-                let srcStdlib = bundledPythonDist.appendingPathComponent("lib/python3.14t")
+                let srcStdlib = pythonSource.appendingPathComponent("lib/python3.14t")
                 let dstStdlib = dstLib.appendingPathComponent("python3.14t")
-                if fm.fileExists(atPath: dstStdlib.path) {
-                    try fm.removeItem(at: dstStdlib)
-                }
-                try fm.copyItem(at: srcStdlib, to: dstStdlib)
+                try provisionPythonStdlib(from: srcStdlib, to: dstStdlib)
 
-                writeVersionMarker(at: runtimeURL)
-                log.info("Shared Python runtime installed at \(runtimeURL.path, privacy: .public)")
+                writeProvenanceMarker(at: runtimeURL, provenance: provenance)
+                log.info("Shared Python runtime installed from \(provenance, privacy: .public) at \(runtimeURL.path, privacy: .public)")
                 migrateUserPackages(to: dstStdlib.appendingPathComponent("site-packages"))
             } catch {
                 log.error("Failed to install shared Python runtime: \(error.localizedDescription, privacy: .public)")
@@ -478,7 +534,7 @@ class TerminalAppServer {
             }
         }
 
-        updateConjureDSPPackage(bundledPythonDist: bundledPythonDist, runtimeURL: runtimeURL)
+        updateConjureDSPPackage(bundledPythonDist: pythonSource, runtimeURL: runtimeURL)
     }
 
     nonisolated private static func updateConjureDSPPackage(bundledPythonDist: URL, runtimeURL: URL) {
@@ -536,6 +592,13 @@ class TerminalAppServer {
            FileManager.default.fileExists(atPath: bundled.path) {
             return bundled
         }
+        // Phase 3+: user-installed rustc language module. Already lives in
+        // the App Group container, so no provision-to-rustc-dist copy is
+        // needed (provisionRustToolchainIfNeeded short-circuits on this).
+        let module = AppGroupContainer.url.appendingPathComponent("LanguageModules/rustc")
+        if FileManager.default.fileExists(atPath: module.appendingPathComponent("bin/cargo").path) {
+            return module
+        }
         return nil
     }
 
@@ -558,6 +621,104 @@ class TerminalAppServer {
         try? appBuildVersion.write(to: versionFile, atomically: true, encoding: .utf8)
     }
 
+    /// Provenance-aware variant used by the Python runtime so a switch
+    /// between the bundled source and a user-installed language module
+    /// triggers re-provisioning. The marker file is `.source` (separate
+    /// from `.version` so bundled→module transitions don't collide with
+    /// app-build-number changes).
+    private nonisolated static func isProvisionedCurrent(at directory: URL, provenance: String) -> Bool {
+        let markerFile = directory.appendingPathComponent(".source")
+        guard let stored = try? String(contentsOf: markerFile, encoding: .utf8) else { return false }
+        return stored.trimmingCharacters(in: .whitespacesAndNewlines) == provenance
+    }
+
+    private nonisolated static func writeProvenanceMarker(at directory: URL, provenance: String) {
+        let markerFile = directory.appendingPathComponent(".source")
+        try? provenance.write(to: markerFile, atomically: true, encoding: .utf8)
+    }
+
+    /// Copy Python's `bin/` directory from `source/bin` to `destination/bin`,
+    /// preserving the whole `python3 → python3.14 → python3.14t` symlink
+    /// chain plus sibling tools (pip, f2py, numpy-config, etc.). Copying
+    /// just one file is a trap — FileManager.copyItem preserves symlinks
+    /// rather than following them, so a single `bin/python3` copy would
+    /// leave a dangling symlink at the destination and break Python's
+    /// self-locating (which then breaks `import numpy`).
+    ///
+    /// Exposed as a nonisolated static so tests can verify the chain
+    /// survives the copy without spinning up the @MainActor Terminal app.
+    nonisolated static func copyPythonBinaries(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        let srcBinDir = source.appendingPathComponent("bin")
+        let dstBinDir = destination.appendingPathComponent("bin")
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        if fm.fileExists(atPath: dstBinDir.path) {
+            try fm.removeItem(at: dstBinDir)
+        }
+        try fm.copyItem(at: srcBinDir, to: dstBinDir)
+    }
+
+    /// Provision Python's standard library non-destructively:
+    /// - Everything other than `site-packages` is fully replaced from source
+    ///   (clean stdlib upgrades — e.g. when a new Python ships new os.py).
+    /// - `site-packages` is merge-copied: entries present in source replace
+    ///   their destination counterparts (bundled numpy/scipy/conjuredsp get
+    ///   cleanly updated), but destination entries NOT present in source are
+    ///   preserved (user-installed packages like `librosa` survive re-provisioning).
+    ///
+    /// Trade-off: stale `*-dist-info` directories for bundled packages may
+    ///   accumulate across version bumps (e.g. `numpy-2.4.4.dist-info` stays
+    ///   alongside `numpy-2.5.0.dist-info`). Acceptable vs the alternative of
+    ///   losing user packages on every source switch.
+    nonisolated static func provisionPythonStdlib(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+
+        // Step 1: Remove destination-only stdlib entries so stale modules from a
+        // previous Python version don't leak through. site-packages is preserved
+        // here and handled below via merge semantics.
+        let dstExisting = (try? fm.contentsOfDirectory(
+            at: destination, includingPropertiesForKeys: nil, options: []
+        )) ?? []
+        for dstEntry in dstExisting where dstEntry.lastPathComponent != "site-packages" {
+            try fm.removeItem(at: dstEntry)
+        }
+
+        // Step 2: Copy stdlib entries from source; merge site-packages.
+        let srcEntries = try fm.contentsOfDirectory(
+            at: source, includingPropertiesForKeys: nil, options: []
+        )
+        for srcEntry in srcEntries {
+            let name = srcEntry.lastPathComponent
+            let dstEntry = destination.appendingPathComponent(name)
+
+            if name == "site-packages" {
+                try mergeSitePackages(from: srcEntry, to: dstEntry)
+            } else {
+                try fm.copyItem(at: srcEntry, to: dstEntry)
+            }
+        }
+    }
+
+    /// Merge-copy semantics for site-packages: source entries fully replace
+    /// their destination counterparts, destination-only entries are untouched.
+    /// Used by `provisionPythonStdlib`; exposed for testing.
+    nonisolated static func mergeSitePackages(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+
+        let srcEntries = try fm.contentsOfDirectory(
+            at: source, includingPropertiesForKeys: nil, options: []
+        )
+        for srcEntry in srcEntries {
+            let dstEntry = destination.appendingPathComponent(srcEntry.lastPathComponent)
+            if fm.fileExists(atPath: dstEntry.path) {
+                try fm.removeItem(at: dstEntry)
+            }
+            try fm.copyItem(at: srcEntry, to: dstEntry)
+        }
+    }
+
     nonisolated static func provisionRustToolchainIfNeeded() {
         let containerURL = AppGroupContainer.url
         let dstRustcDist = containerURL.appendingPathComponent("rustc-dist")
@@ -569,6 +730,15 @@ class TerminalAppServer {
 
         guard let rustcDistSource = findRustcDist() else {
             log.warning("rustc-dist not found — crate management unavailable")
+            return
+        }
+
+        // If the source is already the installed rustc language module, don't
+        // copy it anywhere — it already lives inside the App Group container.
+        // CrateInstaller probes LanguageModules/rustc directly as a fallback.
+        let moduleRustc = AppGroupContainer.url.appendingPathComponent("LanguageModules/rustc")
+        if rustcDistSource.standardizedFileURL == moduleRustc.standardizedFileURL {
+            log.info("Using rustc language module at \(rustcDistSource.path, privacy: .public) — skipping rustc-dist copy")
             return
         }
 

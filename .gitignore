@@ -64,3 +64,4 @@ cargo-home/
 
 # Stray NAM export at repo root (tracked .nam files live under tone3000_py_demo/)
 /passthrough-approximation.nam
+
