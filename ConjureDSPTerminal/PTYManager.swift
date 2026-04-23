@@ -335,9 +335,10 @@ final class PTYManager {
 
         case .noAgents:
             DispatchQueue.main.async { [weak self] in
-                self?.onControlMessage?(["type": "noAgentsInstalled"])
-                self?.writeLaunch("\(restoreEcho)\n")
-                self?.onDisplayText?(self!.buildNoAgentsBanner(mcpURL: mcpURL))
+                guard let self else { return }
+                self.onControlMessage?(["type": "noAgentsInstalled"])
+                self.writeLaunch("\(restoreEcho)\n")
+                self.onDisplayText?(self.buildNoAgentsBanner(mcpURL: mcpURL))
             }
 
         case .manual(let newlyAvailable):
@@ -355,9 +356,10 @@ final class PTYManager {
 
         case .agentMissing(let name, let others):
             DispatchQueue.main.async { [weak self] in
-                self?.onControlMessage?(["type": "agentMissing", "agent": name])
-                self?.writeLaunch("\(restoreEcho)\n")
-                self?.onDisplayText?(self!.buildAgentMissingBanner(
+                guard let self else { return }
+                self.onControlMessage?(["type": "agentMissing", "agent": name])
+                self.writeLaunch("\(restoreEcho)\n")
+                self.onDisplayText?(self.buildAgentMissingBanner(
                     name: name, others: others, mcpURL: mcpURL))
             }
         }
