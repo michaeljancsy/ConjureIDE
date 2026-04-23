@@ -35,16 +35,13 @@ final class TerminalStartupCommandStore: ObservableObject {
     private let manualSentinel = "__manual__"
 
     init() {
-        // Match PTYManager.startupCommandFilePath — use the real user home, not the
-        // sandbox container. The extension's App Group entitlement lets us read/write
-        // this unsandboxed path.
-        let home: String = {
-            if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-                return String(cString: dir)
-            }
-            return NSHomeDirectory()
-        }()
-        self.filePath = home + "/Library/Application Support/ConjureDSP/startup-command"
+        // The file must live in the App Group container — that's the only
+        // path both the sandboxed extension and the unsandboxed daemon can
+        // access. `~/Library/Application Support/ConjureDSP/` is outside the
+        // extension's sandbox and silently returns nil on read here.
+        self.filePath = AppGroupContainer.url
+            .appendingPathComponent("startup-command")
+            .path
         reload()
     }
 
@@ -142,6 +139,10 @@ struct TerminalSettingsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
+            // Re-read from disk every time the view appears — the @StateObject
+            // is created once per view lifetime (often before the daemon's
+            // picker writes the file), so the initial value can be stale.
+            store.reload()
             draft = store.value
             refreshAllMCPStatus()
         }

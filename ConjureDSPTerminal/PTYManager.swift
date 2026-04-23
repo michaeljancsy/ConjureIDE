@@ -78,12 +78,15 @@ final class PTYManager {
     }()
 
     /// Path to the startup-command preference file (current format).
+    /// Lives in the App Group container so the sandboxed extension's Settings
+    /// pane can read/write it too. Both processes have the App Group
+    /// entitlement; neither can access paths outside of it.
     static let startupCommandFilePath: String =
-        realHomeDirectory + "/Library/Application Support/ConjureDSP/startup-command"
+        AppGroupContainer.url.appendingPathComponent("startup-command").path
 
     /// Path to the legacy agent-mode preference file (migrated lazily).
     static let agentModeFilePath: String =
-        realHomeDirectory + "/Library/Application Support/ConjureDSP/agent-mode"
+        AppGroupContainer.url.appendingPathComponent("agent-mode").path
 
     /// Directory the daemon cd's into before launching an agent. Contains CLAUDE.md,
     /// GEMINI.md, and AGENTS.md with the DSP guidance each CLI auto-reads.
