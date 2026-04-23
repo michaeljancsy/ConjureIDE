@@ -89,6 +89,16 @@ struct PresetToolbar: View {
     @State private var renameName = ""
     @State private var renameError: String?
     @State private var showingSettings = false
+    @State private var settingsTab: SettingsTab = .license
+
+    private enum SettingsTab: String, CaseIterable, Identifiable {
+        case license = "License"
+        case sync    = "Sync"
+        case editor  = "Editor"
+        case terminal = "Terminal"
+        case about   = "About"
+        var id: String { rawValue }
+    }
     @State private var showingPackages = false
     @State private var packageInstallManager = PackageInstallManager()
     @State private var crateInstallManager = CrateInstallManager()
@@ -545,21 +555,41 @@ struct PresetToolbar: View {
             .toolbarTooltip("Settings")
             .accessibilityIdentifier("settingsButton")
             .popover(isPresented: $showingSettings) {
-                VStack(alignment: .leading, spacing: 16) {
-                    SubscriptionSettingsView(subscriptionManager: subscriptionManager)
-                    Divider()
-                    RemoteSyncSettingsView(
-                        gitHubService: gitHubService,
-                        gitCoordinator: gitCoordinator,
-                        onDone: { showingSettings = false }
-                    )
-                    Divider()
-                    EditorSettingsView()
-                    Divider()
-                    ThirdPartyLicensesView()
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("", selection: $settingsTab) {
+                        ForEach(SettingsTab.allCases) { tab in
+                            Text(tab.rawValue).tag(tab)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+
+                    // Swap the tab body. No outer ScrollView / no max height —
+                    // the popover sizes to the current tab's natural content.
+                    // If a tab ever grows past the screen, wrap that specific
+                    // tab in its own ScrollView rather than constraining here.
+                    VStack(alignment: .leading, spacing: 16) {
+                        switch settingsTab {
+                        case .license:
+                            SubscriptionSettingsView(subscriptionManager: subscriptionManager)
+                        case .sync:
+                            RemoteSyncSettingsView(
+                                gitHubService: gitHubService,
+                                gitCoordinator: gitCoordinator,
+                                onDone: { showingSettings = false }
+                            )
+                        case .editor:
+                            EditorSettingsView()
+                        case .terminal:
+                            TerminalSettingsView()
+                        case .about:
+                            ThirdPartyLicensesView()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding()
-                .frame(width: 400)
+                .frame(width: 420)
             }
         }
         .font(.system(size: 14))

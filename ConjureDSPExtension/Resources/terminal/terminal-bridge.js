@@ -269,12 +269,34 @@
                 }
             };
 
+            // Daemon control-message types that should NOT be rendered to xterm.
+            // Everything else (including unknown JSON) falls through to terminal.write.
+            var CONTROL_TYPES = {
+                'claudeNotInstalled': true,
+                'noAgentsInstalled': true,
+                'agentPicker': true,
+                'agentMissing': true,
+                'agentLaunching': true,
+                'newAgentHint': true
+            };
+
             socket.onmessage = function(event) {
                 if (terminal) {
                     if (event.data instanceof ArrayBuffer) {
                         terminal.write(new Uint8Array(event.data));
                     } else {
-                        terminal.write(event.data);
+                        // Check for JSON control messages before passing to xterm.
+                        var handled = false;
+                        if (typeof event.data === 'string' && event.data.charCodeAt(0) === 123) {
+                            try {
+                                var msg = JSON.parse(event.data);
+                                if (msg && typeof msg.type === 'string' && CONTROL_TYPES[msg.type]) {
+                                    postToSwift('agentStatus', msg);
+                                    handled = true;
+                                }
+                            } catch (e) { /* not JSON, fall through */ }
+                        }
+                        if (!handled) { terminal.write(event.data); }
                     }
                 }
             };

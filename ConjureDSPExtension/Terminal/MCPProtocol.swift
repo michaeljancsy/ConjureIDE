@@ -15,7 +15,12 @@ enum MCPProtocol {
 
     struct JSONRPCRequest: Codable {
         let jsonrpc: String  // "2.0"
-        let id: JSONRPCId
+        /// Optional: JSON-RPC notifications (per the 2.0 spec) omit `id` and
+        /// expect NO reply. Codex's streamable-HTTP client sends
+        /// `notifications/initialized` this way after initialize. If the field
+        /// were non-optional, decoding would throw "parse error" and the
+        /// client would see its transport channel close.
+        let id: JSONRPCId?
         let method: String
         let params: [String: AnyCodable]?
     }
@@ -252,12 +257,25 @@ struct AnyCodable: Codable {
         switch value {
         case is NSNull:
             try container.encodeNil()
-        case let b as Bool:
-            try container.encode(b)
-        case let i as Int:
-            try container.encode(i)
-        case let d as Double:
-            try container.encode(d)
+        case let num as NSNumber:
+            // NSNumber bridges Bool and Int indistinguishably via Swift's `as`
+            // pattern, so a plain `case let b as Bool` would match NSNumber(0)
+            // as `false` and NSNumber(1) as `true`. Round-trips through
+            // `JSONSerialization.jsonObject(with:)` produce NSNumber, so this
+            // path is hit for the encoded-then-reparsed tool schemas.
+            // Distinguish actual Bool via CFBooleanGetTypeID — only the two
+            // kCFBoolean singletons match it.
+            if CFGetTypeID(num) == CFBooleanGetTypeID() {
+                try container.encode(num.boolValue)
+            } else {
+                let objcType = String(cString: num.objCType)
+                // "f" = float, "d" = double
+                if objcType == "f" || objcType == "d" {
+                    try container.encode(num.doubleValue)
+                } else {
+                    try container.encode(num.int64Value)
+                }
+            }
         case let s as String:
             try container.encode(s)
         case let arr as [Any]:

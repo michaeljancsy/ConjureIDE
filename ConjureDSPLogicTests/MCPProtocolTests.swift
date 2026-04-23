@@ -276,3 +276,38 @@ private struct ScriptSourceChangeMock {
     var processTimeMs: Double?
     var budgetMs: Double?
 }
+
+// =============================================================================
+// JSON-RPC Notification handling (no id field per spec 2.0)
+//
+// Regression guard: codex's streamable-HTTP MCP client sends
+// `notifications/initialized` after the initialize handshake. That payload
+// has a `method` but no `id`. If JSONRPCRequest.id is non-optional, the
+// decoder throws and the server returns a parse error — codex then sees
+// its transport channel close and reports "MCP startup failed".
+// =============================================================================
+
+private struct RequestWithOptionalId: Codable {
+    let jsonrpc: String
+    let id: JSONRPCId?
+    let method: String
+}
+
+struct JSONRPCNotificationParsingTests {
+
+    @Test("Notification (no id) decodes with id == nil")
+    func notificationHasNilId() throws {
+        let json = #"{"jsonrpc":"2.0","method":"notifications/initialized"}"#
+        let decoded = try JSONDecoder().decode(RequestWithOptionalId.self, from: Data(json.utf8))
+        #expect(decoded.id == nil)
+        #expect(decoded.method == "notifications/initialized")
+    }
+
+    @Test("Regular request (with id) still decodes")
+    func requestKeepsId() throws {
+        let json = #"{"jsonrpc":"2.0","id":42,"method":"tools/list"}"#
+        let decoded = try JSONDecoder().decode(RequestWithOptionalId.self, from: Data(json.utf8))
+        #expect(decoded.id == .int(42))
+        #expect(decoded.method == "tools/list")
+    }
+}

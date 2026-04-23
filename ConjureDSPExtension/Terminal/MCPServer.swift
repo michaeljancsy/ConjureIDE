@@ -245,20 +245,27 @@ final class MCPServer {
             return
         }
 
+        // JSON-RPC notifications: method present, no id, no response.
+        // MCP clients (codex's streamable-HTTP, among others) send
+        // `notifications/initialized` right after the initialize handshake
+        // and will fail if we don't accept it cleanly. Return 202 per the
+        // Streamable HTTP spec (no body, connection can close).
+        guard let id = request.id else {
+            sendHTTPResponse(connection: connection, status: 202, body: "")
+            return
+        }
+
         switch request.method {
         case "initialize":
-            handleInitialize(request: request, on: connection)
-        case "notifications/initialized":
-            // Client acknowledgment — no response needed
-            sendHTTPResponse(connection: connection, status: 202, body: "")
+            handleInitialize(request: request, id: id, on: connection)
         case "tools/list":
-            handleToolsList(request: request, on: connection)
+            handleToolsList(request: request, id: id, on: connection)
         case "tools/call":
-            handleToolsCall(request: request, on: connection)
+            handleToolsCall(request: request, id: id, on: connection)
         case "ping":
-            sendJSONRPCResult(connection: connection, id: request.id, result: AnyCodable([:] as [String: String]))
+            sendJSONRPCResult(connection: connection, id: id, result: AnyCodable([:] as [String: String]))
         default:
-            sendJSONRPCError(connection: connection, id: request.id, code: -32601, message: "Method not found: \(request.method)")
+            sendJSONRPCError(connection: connection, id: id, code: -32601, message: "Method not found: \(request.method)")
         }
     }
 
@@ -286,7 +293,7 @@ final class MCPServer {
 
     // MARK: - MCP Method Handlers
 
-    private func handleInitialize(request: MCPProtocol.JSONRPCRequest, on connection: NWConnection) {
+    private func handleInitialize(request: MCPProtocol.JSONRPCRequest, id: JSONRPCId, on connection: NWConnection) {
         let instructions = toolProvider?.mcpStateSummary?()
 
         let result = MCPProtocol.InitializeResult(
@@ -298,33 +305,33 @@ final class MCPServer {
         )
 
         if let encoded = try? JSONEncoder().encode(result) {
-            sendJSONRPCResult(connection: connection, id: request.id, result: AnyCodable(
+            sendJSONRPCResult(connection: connection, id: id, result: AnyCodable(
                 try! JSONSerialization.jsonObject(with: encoded)
             ))
         }
     }
 
-    private func handleToolsList(request: MCPProtocol.JSONRPCRequest, on connection: NWConnection) {
+    private func handleToolsList(request: MCPProtocol.JSONRPCRequest, id: JSONRPCId, on connection: NWConnection) {
         let result = MCPProtocol.ToolsListResult(tools: MCPProtocol.tools)
 
         if let encoded = try? JSONEncoder().encode(result) {
-            sendJSONRPCResult(connection: connection, id: request.id, result: AnyCodable(
+            sendJSONRPCResult(connection: connection, id: id, result: AnyCodable(
                 try! JSONSerialization.jsonObject(with: encoded)
             ))
         }
     }
 
-    private func handleToolsCall(request: MCPProtocol.JSONRPCRequest, on connection: NWConnection) {
+    private func handleToolsCall(request: MCPProtocol.JSONRPCRequest, id: JSONRPCId, on connection: NWConnection) {
         guard let params = request.params,
               let toolName = params["name"]?.value as? String else {
             Analytics.track(.mcpToolCall, properties: ["tool": "<missing>", "success": false, "reason": "missing_name"])
-            sendJSONRPCError(connection: connection, id: request.id, code: -32602, message: "Missing tool name")
+            sendJSONRPCError(connection: connection, id: id, code: -32602, message: "Missing tool name")
             return
         }
 
         guard let provider = toolProvider else {
             Analytics.track(.mcpToolCall, properties: ["tool": toolName, "success": false, "reason": "provider_unavailable"])
-            sendJSONRPCError(connection: connection, id: request.id, code: -32603, message: "Audio unit not available")
+            sendJSONRPCError(connection: connection, id: id, code: -32603, message: "Audio unit not available")
             return
         }
 
@@ -338,7 +345,7 @@ final class MCPServer {
             inputJSON = "{}"
         }
 
-        let requestId = request.id
+        let requestId = id
         let startTime = DispatchTime.now()
         provider.executeMCPTool(toolName, inputJSON: inputJSON) { [weak self] resultJSON, isError in
             let elapsedMs = Int(Double(DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds) / 1_000_000.0)
