@@ -212,6 +212,41 @@ struct PickerShellIntegrationTests {
         #expect(startup == "gemini")
     }
 
+    @Test("conjure-mcp-connect-codex reads URL from file and invokes codex mcp add --url")
+    func mcpConnectInvokesCodexWithCurrentUrl() throws {
+        // Stub `codex` that records its argv, mirroring the gemini stub.
+        // Codex CLI added `mcp add --url <url>` in 0.123.0 (PR #4317).
+        let (tmp, codex, capture) = try Self.makeStubAgent(name: "codex")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let mcpUrlFile = tmp.appendingPathComponent("mcp-url.txt").path
+        let sessionURL = "http://127.0.0.1:54100/mcp"
+        try sessionURL.write(toFile: mcpUrlFile, atomically: true, encoding: .utf8)
+
+        let q = Self.shellQuote
+        let script = """
+        export PATH=\(q(tmp.path)):$PATH
+        conjure-mcp-connect-codex() {
+          local url
+          url=$(cat \(q(mcpUrlFile)) 2>/dev/null)
+          [ -z "$url" ] && return 0
+          codex mcp remove conjuredsp >/dev/null 2>&1
+          codex mcp add conjuredsp --url "$url" >/dev/null 2>&1
+        }
+        conjure-mcp-connect-codex
+        """
+        _ = try Self.runZsh(script)
+
+        let captured = (try? String(contentsOfFile: capture, encoding: .utf8)) ?? ""
+        #expect(captured.contains("mcp"))
+        #expect(captured.contains("remove"))
+        #expect(captured.contains("add"))
+        #expect(captured.contains("--url"))
+        #expect(captured.contains("conjuredsp"))
+        #expect(captured.contains(sessionURL))
+        _ = codex
+    }
+
     @Test("conjure-mcp-connect-gemini is a no-op when URL file is missing")
     func mcpConnectMissingUrlIsSafe() throws {
         let (tmp, _, capture) = try Self.makeStubAgent(name: "gemini")

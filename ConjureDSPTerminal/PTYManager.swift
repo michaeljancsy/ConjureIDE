@@ -681,10 +681,12 @@ final class PTYManager {
             printf '\\033[33mConjureDSP MCP URL not found — skipping codex wire-up.\\033[0m\\n' >&2
             return 0
           fi
-          # codex CLI's `mcp add` is stdio-only in current releases. HTTP MCP
-          # for codex requires editing ~/.codex/config.toml directly. Surface
-          # the action to the user rather than guessing at file edits.
-          printf '\\033[33mcodex does not yet support HTTP MCP via CLI. Add the following to ~/.codex/config.toml:\\n[mcp_servers.conjuredsp]\\nurl = "%s"\\033[0m\\n' "$url" >&2
+          # codex mcp add --url landed via PR #4317 (0.123.0+). Remove-then-add
+          # refreshes the URL across sessions (port changes each launch).
+          codex mcp remove conjuredsp >/dev/null 2>&1
+          if ! codex mcp add conjuredsp --url "$url" >/dev/null 2>&1; then
+            printf '\\033[33mcodex mcp add failed — run `codex mcp add conjuredsp --url %s` manually.\\033[0m\\n' "$url" >&2
+          fi
         }
         """
 
