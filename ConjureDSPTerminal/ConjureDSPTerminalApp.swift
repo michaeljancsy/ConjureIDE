@@ -150,6 +150,7 @@ class TerminalAppServer {
                 guard let self else { return }
 
                 self.reconcileInstances()
+                self.checkForRelaunchRequest()
 
                 // Package/crate install requests
                 if let installer = self.packageInstaller {
@@ -225,6 +226,28 @@ class TerminalAppServer {
             status = "Ready (MCP: \(s.mcpPort), WS: \(s.wsPort ?? 0))"
         } else {
             status = "\(sessions.count) sessions active"
+        }
+    }
+
+    // MARK: - Relaunch signal
+
+    /// The extension's Settings pane touches `<AppGroup>/relaunch-requested` when
+    /// the user clicks "Relaunch terminal". Delete the signal and restart every
+    /// active session's PTY. Consuming the file is atomic-ish: if two clicks
+    /// land within one reconcile tick, we restart once, which is fine.
+    private func checkForRelaunchRequest() {
+        let url = AppGroupContainer.url.appendingPathComponent("relaunch-requested")
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return }
+        try? fm.removeItem(at: url)
+        log.info("Relaunch requested — restarting \(self.sessions.count) session(s)")
+        // ESC c  = RIS (Reset to Initial State). xterm.js treats this as "clear
+        // screen + scrollback + reset cursor", which is the UX we want on a
+        // manual relaunch — leftover output from the old agent is just noise.
+        let clearSequence = "\u{1b}c".data(using: .utf8) ?? Data()
+        for session in sessions.values {
+            session.wsServer?.broadcast(clearSequence)
+            session.pty?.restart()
         }
     }
 

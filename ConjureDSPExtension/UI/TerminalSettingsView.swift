@@ -125,6 +125,15 @@ struct TerminalSettingsView: View {
 
             Divider()
 
+            HStack {
+                Button("Relaunch terminal") { requestRelaunch() }
+                Text("Ends the current agent session and re-runs detection.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Divider()
+
             Text("ConjureDSP MCP")
                 .font(.subheadline)
 
@@ -217,6 +226,14 @@ struct TerminalSettingsView: View {
                 mcpStatus[agent] = connected ? .connected : .notConnected
             }
         }
+    }
+
+    /// Touch a signal file the daemon polls for. The daemon's 500ms reconcile
+    /// loop detects it, deletes it, and calls `restart()` on active sessions.
+    /// See `TerminalAppServer.checkForRelaunchRequest()` in ConjureDSPTerminalApp.swift.
+    private func requestRelaunch() {
+        let url = AppGroupContainer.url.appendingPathComponent("relaunch-requested")
+        try? Data().write(to: url)
     }
 
     private func disconnectMCP(agent: String) {
