@@ -145,4 +145,64 @@ struct ExportAUSizingTests {
         #expect(withError.height > base.height,
                "error banner should add vertical room")
     }
+
+    /// Error banner must ADD to the window, not subtract from the
+    /// body. Window-with-error >= window-without-error + minBannerSize
+    /// for the same custom UI height. Catches a "banner squeezes
+    /// body" regression where the banner's budget gets shaved.
+    @Test func errorBannerGrowsWindowForCustomUI() {
+        let manifestHeight = 420
+        let minBannerContribution: CGFloat = 150  // banner is budgeted 180pt
+
+        let withoutError = ExportAUWindowSizing.computeSize(
+            showDebug: false, showError: false,
+            hasCustomUI: true, customUIHeight: manifestHeight,
+            paramCount: 0, viewWidth: Self.viewWidth
+        )
+        let withError = ExportAUWindowSizing.computeSize(
+            showDebug: false, showError: true,
+            hasCustomUI: true, customUIHeight: manifestHeight,
+            paramCount: 0, viewWidth: Self.viewWidth
+        )
+        let delta = withError.height - withoutError.height
+        #expect(delta >= minBannerContribution,
+               "error banner adds only \(delta)pt; should add at least \(minBannerContribution)pt so body isn't squeezed")
+    }
+
+    /// Slider layout overhead should stay roughly linear in param
+    /// count. Catches per-param creep (e.g. someone inserts a
+    /// divider between every slider and quietly doubles the vertical
+    /// cost per row).
+    @Test func sliderLayoutBodyScalesLinearly() {
+        let s4 = ExportAUWindowSizing.computeSize(
+            showDebug: false, showError: false,
+            hasCustomUI: false, customUIHeight: nil,
+            paramCount: 4, viewWidth: Self.viewWidth
+        )
+        let s8 = ExportAUWindowSizing.computeSize(
+            showDebug: false, showError: false,
+            hasCustomUI: false, customUIHeight: nil,
+            paramCount: 8, viewWidth: Self.viewWidth
+        )
+        // 4 -> 8 params should add ~4 slider rows * ~28pt = ~112pt.
+        // Anything outside 100-140pt is a signal that per-row cost
+        // changed.
+        let delta = s8.height - s4.height
+        #expect(delta >= 100 && delta <= 140,
+               "4->8 param delta \(delta)pt is out of expected 100-140pt band (per-row ~28pt * 4)")
+    }
+
+    /// Degenerate case (0 params, no custom UI) must floor at 150pt
+    /// so the exported AU window isn't collapsed to invisibility.
+    /// One-line regression guard for `max(height, 150)` in
+    /// computeSize.
+    @Test func windowHasSensibleMinimum() {
+        let degenerate = ExportAUWindowSizing.computeSize(
+            showDebug: false, showError: false,
+            hasCustomUI: false, customUIHeight: nil,
+            paramCount: 0, viewWidth: Self.viewWidth
+        )
+        #expect(degenerate.height >= 150,
+               "degenerate case got \(degenerate.height)pt; floor is 150pt")
+    }
 }
