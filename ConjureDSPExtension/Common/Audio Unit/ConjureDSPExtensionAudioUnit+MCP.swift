@@ -321,6 +321,28 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 scaffoldUI: scaffoldUI
             )
 
+            // CRITICAL: apply the new bundle's manifest params BEFORE
+            // setCurrentPreset + compileAndRun. Fresh user bundles have
+            // no `params` block in manifest.json, so
+            // `resolvedParamMetadata()` returns nil. Passing nil clears
+            // the stale `manifestDeclaredMetadata` from the PREVIOUS
+            // preset — otherwise `readParamNames()` (called after the
+            // kernel reload) sees non-empty manifest metadata, runs the
+            // drift validator, and returns early WITHOUT rebuilding the
+            // parameter tree. Result: sliders keep showing the previous
+            // preset's params (e.g. SVF's cutoff + resonance) even
+            // though the kernel runs the new DSP.
+            //
+            // Same ordering rule as `selectPreset`: apply params before
+            // `setCurrentPreset` so SwiftUI's view update (which may
+            // recreate CustomUIWebView) sees the right metadata on the
+            // first `sendInit`.
+            if let newBundle = pm.loadBundle(for: preset) {
+                applyManifestParams(newBundle.manifest.resolvedParamMetadata())
+            } else {
+                applyManifestParams(nil)
+            }
+
             // Switch the plugin to the new bundle so follow-up
             // write_bundle_file calls edit it (instead of continuing
             // to hit "factory is read-only" or "no current preset").
