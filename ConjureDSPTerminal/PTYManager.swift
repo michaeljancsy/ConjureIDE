@@ -677,7 +677,14 @@ final class PTYManager {
     1. Call `save_preset(name, source=<DSP script text>, scaffold_ui=true_or_false)`. \
     One call creates the bundle, switches the plugin to it, and loads \
     the script into the kernel. Response has `switched_current_preset: true` \
-    and `kernel_reloaded: true`.
+    and `kernel_reloaded: true`. \
+    **Pass `scaffold_ui=true` whenever you plan to ship a custom UI — \
+    even if you're about to overwrite `ui/index.html` with your own HTML \
+    anyway.** It makes the manifest declare a `ui` block in the same \
+    atomic write that creates the bundle. Without it, the plugin renders \
+    generic sliders until a later `write_bundle_file` on `manifest.json` \
+    adds the block — a visible flash for the user between save and the \
+    first UI paint.
     2. If the user wants a custom UI, call `write_bundle_file(\"ui/index.html\", \
     …)` (and any ui/assets/*) to author it. Read the inline `validation` \
     block on each write.
@@ -689,7 +696,10 @@ final class PTYManager {
     BEFORE `save_preset`, then after save_preset use `write_bundle_file` \
     to drop the inherited (possibly edited) files into the new bundle. \
     Three explicit steps — no hidden cloning. This keeps the bundle on \
-    disk consistent with whatever `source` you save.
+    disk consistent with whatever `source` you save. If the loaded \
+    preset ships a custom UI you're inheriting, pass `scaffold_ui=true` \
+    to `save_preset` for the same reason as above — avoids the \
+    generic-slider flash between save and your first UI overwrite.
 
     Don't call `compile_and_run` FIRST just to get a script into the \
     kernel before save_preset — pass the source straight to save_preset. \
