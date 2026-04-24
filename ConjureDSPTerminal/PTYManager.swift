@@ -649,10 +649,12 @@ final class PTYManager {
     - File watcher hot-reloads ~300ms after every `write_bundle_file`, so \
       iterate quickly. To scaffold a new bundle with a starter UI, pass \
       `scaffold_ui=true` to `save_preset`.
-    - DO NOT draw the preset's own name as a header inside `ui/index.html`. \
-      The plugin/DAW host already shows it in the window title bar; \
-      repeating it wastes vertical viewport space and duplicates the \
-      label. Use the UI canvas for the actual controls and visualization.
+    - DO NOT draw the preset's own name ANYWHERE inside `ui/index.html` — \
+      not as a header, not as a footer, not as a watermark, not as a \
+      subtitle. The plugin/DAW host already shows it in the window title \
+      bar. Repeating it wastes vertical viewport space and duplicates the \
+      label. Use the UI canvas for the actual controls and visualization \
+      only, unless the user asks for it.
 
     Working examples to copy from: `read_bundle_file` on `preset_svf`, \
     `preset_compressor`, `preset_wavefolder`, `preset_mockingbird_at_night_rust`.
