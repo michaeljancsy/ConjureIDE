@@ -526,6 +526,8 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
 
     @MainActor
     private func mcpSmokeTestUI() async -> (String, Bool) {
+        mcpLog.info("[uaf-trace] smoke_test_ui.enter")
+        defer { mcpLog.info("[uaf-trace] smoke_test_ui.exit") }
         guard let preset = presetManager.currentPreset,
               let bundle = presetManager.loadBundle(for: preset) else {
             return (jsonStr(["error": "No current preset with a loadable bundle."]), true)

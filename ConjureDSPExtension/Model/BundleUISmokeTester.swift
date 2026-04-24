@@ -135,9 +135,11 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
 
     // MARK: - Private state
 
-    private var window: NSWindow?
     private var webView: WKWebView?
     private var schemeHandler: BundleAssetSchemeHandler?
+    /// Per-tester unique scheme name (see start() for rationale).
+    /// Seeded in `start()`; default kept for safety before start runs.
+    private var customScheme: String = "conjuredsp-preset"
     private var completion: ((Report) -> Void)?
     private var didComplete = false
     private var loadStart: TimeInterval = 0
@@ -172,22 +174,29 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         self.hostParameterNames = hostParameterNames
         self.hostParameterCount = hostParameterCount
 
-        // Offscreen invisible host window. WKWebView needs to be in a
-        // window for rendering + JS event loop to behave normally; we
-        // don't ever show it.
-        let w = NSWindow(
-            contentRect: NSRect(x: -10000, y: -10000, width: 1, height: 1),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        w.alphaValue = 0
-        w.ignoresMouseEvents = true
-        window = w
-
         let config = WKWebViewConfiguration()
+        // ─── Isolation from the plugin's live custom-UI WKWebView ───
+        //
+        // BundleUISmokeTester and CustomUIWebView BOTH create WKWebViews
+        // in the same extension (AU view service) process. Any state
+        // shared between them — a process pool, a data store, a scheme
+        // name, a parent NSWindow — has been observed to corrupt the
+        // run loop's autorelease pool, crashing the extension during a
+        // later main-thread event drain (mouse hover, @Published fan-
+        // out, etc.). Empirically tested layers:
+        //
+        //   1. Private WKProcessPool isolates the WebContent process.
+        //   2. Non-persistent WKWebsiteDataStore isolates cookies +
+        //      IndexedDB + local storage bookkeeping.
+        //   3. Unique URL scheme per instance avoids colliding handler
+        //      registrations across two configs in the same process.
+        //   4. No offscreen NSWindow — see below.
+        config.processPool = WKProcessPool()
+        config.websiteDataStore = .nonPersistent()
+        let scheme = "\(Self.bundleScheme)-smoke-\(UUID().uuidString.prefix(8).lowercased())"
+        customScheme = scheme
         let handler = BundleAssetSchemeHandler(rootURL: bundle.rootURL)
-        config.setURLSchemeHandler(handler, forURLScheme: Self.bundleScheme)
+        config.setURLSchemeHandler(handler, forURLScheme: scheme)
         schemeHandler = handler
 
         // Inject the bridge, the component library, AND an
@@ -217,8 +226,15 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
 
         let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 240), configuration: config)
         wv.navigationDelegate = self
-        w.contentView = NSView()
-        w.contentView?.addSubview(wv)
+        // No NSWindow. Adding a second NSWindow to an
+        // `NSViewServiceApplication`'s window list has been observed
+        // to corrupt ViewBridge's event plumbing — subsequent mouse
+        // events to the plugin's own (ViewBridge-owned) window leave
+        // zombie ObjC pointers in the main-thread autorelease pool,
+        // which SIGSEGVs the extension on the next pool drain (often
+        // seconds later). WKWebView runs its JS + fires its message
+        // handlers whether or not it's in a view hierarchy, so long
+        // as we hold a strong reference — which we do via `webView`.
         webView = wv
 
         // 3 s hard timeout. If the webview hangs (infinite loop, non-
@@ -233,7 +249,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         loadStart = CFAbsoluteTimeGetCurrent()
         let entryPath = bundle.manifest.uiEntryHTMLPath
         let encoded = entryPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? entryPath
-        guard let url = URL(string: "\(Self.bundleScheme)://preset/\(encoded)") else {
+        guard let url = URL(string: "\(customScheme)://preset/\(encoded)") else {
             log.error("smoke test: bad entry URL for \(entryPath, privacy: .public)")
             finish(reason: "invalid entry URL")
             return
@@ -267,11 +283,8 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             wv.configuration.userContentController.removeScriptMessageHandler(forName: "smokeReady")
             wv.configuration.userContentController.removeScriptMessageHandler(forName: "log")
             wv.navigationDelegate = nil
-            wv.removeFromSuperview()
         }
         webView = nil
-        window?.close()
-        window = nil
     }
 
     // MARK: - Report collection
