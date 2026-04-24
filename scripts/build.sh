@@ -174,6 +174,19 @@ if [ -f "$TEMPLATE_ZIP" ]; then
         --entitlements "$ENTITLEMENTS_DIR/ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplate.entitlements" \
         "$TEMPLATE_APP"
 
+    # 5. Verify the re-signed appex still has the sandbox entitlement.
+    # If it doesn't, pkd silently rejects every export ("plug-ins must be
+    # sandboxed") and exported AUs never appear in DAWs. `codesign
+    # --entitlements <file>` overwrites with the file as-is, so any key
+    # Xcode auto-merges (like app-sandbox via ENABLE_APP_SANDBOX) must also
+    # be present in the source .entitlements file or this assertion fires.
+    if ! codesign -d --entitlements - "$TEMPLATE_APPEX" 2>&1 | grep -q "com.apple.security.app-sandbox"; then
+        echo "error: ExportTemplate appex is missing com.apple.security.app-sandbox after re-sign." >&2
+        echo "       PluginKit will reject every exported AU. Add the key to" >&2
+        echo "       ConjureDSPExportAUTemplateExtension.entitlements." >&2
+        exit 1
+    fi
+
     # Re-zip
     rm "$TEMPLATE_ZIP"
     cd "$TEMPLATE_TMP"
