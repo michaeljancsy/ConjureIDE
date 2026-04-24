@@ -2,7 +2,17 @@ import Foundation
 import os.log
 import WebKit
 
-private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP.ConjureDSPExtension", category: "BundleAssetSchemeHandler")
+// Logger subsystem is resolved from the bundle that contains this class
+// at runtime. That lets the same source file ship in both the main
+// extension and the export-AU template (where it's symlinked in) without
+// the two having to maintain separate copies. Each extension's logs are
+// still tagged with that extension's own bundle identifier, so Console
+// filters keep working.
+private let log: Logger = {
+    let subsystem = Bundle(for: BundleAssetSchemeHandler.self).bundleIdentifier
+        ?? "com.MichaelJancsy.ConjureDSP"
+    return Logger(subsystem: subsystem, category: "BundleAssetSchemeHandler")
+}()
 
 /// Serves files from a preset bundle's `ui/` directory into a WKWebView's
 /// WebContent process via a custom URL scheme.

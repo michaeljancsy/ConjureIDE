@@ -104,4 +104,30 @@ struct CustomUIAssetParityTests {
             once exported.
             """)
     }
+
+    /// `BundleAssetSchemeHandler.swift` is the WKURLSchemeHandler that
+    /// serves bundle files into the webview's WebContent process. Both
+    /// the main extension's CustomUIWebView and the export AU's
+    /// ExportCustomUIWebView use it, with the same sandbox + path
+    /// validation logic. Identical code lives in both targets via a
+    /// symlink (same model as the JS files); this test guards against
+    /// the symlink being deleted and replaced with a stale duplicate.
+    @Test func bundleAssetSchemeHandlerIsByteIdenticalAcrossMainAndExportTemplate() throws {
+        let main = Self.repoRoot
+            .appendingPathComponent("ConjureDSPExtension/UI/BundleAssetSchemeHandler.swift")
+        let template = Self.repoRoot
+            .appendingPathComponent("ConjureDSPExportAUTemplate/ConjureDSPExportAUTemplateExtension/UI/BundleAssetSchemeHandler.swift")
+
+        let mainHash = try Self.sha256(of: main)
+        let tplHash = try Self.sha256(of: template)
+
+        #expect(mainHash == tplHash, """
+            BundleAssetSchemeHandler.swift drift between main extension and export template:
+              main:     \(mainHash)
+              template: \(tplHash)
+            Re-sync. The scheme handler enforces the sandbox boundary that
+            stops UI HTML from reading arbitrary files; drift means an
+            exported AU could miss a sandbox tightening that landed on main.
+            """)
+    }
 }
