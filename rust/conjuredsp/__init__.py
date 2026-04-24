@@ -23,7 +23,7 @@ Quick start::
 from .types import AudioBuffer, ChannelList, ParamDict, ParamSpec, ParamValues
 
 # Parameter helpers
-from .params import choice, db, freq, mix, param, pct, ratio, time_ms, toggle
+from .params import choice, db, freq, integer, mix, param, pct, ratio, time_ms, toggle
 
 # DSP utilities
 from .dsp import (
@@ -67,6 +67,7 @@ __all__ = [
     "mix",
     "toggle",
     "ratio",
+    "integer",
     # DSP utilities
     "db_to_gain",
     "gain_to_db",
