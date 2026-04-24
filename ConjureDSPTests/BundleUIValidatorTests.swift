@@ -267,6 +267,64 @@ struct BundleUIValidatorTests {
         #expect(report.issues.contains { $0.check == "network_egress_in_ui" })
     }
 
+    @Test func xmlHttpRequestFlagged() throws {
+        // The egress rule table includes XMLHttpRequest but no test covered
+        // it. Pin here so regressions in the regex (e.g. whitespace change)
+        // don't silently disable the check.
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>const xhr = new XMLHttpRequest(); xhr.open("GET", "/data");</script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "network_egress_in_ui" })
+    }
+
+    @Test func eventSourceFlagged() throws {
+        // Symmetric to xhr/websocket — the rule is listed in the table but
+        // untested.
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>const es = new EventSource("/events");</script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "network_egress_in_ui" })
+    }
+
+    @Test func externalImgFlagged() throws {
+        // The external_asset_ref rule matches img/iframe/audio/video/source
+        // too, not just script/link. Pin at least <img> since that's the
+        // most common form preset authors reach for.
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <img src="https://cdn.example.com/logo.png">
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "external_asset_ref" })
+    }
+
+    @Test func protocolRelativeURLFlagged() throws {
+        // `//example.com/x.js` is protocol-relative and reaches the network
+        // just as surely as an `https:` URL. The CSP blocks it; the
+        // validator rule regex includes `//` as a leading form.
+        let ui = """
+        <!doctype html><html><head>
+          <script src="//evil.example.com/tracker.js"></script>
+        </head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "external_asset_ref" })
+    }
+
     // MARK: - canvas_system_color_literal
 
     @Test func canvasTextAssignmentFlagged() throws {
@@ -285,6 +343,45 @@ struct BundleUIValidatorTests {
         let report = BundleUIValidator.validate(bundle)
         let canvasIssues = report.issues.filter { $0.check == "canvas_system_color_literal" }
         #expect(canvasIssues.count >= 1, "should flag CanvasText and color-mix(...)")
+    }
+
+    @Test func canvasPlainKeywordFlagged() throws {
+        // The regex covers the bare "Canvas" keyword (the background-side
+        // system color), not just "CanvasText". Both fail the same way in
+        // Canvas 2D — silent fallback to transparent/black.
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c"></canvas>
+          <script>
+            const ctx = document.getElementById("c").getContext("2d");
+            ctx.fillStyle = "Canvas";
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "canvas_system_color_literal" })
+    }
+
+    @Test func canvasValidColorNotFlagged() throws {
+        // Hex / rgb / named colors should never trip the system-color rule.
+        // Prevents regex over-tightening from producing false positives on
+        // perfectly legal canvas code.
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c"></canvas>
+          <script>
+            const ctx = document.getElementById("c").getContext("2d");
+            ctx.fillStyle = "#3366aa";
+            ctx.strokeStyle = "rgb(100, 200, 50)";
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "canvas_system_color_literal" })
     }
 
     // MARK: - no_interactive_surface
@@ -603,6 +700,35 @@ struct BundleUIValidatorTests {
         let contrast = report.issues.filter { $0.check == "text_contrast_low" }
         // white on #111 is ~18:1 — neither branch should flag this.
         #expect(contrast.isEmpty)
+    }
+
+    // MARK: - Performance / scale
+
+    @Test func largeUIValidatesInBoundedTime() throws {
+        // 500 cdp-slider rows + a sizeable <style> block — well beyond any
+        // real preset UI but small enough to fit in-memory. Validates in
+        // well under a second; pinning at 5s so CI variance doesn't flake.
+        var body = ""
+        for i in 0..<500 {
+            body += "<cdp-slider param=\"cutoff\" label=\"P\(i)\"></cdp-slider>\n"
+        }
+        var style = ""
+        for i in 0..<200 {
+            style += ".row\(i) { color: #\(String(format: "%06x", i * 113 % 0xffffff)); background: #fff; }\n"
+        }
+        let ui = """
+        <!doctype html><html><head><style>\(style)</style></head>
+        <body>\(body)</body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+
+        let start = Date()
+        let report = BundleUIValidator.validate(bundle)
+        let elapsed = Date().timeIntervalSince(start)
+
+        #expect(elapsed < 5.0, "validator took \(elapsed)s on a 500-component UI — regex backtracking?")
+        // Report should be well-formed regardless of issue count.
+        #expect([.pass, .warn, .fail].contains(report.status))
     }
 
     @Test func statusWarnIfOnlyWarnings() throws {
