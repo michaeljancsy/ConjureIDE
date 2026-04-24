@@ -833,4 +833,525 @@ enum DSPDocumentation {
         [params, filters, delays, oscillators, utilities, accel, nam, ui]
             .joined(separator: "\n\n")
     }
+
+    // MARK: - Language-filtered docs (for AI Prompt Helper)
+
+    /// Returns API docs filtered to a single language — omits examples for the other language.
+    static func docs(for language: ScriptLanguage) -> String {
+        switch language {
+        case .python:
+            return [pythonParams, pythonFilters, pythonDelays, pythonOscillators, pythonUtilities, pythonAccel]
+                .joined(separator: "\n\n")
+        case .rust:
+            return [rustParams, rustFilters, rustDelays, rustOscillators, rustUtilities, rustAccel]
+                .joined(separator: "\n\n")
+        }
+    }
+
+    private static let pythonParams = """
+    # Parameter Builders
+
+    Available builders and their default ranges:
+
+    freq — 20-20000 Hz, log curve, default 1000
+    db — -60 to +12 dB, linear curve, default 0
+    time_ms — 0.1-1000 ms, log curve, default 100
+    mix — 0.0-1.0, linear, default 0.5
+    pct — 0-100%, linear, default 50
+    toggle — 0/1, rendered as switch in UI, default 0
+    ratio — 1-20 :1, linear, default 4
+    param — generic with explicit min/max, default=min, linear, no unit
+
+    ## Syntax
+
+    Builders are functions that return dicts. Customize via keyword arguments:
+
+      from conjuredsp import freq, db, time_ms, mix, pct, toggle, choice, ratio, param
+
+      PARAMS = {
+          "cutoff": freq(),                                # use defaults: 20-20000 Hz
+          "attack": time_ms(0.5, 50, default=5),           # positional min/max, keyword default
+          "damping": freq(min=500, max=16000, default=4000),  # all keyword args
+          "drive": pct(default=70),
+          "mix": mix(default=0.35),
+          "bypass": toggle(),
+          "mode": choice("Low", "Mid", "High", default="Mid"),  # dropdown
+      }
+
+    param() accepts: param(min, max, unit="", default=None, curve="linear")
+
+    choice(*labels, default=None) — Dropdown menu, receives selected index as float \
+    (0.0, 1.0, ...). Requires at least 2 labels.
+
+    ## How parameters are delivered
+
+    With PARAMS metadata: scripts receive denormalized actual values (e.g., 1000.0 Hz).
+    Without PARAMS: scripts receive raw 0-1 normalized floats (legacy mode).
+    params arg is a dict keyed by name.
+    """
+
+    private static let rustParams = """
+    # Parameter Builders
+
+    Available builders and their default ranges:
+
+    freq — 20-20000 Hz, log curve, default 1000
+    db — -60 to +12 dB, linear curve, default 0
+    time_ms — 0.1-1000 ms, log curve, default 100
+    mix — 0.0-1.0, linear, default 0.5
+    pct — 0-100%, linear, default 50
+    toggle — 0/1, rendered as switch in UI, default 0
+    ratio — 1-20 :1, linear, default 4
+    param — generic with explicit min/max, default=min, linear, no unit
+
+    ## Syntax
+
+    Builders are const functions. Customize via method chaining:
+
+      params! {
+          CUTOFF = freq(),                                  // use defaults: 20-20000 Hz
+          ATTACK = time_ms().min(0.5).max(50.0).default(5.0),
+          DAMPING = freq().min(500.0).max(16000.0).default(4000.0),
+          DRIVE = pct().default(70.0),
+          MIX = mix().default(0.35),
+          BYPASS = toggle(),
+      }
+
+    Chaining methods: .min(val), .max(val), .default(val), .unit("str"), .curve("log" or "linear")
+    All are const fn and can be used in static/const contexts.
+
+    ## How parameters are delivered
+
+    With PARAMS metadata: scripts receive denormalized actual values (e.g., 1000.0 Hz).
+    Without PARAMS: scripts receive raw 0-1 normalized floats (legacy mode).
+    Params are accessed via ctx.param(INDEX).
+    """
+
+    private static let pythonFilters = """
+    # Filters — BiquadCoeffs + Biquad
+
+    Biquad filters using Audio EQ Cookbook formulas (Robert Bristow-Johnson).
+    All internal math uses f64 for precision. Create one Biquad per channel.
+
+    ## BiquadCoeffs — coefficient calculation (stateless)
+
+    3-argument filters (freq, q, sample_rate):
+      .lowpass(freq, q, sr)    — passes frequencies below cutoff
+      .highpass(freq, q, sr)   — passes frequencies above cutoff
+      .bandpass(freq, q, sr)   — passes a frequency band (constant skirt gain)
+      .notch(freq, q, sr)      — removes a frequency band
+      .allpass(freq, q, sr)    — passes all frequencies, shifts phase
+
+    4-argument filters (freq, q, gain_db, sample_rate):
+      .peak(freq, q, gain_db, sr)      — boosts or cuts at center frequency
+      .lowshelf(freq, q, gain_db, sr)   — boosts or cuts below cutoff
+      .highshelf(freq, q, gain_db, sr)  — boosts or cuts above cutoff
+
+    Parameters:
+      freq — center/cutoff frequency in Hz
+      q — quality factor (0.707 = Butterworth/no resonance, higher = narrower/more resonant)
+      gain_db — boost/cut in dB (only for peak, lowshelf, highshelf)
+      sr — sample rate in Hz
+
+    BiquadCoeffs.lowpass(freq, q, sr) — returns BiquadCoeffs instance
+
+    ## Biquad — stateful filter (Direct Form II Transposed)
+
+    Biquad(coeffs=None) — passthrough if no coeffs
+
+    Methods:
+      .set_coeffs(coeffs)        — update coefficients without resetting state
+      .process_sample(x) -> y    — filter one sample
+      .reset()                   — zero internal state (z1, z2)
+
+    ## Typical usage pattern
+
+      _filters = None
+      def process(inputs, outputs, frame_count, sample_rate, params):
+          global _filters
+          if _filters is None:
+              _filters = [Biquad() for _ in range(len(inputs))]
+          coeffs = BiquadCoeffs.lowpass(params["cutoff"], 0.707, sample_rate)
+          for ch in range(len(inputs)):
+              _filters[ch].set_coeffs(coeffs)
+              for i in range(frame_count):
+                  outputs[ch][i] = _filters[ch].process_sample(inputs[ch][i])
+    """
+
+    private static let rustFilters = """
+    # Filters — BiquadCoeffs + Biquad
+
+    Biquad filters using Audio EQ Cookbook formulas (Robert Bristow-Johnson).
+    All internal math uses f64 for precision. Create one Biquad per channel.
+
+    ## BiquadCoeffs — coefficient calculation (stateless)
+
+    3-argument filters (freq, q, sample_rate):
+      ::lowpass(freq, q, sr)    — passes frequencies below cutoff
+      ::highpass(freq, q, sr)   — passes frequencies above cutoff
+      ::bandpass(freq, q, sr)   — passes a frequency band (constant skirt gain)
+      ::notch(freq, q, sr)      — removes a frequency band
+      ::allpass(freq, q, sr)    — passes all frequencies, shifts phase
+
+    4-argument filters (freq, q, gain_db, sample_rate):
+      ::peak(freq, q, gain_db, sr)      — boosts or cuts at center frequency
+      ::lowshelf(freq, q, gain_db, sr)   — boosts or cuts below cutoff
+      ::highshelf(freq, q, gain_db, sr)  — boosts or cuts above cutoff
+
+    Parameters:
+      freq — center/cutoff frequency in Hz
+      q — quality factor (0.707 = Butterworth/no resonance, higher = narrower/more resonant)
+      gain_db — boost/cut in dB (only for peak, lowshelf, highshelf)
+      sr — sample rate in Hz
+
+    BiquadCoeffs::lowpass(freq, q, sr) — returns BiquadCoeffs (Copy type)
+    IMPORTANT: all three arguments must be f64. Cast with `as f64`:
+      BiquadCoeffs::lowpass(cutoff as f64, q as f64, sample_rate as f64)
+
+    ## Biquad — stateful filter (Direct Form II Transposed)
+
+    Biquad::new() — const fn, passthrough by default. Copy type.
+
+    Methods:
+      .set_coeffs(coeffs)        — update coefficients without resetting state
+      .process_sample(x) -> y    — filter one sample (f64)
+      .reset()                   — zero internal state (z1, z2)
+
+    ## Typical usage pattern
+
+      static mut FILTERS: [Biquad; 2] = [Biquad::new(); 2];
+      // in process():
+      let coeffs = BiquadCoeffs::lowpass(ctx.param(CUTOFF) as f64, 0.707, ctx.sample_rate() as f64);
+      unsafe {
+          FILTERS[c].set_coeffs(coeffs);
+          ctx.set_output(c, i, FILTERS[c].process_sample(ctx.input(c, i) as f64) as f32);
+      }
+    """
+
+    private static let pythonDelays = """
+    # DelayLine — Circular Buffer
+
+    Pre-allocated circular buffer for delay effects with fractional-sample interpolation.
+
+    ## Construction
+
+    DelayLine(max_samples: int) — numpy float32 backed
+      Sizing: int(max_delay_seconds * sample_rate)
+      Property: .max_samples → int
+
+    ## Methods
+
+    .write(sample)              — write one sample and advance write head
+    .read(delay_samples)        — fractional delay with linear interpolation
+    .read_cubic(delay_samples)  — fractional delay with 4-point Hermite interpolation (better for
+                                  pitch shifting and modulated delays)
+    .tap(delay_samples)         — integer delay, no interpolation
+    .clear()                    — zero buffer and reset write position
+
+    ## Delay time conversion
+
+    delay_samples = delay_time_ms * 0.001 * sample_rate
+    max_samples = int(max_delay_seconds * sample_rate)
+
+    ## Notes
+
+    - write() before read() each sample — write advances the head, read looks backward
+    - read(0) and tap(0) return the sample at the current write position (just written)
+    - read(1) / tap(1) returns the previous sample
+    """
+
+    private static let rustDelays = """
+    # DelayLine — Circular Buffer
+
+    Pre-allocated circular buffer for delay effects with fractional-sample interpolation.
+
+    ## Construction
+
+    DelayLine::<SIZE>::new() — const generic, compile-time size
+      SIZE must be a const. Example: DelayLine::<48000>::new()
+      Stored in static mut for persistence: static mut DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2];
+
+    ## Methods
+
+    .write(sample)              — write one sample and advance write head
+    .read(delay_samples)        — fractional delay with linear interpolation (f64 delay arg)
+    .read_cubic(delay_samples)  — fractional delay with 4-point Hermite interpolation (better for
+                                  pitch shifting and modulated delays)
+    .tap(delay_samples)         — integer delay, no interpolation (usize arg)
+    .clear()                    — zero buffer and reset write position
+
+    ## Delay time conversion
+
+    delay_samples = delay_time_ms * 0.001 * sample_rate
+    SIZE = max_delay_seconds * max_sample_rate (e.g., 2.0 * 48000.0 as usize)
+
+    ## Notes
+
+    - write() before read() each sample — write advances the head, read looks backward
+    - read(0) and tap(0) return the sample at the current write position (just written)
+    - read(1) / tap(1) returns the previous sample
+    - Uses f32 samples, f64 delay argument for read/read_cubic
+    """
+
+    private static let pythonOscillators = """
+    # Oscillators — LFO + Waveform Functions
+
+    ## LFO — Stateful Low-Frequency Oscillator
+
+    LFO(sample_rate, freq=1.0, waveform="sine")
+
+    Methods:
+      .tick() -> float          — advance one sample, returns value in [-1, 1]
+      .tick_n(n) -> np.ndarray  — advance n samples, returns float32 array. More efficient than tick() in a loop.
+      .set_freq(hz)             — update frequency
+      .set_waveform(wf)         — string: "sine", "triangle", "saw", "square"
+      .reset()                  — reset phase to 0
+      .value                    — last tick() value (attribute, not a method call)
+
+    ## Stateless waveform functions
+
+    All take phase in [0, 1) and return value in [-1, 1]:
+      sine(phase)      — sin(2*pi*phase)
+      triangle(phase)  — triangle wave
+      saw(phase)       — sawtooth wave (rising)
+
+    advance_phase(phase, freq, sample_rate) -> new_phase  — advance phase by one sample, wraps at 1.0
+
+    ## Multi-channel LFO pattern
+
+    Call tick() once per frame (every frame iteration) to advance the phase by one sample.
+    Do NOT call tick() once per channel — that would advance the phase too fast.
+
+    Frames-outer loop (most common — call tick() unconditionally every frame):
+      for i in range(frame_count):
+          mod = lfo.tick()          # tick every iteration, no condition
+          for ch in range(len(inputs)):
+              outputs[ch][i] = inputs[ch][i] * mod
+
+    Channels-outer loop (tick on channel 0, use .value for others):
+      mod = lfo.tick() if ch == 0 else lfo.value
+
+    ## Multi-voice LFO phase spread
+
+    For chorus/flanger with N voices, spread LFO phases evenly. Pre-seed each LFO at module scope
+    by advancing it by phase_offset * samples_per_cycle at a reference frequency.
+
+      NUM_VOICES = 3
+      _lfos = None
+      _last_sr = None
+
+      def _init_lfos(sample_rate, rate_hz):
+          global _lfos, _last_sr
+          _lfos = []
+          for v in range(NUM_VOICES):
+              lfo = LFO(sample_rate, freq=rate_hz)
+              for _ in range(int((v / NUM_VOICES) * sample_rate / rate_hz)):
+                  lfo.tick()
+              _lfos.append(lfo)
+          _last_sr = sample_rate
+
+      def process(inputs, outputs, frame_count, sample_rate, params):
+          if _last_sr != sample_rate:
+              _init_lfos(sample_rate, params["rate"])
+          ...
+    """
+
+    private static let rustOscillators = """
+    # Oscillators — LFO + Waveform Functions
+
+    ## LFO — Stateful Low-Frequency Oscillator
+
+    Lfo::new() → defaults to 1 Hz sine at 44100 Hz. Call .init(sr, freq) each callback.
+      Both args are f64. Cast f32 values: .init(ctx.sample_rate() as f64, rate_hz as f64)
+
+    Methods:
+      .tick() -> f32            — advance one sample, returns value in [-1, 1]
+      .init(sr: f64, freq: f64) — set sample rate and frequency. Call at start of each process() callback.
+      .set_freq(hz)             — update frequency
+      .set_waveform(wf)         — Waveform enum: Waveform::Sine, Triangle, Saw, Square
+      .reset()                  — reset phase to 0
+      .value                    — last tick() value (field, not a method call)
+
+    ## Waveform enum
+
+    Waveform::Sine, Waveform::Triangle, Waveform::Saw, Waveform::Square
+
+    ## Stateless waveform functions
+
+    All take phase in [0, 1) and return value in [-1, 1]:
+      sine(phase)      — sin(2*pi*phase)
+      triangle(phase)  — triangle wave
+      saw(phase)       — sawtooth wave (rising)
+
+    advance_phase(phase, freq, sample_rate) -> new_phase  — advance phase by one sample, wraps at 1.0
+
+    ## Multi-channel LFO pattern
+
+    Call tick() once per frame to advance the phase by one sample.
+    Do NOT call tick() once per channel — that would advance the phase too fast.
+
+    Frames-outer loop (most common):
+      for f in 0..ctx.frames() {
+          let mod_val = unsafe { LFO.tick() };  // tick once per frame
+          for c in 0..ctx.channels() {
+              ctx.set_output(c, f, ctx.input(c, f) * mod_val);
+          }
+      }
+
+    Channels-outer loop:
+      let mod_val = if c == 0 { unsafe { LFO.tick() } } else { unsafe { LFO.value } };
+    """
+
+    private static let pythonUtilities = """
+    # Utility Functions
+
+    Stateless helpers for unit conversion and common audio math.
+
+    ## Unit conversion
+
+    db_to_gain(db) -> gain          — 0 dB = 1.0, -6 dB ≈ 0.5, -20 dB = 0.1
+    gain_to_db(gain) -> db          — inverse of db_to_gain, clamps to avoid log(0)
+    ms_to_samples(ms, sr) -> int    — milliseconds to sample count (rounded)
+    samples_to_ms(samples, sr)      — sample count to milliseconds
+    freq_to_period(freq, sr)        — frequency in Hz to period in samples
+
+    ## Smoothing
+
+    smooth_coeff(time_ms, sr) -> alpha
+      One-pole smoothing coefficient. Use as: state = alpha * state + (1 - alpha) * target
+      Larger time_ms = slower smoothing (alpha closer to 1.0).
+      time_ms=0 or negative returns 0.0 (instant).
+
+    ## Waveshaping
+
+    soft_clip(x, drive=1.0)   — tanh saturation. drive > 1 increases distortion.
+    lerp(a, b, t)             — linear interpolation. t=0 → a, t=1 → b.
+
+    ## Crossfade
+
+    crossfade(dry, wet, mix, out, n)
+      Buffer-level linear crossfade. Writes to out[:n] in-place.
+      dry, wet, out are numpy arrays. mix is a float.
+
+    equal_power_crossfade(dry, wet, mix, out, n)
+      Constant-energy crossfade using sine/cosine curves.
+      Preserves perceived loudness at 50% mix (no energy dip).
+    """
+
+    private static let rustUtilities = """
+    # Utility Functions
+
+    Stateless helpers for unit conversion and common audio math. All use f64.
+
+    ## Unit conversion
+
+    db_to_gain(db) -> gain          — 0 dB = 1.0, -6 dB ≈ 0.5, -20 dB = 0.1
+    gain_to_db(gain) -> db          — inverse of db_to_gain, clamps to avoid log(0)
+    ms_to_samples(ms, sr) -> int    — milliseconds to sample count (rounded)
+    samples_to_ms(samples, sr)      — sample count to milliseconds
+    freq_to_period(freq, sr)        — frequency in Hz to period in samples
+
+    ## Smoothing
+
+    smooth_coeff(time_ms, sr) -> alpha
+      One-pole smoothing coefficient. Use as: state = alpha * state + (1 - alpha) * target
+      Larger time_ms = slower smoothing (alpha closer to 1.0).
+      time_ms=0 or negative returns 0.0 (instant).
+
+    ## Waveshaping
+
+    soft_clip(x, drive=1.0)   — tanh saturation. drive > 1 increases distortion.
+    lerp(a, b, t)             — linear interpolation. t=0 → a, t=1 → b.
+
+    ## Crossfade
+
+    crossfade(dry: f32, wet: f32, mix: f32) -> f32
+      Per-sample linear crossfade. mix=0 → dry, mix=1 → wet.
+    """
+
+    private static let pythonAccel = """
+    # Accelerated Math — conjuredsp.accel
+
+    Hardware-accelerated vectorized math operations. On WASM, these call Apple's
+    Accelerate framework (vDSP/vecLib) via host imports for AMX/NEON-optimized
+    performance. Use these instead of writing your own loops for matrix math,
+    element-wise operations, or activation functions.
+
+      from conjuredsp.accel import matmul, vec_add, vec_mul, vec_tanh, vec_sigmoid, vec_add_scalar
+
+      matmul(a, b, out)               # numpy.matmul (Accelerate BLAS)
+      vec_add(a, b, out)              # numpy.add
+      vec_mul(a, b, out)              # numpy.multiply
+      vec_tanh(x, out)                # numpy.tanh
+      vec_sigmoid(x, out)             # 1 / (1 + exp(-clip(x)))
+      vec_add_scalar(x, scalar, out)  # numpy.add(x, scalar)
+
+    IMPORTANT: `out` is REQUIRED in all functions (not optional). Pre-allocate
+    output buffers and reuse them across calls. This is critical for real-time
+    audio — per-call allocation causes memory growth because the macOS allocator
+    retains pages. Example:
+
+      # Pre-allocate once (e.g., in module scope or __init__)
+      _buf = np.empty((rows, cols), dtype=np.float32)
+
+      # Reuse every callback
+      matmul(a, b, _buf)
+
+    Note: You can also use numpy directly (e.g., `a @ b`) but be aware that
+    numpy operators allocate new arrays each call. Use conjuredsp.accel with
+    pre-allocated buffers for zero-allocation real-time code.
+
+    ## Performance
+
+    These functions are 10-30x faster than equivalent scalar loops for
+    matrix-heavy workloads (e.g., NAM inference, convolutions) because they
+    use Apple's AMX coprocessor (dedicated matrix math hardware).
+
+    Always prefer accel functions over hand-written loops for:
+    - Matrix multiplication
+    - Bulk activation functions (tanh, sigmoid on arrays)
+    - Element-wise vector operations on large buffers
+    """
+
+    private static let rustAccel = """
+    # Accelerated Math — conjuredsp::accel
+
+    Hardware-accelerated vectorized math operations. In WASM, these call Apple's
+    Accelerate framework (vDSP/vecLib) via host imports for AMX/NEON-optimized
+    performance. Use these instead of writing your own loops for matrix math,
+    element-wise operations, or activation functions.
+
+      use conjuredsp::accel;
+
+      // Matrix multiply: out[m×n] = a[m×k] @ b[k×n], row-major
+      accel::matmul(a: &[f32], b: &[f32], out: &mut [f32], m: usize, k: usize, n: usize)
+
+      // Element-wise operations (all slices must be same length)
+      accel::vec_add(a: &[f32], b: &[f32], out: &mut [f32])    // out = a + b
+      accel::vec_mul(a: &[f32], b: &[f32], out: &mut [f32])    // out = a * b
+      accel::vec_tanh(input: &[f32], output: &mut [f32])        // out = tanh(in)
+      accel::vec_sigmoid(input: &[f32], output: &mut [f32])     // out = sigmoid(in)
+      accel::vec_add_scalar(input: &[f32], scalar: f32, output: &mut [f32])  // out = in + s
+
+    ## Example
+
+      use conjuredsp::accel;
+
+      let a = [1.0, 2.0, 3.0, 4.0];
+      let b = [5.0, 6.0, 7.0, 8.0];
+      let mut c = [0.0f32; 4];
+      accel::matmul(&a, &b, &mut c, 2, 2, 2);
+      // c = [19.0, 22.0, 43.0, 50.0]
+
+    ## Performance
+
+    These functions are 10-30x faster than equivalent scalar loops for
+    matrix-heavy workloads (e.g., NAM inference, convolutions) because they
+    use Apple's AMX coprocessor (dedicated matrix math hardware).
+
+    Always prefer accel:: functions over hand-written loops for:
+    - Matrix multiplication
+    - Bulk activation functions (tanh, sigmoid on arrays)
+    - Element-wise vector operations on large buffers
+    """
 }

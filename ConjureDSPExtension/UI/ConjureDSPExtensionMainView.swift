@@ -94,8 +94,16 @@ struct ConjureDSPExtensionMainView: View {
     /// Flips true the first time keyboard input reaches the terminal's
     /// WebSocket — exposed as a hidden accessibility element for UI tests.
     @State private var terminalFirstInputReceived: Bool = false
+    /// True when the daemon reported zero agents detected on first run
+    /// (kept under its original name for UI-test backwards compatibility).
+    @State private var terminalClaudeNotInstalled: Bool = false
+    /// True when the daemon is showing the multi-agent picker inside the PTY.
+    @State private var terminalAgentPickerShowing: Bool = false
+    /// Names of agents whose presence the daemon has reported (launching, picker, new-agent-hint).
+    /// Each appears as a hidden `terminalAgentInstalled_<name>` marker for UI tests.
+    @State private var terminalInstalledAgents: Set<String> = []
     @State private var showAIPromptTab: Bool = false
-    @State private var chatWidth: CGFloat = 280
+    @State private var chatWidth: CGFloat = 360
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
     @State private var showExportAlert: Bool = false
@@ -378,7 +386,22 @@ struct ConjureDSPExtensionMainView: View {
                                     colorScheme: colorScheme,
                                     appGroupContainerURL: appGroupContainerURL,
                                     instanceID: instanceID,
-                                    onFirstInput: { terminalFirstInputReceived = true }
+                                    onFirstInput: { terminalFirstInputReceived = true },
+                                    onAgentStatus: { status in
+                                        switch status {
+                                        case .noAgentsInstalled, .claudeNotInstalled:
+                                            terminalClaudeNotInstalled = true
+                                        case .picker(let agents):
+                                            terminalAgentPickerShowing = true
+                                            terminalInstalledAgents.formUnion(agents)
+                                        case .launching(let agent):
+                                            terminalInstalledAgents.insert(agent)
+                                        case .agentMissing:
+                                            break
+                                        case .newAgentHint(let agents):
+                                            terminalInstalledAgents.formUnion(agents)
+                                        }
+                                    }
                                 )
                                     .accessibilityIdentifier("terminalPanel")
                                     .opacity(showAIPromptTab ? 0 : 1)
@@ -390,6 +413,24 @@ struct ConjureDSPExtensionMainView: View {
                                                 .frame(width: 1, height: 1)
                                                 .accessibilityIdentifier("terminalFirstInputReceived")
                                                 .accessibilityLabel("terminalFirstInputReceived")
+                                        }
+                                        if terminalClaudeNotInstalled {
+                                            Color.clear
+                                                .frame(width: 1, height: 1)
+                                                .accessibilityIdentifier("terminalClaudeNotInstalled")
+                                                .accessibilityLabel("terminalClaudeNotInstalled")
+                                        }
+                                        if terminalAgentPickerShowing {
+                                            Color.clear
+                                                .frame(width: 1, height: 1)
+                                                .accessibilityIdentifier("terminalAgentPickerShowing")
+                                                .accessibilityLabel("terminalAgentPickerShowing")
+                                        }
+                                        ForEach(Array(terminalInstalledAgents), id: \.self) { agent in
+                                            Color.clear
+                                                .frame(width: 1, height: 1)
+                                                .accessibilityIdentifier("terminalAgentInstalled_\(agent)")
+                                                .accessibilityLabel("terminalAgentInstalled_\(agent)")
                                         }
                                     }
                             } else {
@@ -419,7 +460,7 @@ struct ConjureDSPExtensionMainView: View {
                             .onChanged { value in
                                 let start = chatResizeStart ?? chatWidth
                                 if chatResizeStart == nil { chatResizeStart = chatWidth }
-                                chatWidth = max(200, min(450, start + value.translation.width))
+                                chatWidth = max(200, min(600, start + value.translation.width))
                             }
                             .onEnded { _ in chatResizeStart = nil }
                     )
