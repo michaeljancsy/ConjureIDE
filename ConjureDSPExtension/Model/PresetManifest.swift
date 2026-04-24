@@ -147,4 +147,46 @@ extension PresetManifest {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try encoder.encode(self)
     }
+
+    /// Preflight a proposed `manifest.json` write for the given bundle
+    /// root. Returns nil when the write is safe to land, or a
+    /// human-readable error message when it would leave the bundle in
+    /// an unloadable state.
+    ///
+    /// Two rejection conditions:
+    ///
+    /// 1. **Content doesn't decode as a valid manifest.** Missing or
+    ///    wrong-typed fields, trailing commas, etc. `PresetBundle.load`
+    ///    would return nil after the refresh, silently invalidating
+    ///    `currentBundle` — the agent would see `get_bundle_info`
+    ///    return `bundle: null` and perceive a "preset dropped" state.
+    /// 2. **`entry` points at a missing file.** Decode succeeds but
+    ///    the referenced entry script doesn't exist in the bundle
+    ///    (e.g. agent swapped `process.rs` for `process.py` without
+    ///    creating the Python file). Same silent-unload outcome.
+    ///
+    /// Pure function: doesn't touch disk except to check that
+    /// `entry`'s file exists under `bundleRoot`. Exposed on
+    /// PresetManifest so tests can exercise it without spinning up an
+    /// AU or MCP handler.
+    static func validateProposedWrite(
+        content: String,
+        bundleRoot: URL,
+        fileManager: FileManager = .default
+    ) -> String? {
+        guard let data = content.data(using: .utf8) else {
+            return "Manifest content is not valid UTF-8."
+        }
+        let parsed: PresetManifest
+        do {
+            parsed = try decode(from: data)
+        } catch {
+            return "Manifest write rejected: content does not parse as a valid manifest. Keep the existing fields (schemaVersion, entry, language, ui) and only add/modify the params block. Underlying error: \(error.localizedDescription)"
+        }
+        let entryURL = bundleRoot.appendingPathComponent(parsed.entry)
+        if !fileManager.fileExists(atPath: entryURL.path) {
+            return "Manifest write rejected: `entry` points at \"\(parsed.entry)\" but that file doesn't exist in the bundle. Either restore the original `entry` value or write the entry file first."
+        }
+        return nil
+    }
 }

@@ -509,6 +509,24 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         if preset.isFactory {
             return (jsonStr(["error": "Factory presets are read-only. Save the preset with save_preset first to create an editable user bundle."]), true)
         }
+
+        // Pre-flight validation for manifest.json writes. A malformed
+        // manifest or one pointing at a missing `entry` file makes
+        // `PresetBundle.load` return nil — the bundle silently becomes
+        // unloadable, `get_bundle_info` reports `bundle: null`, and the
+        // agent perceives the preset as "dropped" even though
+        // `currentPreset` is still set. Catching the bad write here
+        // means the file never lands in a broken state, and the agent
+        // gets an actionable error instead of a mysterious unload.
+        if url.lastPathComponent == PresetManifest.filename {
+            if let errorMessage = PresetManifest.validateProposedWrite(
+                content: content,
+                bundleRoot: url.deletingLastPathComponent()
+            ) {
+                return (jsonStr(["error": errorMessage]), true)
+            }
+        }
+
         do {
             // Parent dirs may not exist yet — e.g. first write to
             // ui/assets/style.css in a bundle that only had ui/.
