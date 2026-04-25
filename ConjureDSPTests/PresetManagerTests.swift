@@ -92,6 +92,38 @@ struct PresetManagerTests {
         }
     }
 
+    /// Factory presets that ship a `ui/index.html` AND declare a manifest.ui
+    /// block must report `hasCustomUI == true`. Regression guard for the
+    /// preset-browser palette badge — when this returns false, the browser's
+    /// `paintpalette` SF Symbol disappears AND the main view's custom-UI
+    /// toggle bar collapses to "Basic UI" with no toggle, both of which
+    /// silently make exported preset UIs untestable from the host app.
+    /// SVF (Python + Rust) are the canonical custom-UI factory presets;
+    /// they were added with the cdp-xy pad and have shipped with a UI
+    /// since they were promoted to factory.
+    @Test @MainActor func factoryBundlesWithCustomUIReportHasCustomUI() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let svfNames = ["State Variable Filter (Python)", "State Variable Filter (Rust)"]
+        for name in svfNames {
+            guard let preset = manager.presets.first(where: { $0.name == name }) else {
+                Issue.record("Missing factory preset '\(name)'")
+                continue
+            }
+            guard let bundle = manager.loadBundle(for: preset) else {
+                Issue.record("loadBundle returned nil for factory '\(name)' — Bundle.url(forResource:withExtension:subdirectory:) likely failed to resolve the .cdp directory")
+                continue
+            }
+            #expect(bundle.manifest.ui != nil,
+                   "\(name) manifest must declare a ui block (it ships ui/index.html)")
+            #expect(bundle.uiIndexURL != nil,
+                   "\(name) ui/index.html must resolve under the bundle root — got rootURL=\(bundle.rootURL.path)")
+            #expect(bundle.hasCustomUI,
+                   "\(name) must report hasCustomUI=true so the preset-browser palette badge + main-view toggle bar render correctly")
+        }
+    }
+
     @Test @MainActor func factoryPresetsHaveCorrectLanguage() throws {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
