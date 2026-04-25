@@ -42,7 +42,15 @@ TEMPLATE_SOURCES="${SRCROOT}/ConjureDSPExportAUTemplate/ConjureDSPExportAUTempla
 needs_clean=false
 if [ -f "${TEMPLATE_BINARY}" ]; then
     binary_mtime=$(stat -f %m "${TEMPLATE_BINARY}")
-    newest_source_mtime=$(find "${TEMPLATE_SOURCES}" -type f \( -name "*.swift" -o -name "*.m" -o -name "*.mm" -o -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.plist" -o -name "*.entitlements" \) -exec stat -f %m {} \; | sort -n | tail -1)
+    # `find -L` follows symlinks so resources symlinked from the main extension
+    # (cdp-ui.js, customui-bridge.js, BundleAssetSchemeHandler.swift) trigger a
+    # rebuild when their TARGETS change. Without -L, the symlink's own mtime
+    # is used, which never updates when only the target changes — Xcode's
+    # incremental build then skips Copy Bundle Resources and the bundled
+    # appex contains a stale snapshot of the JS / Swift symlink target.
+    # We also include .js/.css/.html so any future symlinked web asset is
+    # caught by the same check.
+    newest_source_mtime=$(find -L "${TEMPLATE_SOURCES}" -type f \( -name "*.swift" -o -name "*.m" -o -name "*.mm" -o -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.plist" -o -name "*.entitlements" -o -name "*.js" -o -name "*.css" -o -name "*.html" \) -exec stat -f %m {} \; | sort -n | tail -1)
     if [ -n "${newest_source_mtime}" ] && [ "${newest_source_mtime}" -gt "${binary_mtime}" ]; then
         echo "note: Template binary is older than template sources — forcing clean build" >&2
         needs_clean=true
@@ -83,9 +91,12 @@ fi
 # Post-build sanity check: if sources are STILL newer than the built
 # binary after xcodebuild claimed success, fail loudly. Catches any future
 # incremental-build regression that silently ships yesterday's code.
+# `find -L` + .js/.css/.html mirror the freshness check above so symlinked
+# resources (cdp-ui.js, customui-bridge.js) are tracked through the symlink
+# to the actual content that gets bundled.
 if [ -f "${TEMPLATE_BINARY}" ]; then
     binary_mtime=$(stat -f %m "${TEMPLATE_BINARY}")
-    newest_source_mtime=$(find "${TEMPLATE_SOURCES}" -type f \( -name "*.swift" -o -name "*.m" -o -name "*.mm" -o -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.plist" -o -name "*.entitlements" \) -exec stat -f %m {} \; | sort -n | tail -1)
+    newest_source_mtime=$(find -L "${TEMPLATE_SOURCES}" -type f \( -name "*.swift" -o -name "*.m" -o -name "*.mm" -o -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.plist" -o -name "*.entitlements" -o -name "*.js" -o -name "*.css" -o -name "*.html" \) -exec stat -f %m {} \; | sort -n | tail -1)
     if [ -n "${newest_source_mtime}" ] && [ "${newest_source_mtime}" -gt "${binary_mtime}" ]; then
         echo "error: Template sources newer than built binary AFTER build. xcodebuild didn't actually recompile." >&2
         echo "error:   binary mtime: $(date -r "${binary_mtime}")" >&2
@@ -95,16 +106,17 @@ if [ -f "${TEMPLATE_BINARY}" ]; then
 fi
 
 if [ -d "$TEMPLATE_SRC" ]; then
-    # Skip zip if the output is newer than the source app
-    if [ -f "$TEMPLATE_DST" ] && [ "$TEMPLATE_DST" -nt "$TEMPLATE_SRC" ]; then
-        echo "note: Export template zip is up to date" >&2
-    else
-        echo "Zipping export template from $TEMPLATE_SRC"
-        # Remove old zip first to avoid stale files from a previous build config
-        rm -f "$TEMPLATE_DST"
-        cd "$(dirname "$TEMPLATE_SRC")"
-        zip -qry "$TEMPLATE_DST" "$(basename "$TEMPLATE_SRC")"
-    fi
+    # Always re-zip. The previous "skip if zip is newer than .app dir" check
+    # was unreliable: the .app DIRECTORY's mtime doesn't update when only
+    # files inside it change (e.g. a Copy Bundle Resources phase rewriting
+    # cdp-ui.js content), so the skip would wrongly say "up to date" and
+    # bundle a stale ExportTemplate.zip while the template build itself
+    # was correct. Zipping costs ~1s for ~16MB; that's cheaper than another
+    # round of "wait, the bundled JS is stale AGAIN" debugging.
+    echo "Zipping export template from $TEMPLATE_SRC"
+    rm -f "$TEMPLATE_DST"
+    cd "$(dirname "$TEMPLATE_SRC")"
+    zip -qry "$TEMPLATE_DST" "$(basename "$TEMPLATE_SRC")"
 else
     echo "warning: Export template not built at $TEMPLATE_SRC" >&2
     echo "warning: Run: cd ConjureDSPExportAUTemplate && xcodebuild -scheme ConjureDSPExportAUTemplate -configuration ${TEMPLATE_CONFIG} -arch arm64 -derivedDataPath build build" >&2
