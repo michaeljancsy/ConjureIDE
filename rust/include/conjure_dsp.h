@@ -176,7 +176,7 @@ void dsp_kernel_set_tones_dir(DSPKernelRef _kernel, const char *path);
  * Load a WASM module for DSP processing.
  *
  * The module must export a `process` function with signature
- * `(input_ptr: i32, output_ptr: i32, channels: i32, frame_count: i32, sample_rate: f32)`
+ * `(input_ptr: i32, output_ptr: i32, channel_count: i32, frame_count: i32, sample_rate: f32)`
  * and a `memory` (linear memory).
  *
  * Returns true on success, false on error (check `dsp_kernel_last_error`).

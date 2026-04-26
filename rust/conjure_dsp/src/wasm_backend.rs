@@ -81,7 +81,7 @@ enum BufferMode {
 /// Audio data is copied into/out of WASM linear memory each render callback.
 ///
 /// The WASM `process` function signature:
-///   `(input_ptr: i32, output_ptr: i32, channels: i32, frame_count: i32, sample_rate: f32) -> ()`
+///   `(input_ptr: i32, output_ptr: i32, channel_count: i32, frame_count: i32, sample_rate: f32) -> ()`
 ///
 /// Memory layout at input_ptr / output_ptr:
 ///   Channels laid out sequentially, each `frame_count` floats.
@@ -2050,9 +2050,9 @@ params! { GAIN = db().default(0.0), }
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32, output: *mut f32,
-    channels: i32, frame_count: i32, sample_rate: f32,
+    channel_count: i32, frame_count: i32, sample_rate: f32,
 ) {
-    let ctx = ctx(input, output, channels, frame_count, sample_rate);
+    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
     unsafe {
         for c in 0..ctx.channels() {
             let n = ctx.frames();

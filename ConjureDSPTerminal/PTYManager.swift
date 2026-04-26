@@ -546,12 +546,14 @@ final class PTYManager {
         "ratio": ratio(),           # 1:1-20:1 compression ratio, default 4
     }
 
-    def process(inputs, outputs, frame_count, sample_rate, params):
-        # inputs/outputs: list of numpy.float32 arrays, one per channel
-        # params: dict keyed by PARAMS names (e.g. params["cutoff"] = 1000.0)
+    def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+        # ALWAYS declare all 7 args. Use _transport / _telemetry (underscore
+        # prefix = unused) when you don't read them; drop the underscore later
+        # if you start using them. inputs/outputs: list of numpy.float32 arrays,
+        # one per channel. params: dict keyed by PARAMS names
+        # (e.g. params["cutoff"] = 1000.0).
         for ch in range(len(inputs)):
-            for i in range(frame_count):
-                outputs[ch][i] = inputs[ch][i]  # passthrough
+            outputs[ch][:frame_count] = inputs[ch][:frame_count]  # passthrough
     ```
 
     Persistent state: module-level globals (e.g. `_filters = None`, initialized on first call). \
@@ -575,9 +577,14 @@ final class PTYManager {
     #[no_mangle]
     pub extern "C" fn process(
         input: *const f32, output: *mut f32,
-        channels: i32, frame_count: i32, sample_rate: f32,
+        channel_count: i32, frame_count: i32, sample_rate: f32,
     ) {
-        let ctx = ctx(input, output, channels, frame_count, sample_rate);
+        // Copy your process() args into ctx() in the same order. Don't rename
+        // the third arg to anything that suggests "frames" — Context indexes
+        // via channel * frames + frame; mixing the two compiles fine but
+        // walks the buffer with the wrong stride and produces silently-wrong
+        // output.
+        let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
         unsafe {
             let cutoff = ctx.param(CUTOFF);  // actual value (1000.0 Hz), not 0-1
             for c in 0..ctx.channels() {

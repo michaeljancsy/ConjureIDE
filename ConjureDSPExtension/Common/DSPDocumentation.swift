@@ -233,7 +233,7 @@ enum DSPDocumentation {
 
     Python:
       _filters = None
-      def process(inputs, outputs, frame_count, sample_rate, params):
+      def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
           global _filters
           if _filters is None:
               _filters = [Biquad() for _ in range(len(inputs))]
@@ -373,7 +373,7 @@ enum DSPDocumentation {
               _lfos.append(lfo)
           _last_sr = sample_rate
 
-      def process(inputs, outputs, frame_count, sample_rate, params):
+      def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
           if _last_sr != sample_rate:
               _init_lfos(sample_rate, params["rate"])
           ...
@@ -536,7 +536,7 @@ enum DSPDocumentation {
 
       model = load_model("tone3000://12345/67890")
 
-      def process(inputs, outputs, frame_count, sample_rate, params):
+      def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
           gain = 10 ** (params["input_gain"] / 20.0)
           mix_val = params["mix"]
           for ch in range(len(inputs)):
@@ -1250,7 +1250,7 @@ enum DSPDocumentation {
     ## Typical usage pattern
 
       _filters = None
-      def process(inputs, outputs, frame_count, sample_rate, params):
+      def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
           global _filters
           if _filters is None:
               _filters = [Biquad() for _ in range(len(inputs))]
@@ -1433,7 +1433,7 @@ enum DSPDocumentation {
               _lfos.append(lfo)
           _last_sr = sample_rate
 
-      def process(inputs, outputs, frame_count, sample_rate, params):
+      def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
           if _last_sr != sample_rate:
               _init_lfos(sample_rate, params["rate"])
           ...
