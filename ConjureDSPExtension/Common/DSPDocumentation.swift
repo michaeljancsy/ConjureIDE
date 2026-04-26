@@ -819,6 +819,28 @@ enum DSPDocumentation {
     vs choice styles — all the metadata shapes you'd otherwise have to
     special-case.
 
+    ### control() accepts both index and name
+
+    `ConjureDSP.ui.control(...)` takes EITHER a numeric index OR a param
+    name string — same loose match `<cdp-slider param="...">` uses
+    (case / underscore / space insensitive):
+
+    ```js
+    const a = ConjureDSP.ui.control(0);          // by index
+    const b = ConjureDSP.ui.control('Drive');    // by name (any case)
+    const c = ConjureDSP.ui.control('low gain'); // matches LOW_GAIN, lowGain, etc.
+    ```
+
+    Returns `null` when a name doesn't resolve, with a warning logged
+    via `ConjureDSP.log` so the typo shows up in Console.app instead
+    of silently freezing your widget. Always check for null when you
+    pass a name:
+
+    ```js
+    const drive = ConjureDSP.ui.control('Drive');
+    if (drive) drive.onChange(v => redraw(v));
+    ```
+
     ### SVG drag regions that don't respond to the mouse
 
     When you attach a `pointerdown` listener to an SVG `<g>`, the

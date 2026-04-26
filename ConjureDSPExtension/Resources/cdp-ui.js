@@ -13,9 +13,17 @@
  *   ConjureDSP.ui.version                 // integer; bumped on breaking changes
  *   ConjureDSP.ui.requireVersion(n)       // throws if library is older than n
  *
- *   ConjureDSP.ui.control(i)              // primitive: { value, setValue(v),
+ *   ConjureDSP.ui.control(indexOrName)    // primitive: { value, setValue(v),
  *                                         //             metadata, onChange(cb),
  *                                         //             normalize(v), denormalize(t) }
+ *                                         // Accepts a numeric index or a
+ *                                         // param name (case/underscore/space
+ *                                         // insensitive — same loose match
+ *                                         // as `<cdp-slider param="...">`).
+ *                                         // Returns null if the name doesn't
+ *                                         // resolve, with a warning logged
+ *                                         // via `ConjureDSP.log` so authors
+ *                                         // can see the typo in Console.app.
  *   ConjureDSP.ui.formatValue(v, meta)    // "440 Hz", "-3.2 dB", "12%", etc.
  *   ConjureDSP.ui.denormalize(t, meta)    // 0..1 -> actual (respects log curve)
  *   ConjureDSP.ui.normalize(v, meta)      // actual -> 0..1
@@ -159,11 +167,29 @@
     }
 
     /**
-     * Wrap a parameter index in an observable control object. Reads
-     * actual (denormalized) values from the bridge; writes pass through
-     * to `CDP.parameters.set`, which routes to the AU parameter tree.
+     * Wrap a parameter in an observable control object. Reads actual
+     * (denormalized) values from the bridge; writes pass through to
+     * `CDP.parameters.set`, which routes to the AU parameter tree.
+     *
+     * Accepts either a numeric index (`control(0)`) or a param name
+     * string (`control('Drive')`). Name lookup is case/underscore/
+     * space insensitive — the same loose match `<cdp-slider
+     * param="...">` uses. Returns `null` when a name doesn't resolve,
+     * with a warning logged via the bridge so the typo shows up in
+     * Console.app instead of appearing as a silently-frozen widget.
      */
-    function control(index) {
+    function control(indexOrName) {
+        var index = (typeof indexOrName === 'string')
+            ? resolveParamAttr(indexOrName)
+            : indexOrName;
+        if (typeof index !== 'number' || index < 0) {
+            try {
+                if (window.ConjureDSP && typeof window.ConjureDSP.log === 'function') {
+                    window.ConjureDSP.log('[cdp-ui.control] unknown param: ' + JSON.stringify(indexOrName));
+                }
+            } catch (_) {}
+            return null;
+        }
         var meta = CDP.parameters.metadata(index);
         var listeners = [];
         CDP.parameters.onChange(index, function (v) {
