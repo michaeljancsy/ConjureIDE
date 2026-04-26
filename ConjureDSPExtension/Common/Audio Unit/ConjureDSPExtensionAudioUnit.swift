@@ -732,7 +732,6 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			   let metadata = try? JSONDecoder().decode([ParamMetadata].self, from: data),
 			   !metadata.isEmpty {
 				currentParamMetadata = metadata
-				paramMetadataDidChange.send(metadata)
 
 				// Derive param names from metadata
 				var names: [Int: String] = [:]
@@ -740,10 +739,26 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					names[i] = meta.name
 				}
 				currentParamNames = names
-				paramNamesDidChange.send(names)
 
-				// Rebuild tree with real names/ranges for hosts that observe KVO (Logic)
+				// CRITICAL ORDERING (mirrors applyManifestParams):
+				// rebuild the tree BEFORE broadcasting
+				// paramMetadataDidChange. ParameterState's sink in
+				// AudioUnitViewController calls `ps.attach(to:
+				// au.parameterTree)` synchronously inside the sink
+				// and snapshots the CURRENT values from whatever
+				// tree it sees. If we sent first, attach would hit
+				// the PREVIOUS (pre-rebuild) tree and populate
+				// `ParameterState.values` with stale data — and
+				// the custom-UI WebView's `sendInit`, which reads
+				// from state.values, would ship those stale values
+				// to JS. Authors see (e.g.) mix=0% in the slider
+				// while the kernel actually runs at the manifest's
+				// 0.5 default. Nudging any slider eventually
+				// converges (set() updates _values) but the first
+				// load shows wrong numbers.
 				rebuildParameterTree(metadata: metadata)
+				paramNamesDidChange.send(names)
+				paramMetadataDidChange.send(metadata)
 				return
 			}
 		}
