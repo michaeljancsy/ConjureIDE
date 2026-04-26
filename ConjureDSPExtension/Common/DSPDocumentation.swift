@@ -520,6 +520,7 @@ enum DSPDocumentation {
     <cdp-toggle param="bypass_eq"></cdp-toggle>
     <cdp-choice param="mode"></cdp-choice>
     <cdp-xy param-x="cutoff" param-y="resonance" invert-y></cdp-xy>
+    <cdp-knob param="threshold"></cdp-knob>
     <cdp-panel auto></cdp-panel>   <!-- renders one control per param -->
     ```
 
@@ -531,6 +532,30 @@ enum DSPDocumentation {
       (≤2 options) or dropdown (3+), driven by manifest `options`.
     - `<cdp-xy>` — 2D pad. `invert-y` flips so low Y = bottom (standard
       graph orientation — omit for "screen" orientation where top = 0).
+    - `<cdp-knob>` — circular knob. Vertical drag changes the value
+      (200px = 0..1; Shift = fine control); also supports mouse-wheel,
+      arrow keys (Shift = fine, Page = ±0.20), Home/End for min/max,
+      and double-click-to-default. Stacked layout: face / label /
+      value. Theme via `--cdp-knob-size`, `--cdp-knob-sweep`,
+      `--cdp-knob-face-bg`, `--cdp-knob-rim-bg`,
+      `--cdp-knob-indicator-color`, `--cdp-knob-indicator-width`. For
+      a fully custom shape (vintage tube, hexagon, animated needle),
+      slot in your own SVG and react to the published
+      `--cdp-knob-norm` CSS variable (0..1, updated live during drag)
+      entirely in CSS — the component still owns events and parameter
+      writes, you own the geometry:
+
+      ```html
+      <cdp-knob param="drive">
+        <svg slot="visual" viewBox="0 0 100 100">
+          <use href="#tube-body"/>
+          <line x1="50" y1="50" x2="50" y2="10" stroke="white"
+                style="transform-origin: 50px 50px;
+                       transform: rotate(calc(var(--cdp-knob-norm)
+                                               * 270deg - 135deg))"/>
+        </svg>
+      </cdp-knob>
+      ```
     - `<cdp-panel auto>` — fallback layout that mirrors the stock slider
       panel. Useful as a one-liner when you just want themed sliders.
 
@@ -631,9 +656,13 @@ enum DSPDocumentation {
       with a placeholder before `params` arrive. Components re-bind
       automatically; any custom JS should listen to `ConjureDSP.ready(cb)`
       before reading `parameters.get(i)` at startup.
-    - Dragging a cdp-slider with param changes does NOT fire `onAnyChange`
-      for the dragging UI's own writes (avoids feedback loops). If you
-      need continuous redraw-on-drag, run a rAF tick.
+    - `onChange`/`onAnyChange` fires for ALL parameter writes — your own
+      `parameters.set(...)` calls AND external automation (DAW, MIDI,
+      MCP, preset load). Use it as the single source of truth for
+      visual updates; a hand-rolled knob whose redraw lives in
+      `ctrl.onChange(cb)` will redraw on the user's drag the same way
+      it does on automation. Self-writes are deduped on equal values,
+      so handlers that re-set the same value they received terminate.
     - The same bundle's UI also renders inside an exported standalone AU
       via `ExportCustomUIWebView`. Don't rely on devtools or host-only
       APIs.

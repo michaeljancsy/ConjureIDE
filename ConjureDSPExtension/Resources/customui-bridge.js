@@ -52,12 +52,26 @@
     var _audioFftOn = false;        // last FFT flag sent to Swift
     var _audioSubscribed = false;   // true after a subscribeAudioFrames post, false after unsubscribe
 
-    // No echo-filtering state here by design. Swift side only forwards
-    // EXTERNAL parameter changes to JS (DAW automation, MIDI, MCP,
-    // preset load) via ParameterState.externalValueChange. UI-initiated
-    // writes via `parameters.set(...)` never come back to JS as
-    // `_paramUpdate` callbacks, so there's nothing to filter — the
-    // user's own drag can't fight itself.
+    // `parameters.set(...)` fires onChange/onAnyChange handlers
+    // synchronously, exactly like an external `_paramUpdate` callback
+    // would. That makes the low-level `ConjureDSP.ui.control(i)` API
+    // safe by default for hand-rolled custom widgets: a knob whose
+    // visual update lives inside `ctrl.onChange(refresh)` redraws on
+    // the user's own drag, not just on DAW automation.
+    //
+    // No double-fire risk: Swift's parameter observer is registered
+    // with our own AU originator token, so AU's contract excludes
+    // self-writes from `_paramUpdate` echoes (pinned by
+    // ParameterStateEchoTests.swift). The synchronous fire from
+    // `set()` is the ONLY notification path for self-writes; the
+    // asynchronous `_paramUpdate` path is the ONLY notification for
+    // external changes (DAW automation, MIDI, MCP, preset load).
+    //
+    // Recursion is broken at the source by a dedupe-on-equal guard
+    // inside `set()` — a handler that re-sets the same value it was
+    // called with terminates after one extra hop. Cross-parameter
+    // writes pass through unchanged; that's the author's loop to
+    // avoid.
 
     function postTo(name, payload) {
         try {
@@ -115,9 +129,26 @@
                     // postTo('log', '[2.js.bridge.set.SKIP] idx=' + i + ' v=' + value + ' (not finite)');
                     return;
                 }
+                // Dedupe-on-equal: cheapens drag-rate writes that don't
+                // change the value (handlers like `if (n !== last) ...`
+                // become unnecessary), and — critically — terminates
+                // recursion when an onChange handler re-sets the same
+                // value it was called with. Without this guard, a
+                // quantize handler that does `set(i, Math.round(v))`
+                // would loop forever once `v` is already an integer.
+                if (_values[i] === v) return;
                 // postTo('log', '[2.js.bridge.set] idx=' + i + ' v=' + v);
                 _values[i] = v;
                 postTo('paramSet', { index: i, value: v });
+                // Fire onChange/onAnyChange synchronously, same payload
+                // shape as the external `_paramUpdate` path. Custom
+                // widgets that depend on `ctrl.onChange(...)` for
+                // visual feedback see their handler run for the user's
+                // own drag, not just for DAW automation. See header
+                // comment for why this can't double-fire with Swift.
+                var handlers = _paramHandlers[String(i)] || [];
+                for (var k = 0; k < handlers.length; k++) safeInvoke(handlers[k], [v], 'onChange');
+                for (var j = 0; j < _anyHandlers.length; j++) safeInvoke(_anyHandlers[j], [i, v], 'onAnyChange');
             },
             metadata: function(i) {
                 // Return a shallow copy so preset code can't mutate the shared record.

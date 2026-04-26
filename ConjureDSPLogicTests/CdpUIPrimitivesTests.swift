@@ -372,7 +372,7 @@ struct CdpUIPrimitivesTests {
         """)
         ctx.evaluateScript(try Self.loadLibrarySource())
         let tags = ctx.evaluateScript("definedTags.join(',')")!.toString()!
-        for expected in ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-panel"] {
+        for expected in ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-knob", "cdp-panel"] {
             #expect(tags.contains(expected), "expected \(expected) to be registered; got: \(tags)")
         }
     }

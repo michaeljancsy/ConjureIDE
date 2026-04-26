@@ -699,10 +699,12 @@
                 var tyParam = this._invertY ? 1 - ty : ty;
                 this._cx.setValue(denormalize(tx, this._cx.metadata));
                 this._cy.setValue(denormalize(tyParam, this._cy.metadata));
-                // `parameters.set` deliberately doesn't fire onChange
-                // (echo avoidance for external automation). The puck's
-                // `_render()` is subscribed to onChange, so it wouldn't
-                // move during a local drag without an explicit nudge.
+                // The bridge fires onChange synchronously on self-writes,
+                // and `_render` is registered as the onChange handler on
+                // both controls — so the puck position updates via that
+                // path. The explicit call below is redundant but cheap;
+                // kept as belt-and-suspenders against a future bridge
+                // change that re-introduces the silent-self-write path.
                 this._render();
             };
             apply(e);
@@ -737,6 +739,269 @@
     }
 
     function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+    // ------------------------------------------------------------------
+    // <cdp-knob param="…">
+    //
+    // Circular knob with vertical-drag interaction and full keyboard /
+    // wheel / double-click-to-default support. Drop-in replacement for
+    // the hand-rolled SVG knobs every audio plugin custom UI ends up
+    // reimplementing — and the kind of widget that previously tripped
+    // authors on the "set() doesn't fire onChange" bridge quirk before
+    // it was lifted. With the bridge now firing onChange synchronously
+    // on self-writes, the indicator redraws on the user's drag through
+    // the same path it does on DAW automation.
+    //
+    // Default layout: knob face on top, label, value — the canonical
+    // audio-plugin stack. Override via CSS for any other arrangement.
+    //
+    // Geometric customization. The default visual is a small SVG (rim
+    // + face + indicator) themed via CSS custom properties and
+    // `::part()` selectors. To ship a totally different visual
+    // (vintage tube, hexagon, animated needle), slot in your own SVG
+    // and react to the published `--cdp-knob-norm` variable (0..1)
+    // entirely in CSS — no JS required:
+    //
+    //     <cdp-knob param="drive">
+    //       <svg slot="visual" viewBox="0 0 100 100">
+    //         <use href="#my-tube-body"/>
+    //         <line x1="50" y1="50" x2="50" y2="10" stroke="white"
+    //               style="transform-origin: 50px 50px;
+    //                      transform: rotate(calc(var(--cdp-knob-norm)
+    //                                              * 270deg - 135deg))"/>
+    //       </svg>
+    //     </cdp-knob>
+    // ------------------------------------------------------------------
+
+    var KNOB_CSS = [
+        ':host {',
+        '  --cdp-knob-size: 56px;',
+        '  --cdp-knob-sweep: 270deg;',
+        '  --cdp-knob-norm: 0;',
+        '  --cdp-knob-face-bg: color-mix(in srgb, CanvasText 6%, var(--cdp-bg));',
+        '  --cdp-knob-rim-bg: color-mix(in srgb, CanvasText 18%, var(--cdp-bg));',
+        '  --cdp-knob-indicator-color: var(--cdp-accent);',
+        '  --cdp-knob-indicator-width: 2.5px;',
+        '}',
+        '.cell {',
+        '  display: flex; flex-direction: column;',
+        '  align-items: center; gap: 4px;',
+        '  user-select: none; -webkit-user-select: none;',
+        '}',
+        '.visual {',
+        '  width: var(--cdp-knob-size);',
+        '  height: var(--cdp-knob-size);',
+        '  cursor: ns-resize;',
+        '  touch-action: none;',
+        '  outline: none;',
+        '  border-radius: 50%;',
+        '}',
+        '.visual:focus-visible {',
+        '  outline: 3px solid color-mix(in srgb, var(--cdp-accent) 30%, transparent);',
+        '  outline-offset: 2px;',
+        '}',
+        '.visual svg { width: 100%; height: 100%; display: block; }',
+        '.default-svg .rim  { fill: var(--cdp-knob-rim-bg); }',
+        '.default-svg .face { fill: var(--cdp-knob-face-bg); }',
+        '.default-svg .indicator {',
+        '  stroke: var(--cdp-knob-indicator-color);',
+        '  stroke-width: var(--cdp-knob-indicator-width);',
+        '  stroke-linecap: round;',
+        '  fill: none;',
+        '}',
+        '.label {',
+        '  font-size: 0.85em; font-weight: 500;',
+        '  color: var(--cdp-fg);',
+        '  white-space: nowrap; text-align: center;',
+        '}',
+        '.value {',
+        '  font-size: 0.8em; color: var(--cdp-muted);',
+        '  font-variant-numeric: tabular-nums;',
+        '  white-space: nowrap; text-align: center;',
+        '}',
+    ].join('\n');
+
+    class CdpKnob extends HTMLElement {
+        static get observedAttributes() { return ['param', 'label']; }
+        constructor() {
+            super();
+            var root = this.attachShadow({ mode: 'open' });
+            root.append(styleEl(THEME_CSS + '\n' + KNOB_CSS));
+            var cell = document.createElement('div');
+            cell.className = 'cell';
+            cell.setAttribute('part', 'cell');
+            // Default visual lives inside <slot name="visual">'s fallback
+            // content, so an author providing <svg slot="visual">…</svg>
+            // wholesale replaces it. The fallback's SVG is JS-driven via
+            // the `transform` attribute on .indicator-group; slotted
+            // visuals consume the host CSS variable `--cdp-knob-norm`.
+            cell.innerHTML = [
+                '<div class="visual" part="visual" tabindex="0" role="slider"',
+                '     aria-valuemin="0" aria-valuemax="1" aria-valuenow="0">',
+                '  <slot name="visual">',
+                '    <svg class="default-svg" viewBox="0 0 64 64" aria-hidden="true">',
+                '      <circle class="rim" part="rim" cx="32" cy="32" r="29"/>',
+                '      <circle class="face" part="face" cx="32" cy="32" r="24"/>',
+                '      <g class="indicator-group">',
+                '        <line class="indicator" part="indicator"',
+                '              x1="32" y1="14" x2="32" y2="22"/>',
+                '      </g>',
+                '    </svg>',
+                '  </slot>',
+                '</div>',
+                '<span class="label" part="label"></span>',
+                '<span class="value" part="value"></span>',
+            ].join('\n');
+            root.append(cell);
+            this._visual = root.querySelector('.visual');
+            this._label = root.querySelector('.label');
+            this._value = root.querySelector('.value');
+            this._indicatorGroup = root.querySelector('.indicator-group');
+        }
+
+        connectedCallback() {
+            adoptTheme(this);
+            whenReady(() => this._bind());
+            this._connectController = new AbortController();
+            var sig = this._connectController.signal;
+            this._visual.addEventListener('pointerdown', (e) => this._startDrag(e), { signal: sig });
+            this._visual.addEventListener('keydown', (e) => this._onKey(e), { signal: sig });
+            // `passive: false` so we can preventDefault on wheel — the
+            // page scrolling otherwise as the user spins the knob would
+            // be incredibly annoying.
+            this._visual.addEventListener('wheel', (e) => this._onWheel(e), { signal: sig, passive: false });
+            this._visual.addEventListener('dblclick', (e) => this._onDoubleClick(e), { signal: sig });
+        }
+        attributeChangedCallback() { if (this.isConnected) this._bind(); }
+        disconnectedCallback() {
+            if (this._offChange) this._offChange();
+            if (this._connectController) { this._connectController.abort(); this._connectController = null; }
+        }
+
+        _bind() {
+            if (this._offChange) { this._offChange(); this._offChange = null; }
+            var idx = resolveParamAttr(this.getAttribute('param'));
+            if (idx < 0) {
+                // Late-binding: the cdp-panel may insert us before the
+                // AU parameter tree has been populated. Show a
+                // placeholder; we'll re-bind on the next attribute
+                // change or via cdp-panel's onAnyChange refresh.
+                this._label.textContent = this.getAttribute('label') || 'unknown';
+                return;
+            }
+            this._ctrl = control(idx);
+            var meta = this._ctrl.metadata || {};
+            // Always overwrite — a stale "unknown" from a prior bind
+            // would otherwise stick after the real metadata arrives.
+            this._label.textContent = this.getAttribute('label') || meta.name || ('Param ' + idx);
+            this._render(this._ctrl.value);
+            this._offChange = this._ctrl.onChange((v) => this._render(v));
+        }
+
+        _render(v) {
+            if (!this._ctrl) return;
+            var t = clamp(normalize(v, this._ctrl.metadata), 0, 1);
+            // Publish normalized position as a CSS variable so a
+            // slotted custom SVG can drive its own rotation/coloring
+            // entirely in CSS via `var(--cdp-knob-norm)`.
+            this.style.setProperty('--cdp-knob-norm', String(t));
+            // Drive the default visual's rotation via SVG `transform`
+            // attribute — most reliable cross-engine. (Slotted visuals
+            // use the CSS var above; this only animates the fallback.)
+            if (this._indicatorGroup) {
+                var sweepDeg = 270;  // matches default --cdp-knob-sweep
+                var angle = t * sweepDeg - sweepDeg / 2;
+                this._indicatorGroup.setAttribute('transform', 'rotate(' + angle + ' 32 32)');
+            }
+            this._visual.setAttribute('aria-valuenow', t.toFixed(3));
+            this._value.textContent = formatValue(v, this._ctrl.metadata);
+        }
+
+        _startDrag(e) {
+            if (!this._ctrl) return;
+            e.preventDefault();
+            try { this._visual.setPointerCapture(e.pointerId); } catch (_) {}
+            this._visual.focus();
+            var startY = e.clientY;
+            var startT = clamp(normalize(this._ctrl.value, this._ctrl.metadata), 0, 1);
+            var meta = this._ctrl.metadata;
+            // 200px to span 0..1 by default. Shift = fine (5x slower).
+            // Read `shiftKey` on the move event, not pointerdown, so the
+            // user can press/release Shift mid-drag and feel the change.
+            var move = (ev) => {
+                var pixelsPerUnit = ev.shiftKey ? 1000 : 200;
+                var dy = startY - ev.clientY;  // up = positive value
+                var t = clamp(startT + dy / pixelsPerUnit, 0, 1);
+                var actual = denormalize(t, meta);
+                this._ctrl.setValue(actual);
+                // The bridge fires onChange synchronously on self-writes
+                // (CustomUIBridgeOnChangeTests pins this), so _render
+                // would already run via the onChange handler. The
+                // explicit call below is redundant but cheap — kept as
+                // belt-and-suspenders against a future bridge change
+                // that re-introduces the silent-self-write path, and to
+                // keep the integration-test harness's stub bridge
+                // happy (it doesn't mirror the synchronous fire).
+                this._render(actual);
+            };
+            var up = (ev) => {
+                try { this._visual.releasePointerCapture(ev.pointerId); } catch (_) {}
+                this._visual.removeEventListener('pointermove', move);
+                this._visual.removeEventListener('pointerup', up);
+                this._visual.removeEventListener('pointercancel', up);
+            };
+            this._visual.addEventListener('pointermove', move);
+            this._visual.addEventListener('pointerup', up);
+            this._visual.addEventListener('pointercancel', up);
+        }
+
+        _onKey(e) {
+            if (!this._ctrl) return;
+            var meta = this._ctrl.metadata;
+            var t = clamp(normalize(this._ctrl.value, meta), 0, 1);
+            var fine = e.shiftKey ? 0.01 : 0.05;
+            var page = 0.2;
+            var nt;
+            switch (e.key) {
+                case 'ArrowUp':   case 'ArrowRight': nt = clamp(t + fine, 0, 1); break;
+                case 'ArrowDown': case 'ArrowLeft':  nt = clamp(t - fine, 0, 1); break;
+                case 'PageUp':    nt = clamp(t + page, 0, 1); break;
+                case 'PageDown':  nt = clamp(t - page, 0, 1); break;
+                case 'Home':      nt = 0; break;
+                case 'End':       nt = 1; break;
+                default: return;
+            }
+            e.preventDefault();
+            var actual = denormalize(nt, meta);
+            this._ctrl.setValue(actual);
+            this._render(actual);  // see note in _startDrag.move
+        }
+
+        _onWheel(e) {
+            if (!this._ctrl) return;
+            e.preventDefault();
+            var meta = this._ctrl.metadata;
+            var t = clamp(normalize(this._ctrl.value, meta), 0, 1);
+            // Scroll up to turn up. macOS natural scroll inverts deltaY
+            // already; this matches the "wheel up to increase" mental
+            // model people have for knobs.
+            var step = e.shiftKey ? 0.001 : 0.01;
+            var nt = clamp(t - Math.sign(e.deltaY) * step, 0, 1);
+            var actual = denormalize(nt, meta);
+            this._ctrl.setValue(actual);
+            this._render(actual);
+        }
+
+        _onDoubleClick(e) {
+            if (!this._ctrl) return;
+            e.preventDefault();
+            var meta = this._ctrl.metadata;
+            if (meta && typeof meta.default === 'number') {
+                this._ctrl.setValue(meta.default);
+                this._render(meta.default);
+            }
+        }
+    }
 
     // ------------------------------------------------------------------
     // <cdp-panel auto> — renders one appropriate control per parameter.
@@ -798,6 +1063,7 @@
     define('cdp-toggle', CdpToggle);
     define('cdp-choice', CdpChoice);
     define('cdp-xy', CdpXY);
+    define('cdp-knob', CdpKnob);
     define('cdp-panel', CdpPanel);
 
     CDP.ui = {

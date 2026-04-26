@@ -32,6 +32,7 @@ Source: [`ConjureDSPExtension/Resources/cdp-ui.js`](../ConjureDSPExtension/Resou
 | `<cdp-toggle param="bypass_eq">` | Switch for `style:"toggle"` params. |
 | `<cdp-choice param="mode">` | Dropdown for `style:"choice"` params with the manifest-declared `options`. |
 | `<cdp-xy param-x="cutoff" param-y="resonance" invert-y>` | Two-axis pad with a puck. Writes both params on drag. `invert-y` flips semantics so low Y = bottom (standard graph orientation). |
+| `<cdp-knob param="threshold">` | Circular knob with vertical drag, mouse-wheel, keyboard nav, and double-click-to-default. Stacked layout (face / label / value). Default visual is themable via `--cdp-*` and `::part()`; for fully custom geometry, slot in your own SVG and consume the `--cdp-knob-norm` CSS variable. |
 | `<cdp-panel>` | Thin layout wrapper — styled container with consistent padding/border. |
 
 ## Author-facing JS API (`window.ConjureDSP.ui`)
@@ -39,7 +40,14 @@ Source: [`ConjureDSPExtension/Resources/cdp-ui.js`](../ConjureDSPExtension/Resou
 Exposed for preset JS that wants to go beyond the components:
 
 - `control(index)` — handle to a single param:
-  `{ get(), set(v), metadata, onChange(cb) }`.
+  `{ get(), set(v), metadata, onChange(cb) }`. `onChange(cb)` fires
+  whenever the parameter's value changes, regardless of source — your
+  own `set()` calls, DAW automation, MIDI learn, MCP writes, preset
+  load. Treat it as the single source of truth for visual updates so a
+  hand-rolled widget redraws on the user's drag the same way it does
+  on automation. (Self-writes are deduped on equal values, so a
+  handler that re-sets the same value it received terminates after one
+  hop.)
 - `formatValue(value, meta)` — unit-aware formatter
   (`1000` → `"1.00 kHz"`, `5` → `"5.00 dB"`, etc.).
 - `denormalize(t, meta)` / `normalize(v, meta)` — curve-aware mapping
@@ -61,7 +69,43 @@ cdp-slider {
   --cdp-value-width: 72px;
   --cdp-radius: 6px;
 }
+
+cdp-knob {
+  --cdp-accent: #c8a84b;       /* indicator color */
+  --cdp-knob-size: 64px;
+  --cdp-knob-sweep: 270deg;    /* total arc the indicator travels */
+  --cdp-knob-face-bg: #1c1c20;
+  --cdp-knob-rim-bg: #3a3a3e;
+  --cdp-knob-indicator-width: 2.5px;
+}
 ```
+
+### Knob: fully custom geometry
+
+For a `<cdp-knob>` whose visual you want to author from scratch
+(vintage tube, hexagon, animated needle), slot in your own SVG and
+react to the published `--cdp-knob-norm` CSS variable (0..1, updated
+live during drag) entirely in CSS:
+
+```html
+<cdp-knob param="drive">
+  <svg slot="visual" viewBox="0 0 100 100" aria-hidden="true">
+    <use href="#tube-body"/>
+    <line x1="50" y1="50" x2="50" y2="10"
+          stroke="white" stroke-width="3"
+          style="transform-origin: 50px 50px;
+                 transform: rotate(calc(var(--cdp-knob-norm) * 270deg
+                                         - 135deg))"/>
+  </svg>
+</cdp-knob>
+```
+
+The component still owns pointer events, keyboard navigation, ARIA
+state, and the parameter writes. You own the geometry. For widgets
+that genuinely can't be expressed within `<cdp-knob>`'s contract, drop
+to `ConjureDSP.ui.control(i)` and roll the whole thing yourself —
+self-feedback through `ctrl.onChange(...)` works correctly thanks to
+the synchronous-fire bridge contract.
 
 ## Param-name resolution
 
