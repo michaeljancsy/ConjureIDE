@@ -52,8 +52,87 @@ Exposed for preset JS that wants to go beyond the components:
   (`1000` → `"1.00 kHz"`, `5` → `"5.00 dB"`, etc.).
 - `denormalize(t, meta)` / `normalize(v, meta)` — curve-aware mapping
   between the 0–1 AU slider space and the author's actual-value space.
+- `parseUserValue(raw, meta)` — inverse of `formatValue`. Parses a
+  user-typed string (`"1.5kHz"`, `"-3 dB"`, `"50%"`) back to a
+  numeric value, honoring the same SI-prefix rollovers the formatter
+  produces and clamping to `meta.min`/`meta.max`. Returns `null` on
+  unparseable input. Used internally by the click-to-edit value
+  text on `cdp-slider` / `cdp-knob`; exposed for authored UIs that
+  render their own value displays.
 - `requireVersion(n)` — future-proofing; asserts the library is at
   least version `n`.
+
+## DSP→UI telemetry channel
+
+For meters / visualizers that need to display **internal DSP state** —
+gain reduction, envelope follower output, sidechain RMS, NAM model
+magnitude — the `audio.onFrame` payload carries an optional
+`telemetry` field populated from a per-block snapshot the DSP
+publishes via [`Context::set_telemetry`](../rust/conjuredsp-rs/src/context.rs)
+(Rust) or the `TELEMETRY` dict (Python).
+
+This is the right answer for any "show me the value the DSP is
+actually computing" use case. Don't mirror the DSP math in JS:
+parameter changes leak between block boundaries, attack/release
+state is hard to track from outside, and the resulting UI drifts
+from the audio whenever you tweak the script.
+
+**Rust author surface:**
+
+```rust
+use conjuredsp::*;
+setup!();
+
+params! { THRESHOLD = db().min(-40.0).max(-3.0).default(-20.0) }
+telemetry! {
+    GR_DB  = telemetry().unit("dB"),
+    ENV_DB = telemetry().unit("dB"),
+}
+
+#[no_mangle] pub extern "C" fn process(...) {
+    let ctx = ctx(...);
+    // …compute envelope follower, gain computer…
+    ctx.set_telemetry(GR_DB, max_gr_db);
+    ctx.set_telemetry(ENV_DB, env_db);
+}
+```
+
+**Python author surface** (process() must accept all 7 args
+including transport):
+
+```python
+TELEMETRY = {
+    "gr_db":  {"unit": "dB"},
+    "env_db": {"unit": "dB"},
+}
+
+def process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry):
+    # …compute…
+    telemetry["gr_db"] = max_gr_db
+    telemetry["env_db"] = env_db
+```
+
+**UI consumer surface:**
+
+```js
+ConjureDSP.audio.onFrame((frame) => {
+    if (!frame.telemetry) return;       // legacy preset, no slots declared
+    const gr = frame.telemetry["Gr Db"]; // title-cased slot name
+    grBar.style.height = (gr / 24 * 100) + "%";
+});
+```
+
+The slot key is the title-cased form of the const identifier
+(`GR_DB` → `"Gr Db"`) for Rust, or the title-cased dict key for
+Python (`"gr_db"` → `"Gr Db"`). The unit string is exposed for
+display formatting via `formatValue` if needed.
+
+**Cadence + cost:** snapshot is read on the same display-link tick
+that fires `audio.onFrame` (typically 30 Hz, throttled to
+`manifest.fps`). 8 slots max per script. Zero overhead for presets
+that don't declare any — the field is absent from the payload, the
+kernel skips the FFI snapshot, and `frame.telemetry` is undefined
+on the JS side.
 
 ## Theme hooks
 

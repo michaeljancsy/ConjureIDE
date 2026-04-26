@@ -640,13 +640,60 @@ enum DSPDocumentation {
 
     ```js
     ConjureDSP.audio.onFrame(frame => {
-        // frame = { peakIn, peakOut, rmsIn, rmsOut, fft? }
+        // frame = { peakIn, peakOut, rmsIn, rmsOut, fft?, telemetry? }
         drawMeter(frame.peakOut);
     });
     ```
 
     Pass `{ fft: true }` as a second arg to opt in to FFT (heavier
     payload; default payload is ~80 bytes).
+
+    ## DSP→UI telemetry channel
+
+    For meters / visualizers that need to show **internal DSP state**
+    (gain reduction, envelope follower output, sidechain RMS, NAM
+    model magnitude) — values that aren't reconstructible from
+    rmsIn/rmsOut — declare named float slots the DSP writes per block.
+
+    Rust:
+
+    ```rust
+    use conjuredsp::*;
+    setup!();
+    telemetry! {
+        GR_DB  = telemetry().unit("dB"),
+        ENV_DB = telemetry().unit("dB"),
+    }
+    // inside process():
+    ctx.set_telemetry(GR_DB, max_gr_db_this_block);
+    ctx.set_telemetry(ENV_DB, env_db);
+    ```
+
+    Python (`process()` must accept all 7 args including transport):
+
+    ```python
+    TELEMETRY = {"gr_db": {"unit": "dB"}, "env_db": {"unit": "dB"}}
+    def process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry):
+        telemetry["gr_db"] = max_gr_db_this_block
+        telemetry["env_db"] = env_db
+    ```
+
+    UI consumer — slot keys are the title-cased form of the const /
+    dict name (`GR_DB` or `"gr_db"` → `"Gr Db"`):
+
+    ```js
+    ConjureDSP.audio.onFrame(frame => {
+        if (!frame.telemetry) return;       // legacy preset, no slots
+        const gr = frame.telemetry["Gr Db"];
+        meter.show(gr);
+    });
+    ```
+
+    Don't mirror DSP math in JS to compute these values — parameter
+    changes leak between block boundaries, attack/release state is
+    hard to track from outside, and the result drifts from the audio
+    whenever you tweak the script. 8 slots max per script. Zero
+    overhead for presets that don't declare any.
 
     ## Canvas pattern
 
