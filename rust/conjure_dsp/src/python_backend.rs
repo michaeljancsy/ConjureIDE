@@ -1,6 +1,6 @@
 use crate::backend::Backend;
 use crate::kernel::TransportState;
-use crate::params::{ParamMetadata, PARAM_COUNT};
+use crate::params::{ParamMetadata, TelemetryMetadata, PARAM_COUNT, TELEMETRY_LEN};
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -34,8 +34,25 @@ pub struct PythonBackend {
     /// passes a dict of denormalized values instead of a list of 0–1 floats.
     param_metadata: Option<Vec<ParamMetadata>>,
     /// Cached arity of the Python `process()` function.
-    /// 6 = with transport dict, 5 = with params, 4 = legacy.
+    /// 7 = with telemetry dict, 6 = with transport, 5 = with params, 4 = legacy.
+    /// Each level subsumes the previous: a 7-arg signature must accept all
+    /// of (inputs, outputs, frame_count, sample_rate, params, transport,
+    /// telemetry). Authors who want telemetry but not transport accept
+    /// transport as an unused arg.
     process_arity: usize,
+    /// Script-declared telemetry slot metadata (from `TELEMETRY` dict).
+    /// `None` when the script doesn't declare one — matches the missing-
+    /// metadata-export semantics in the WASM backend.
+    telemetry_metadata: Option<Vec<TelemetryMetadata>>,
+    /// Cached PyDict for telemetry slots (created once, values updated
+    /// in-place each block). Pre-seeded with `0.0` for each declared
+    /// slot so script `telemetry["x"] = …` writes are dict updates,
+    /// not key creations.
+    py_telemetry_dict: Option<Py<PyAny>>,
+    /// Per-block telemetry snapshot the kernel reads via `read_telemetry`.
+    /// Filled by `process_with_python` after the script returns; values
+    /// are addressed by the metadata index, in declaration order.
+    telemetry_buf: [f32; TELEMETRY_LEN],
     /// Script-declared algorithmic latency in samples (from `LATENCY` constant).
     latency_samples: u32,
     /// Cached PyList wrapping py_input_arrays (rebuilt on channel count change).
@@ -103,7 +120,7 @@ impl PythonBackend {
             std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
         });
 
-        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, usize, u32, String), PyErr> =
+        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, Option<Vec<TelemetryMetadata>>, usize, u32, String), PyErr> =
             Python::with_gil(|py| {
                 let code = std::fs::read_to_string(script_path)
                     .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
@@ -142,6 +159,11 @@ impl PythonBackend {
                 let (param_names, param_metadata) =
                     Self::extract_params(py, &module);
 
+                // Extract optional TELEMETRY dict for the DSP→UI scalar
+                // channel. Same shape as PARAMS but a smaller schema:
+                //   TELEMETRY = {"env": {"unit": ""}, "gr_db": {"unit": "dB"}}
+                let telemetry_metadata = Self::extract_telemetry(&module);
+
                 // Extract optional LATENCY constant (algorithmic latency in samples)
                 let latency: u32 = module
                     .getattr("LATENCY")
@@ -149,11 +171,11 @@ impl PythonBackend {
                     .and_then(|v| v.extract::<u32>().ok())
                     .unwrap_or(0);
 
-                Ok((process_fn.unbind(), param_names, param_metadata, arity, latency, mod_name_str))
+                Ok((process_fn.unbind(), param_names, param_metadata, telemetry_metadata, arity, latency, mod_name_str))
             });
 
         match result {
-            Ok((process_fn, param_names, param_metadata, arity, latency, module_name)) => {
+            Ok((process_fn, param_names, param_metadata, telemetry_metadata, arity, latency, module_name)) => {
                 eprintln!("ConjureDSP-Rust: Python script loaded successfully (arity={}, latency={})", arity, latency);
                 Ok(Self {
                     py_process_fn: process_fn,
@@ -164,6 +186,9 @@ impl PythonBackend {
                     param_names,
                     param_metadata,
                     process_arity: arity,
+                    telemetry_metadata,
+                    py_telemetry_dict: None,
+                    telemetry_buf: [0.0; TELEMETRY_LEN],
                     latency_samples: latency,
                     py_input_list: None,
                     py_output_list: None,
@@ -303,6 +328,40 @@ impl PythonBackend {
         };
 
         (param_names, None)
+    }
+
+    /// Extract the optional `TELEMETRY` dict from the loaded module.
+    /// Schema mirrors PARAMS but smaller — just `{name: {unit?: str}}`.
+    /// Returns `None` when the script doesn't declare one (the common
+    /// case for legacy scripts), so the kernel skips the per-block
+    /// snapshot read entirely.
+    fn extract_telemetry(module: &Bound<'_, PyModule>) -> Option<Vec<TelemetryMetadata>> {
+        let attr = module.getattr("TELEMETRY").ok()?;
+        let dict = attr.downcast::<PyDict>().ok()?;
+        let mut metadata = Vec::new();
+        for (i, (key, val)) in dict.iter().enumerate() {
+            if i >= TELEMETRY_LEN {
+                break;
+            }
+            let key_str = match key.extract::<String>() {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            // Per-slot dict is optional — `{"x": {}}` is fine, no unit.
+            let unit = val
+                .downcast::<PyDict>()
+                .ok()
+                .and_then(|spec| spec.get_item("unit").ok().flatten())
+                .and_then(|v| v.extract::<String>().ok())
+                .unwrap_or_default();
+            let display_name = Self::to_title_case(&key_str);
+            metadata.push(TelemetryMetadata {
+                name: display_name,
+                key: key_str,
+                unit,
+            });
+        }
+        if metadata.is_empty() { None } else { Some(metadata) }
     }
 
     /// Convert snake_case or lowercase name to Title Case for display.
@@ -445,34 +504,84 @@ impl PythonBackend {
             };
 
             // Dispatch by cached arity (detected at load time):
+            // 7-arg: process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry)
             // 6-arg: process(inputs, outputs, frame_count, sample_rate, params, transport)
             // 5-arg: process(inputs, outputs, frame_count, sample_rate, params)
             // 4-arg: process(inputs, outputs, frame_count, sample_rate)  [legacy]
+            //
+            // The 6-arg branch is also used by the 7-arg path to construct
+            // the transport dict; pulled out into a helper-style closure
+            // would obscure the borrow flow, so it's duplicated inline.
+            let needs_transport = arity >= 6;
+            let transport_obj_opt: Option<Bound<'_, PyAny>> = if needs_transport {
+                let obj = if let Some(ref cached) = self.py_transport_dict {
+                    let dict = cached.bind(py);
+                    dict.set_item("tempo", transport.tempo)?;
+                    dict.set_item("beat", transport.beat_position)?;
+                    dict.set_item("playing", transport.is_playing)?;
+                    dict.set_item("time_sig_num", transport.time_sig_numerator)?;
+                    dict.set_item("time_sig_den", transport.time_sig_denominator)?;
+                    dict.set_item("sample_pos", transport.sample_position)?;
+                    dict.clone()
+                } else {
+                    let dict = PyDict::new(py);
+                    dict.set_item("tempo", transport.tempo)?;
+                    dict.set_item("beat", transport.beat_position)?;
+                    dict.set_item("playing", transport.is_playing)?;
+                    dict.set_item("time_sig_num", transport.time_sig_numerator)?;
+                    dict.set_item("time_sig_den", transport.time_sig_denominator)?;
+                    dict.set_item("sample_pos", transport.sample_position)?;
+                    dict.into_any()
+                };
+                Some(obj)
+            } else {
+                None
+            };
+
+            // Build / update the telemetry dict only when the script
+            // accepts it. Pre-seeded with declared-slot keys at zero so
+            // the script's `telemetry["x"] = …` writes are dict updates,
+            // never key insertions. Cached on first build to avoid
+            // per-block PyDict allocation on the hot path.
+            let telemetry_obj_opt: Option<Bound<'_, PyAny>> = if arity >= 7 {
+                let dict = if let Some(ref cached) = self.py_telemetry_dict {
+                    cached.bind(py).clone()
+                } else {
+                    let new_dict = PyDict::new(py);
+                    if let Some(ref meta) = self.telemetry_metadata {
+                        for slot in meta {
+                            new_dict.set_item(&slot.key, 0.0_f32)?;
+                        }
+                    }
+                    let any = new_dict.into_any();
+                    self.py_telemetry_dict = Some(any.clone().unbind());
+                    any
+                };
+                Some(dict)
+            } else {
+                None
+            };
+
             match arity {
-                6.. => {
-                    // Update cached transport dict values in-place
-                    let transport_obj = if let Some(ref cached) = self.py_transport_dict {
-                        let dict = cached.bind(py);
-                        dict.set_item("tempo", transport.tempo)?;
-                        dict.set_item("beat", transport.beat_position)?;
-                        dict.set_item("playing", transport.is_playing)?;
-                        dict.set_item("time_sig_num", transport.time_sig_numerator)?;
-                        dict.set_item("time_sig_den", transport.time_sig_denominator)?;
-                        dict.set_item("sample_pos", transport.sample_position)?;
-                        dict.clone()
-                    } else {
-                        let dict = PyDict::new(py);
-                        dict.set_item("tempo", transport.tempo)?;
-                        dict.set_item("beat", transport.beat_position)?;
-                        dict.set_item("playing", transport.is_playing)?;
-                        dict.set_item("time_sig_num", transport.time_sig_numerator)?;
-                        dict.set_item("time_sig_den", transport.time_sig_denominator)?;
-                        dict.set_item("sample_pos", transport.sample_position)?;
-                        dict.into_any()
-                    };
+                7.. => {
                     self.py_process_fn.call1(
                         py,
-                        (input_list, output_list, frame_count as u32, sample_rate, params_obj, transport_obj),
+                        (
+                            input_list, output_list, frame_count as u32, sample_rate,
+                            params_obj,
+                            transport_obj_opt.as_ref().expect("transport built for arity>=6"),
+                            telemetry_obj_opt.as_ref().expect("telemetry built for arity>=7"),
+                        ),
+                    )?;
+                }
+                6 => {
+                    self.py_process_fn.call1(
+                        py,
+                        (
+                            input_list, output_list, frame_count as u32, sample_rate,
+                            params_obj,
+                            transport_obj_opt.as_ref().expect("transport built for arity>=6"),
+                        ),
                     )?;
                 }
                 5 => {
@@ -486,6 +595,34 @@ impl PythonBackend {
                         py,
                         (input_list, output_list, frame_count as u32, sample_rate),
                     )?;
+                }
+            }
+
+            // Snapshot the telemetry dict back into the f32 buffer the
+            // kernel reads via `read_telemetry`. Slots without a numeric
+            // entry stay at the previous block's value — that's
+            // acceptable for a meter (a missed update reads as "no
+            // change") and keeps the hot path branch-free.
+            //
+            // Split the borrow manually: we hold &mut self.telemetry_buf
+            // while iterating &self.telemetry_metadata. Pull metadata out
+            // first via a raw pointer dance? No — easier to just buffer
+            // the keys upfront. Since the metadata vec is set at load
+            // time and never mutated during process(), a quick clone of
+            // the keys is acceptable; this path runs only when telemetry
+            // is in use, and the slot count is ≤8.
+            if let Some(ref tele_obj) = telemetry_obj_opt {
+                if let Some(ref meta) = self.telemetry_metadata {
+                    let dict = tele_obj.downcast::<PyDict>()?;
+                    let keys: Vec<&str> = meta.iter().map(|s| s.key.as_str()).collect();
+                    for (i, key) in keys.iter().enumerate() {
+                        if i >= TELEMETRY_LEN { break; }
+                        if let Ok(Some(val)) = dict.get_item(key) {
+                            if let Ok(v) = val.extract::<f32>() {
+                                self.telemetry_buf[i] = v;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -536,6 +673,7 @@ impl Backend for PythonBackend {
                 self.py_transport_dict = None;
                 self.py_params_dict = None;
                 self.py_params_list = None;
+                self.py_telemetry_dict = None;
             });
         }
     }
@@ -571,5 +709,16 @@ impl Backend for PythonBackend {
 
     fn latency_samples(&self) -> u32 {
         self.latency_samples
+    }
+
+    fn telemetry_metadata(&self) -> Option<&[TelemetryMetadata]> {
+        self.telemetry_metadata.as_deref()
+    }
+
+    fn read_telemetry(&self, out: &mut [f32; TELEMETRY_LEN]) {
+        if self.telemetry_metadata.is_none() {
+            return;
+        }
+        out.copy_from_slice(&self.telemetry_buf);
     }
 }
