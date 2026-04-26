@@ -182,8 +182,13 @@ enum BundleUIValidator {
             options: []
         )
         guard let regex = attrRegex else { return [] }
-        let ns = html as NSString
-        let matches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+        // Strip HTML comments first — the starter scaffold lists example
+        // bindings like `<cdp-toggle param="Bypass">` inside `<!-- ... -->`
+        // for authors to copy. Those aren't real bindings; flagging them
+        // wastes the agent's turn rewriting the comment.
+        let scanned = stripHTMLComments(html)
+        let ns = scanned as NSString
+        let matches = regex.matches(in: scanned, range: NSRange(location: 0, length: ns.length))
 
         // Collect every named (non-numeric) reference in the HTML so the
         // two branches below can reason about them.
@@ -847,6 +852,23 @@ enum BundleUIValidator {
     ]
 
     // MARK: - Helpers
+
+    /// Strip `<!-- ... -->` comments from HTML before content scans that
+    /// shouldn't see commented-out example markup (e.g. the starter
+    /// scaffold's "<cdp-toggle param=\"Bypass\">" example block).
+    /// Non-greedy match across newlines.
+    private static func stripHTMLComments(_ html: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: "<!--[\\s\\S]*?-->",
+            options: []
+        ) else { return html }
+        let ns = html as NSString
+        return regex.stringByReplacingMatches(
+            in: html,
+            range: NSRange(location: 0, length: ns.length),
+            withTemplate: ""
+        )
+    }
 
     /// Case-insensitive, underscore-and-space-insensitive comparison key.
     /// Mirrors the loose matching cdp-ui.js uses when resolving `param="…"`

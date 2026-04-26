@@ -205,6 +205,61 @@ struct BundleUIValidatorTests {
         #expect(issue?.suggestion?.contains("resonance") == true)
     }
 
+    @Test func paramRefsInsideHTMLCommentsIgnored() throws {
+        // The starter scaffold's example block lists hand-rolled bindings
+        // like `<cdp-toggle param="Bypass">` inside an HTML comment so
+        // authors can copy them out. They aren't real bindings; the
+        // validator must not flag them. Reproduces the embedded-agent
+        // turn that wasted a tool call rewriting the comment.
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "threshold", "min": -60.0, "max": 0.0, "default": -20.0, "unit": "dB"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="threshold"></cdp-slider>
+          <!--
+            Examples authors can copy:
+              <cdp-toggle param="Bypass"></cdp-toggle>
+              <cdp-choice param="Mode"></cdp-choice>
+              <cdp-knob param="cutoff"></cdp-knob>
+          -->
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "params_referenced_in_ui" },
+                "param=\"…\" inside <!-- ... --> must not be flagged")
+    }
+
+    @Test func paramRefsInsideHTMLCommentsIgnoredWhenNoManifestParams() throws {
+        // Same comment-stripping rule applies in the no-manifest-params
+        // branch — the starter scaffold ships v1 manifest + commented
+        // examples, and that combination must be silent.
+        let manifest = """
+        {
+          "schemaVersion": 1, "entry": "process.py", "language": "python",
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-panel auto></cdp-panel>
+          <!-- <cdp-toggle param="Bypass"></cdp-toggle> -->
+          <!-- <cdp-knob param="cutoff"></cdp-knob> -->
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "params_referenced_in_ui" },
+                "no-manifest-params branch must also strip comments")
+    }
+
     // MARK: - external_asset_ref / network_egress_in_ui
 
     @Test func externalScriptFlagged() throws {
