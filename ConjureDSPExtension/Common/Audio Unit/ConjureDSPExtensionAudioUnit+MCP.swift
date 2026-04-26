@@ -353,10 +353,17 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // factory name alongside the new user bundle.
             clearDAWCurrentPreset()
 
-            // If the caller handed us a new `source` that's different
-            // from what's already in the kernel, load it. Keeps disk
-            // and kernel coherent — the bundle's entry script is the
-            // one that's actually running.
+            // Always reload the kernel from `source`, mirroring
+            // `selectPreset`'s post-state. Even when the kernel already
+            // has the same source (because the agent called
+            // `compile_and_run` earlier), the param-tree rebuild we
+            // just did via `applyManifestParams` can leave the
+            // kernel's parameter wiring inconsistent with the new
+            // tree — selecting the preset later "fixes" it because
+            // selectPreset reloads, but until then audio runs
+            // passthrough. Reloading unconditionally costs one
+            // compile (WasmCache hit for Rust, ~ms for Python) and
+            // guarantees disk + tree + kernel are coherent.
             //
             // On success, fan the new source out to Monaco via
             // `scriptSourceDidChange`. Without this, the editor keeps
@@ -364,18 +371,14 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // runs the new DSP — the next ⌘R would silently overwrite
             // the agent's change with the stale buffer. Mirrors the
             // explicit publish in the `compile_and_run` MCP dispatch.
-            var kernelReloaded = false
-            var kernelError: String?
-            if suppliedSource != nil, source != scriptSource {
-                let result = await compileAndRun(source: source)
-                kernelReloaded = result.success
-                if !result.success { kernelError = result.error }
-                if result.success {
-                    var change = ScriptSourceChange(source: source, origin: .mcp)
-                    change.processTimeMs = result.processTimeMs
-                    change.budgetMs = result.budgetMs
-                    scriptSourceDidChange.send(change)
-                }
+            let result = await compileAndRun(source: source)
+            let kernelReloaded = result.success
+            let kernelError = result.success ? nil : result.error
+            if result.success {
+                var change = ScriptSourceChange(source: source, origin: .mcp)
+                change.processTimeMs = result.processTimeMs
+                change.budgetMs = result.budgetMs
+                scriptSourceDidChange.send(change)
             }
 
             var response: [String: Any] = [
@@ -538,11 +541,18 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         } catch {
             return (jsonStr(["error": "Write failed: \(error.localizedDescription)"]), true)
         }
-        // Manifest edits can flip hasCustomUI on or off; refresh so the
-        // in-plugin UI toggle state tracks the new state.
-        if url.lastPathComponent == PresetManifest.filename {
-            presetManager.refreshPresets()
-        }
+        // Any bundle file write can flip what the host UI sees: a
+        // manifest edit can add/remove the `ui` block; writing
+        // ui/index.html for the first time (after manifest already
+        // declared `ui`) lands the file `hasCustomUI` is gated on; a
+        // ui/assets/* write doesn't change hasCustomUI but does
+        // affect what the live webview will reload. Refresh in all
+        // cases — re-enumerating the user presets dir + re-parsing
+        // the current manifest is cheap, and it guarantees
+        // `presetManager.currentBundle` reflects the on-disk state
+        // before the agent's next tool call (or the user's next
+        // glance at the toggle bar) reads it.
+        presetManager.refreshPresets()
 
         // For edits that could affect the custom UI (ui/*, manifest.json),
         // run the static validator and include its report in the response

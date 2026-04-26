@@ -11,6 +11,16 @@ enum DSPDocumentation {
     static let params = """
     # Parameter Builders
 
+    ## Python and Rust use DIFFERENT syntax. Don't mix them.
+
+    Python: `freq(min=0.1, max=20.0, default=4.0)` — keyword args.
+    Rust:   `freq().min(0.1).max(20.0).default(4.0)` — fluent chain.
+
+    A common mistake: writing `freq(min=…)` style in a Rust preset, or
+    `freq().min(…)` style in a Python preset. Either way the file won't
+    compile. The detailed examples below match the language section
+    they're under — copy from the right one.
+
     Available builders and their default ranges:
 
     freq — 20-20000 Hz, log curve, default 1000
@@ -465,6 +475,36 @@ enum DSPDocumentation {
 
     static let ui = """
     # Custom HTML/JS UIs — cdp-ui component library
+
+    ## Recommended call order for preset+UI authoring
+
+    Before you write anything, call `get_bundle_info` — it tells you
+    what preset is currently active, whether it's a factory bundle
+    (read-only), and whether it already ships a UI. If a working
+    factory bundle has a UI you can borrow patterns from, fetch it
+    with `read_bundle_file('ui/index.html')` first. Most authoring
+    sessions go:
+
+      1. `get_bundle_info` — see the active bundle.
+      2. `read_bundle_file('ui/index.html')` — optional, study a
+         working example.
+      3. `save_preset(name, source, language)` — fork to a new
+         editable user bundle. This switches the active preset to
+         the new bundle AND reloads the kernel with `source`, so the
+         user can hit play immediately.
+      4. `write_bundle_file('manifest.json', …)` — declare params
+         and the `ui` block (schemaVersion 2).
+      5. `write_bundle_file('ui/index.html', …)` — the HTML.
+      6. `write_bundle_file('ui/assets/...', …)` — optional CSS, JS,
+         images.
+      7. `validate_bundle` — static checks (lint).
+      8. `smoke_test_ui` — runtime check (load in offscreen
+         WKWebView, confirm bridge ready, components bound, params
+         covered, no JS errors).
+
+    `write_bundle_file` for `ui/*` and `manifest.json` already inlines
+    a validation report in its response — separate `validate_bundle`
+    is mostly useful as a final pass.
 
     When a preset bundle's manifest declares a `ui` block and ships a
     `ui/index.html`, the plugin renders that HTML in a WKWebView instead
