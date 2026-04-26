@@ -129,6 +129,17 @@ enum BundleUIValidator {
 
     /// manifest.ui.entryHTML must point at a real file inside the bundle.
     /// Typo here silently disables the custom UI.
+    ///
+    /// Severity is tactically split: a manifest that declares
+    /// entryHTML but ships an empty (or HTML-less) `ui/` directory is
+    /// almost always mid-authoring — the standard sequence is
+    /// save_preset → write manifest.json → write ui/index.html, and
+    /// the manifest write transiently fails this check until the next
+    /// call. Reporting `fail` there spooks literal-minded agents.
+    /// Reserve `fail` for the case that's unambiguously a bug: the
+    /// `ui/` directory has other html files (the author shipped some
+    /// HTML), but the entryHTML name typoed and references a file
+    /// that isn't among them.
     private static func checkEntryHTMLResolves(_ bundle: PresetBundle) -> [Issue] {
         // manifest.ui.entryHTML is itself optional; fall back to the same
         // default the manifest uses when rendering (`ui/index.html`).
@@ -136,13 +147,49 @@ enum BundleUIValidator {
         let entryPath = bundle.manifest.uiEntryHTMLPath
         let entryURL = bundle.rootURL.appendingPathComponent(entryPath)
         guard !FileManager.default.fileExists(atPath: entryURL.path) else { return [] }
+
+        // Look at ui/ to decide severity. `ui/` may not exist at all
+        // (manifest written first, no ui dir created yet) — that's
+        // also the transient "still authoring" case.
+        let uiDir = bundle.rootURL.appendingPathComponent("ui", isDirectory: true)
+        let fm = FileManager.default
+        let uiHTMLFiles: [String] = {
+            guard let entries = try? fm.contentsOfDirectory(
+                at: uiDir,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else { return [] }
+            return entries
+                .filter { $0.pathExtension.lowercased() == "html" }
+                .map { $0.lastPathComponent }
+        }()
+
+        if uiHTMLFiles.isEmpty {
+            // No HTML in ui/ yet — author hasn't gotten there. Warn,
+            // don't fail. The next write_bundle_file('ui/index.html',
+            // ...) will resolve the issue and a subsequent
+            // validate_bundle pass will return clean.
+            return [
+                Issue(
+                    severity: .warn,
+                    check: "ui_entry_html_missing",
+                    file: PresetManifest.filename,
+                    message: "manifest.ui.entryHTML points at \"\(entryPath)\" but ui/ contains no HTML files yet.",
+                    suggestion: "If you're mid-authoring, this resolves once you call write_bundle_file with the entryHTML file. Otherwise update manifest.ui.entryHTML or write the missing file."
+                )
+            ]
+        }
+
+        // ui/ has HTML, just not the one named — almost certainly a
+        // typo. Real failure.
+        let nearby = uiHTMLFiles.sorted().joined(separator: ", ")
         return [
             Issue(
                 severity: .fail,
                 check: "ui_entry_html_missing",
                 file: PresetManifest.filename,
-                message: "manifest.ui.entryHTML points at \"\(entryPath)\" but that file doesn't exist in the bundle.",
-                suggestion: "Either create the file via write_bundle_file, or update manifest.ui.entryHTML to match an existing path."
+                message: "manifest.ui.entryHTML points at \"\(entryPath)\" but that file doesn't exist. ui/ contains: \(nearby).",
+                suggestion: "Update manifest.ui.entryHTML to match one of the existing files, or rename the file on disk."
             )
         ]
     }

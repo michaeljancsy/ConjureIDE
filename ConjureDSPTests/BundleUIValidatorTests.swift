@@ -106,7 +106,15 @@ struct BundleUIValidatorTests {
 
     // MARK: - ui_entry_html_missing
 
-    @Test func manifestPointsAtNonexistentHTMLFlagged() throws {
+    /// Mid-authoring: manifest declares entryHTML but ui/ has no HTML
+    /// files yet (or no ui/ directory at all). This is the standard
+    /// save_preset → write manifest → write ui/index.html sequence,
+    /// captured at step 2. Validator should warn, not fail — a `fail`
+    /// here spooks literal-minded MCP agents into retrying or
+    /// backtracking on what's actually transient state. The next
+    /// write resolves it and a final validate_bundle pass returns
+    /// clean.
+    @Test func manifestPointsAtNonexistentHTMLWithEmptyUIDirWarnsOnly() throws {
         let manifest = """
         {
           "schemaVersion": 2, "entry": "process.py", "language": "python",
@@ -115,8 +123,31 @@ struct BundleUIValidatorTests {
         """
         let bundle = try makeBundle(manifest: manifest, uiHTML: nil)
         let report = BundleUIValidator.validate(bundle)
-        #expect(report.status == .fail)
-        #expect(report.issues.contains { $0.check == "ui_entry_html_missing" })
+        let entryIssue = report.issues.first { $0.check == "ui_entry_html_missing" }
+        #expect(entryIssue != nil, "expected ui_entry_html_missing to fire")
+        #expect(entryIssue?.severity == .warn, "empty ui/ is the transient mid-authoring case — should warn, not fail")
+    }
+
+    /// Real typo: ui/ contains other HTML files, but entryHTML names a
+    /// different one. The author shipped some HTML, just not the one
+    /// the manifest references. Validator should still fail — this is
+    /// not transient state, it's a config bug that silently disables
+    /// the custom UI.
+    @Test func manifestPointsAtNonexistentHTMLWithOtherHTMLPresentFails() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "ui": {"entryHTML": "ui/main.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        // makeBundle writes uiHTML to ui/index.html. So manifest points at
+        // ui/main.html, ui/ contains index.html — entryHTML typo.
+        let bundle = try makeBundle(manifest: manifest, uiHTML: baselineUI)
+        let report = BundleUIValidator.validate(bundle)
+        let entryIssue = report.issues.first { $0.check == "ui_entry_html_missing" }
+        #expect(entryIssue != nil, "expected ui_entry_html_missing to fire")
+        #expect(entryIssue?.severity == .fail, "ui/ has other HTML — entryHTML typo is a real failure")
+        #expect(entryIssue?.message.contains("index.html") == true, "fail message should list the HTML files actually present so the author can correct the typo")
     }
 
     // MARK: - schema_v2_recommended
