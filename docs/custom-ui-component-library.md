@@ -116,16 +116,39 @@ def process(inputs, outputs, frame_count, sample_rate, params, transport, teleme
 
 ```js
 ConjureDSP.audio.onFrame((frame) => {
-    if (!frame.telemetry) return;       // legacy preset, no slots declared
-    const gr = frame.telemetry["Gr Db"]; // title-cased slot name
+    if (!frame.telemetry) return;        // legacy preset, no slots declared
+    const gr = frame.telemetry["GR_DB"]; // verbatim macro identifier
     grBar.style.height = (gr / 24 * 100) + "%";
 });
 ```
 
-The slot key is the title-cased form of the const identifier
-(`GR_DB` → `"Gr Db"`) for Rust, or the title-cased dict key for
-Python (`"gr_db"` → `"Gr Db"`). The unit string is exposed for
-display formatting via `formatValue` if needed.
+**Slot key naming — pass-through, no canonicalization.** The slot
+key in `frame.telemetry` is whatever the script wrote, verbatim:
+
+| Script | Source token | JS lookup key |
+|---|---|---|
+| Rust `telemetry! { GR_DB = ... }` | const identifier | `"GR_DB"` |
+| Python `TELEMETRY = {"gr_db": {...}}` | dict key | `"gr_db"` |
+
+This is **deliberately different** from `params!()` / `PARAMS`,
+which title-case the source identifier so the form that lands on
+DAW automation lanes reads naturally ("Low Gain"). Telemetry has
+no DAW-facing surface — the JSON `name` field IS the JS lookup
+key — so canonicalization would only mangle acronyms (DB → Db,
+RMS → Rms, FFT → Fft) without enabling any third consumer.
+
+**Cross-backend UIs** that target both Rust and Python presets
+should read both forms via the `??` chain:
+
+```js
+const gr = frame.telemetry["GR_DB"] ?? frame.telemetry["gr_db"];
+```
+
+UIs that ship with only one backend (Rust-only `.cdp` or Python-
+only `.cdp`) read the corresponding form directly with no fallback.
+The `Telemetry Smoke (Rust)` / `Telemetry Smoke (Python)` factory
+presets share a single UI that demonstrates this pattern — the
+shared file uses the `??` chain because both flavors load it.
 
 **Cadence + cost:** snapshot is read on the same display-link tick
 that fires `audio.onFrame` (typically 30 Hz, throttled to

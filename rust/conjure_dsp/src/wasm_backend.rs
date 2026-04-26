@@ -1860,7 +1860,9 @@ mod tests {
         // Two telemetry slots — backend should expose them via
         // `telemetry_metadata()`. The buffer-ptr export is also present
         // (placed elsewhere in memory) so `read_telemetry` works.
-        let json = r#"[{"name":"Env Level","unit":""},{"name":"Gr Db","unit":"dB"}]"#;
+        // JSON uses verbatim macro identifiers (no canonicalization)
+        // to match what the real `write_telemetry_json` emits.
+        let json = r#"[{"name":"ENV_LEVEL","unit":""},{"name":"GR_DB","unit":"dB"}]"#;
         let hex = json_to_wat_hex(json);
         let wat = format!(
             r#"
@@ -1882,9 +1884,9 @@ mod tests {
         let backend = WasmBackend::load(&wasm).unwrap();
         let meta = backend.telemetry_metadata().expect("Should have telemetry metadata");
         assert_eq!(meta.len(), 2);
-        assert_eq!(meta[0].name, "Env Level");
+        assert_eq!(meta[0].name, "ENV_LEVEL");
         assert_eq!(meta[0].unit, "");
-        assert_eq!(meta[1].name, "Gr Db");
+        assert_eq!(meta[1].name, "GR_DB");
         assert_eq!(meta[1].unit, "dB");
     }
 

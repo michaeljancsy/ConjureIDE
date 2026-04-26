@@ -354,9 +354,16 @@ impl PythonBackend {
                 .and_then(|spec| spec.get_item("unit").ok().flatten())
                 .and_then(|v| v.extract::<String>().ok())
                 .unwrap_or_default();
-            let display_name = Self::to_title_case(&key_str);
+            // Pass-through naming: the JS-facing key is the dict key
+            // verbatim. Differs from PARAMS, which title-cases for the
+            // DAW display label — telemetry has no DAW surface so the
+            // canonicalization would only mangle acronyms (DB / RMS /
+            // GR / FFT). UIs that target both Rust and Python presets
+            // read both forms via the `??` chain (the Rust side emits
+            // SCREAMING_SNAKE; the Python side emits whatever the
+            // dict key is, conventionally snake_case).
             metadata.push(TelemetryMetadata {
-                name: display_name,
+                name: key_str.clone(),
                 key: key_str,
                 unit,
             });

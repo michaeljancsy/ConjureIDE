@@ -89,10 +89,14 @@
     ConjureDSP.ready(() => {
       ConjureDSP.audio.onFrame((frame) => {
         if (!frame.telemetry) return;
-        // Slot names follow the title-case-from-SCREAMING_SNAKE rule
-        // applied to the Rust telemetry!() identifiers.
-        const peak = frame.telemetry['Peak Db'];
-        const env  = frame.telemetry['Envelope Db'];
+        // Telemetry slot names pass through verbatim from the script:
+        //   Rust   `telemetry! { PEAK_DB = ... }`           → "PEAK_DB"
+        //   Python `TELEMETRY = {"peak_db": {...}}`         → "peak_db"
+        // This shared UI serves both the Rust and Python smoke
+        // presets, so we read both forms via `??`. Production UIs
+        // that target only one backend can drop the fallback.
+        const peak = frame.telemetry['PEAK_DB']     ?? frame.telemetry['peak_db'];
+        const env  = frame.telemetry['ENVELOPE_DB'] ?? frame.telemetry['envelope_db'];
         if (peak !== undefined) {
           peakFill.style.width = dbToFill(peak);
           peakValue.textContent = fmtDb(peak);

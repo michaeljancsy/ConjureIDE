@@ -678,15 +678,24 @@ enum DSPDocumentation {
         telemetry["env_db"] = env_db
     ```
 
-    UI consumer — slot keys are the title-cased form of the const /
-    dict name (`GR_DB` or `"gr_db"` → `"Gr Db"`):
+    UI consumer — slot key is the script's source token verbatim
+    (`GR_DB` for the Rust macro identifier, `"gr_db"` for the Python
+    dict key). No canonicalization: telemetry has no DAW-facing
+    surface, so title-casing would only mangle acronyms (DB / RMS /
+    GR / FFT) without enabling any third consumer:
 
     ```js
     ConjureDSP.audio.onFrame(frame => {
-        if (!frame.telemetry) return;       // legacy preset, no slots
-        const gr = frame.telemetry["Gr Db"];
+        if (!frame.telemetry) return;        // legacy preset, no slots
+        const gr = frame.telemetry["GR_DB"]; // Rust-side identifier
         meter.show(gr);
     });
+    ```
+
+    UIs that target both backends use a `??` chain:
+
+    ```js
+    const gr = frame.telemetry["GR_DB"] ?? frame.telemetry["gr_db"];
     ```
 
     Don't mirror DSP math in JS to compute these values — parameter

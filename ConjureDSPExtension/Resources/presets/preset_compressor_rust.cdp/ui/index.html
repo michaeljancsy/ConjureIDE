@@ -215,7 +215,11 @@
       // follower has finished attacking) and depended on makeup gain
       // for cancellation. Telemetry shows the actual reduction
       // independent of makeup.
-      const gr = (frame.telemetry && frame.telemetry['Gr Db']) || 0;
+      //
+      // Slot key matches the macro identifier verbatim — `telemetry!()`
+      // doesn't canonicalize names. Rust convention is
+      // SCREAMING_SNAKE_CASE.
+      const gr = (frame.telemetry && frame.telemetry['GR_DB']) || 0;
       // Smooth the reading so the bar doesn't strobe.
       smoothedGR = smoothedGR * 0.7 + gr * 0.3;
       const clamped = Math.min(24, smoothedGR);

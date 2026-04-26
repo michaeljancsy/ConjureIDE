@@ -232,17 +232,27 @@ pub const fn write_param_json(buf: JsonBuf, name: &str, spec: &crate::ParamSpec)
 }
 
 /// Write a single TelemetrySpec as a JSON object into the buffer.
-/// Schema: `{"name": "<TitleCase>", "unit": "<unit>"}`. The unit field
-/// is always emitted (possibly empty) so consumers can rely on its
-/// presence — telemetry metadata is small enough that the bytes don't
-/// matter.
+/// Schema: `{"name": "<identifier>", "unit": "<unit>"}`. The name is
+/// the verbatim identifier from the `telemetry!()` macro
+/// (SCREAMING_SNAKE_CASE in idiomatic Rust) — passed through with no
+/// canonicalization, so JS reads `frame.telemetry["PEAK_DB"]` to
+/// match.
+///
+/// Differs deliberately from `write_param_json`, which title-cases:
+/// params surface in DAW automation lanes ("Low Gain"), so the
+/// canonicalization earns its cost there. Telemetry is JS-internal —
+/// the JSON `name` field IS the JS lookup key — and predictability +
+/// not-mangling-acronyms (DB / RMS / FFT / NAM / GR) wins. Authors
+/// writing a UI that targets both backends accept that
+/// `PEAK_DB` (Rust) and `peak_db` (Python) are different keys; the
+/// canonical pattern is `frame.telemetry["PEAK_DB"] ?? frame.telemetry["peak_db"]`.
 pub const fn write_telemetry_json(
     buf: JsonBuf,
     name: &str,
     spec: &crate::TelemetrySpec,
 ) -> JsonBuf {
     let s = buf.push_str(r#"{"name":""#);
-    let s = s.push_title_case(name);
+    let s = s.push_str(name);
     let s = s.push_str(r#"","unit":""#);
     let s = s.push_str(spec.unit_str);
     s.push_str(r#""}"#)
@@ -389,7 +399,12 @@ mod tests {
         let spec = crate::telemetry();
         let buf = write_telemetry_json(JsonBuf::new(), "ENV_LEVEL", &spec);
         let s = buf_to_string(&buf);
-        assert_eq!(s, r#"{"name":"Env Level","unit":""}"#);
+        // Pass-through: identifier emitted verbatim. JS reads
+        // frame.telemetry["ENV_LEVEL"]. Mangled forms like "Env Level"
+        // are deliberately NOT produced — telemetry doesn't have a
+        // DAW display surface, and acronyms in the macro identifier
+        // (DB, GR, RMS) survive unscathed.
+        assert_eq!(s, r#"{"name":"ENV_LEVEL","unit":""}"#);
     }
 
     #[test]
@@ -397,7 +412,7 @@ mod tests {
         let spec = crate::telemetry().unit("dB");
         let buf = write_telemetry_json(JsonBuf::new(), "GR_DB", &spec);
         let s = buf_to_string(&buf);
-        assert_eq!(s, r#"{"name":"Gr Db","unit":"dB"}"#);
+        assert_eq!(s, r#"{"name":"GR_DB","unit":"dB"}"#);
     }
 
     #[test]
