@@ -107,6 +107,15 @@ pub struct DSPKernel {
     /// Set after each successful script/WASM load that declares a `PARAMS` dict.
     /// None means "no rich metadata" (backward-compatible mode).
     param_metadata_json: Option<std::ffi::CString>,
+    /// Per-render-block snapshot of script-published telemetry slots.
+    /// f32-as-bits via `to_bits`/`from_bits`, single writer (audio thread,
+    /// post-process), readers any thread (Swift display-link tick).
+    telemetry: [AtomicU32; crate::params::TELEMETRY_LEN],
+    /// Cached JSON metadata for the telemetry slots (name + unit per slot).
+    /// Set after each successful script load that declares a `telemetry!()`
+    /// block or `TELEMETRY` dict. None means "no telemetry" — Swift skips
+    /// the per-tick snapshot read entirely.
+    telemetry_metadata_json: Option<std::ffi::CString>,
     /// Script-declared algorithmic latency in samples. Zero = no latency.
     /// Read by Swift via FFI to report `AUAudioUnit.latency` for DAW compensation.
     latency_samples: u32,
@@ -255,6 +264,8 @@ impl DSPKernel {
             demo_fade_step: (1000.0 / (DEMO_FADE_MS * 44100.0)) as f32,
             param_names_json: None,
             param_metadata_json: None,
+            telemetry: [ZERO; crate::params::TELEMETRY_LEN],
+            telemetry_metadata_json: None,
             latency_samples: 0,
             transport: TransportState::default(),
             profiler_current_us: AtomicU32::new(0),
@@ -387,6 +398,7 @@ impl DSPKernel {
                 }
                 let names = pb.param_names();
                 let metadata = pb.param_metadata().map(|m| m.to_vec());
+                let telemetry_meta = pb.telemetry_metadata().map(|m| m.to_vec());
                 let latency = pb.latency_samples();
                 let defaults = Self::defaults_from_metadata(metadata.as_deref());
                 let boxed: Box<dyn Backend> = Box::new(pb);
@@ -397,6 +409,7 @@ impl DSPKernel {
                 // before the swap actually happens.
                 self.update_param_names_cache(names);
                 self.update_param_metadata_cache(metadata);
+                self.update_telemetry_metadata_cache(telemetry_meta);
                 self.latency_samples = latency;
                 self.reset_profiler();
                 self.memory_baseline_bytes
@@ -432,6 +445,7 @@ impl DSPKernel {
                 }
                 let names = wb.param_names();
                 let metadata = wb.param_metadata().map(|m| m.to_vec());
+                let telemetry_meta = wb.telemetry_metadata().map(|m| m.to_vec());
                 let latency = wb.latency_samples();
                 // Store NAM path for Swift to read and inject model data
                 self.nam_path = wb.nam_path().map(String::from);
@@ -441,6 +455,7 @@ impl DSPKernel {
 
                 self.update_param_names_cache(names);
                 self.update_param_metadata_cache(metadata);
+                self.update_telemetry_metadata_cache(telemetry_meta);
                 self.latency_samples = latency;
                 self.reset_profiler();
                 self.memory_baseline_bytes
@@ -746,6 +761,31 @@ impl DSPKernel {
         }
     }
 
+    /// Update the cached JSON for telemetry slot metadata. Set to None
+    /// when the script declares no telemetry, so Swift can short-circuit
+    /// the per-tick `read_telemetry` snapshot read.
+    pub(crate) fn update_telemetry_metadata_cache(
+        &mut self,
+        metadata: Option<Vec<crate::params::TelemetryMetadata>>,
+    ) {
+        match metadata {
+            Some(meta) if !meta.is_empty() => {
+                self.telemetry_metadata_json = serde_json::to_string(&meta)
+                    .ok()
+                    .and_then(|s| std::ffi::CString::new(s).ok());
+            }
+            _ => {
+                self.telemetry_metadata_json = None;
+            }
+        }
+        // Clear the snapshot too — stale values from the previous
+        // script's slots would otherwise leak into the first reads
+        // after a swap.
+        for slot in &self.telemetry {
+            slot.store(0, Ordering::Relaxed);
+        }
+    }
+
     /// Compute normalized parameter defaults from rich metadata.
     /// Returns `None` for backends with no metadata (legacy 0–1 mode); in that case
     /// the existing param values are preserved across the swap.
@@ -903,6 +943,30 @@ impl DSPKernel {
             Some(cstr) => cstr.as_ptr(),
             None => std::ptr::null(),
         }
+    }
+
+    /// Returns a pointer to the cached telemetry slot metadata JSON
+    /// (`[{name, key?, unit}, …]`), or null when the script declared no
+    /// telemetry. Pointer is valid until the next script load or kernel
+    /// destroy.
+    pub fn telemetry_metadata_json_ptr(&self) -> *const std::os::raw::c_char {
+        match &self.telemetry_metadata_json {
+            Some(cstr) => cstr.as_ptr(),
+            None => std::ptr::null(),
+        }
+    }
+
+    /// Snapshot the latest telemetry values into the caller's buffer.
+    /// Writes up to `out.len()` slots (capped at `TELEMETRY_LEN`) and
+    /// returns the number of slots written. Lock-free Relaxed read of
+    /// the per-slot atomics — single writer (audio thread, post-process)
+    /// vs. arbitrary readers (Swift display-link).
+    pub fn read_telemetry(&self, out: &mut [f32]) -> usize {
+        let n = out.len().min(self.telemetry.len());
+        for i in 0..n {
+            out[i] = f32::from_bits(self.telemetry[i].load(Ordering::Relaxed));
+        }
+        n
     }
 
     /// Returns script-declared algorithmic latency in samples (0 = no latency).
@@ -1165,6 +1229,17 @@ impl DSPKernel {
                             *last = Some(err.to_string());
                         }
                     }
+                }
+                // Snapshot script-published telemetry into the kernel's
+                // atomic store. Single-writer (audio thread, here) /
+                // multi-reader (Swift display-link). Even on backend
+                // failure we sample so transient writes from before the
+                // crash aren't lost; backends that publish nothing have
+                // a no-op `read_telemetry` and the snapshot stays zero.
+                let mut tele = [0.0_f32; crate::params::TELEMETRY_LEN];
+                backend.read_telemetry(&mut tele);
+                for (slot, v) in self.telemetry.iter().zip(tele.iter()) {
+                    slot.store(v.to_bits(), Ordering::Relaxed);
                 }
             }
 

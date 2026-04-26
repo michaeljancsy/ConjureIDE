@@ -10,6 +10,16 @@
 #define PARAM_COUNT 16
 
 /**
+ * Maximum number of telemetry slots a script can publish per render
+ * block. Telemetry is the read-back twin of params: scripts write
+ * internal DSP state (envelope follower, computed GR, sidechain RMS)
+ * once per block and the host UI reads the snapshot via
+ * `audio.onFrame`'s `telemetry` field. Mirrors `conjuredsp::TELEMETRY_LEN`
+ * in the author crate.
+ */
+#define TELEMETRY_LEN 8
+
+/**
  * Default capacity: 8192 samples (~185ms at 44.1kHz).
  * Enough for multiple FFT windows with overlap.
  */
@@ -246,6 +256,36 @@ const char *dsp_kernel_param_metadata_json(DSPKernelRef kernel);
  * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
  */
 uint32_t dsp_kernel_latency_samples(DSPKernelRef kernel);
+
+/**
+ * Returns a pointer to the cached telemetry slot metadata JSON
+ * (`[{name, key?, unit}, …]`), or null when the script declared no
+ * telemetry. Pointer is valid until the next script load or kernel
+ * destroy; Swift caches the parsed slot names.
+ *
+ * Telemetry is the read-back twin of `dsp_kernel_param_metadata_json`:
+ * scripts publish internal DSP state per render block via
+ * `Context::set_telemetry` / `TELEMETRY` dict, host UI reads the
+ * snapshot via `dsp_kernel_read_telemetry`.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+const char *dsp_kernel_telemetry_metadata_json(DSPKernelRef kernel);
+
+/**
+ * Snapshot the latest telemetry values published by the most recent
+ * `process()` call into the caller's buffer. Writes up to `max`
+ * slots (capped at the kernel's TELEMETRY_LEN, currently 8) and
+ * returns the number written. Lock-free Relaxed read of per-slot
+ * atomics; safe to call from any thread, throttled in practice to
+ * display-link cadence (~30–120 Hz).
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * - `out` must point to at least `max` writable f32 values.
+ */
+uint32_t dsp_kernel_read_telemetry(DSPKernelRef kernel, float *out, uint32_t max);
 
 /**
  * Enable or disable audio capture for spectrogram visualization.
