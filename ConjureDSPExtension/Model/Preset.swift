@@ -203,7 +203,10 @@ enum FactoryPresetRegistry {
 
         // Diagnostics — manual smoke test for the DSP→UI telemetry channel.
         // Passes a Drive-scaled signal through and publishes per-block
-        // peak + envelope-follower output via `frame.telemetry`.
+        // peak + envelope-follower output via `frame.telemetry`. Both
+        // language variants share the same UI so the keys (`Peak Db`,
+        // `Envelope Db`) are interchangeable.
         Entry(name: "Telemetry Smoke (Rust)", number: 104, resourceName: "preset_telemetry_smoke", language: .rust, category: .utility),
+        Entry(name: "Telemetry Smoke (Python)", number: 105, resourceName: "preset_telemetry_smoke_python", language: .python, category: .utility),
     ]
 }

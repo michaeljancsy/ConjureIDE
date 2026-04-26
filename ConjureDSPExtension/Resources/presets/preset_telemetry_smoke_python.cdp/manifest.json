@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 2,
+  "entry": "process.py",
+  "language": "python",
+  "params": [
+    { "name": "drive", "min": 1.0, "max": 10.0, "default": 1.0, "unit": "x" }
+  ],
+  "ui": {
+    "entryHTML": "ui/index.html",
+    "width": 420,
+    "height": 220,
+    "fps": 30,
+    "audioFrames": true
+  },
+  "meta": {
+    "description": "Python twin of preset_telemetry_smoke.cdp \u2014 same DSP, same UI, exercises the Python TELEMETRY dict + 7-arg process() dispatch path."
+  }
+}
