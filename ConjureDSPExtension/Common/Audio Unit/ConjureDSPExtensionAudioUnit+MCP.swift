@@ -446,6 +446,39 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         ]
         if !uiInfo.isEmpty { bundleInfo["ui"] = uiInfo }
 
+        // user_visible_state — what the user is ACTUALLY seeing right
+        // now, not just what the bundle declares on disk. Lets the
+        // agent detect "I built it correctly but the user is staring
+        // at stale kernel code / a Basic UI fallback / an unsaved-edit
+        // asterisk" without having to ask.
+        var visibility: [String: Any] = [
+            "is_modified": presetManager.isModified,
+        ]
+        let onDiskSource = try? String(contentsOf: bundle.entryScriptURL, encoding: .utf8)
+        let kernelInSync: Bool = {
+            guard let disk = onDiskSource, let kernel = self.scriptSource else { return false }
+            return disk == kernel
+        }()
+        visibility["kernel_in_sync"] = kernelInSync
+        if bundle.hasCustomUI {
+            // Only meaningful when a custom UI exists. False = user
+            // toggled it off and is looking at the stock slider panel
+            // instead.
+            visibility["custom_ui_visible"] = CustomUIPreference.read(key: bundle.name)
+        }
+        var issues: [String] = []
+        if presetManager.isModified {
+            issues.append("isModified=true: host title bar shows the '*' modified marker; user sees this as 'unsaved changes'.")
+        }
+        if !kernelInSync {
+            issues.append("Kernel-loaded script differs from the bundle's entry script on disk; audio is running stale code. Call save_preset (or compile_and_run with the on-disk source) to resync.")
+        }
+        if bundle.hasCustomUI, CustomUIPreference.read(key: bundle.name) == false {
+            issues.append("Bundle ships a custom UI but the user has toggled it off; they're seeing the stock slider panel instead. The user can flip the toggle in the host UI's Custom UI bar.")
+        }
+        visibility["issues"] = issues
+        bundleInfo["user_visible_state"] = visibility
+
         return (jsonStr(["bundle": bundleInfo]), false)
     }
 

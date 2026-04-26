@@ -172,7 +172,7 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "get_bundle_info",
-            description: "Introspect the currently-loaded preset bundle. Returns the bundle's name and root path, whether it ships a custom HTML/JS UI, the manifest's UI block (width/height/fps/audioFrames), and every editable text file inside (path + kind). Use before read_bundle_file / write_bundle_file to discover what's editable. Returns bundle=null when the active preset is legacy single-file (pre-bundle).",
+            description: "Introspect the currently-loaded preset bundle. Returns the bundle's name and root path, whether it ships a custom HTML/JS UI, the manifest's UI block (width/height/fps/audioFrames), every editable text file inside (path + kind), AND a `user_visible_state` block describing what the user is actually seeing right now: `is_modified` (host shows '*' on title bar), `kernel_in_sync` (kernel-loaded script matches the on-disk entry script — false means audio is running stale code), `custom_ui_visible` (only when has_custom_ui; false means the user has toggled it off and is looking at the stock slider panel), and `issues[]` — a human-readable list, empty when everything's coherent. Use before reporting 'done' to the user: a green validate_bundle + smoke_test_ui can still ship over a stale kernel or a hidden custom UI. Returns bundle=null when the active preset is legacy single-file (pre-bundle).",
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
         ToolDefinition(
