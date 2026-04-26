@@ -208,14 +208,14 @@
     let smoothedGR = 0;
 
     function onFrame(frame) {
-      // Peak-based GR estimate: peakIn (dBFS) - peakOut (dBFS), minus makeup so
-      // we isolate the compression amount. peaks arrive in linear amplitude.
-      const pin = Math.max(1e-6, frame.peakIn || 0);
-      const pout = Math.max(1e-6, frame.peakOut || 0);
-      const dbIn = 20 * Math.log10(pin);
-      const dbOut = 20 * Math.log10(pout);
-      const makeup = CDP.parameters.get(idx('makeup')) || 0;
-      const gr = Math.max(0, dbIn - (dbOut - makeup));
+      // Read the gain computer's actual per-block decision via the
+      // DSP→UI telemetry channel (set in process.rs). Replaces a
+      // peakIn/peakOut/makeup arithmetic estimate that under-reported
+      // during transients (the input peak arrives before the envelope
+      // follower has finished attacking) and depended on makeup gain
+      // for cancellation. Telemetry shows the actual reduction
+      // independent of makeup.
+      const gr = (frame.telemetry && frame.telemetry['Gr Db']) || 0;
       // Smooth the reading so the bar doesn't strobe.
       smoothedGR = smoothedGR * 0.7 + gr * 0.3;
       const clamped = Math.min(24, smoothedGR);
