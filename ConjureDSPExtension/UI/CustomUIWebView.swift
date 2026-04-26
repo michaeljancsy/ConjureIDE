@@ -585,6 +585,17 @@ struct CustomUIWebView: NSViewRepresentable {
                 if let fft = frame.fftOutDB { payload["fftOut"] = fft }
                 if let fft = frame.fftInDB { payload["fftIn"] = fft }
             }
+            // Telemetry: per-block scalars the DSP published via
+            // `ctx.set_telemetry(IDX, value)` (Rust) or the `TELEMETRY`
+            // dict (Python). Always attached when present (no opt-in
+            // flag) — the payload is small (≤8 floats keyed by short
+            // strings, ~150 bytes worst case) and the use cases (GR
+            // meters, envelope visualizers) don't tolerate the extra
+            // round-trip an opt-in would require. Only emitted when the
+            // loaded preset declared at least one slot.
+            if let telemetry = frame.telemetry, !telemetry.isEmpty {
+                payload["telemetry"] = telemetry
+            }
 
             guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
                   let json = String(data: data, encoding: .utf8) else { return }

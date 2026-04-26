@@ -200,5 +200,10 @@ enum FactoryPresetRegistry {
         Entry(name: "Methane Sea (Python)", number: 101, resourceName: "preset_methane_sea", language: .python, category: .other),
         Entry(name: "Methane Sea (Rust)", number: 102, resourceName: "preset_methane_sea_rust", language: .rust, category: .other),
         Entry(name: "Mockingbird at Night (Rust)", number: 103, resourceName: "preset_mockingbird_at_night_rust", language: .rust, category: .other),
+
+        // Diagnostics — manual smoke test for the DSP→UI telemetry channel.
+        // Passes a Drive-scaled signal through and publishes per-block
+        // peak + envelope-follower output via `frame.telemetry`.
+        Entry(name: "Telemetry Smoke (Rust)", number: 104, resourceName: "preset_telemetry_smoke", language: .rust, category: .utility),
     ]
 }
