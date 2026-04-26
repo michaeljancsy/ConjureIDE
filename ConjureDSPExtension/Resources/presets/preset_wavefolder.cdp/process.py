@@ -6,7 +6,7 @@ PARAMS = {
 }
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     Wavefolder — folds the waveform back when it exceeds +/-1.
 

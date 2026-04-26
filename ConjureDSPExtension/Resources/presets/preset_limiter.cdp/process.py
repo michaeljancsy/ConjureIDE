@@ -12,7 +12,7 @@ PARAMS = {
 _envelope = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     Limiter — brick-wall peak limiter.
 

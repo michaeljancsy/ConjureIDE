@@ -20,7 +20,7 @@ Q = 0.707
 _filters = None
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     3-Band EQ — non-parametric equalizer with low shelf, mid peak, and high shelf.
 

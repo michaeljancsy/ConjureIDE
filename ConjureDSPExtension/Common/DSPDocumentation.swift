@@ -75,6 +75,59 @@ enum DSPDocumentation {
     Without PARAMS: scripts receive raw 0-1 normalized floats (legacy mode).
     Python params arg is a dict keyed by name. Rust params are accessed via ctx.param(INDEX).
 
+    ## Python process() signature — copy this verbatim
+
+    Always use the 7-argument form, even if you don't need transport or
+    telemetry. Use `_transport` and `_telemetry` (Python's
+    underscore-prefix convention for unused args) when you don't read
+    them — adding telemetry later is a one-line edit instead of a
+    refactor. Every factory Python preset uses this canonical shape:
+
+      import numpy as np
+      from conjuredsp import freq, mix
+
+      PARAMS = {
+          "drive": freq(min=20.0, max=2000.0, default=200.0),
+          "mix": mix(default=0.5),
+      }
+
+      def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+          drive = params["drive"]
+          mix_v = params["mix"]
+          for ch in range(len(inputs)):
+              # IMPORTANT: slice with [:frame_count] on BOTH sides.
+              # inputs/outputs are pre-allocated to maximumFramesToRender
+              # (often larger than frame_count); reading or writing past
+              # frame_count gives stale or zero samples.
+              x = inputs[ch][:frame_count]
+              wet = np.tanh(x * drive)
+              outputs[ch][:frame_count] = (1.0 - mix_v) * x + mix_v * wet
+
+    Notes on the args:
+
+    - `inputs` / `outputs` — lists of numpy float32 arrays, one per
+      channel. `len(inputs)` IS the channel count (no separate
+      `channel_count` arg, unlike Rust). Both arrays are sized to the
+      AU's `maximumFramesToRender`, NOT `frame_count` — always slice
+      with `[:frame_count]`.
+    - `frame_count` — int, samples in this block.
+    - `sample_rate` — float, Hz.
+    - `params` — dict keyed by parameter name when `PARAMS` metadata
+      is declared (the recommended path), or a plain list of 0–1
+      normalized floats in legacy mode (no PARAMS dict).
+    - `_transport` — dict with `tempo`, `beat`, `playing`,
+      `time_sig_num`, `time_sig_den`, `sample_pos`. Accept it even if
+      you don't use it; rename to `transport` when you do.
+    - `_telemetry` — dict pre-seeded with declared `TELEMETRY` slot
+      keys at zero. Write to it (e.g. `_telemetry["gr_db"] = -3.5`)
+      to publish per-block values to the host UI's `audio.onFrame`.
+      Rename to `telemetry` when you use it.
+
+    The kernel still supports legacy 4/5/6-arg forms (back-compat for
+    older user presets). New code should always use the 7-arg
+    canonical so adding transport or telemetry later is just deleting
+    an underscore.
+
     ## Rust process() signature — copy this verbatim
 
     The `setup!()` macro provides the buffers + helpers, but the

@@ -21,8 +21,13 @@ static PYTHON_ENV_INIT: OnceLock<()> = OnceLock::new();
 
 /// Python DSP backend using pyo3 and numpy.
 ///
-/// Loads a Python script containing a `process(inputs, outputs, frame_count, sample_rate)`
-/// function and calls it each render callback with pre-allocated numpy arrays.
+/// Loads a Python script containing a
+/// `process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry)`
+/// function (canonical 7-arg form) and calls it each render callback with
+/// pre-allocated numpy arrays. The kernel additionally accepts legacy
+/// 4/5/6-arg forms for back-compat with older user presets — see the
+/// arity dispatch below — but new code should always declare all
+/// seven, using `_transport`/`_telemetry` for unused trailing args.
 pub struct PythonBackend {
     py_process_fn: Py<PyAny>,
     py_input_arrays: Vec<Py<PyAny>>,

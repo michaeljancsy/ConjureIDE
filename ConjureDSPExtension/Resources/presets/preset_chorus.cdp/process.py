@@ -18,7 +18,7 @@ _write_pos = 0
 _lfo_phase = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     Chorus — modulated delay for thickening.
 

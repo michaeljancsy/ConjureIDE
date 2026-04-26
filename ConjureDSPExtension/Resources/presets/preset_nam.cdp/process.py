@@ -16,7 +16,7 @@ PARAMS = {
 model = load_model("tone3000://19/56")
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     NAM Tone — Neural Amp Modeler preset.
 

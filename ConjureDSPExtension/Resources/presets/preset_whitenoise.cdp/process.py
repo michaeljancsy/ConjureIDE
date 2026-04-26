@@ -16,7 +16,7 @@ def _next_f32():
     return float(_rng_state) / 4294967296.0 * 2.0 - 1.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     White Noise Generator — generates uniform white noise.
 

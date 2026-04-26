@@ -17,7 +17,7 @@ _delay_lines = None
 _gain = 1.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     Lookahead Limiter — transparent brick-wall limiter.
 

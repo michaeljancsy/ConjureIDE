@@ -65,7 +65,7 @@ def _resolve_sync(idx, time_sig_num):
     return bar if idx == 5 else 2.0 * bar
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, transport):
+def process(inputs, outputs, frame_count, sample_rate, params, transport, _telemetry):
     global _st, _sr
     nch = len(inputs)
     if _st is None or _sr != sample_rate:

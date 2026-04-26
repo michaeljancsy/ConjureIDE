@@ -14,7 +14,7 @@ MODE = "low"
 _state = [[0.0, 0.0], [0.0, 0.0]]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     Resonant State Variable Filter — multi-mode TPT SVF (LP/HP/BP/Notch).
 

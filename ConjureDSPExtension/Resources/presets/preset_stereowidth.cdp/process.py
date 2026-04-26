@@ -6,7 +6,7 @@ PARAMS = {
 }
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     Stereo Width — mid/side stereo width control.
 
