@@ -339,7 +339,7 @@ struct ConjureDSPTests {
     private static let testScript = """
         import numpy as np
 
-        def process(inputs, outputs, frame_count, sample_rate, params):
+        def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
             for ch in range(len(inputs)):
                 outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25
         """
@@ -543,7 +543,7 @@ struct ConjureDSPTests {
         // Load a script that multiplies all samples by 0.25
         let quarterGainScript = """
             import numpy as np
-            def process(inputs, outputs, frame_count, sample_rate):
+            def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):
                 for ch in range(len(inputs)):
                     outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25
             """

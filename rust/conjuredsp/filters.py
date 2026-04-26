@@ -169,7 +169,7 @@ class Biquad:
 
         _filters = None
 
-        def process(inputs, outputs, frame_count, sample_rate, params):
+        def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
             global _filters
             if _filters is None:
                 _filters = [Biquad() for _ in range(len(inputs))]

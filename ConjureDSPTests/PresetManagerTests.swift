@@ -143,7 +143,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
+        let script = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    pass\n"
         let preset = try manager.savePreset(name: "My Effect", source: script)
 
         #expect(preset.name == "My Effect")
@@ -173,7 +173,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
+        let script = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    pass\n"
         try manager.savePreset(name: "Test Preset", source: script)
 
         let userPresets = manager.presets.filter { !$0.isFactory }
@@ -609,7 +609,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
+        let script = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    pass\n"
         try manager.savePreset(name: "Alpha", source: script)
 
         let renamed = try manager.renamePreset(

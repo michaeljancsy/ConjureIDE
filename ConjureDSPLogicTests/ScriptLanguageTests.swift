@@ -36,7 +36,7 @@ struct ScriptLanguageDetectionTests {
     }
 
     @Test func detectDefProcessReturnsPython() {
-        let source = "def process(inputs, outputs, frame_count, sample_rate, params):\n    pass"
+        let source = "def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):\n    pass"
         #expect(ScriptLanguage.detect(from: source) == .python)
     }
 

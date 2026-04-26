@@ -1102,7 +1102,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	private func loadPassthroughScript() {
 		guard let pythonHome = self.pythonHome else { return }
 		let passthrough = """
-		def process(inputs, outputs, frame_count, sample_rate, params):
+		def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
 		    for ch in range(len(inputs)):
 		        outputs[ch][:frame_count] = inputs[ch][:frame_count]
 		"""

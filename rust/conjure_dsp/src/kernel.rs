@@ -1892,7 +1892,7 @@ mod tests {
             }
         };
         let script = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sample_rate):\n    raise RuntimeError('intentional error')\n",
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    raise RuntimeError('intentional error')\n",
         );
         let mut kernel = DSPKernel::new();
         assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
@@ -3148,7 +3148,7 @@ mod tests {
             }
         };
 
-        let script = "PARAM_NAMES = {0: \"Cutoff\", 1: \"Resonance\"}\n\ndef process(inputs, outputs, frame_count, sample_rate, params):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
+        let script = "PARAM_NAMES = {0: \"Cutoff\", 1: \"Resonance\"}\n\ndef process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
         let temp_dir = std::env::temp_dir();
         let temp_file = temp_dir.join("test_param_names.py");
         std::fs::write(&temp_file, script).unwrap();
@@ -3178,7 +3178,7 @@ mod tests {
             }
         };
 
-        let script = "def process(inputs, outputs, frame_count, sample_rate):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
+        let script = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
         let temp_dir = std::env::temp_dir();
         let temp_file = temp_dir.join("test_no_param_names.py");
         std::fs::write(&temp_file, script).unwrap();
@@ -3206,7 +3206,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
 
         // First: script WITH param names
-        let script1 = "PARAM_NAMES = {0: \"Rate\"}\n\ndef process(inputs, outputs, frame_count, sample_rate, params):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
+        let script1 = "PARAM_NAMES = {0: \"Rate\"}\n\ndef process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
         let temp1 = temp_dir.join("test_param_names_1.py");
         std::fs::write(&temp1, script1).unwrap();
 
@@ -3215,7 +3215,7 @@ mod tests {
         assert!(!kernel.param_names_json_ptr().is_null());
 
         // Second: script WITHOUT param names — should clear
-        let script2 = "def process(inputs, outputs, frame_count, sample_rate):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
+        let script2 = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
         let temp2 = temp_dir.join("test_param_names_2.py");
         std::fs::write(&temp2, script2).unwrap();
 
