@@ -111,6 +111,54 @@
     }
 
     /**
+     * Inverse of formatValue, used by the click-to-edit value text:
+     * parse a user-typed string back into an actual parameter value.
+     *
+     * Accepts the same SI rollovers `formatValue` produces — "1.5kHz"
+     * for an Hz param resolves to 1500; "2 s" for a ms param resolves
+     * to 2000 — so the user can copy-edit the displayed text in place
+     * without thinking about units.
+     *
+     * Returns null when the input has no parseable leading number, so
+     * the caller can revert to the previous value cleanly. The value
+     * is clamped to `meta.min`/`meta.max` and rounded for integer
+     * style. Toggle/choice are NOT handled here — they have their
+     * own widgets and don't expose the type-in editor.
+     */
+    function parseUserValue(raw, meta) {
+        if (raw == null) return null;
+        var s = String(raw).trim();
+        if (!s) return null;
+        // Leading number: optional sign, digits, optional decimal, optional exponent.
+        var m = s.match(/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/);
+        if (!m) return null;
+        var num = parseFloat(m[0]);
+        if (!isFinite(num)) return null;
+        var rest = s.slice(m[0].length).trim().toLowerCase();
+        var unit = ((meta && meta.unit) || '').toLowerCase();
+
+        // Unit-prefix scaling — must mirror `formatValue`'s rollovers.
+        if (unit === 'hz') {
+            if (rest === 'k' || rest.indexOf('khz') === 0) num *= 1000;
+        } else if (unit === 'ms') {
+            // Match a bare "s" / "sec" / "second(s)" — but NOT "ms" /
+            // "msec" (which means milliseconds, no scaling).
+            if (rest === 's' || rest === 'sec' || rest === 'second' ||
+                rest === 'seconds' || /^s\b/.test(rest)) {
+                num *= 1000;
+            }
+        }
+        // Other units: parse as-is. Authors picking exotic units get
+        // literal values; that's the safest default.
+
+        if (meta && meta.style === 'integer') num = Math.round(num);
+
+        if (meta && typeof meta.min === 'number') num = Math.max(meta.min, num);
+        if (meta && typeof meta.max === 'number') num = Math.min(meta.max, num);
+        return num;
+    }
+
+    /**
      * Wrap a parameter index in an observable control object. Reads
      * actual (denormalized) values from the bridge; writes pass through
      * to `CDP.parameters.set`, which routes to the AU parameter tree.
@@ -191,6 +239,21 @@
         '  text-align: right;',
         '  font-variant-numeric: tabular-nums;',
         '  color: var(--cdp-muted);',
+        '  border-radius: 3px;',
+        '  padding: 1px 2px;',
+        '  margin: -1px -2px;',
+        '}',
+        // Hover/focus tint signals the value text is click-editable.
+        // Only fires once the editor is installed (cursor: text is set
+        // inline by installValueEditor; the rule selector matches
+        // either the inline style or the cursor having been applied).
+        '.row > [part="value"][tabindex] {',
+        '  cursor: text;',
+        '}',
+        '.row > [part="value"][tabindex]:hover,',
+        '.row > [part="value"][tabindex]:focus {',
+        '  background: color-mix(in srgb, var(--cdp-fg) 8%, transparent);',
+        '  outline: none;',
         '}',
     ].join('\n');
 
@@ -291,6 +354,128 @@
         });
     }
 
+    /**
+     * Wire up click-to-edit on a `[part="value"]` element. The display
+     * span becomes a focusable target; clicking it (or pressing Enter
+     * while focused) replaces the formatted text with a transparent
+     * `<input>` pre-filled with the raw current value. Enter or blur
+     * commits via `parseUserValue`; Escape reverts. Per-component
+     * `_render` / `updateUI` paths must check `valueEl.__cdpEditing`
+     * and skip the textContent write while the editor is open —
+     * otherwise an automation tick or the user's own setValue (which
+     * fires onChange synchronously) would clobber the input mid-type.
+     *
+     * Idempotent: a re-bind on the same element won't double-install
+     * listeners. The editor refuses to open for `style: "toggle"` /
+     * `style: "choice"` params — those have widgets that already cover
+     * "set this exact value" and a text editor would be confusing.
+     */
+    function installValueEditor(valueEl, getCtrl) {
+        if (valueEl.__cdpEditorInstalled) return;
+        valueEl.__cdpEditorInstalled = true;
+        valueEl.setAttribute('tabindex', '0');
+        valueEl.setAttribute('role', 'button');
+        valueEl.setAttribute('aria-label', 'Edit value');
+        valueEl.style.cursor = 'text';
+
+        function startEdit() {
+            if (valueEl.__cdpEditing) return;
+            var ctrl = getCtrl();
+            if (!ctrl) return;
+            var meta = ctrl.metadata || {};
+            if (meta.style === 'toggle' || meta.style === 'choice') return;
+
+            valueEl.__cdpEditing = true;
+            var v = ctrl.value;
+            // Pre-fill with the bare number (no unit text). Easier to
+            // overwrite "440" than "440 Hz".
+            var raw = (typeof v === 'number')
+                ? String(+v.toFixed(4)).replace(/\.?0+$/, '')
+                : '';
+
+            var input = document.createElement('input');
+            input.type = 'text';
+            input.value = raw;
+            input.setAttribute('part', 'value-input');
+            input.setAttribute('inputmode', 'decimal');
+            input.setAttribute('role', 'spinbutton');
+            input.setAttribute('aria-label',
+                (meta.name ? meta.name + ' value' : 'Param value'));
+            if (typeof meta.min === 'number') input.setAttribute('aria-valuemin', String(meta.min));
+            if (typeof meta.max === 'number') input.setAttribute('aria-valuemax', String(meta.max));
+            if (typeof v === 'number') input.setAttribute('aria-valuenow', String(v));
+            // Inherit the host span's typography so the editor visually
+            // matches the static display.
+            input.style.font = 'inherit';
+            input.style.color = 'inherit';
+            input.style.textAlign = 'inherit';
+            input.style.width = '100%';
+            input.style.minWidth = '0';
+            input.style.boxSizing = 'border-box';
+            input.style.background = 'transparent';
+            input.style.border = '1px solid var(--cdp-border)';
+            input.style.borderRadius = '4px';
+            input.style.padding = '1px 4px';
+            input.style.fontVariantNumeric = 'tabular-nums';
+            input.style.outline = 'none';
+
+            // Snapshot the current children so we can restore the
+            // original (`<slot>` plus any author-supplied content)
+            // verbatim on cancel/commit, instead of just a text
+            // string that loses the slot wiring.
+            var prevChildren = Array.prototype.slice.call(valueEl.childNodes);
+            while (valueEl.firstChild) valueEl.removeChild(valueEl.firstChild);
+            valueEl.appendChild(input);
+            input.focus();
+            input.select();
+
+            var done = false;
+            function finish(commit) {
+                if (done) return;
+                done = true;
+                valueEl.__cdpEditing = false;
+                if (commit) {
+                    var n = parseUserValue(input.value, meta);
+                    if (n != null && isFinite(n)) ctrl.setValue(n);
+                }
+                input.remove();
+                // Restore the original DOM structure first so the slot
+                // wiring is intact, then refresh with the latest value.
+                for (var i = 0; i < prevChildren.length; i++) {
+                    valueEl.appendChild(prevChildren[i]);
+                }
+                var latest = ctrl.value;
+                // Match the same "don't clobber author slot" rule the
+                // components use: if there's a slotted child with
+                // assigned nodes, leave it alone.
+                var slot = valueEl.querySelector('slot');
+                var slotted = slot && slot.assignedNodes
+                    && slot.assignedNodes().length > 0;
+                if (!slotted) {
+                    valueEl.textContent = formatValue(latest, ctrl.metadata);
+                }
+            }
+
+            input.addEventListener('keydown', function (e) {
+                // Don't let arrow-keys / Enter leak to a parent host's
+                // keydown handler (cdp-knob steps the value on arrows).
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+                else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+            });
+            input.addEventListener('blur', function () { finish(true); });
+        }
+
+        valueEl.addEventListener('click', startEdit);
+        valueEl.addEventListener('keydown', function (e) {
+            if (valueEl.__cdpEditing) return;
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                startEdit();
+            }
+        });
+    }
+
     // ------------------------------------------------------------------
     // <cdp-slider>
     // ------------------------------------------------------------------
@@ -353,6 +538,9 @@
             }
             var updateUI = (v) => {
                 this._input.value = isInt ? v : normalize(v, meta);
+                // Don't clobber the type-in editor while the user is
+                // mid-edit; commit/cancel paths refresh the text on exit.
+                if (this._value.__cdpEditing) return;
                 if (!this._value.textContent || !this._value.firstElementChild) {
                     this._value.textContent = formatValue(v, meta);
                 }
@@ -365,8 +553,12 @@
                     ? Math.round(Number(this._input.value))
                     : denormalize(Number(this._input.value), meta);
                 this._ctrl.setValue(actual);
-                this._value.textContent = formatValue(actual, meta);
+                if (!this._value.__cdpEditing) {
+                    this._value.textContent = formatValue(actual, meta);
+                }
             };
+
+            installValueEditor(this._value, () => this._ctrl);
         }
 
         disconnectedCallback() {
@@ -818,6 +1010,16 @@
         '  font-size: 0.8em; color: var(--cdp-muted);',
         '  font-variant-numeric: tabular-nums;',
         '  white-space: nowrap; text-align: center;',
+        '  border-radius: 3px;',
+        '  padding: 1px 4px;',
+        '  margin: -1px -4px;',
+        '}',
+        // Hover/focus tint signals the value text is click-editable.
+        '.value[tabindex] { cursor: text; }',
+        '.value[tabindex]:hover,',
+        '.value[tabindex]:focus {',
+        '  background: color-mix(in srgb, var(--cdp-fg) 8%, transparent);',
+        '  outline: none;',
         '}',
     ].join('\n');
 
@@ -896,6 +1098,7 @@
             this._label.textContent = this.getAttribute('label') || meta.name || ('Param ' + idx);
             this._render(this._ctrl.value);
             this._offChange = this._ctrl.onChange((v) => this._render(v));
+            installValueEditor(this._value, () => this._ctrl);
         }
 
         _render(v) {
@@ -914,7 +1117,11 @@
                 this._indicatorGroup.setAttribute('transform', 'rotate(' + angle + ' 32 32)');
             }
             this._visual.setAttribute('aria-valuenow', t.toFixed(3));
-            this._value.textContent = formatValue(v, this._ctrl.metadata);
+            // Don't overwrite the type-in editor mid-edit. The commit/
+            // cancel path refreshes the text from the latest value.
+            if (!this._value.__cdpEditing) {
+                this._value.textContent = formatValue(v, this._ctrl.metadata);
+            }
         }
 
         _startDrag(e) {
@@ -1071,6 +1278,13 @@
         requireVersion: requireVersion,
         control: control,
         formatValue: formatValue,
+        /// Inverse of formatValue: parse a user-typed string back to a
+        /// numeric value, honoring the param's unit prefixes (kHz/Hz,
+        /// s/ms) and clamping to min/max. Returns null when the input
+        /// has no leading number. Used internally by the click-to-edit
+        /// value text on cdp-slider / cdp-knob; exposed for authored
+        /// UIs that render their own value displays.
+        parseUserValue: parseUserValue,
         denormalize: denormalize,
         normalize: normalize,
         /// Resolve a `param="…"` attribute value to an index. Accepts

@@ -559,6 +559,30 @@ enum DSPDocumentation {
     - `<cdp-panel auto>` — fallback layout that mirrors the stock slider
       panel. Useful as a one-liner when you just want themed sliders.
 
+    ### Don't display the same value twice
+
+    Every `<cdp-slider>` / `<cdp-knob>` / `<cdp-toggle>` / `<cdp-choice>`
+    already renders its own label and formatted value (with units) inside
+    its shadow DOM. Adding a sibling `<span>`/`<div>` that shows
+    `formatValue(...)` for the same param produces a duplicate readout
+    the user has to mentally reconcile, and the two will tear under
+    fast updates because they redraw from different paths.
+
+    If the default value position doesn't fit your layout, restyle the
+    built-in instead of duplicating it:
+
+    ```css
+    /* Hide the default value entirely (and let your layout render its own). */
+    cdp-knob::part(value) { display: none; }
+
+    /* Or just resize the value column on cdp-slider rows. */
+    cdp-slider { --cdp-value-width: 0; }
+    ```
+
+    The components expose `::part(label)`, `::part(value)`, `::part(track)`,
+    `::part(face)`, `::part(rim)`, `::part(indicator)`, `::part(puck)`,
+    `::part(option)`, `::part(thumb)` for restyling without re-rendering.
+
     ## Author JS API (`window.ConjureDSP.ui`)
 
     For preset JS beyond the components:

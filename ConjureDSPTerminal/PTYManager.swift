@@ -649,6 +649,13 @@ final class PTYManager {
       default, and ARIA. Theme via `--cdp-knob-*` properties; for \
       non-circular geometry slot in your own SVG and react to the \
       published `--cdp-knob-norm` CSS variable.
+    - Every cdp-slider / cdp-knob / cdp-choice already renders its own \
+      label and formatted value (with units) inside its shadow DOM. \
+      DO NOT add a sibling `<span>` / `<div>` / readout that displays \
+      the same param value — it shows up twice and the user has to \
+      mentally reconcile them. If the default position doesn't fit, \
+      style the built-in value via `--cdp-value-width` / \
+      `::part(value)` instead of duplicating it.
     - `parameters.set(i, v)` fires `onChange`/`onAnyChange` synchronously \
       (with a dedupe-on-equal guard). Use `ctrl.onChange(cb)` as your \
       single source of truth for visual updates — the same handler \
