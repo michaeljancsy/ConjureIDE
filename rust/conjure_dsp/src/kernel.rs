@@ -1919,7 +1919,7 @@ mod tests {
             }
         };
         let script = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    raise ValueError('boom')\n",
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sr, _params, _transport, _telemetry):\n    raise ValueError('boom')\n",
         );
         let mut kernel = DSPKernel::new();
         assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
@@ -1950,7 +1950,7 @@ mod tests {
             }
         };
         let script_half = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5\n",
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sr, _params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5\n",
         );
         let mut kernel = DSPKernel::new();
         assert!(kernel.load_script(&python_home, script_half.to_str().unwrap()));
@@ -1967,7 +1967,7 @@ mod tests {
 
         // Hot-reload with a different gain
         let script_quarter = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25\n",
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sr, _params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25\n",
         );
         assert!(kernel.load_script(&python_home, script_quarter.to_str().unwrap()));
         kernel.initialize(1, 1, 44100.0);
@@ -2036,12 +2036,49 @@ mod tests {
             }
         };
         let script =
-            write_temp_script("import nonexistent_module_xyz\ndef process(i,o,f,s): pass\n");
+            write_temp_script("import nonexistent_module_xyz\ndef process(i,o,f,s,_p,_t,_tel): pass\n");
         let mut kernel = DSPKernel::new();
         let result = kernel.load_script(&python_home, script.to_str().unwrap());
         assert!(!result);
         assert!(kernel.last_error().is_some());
         std::fs::remove_file(script).ok();
+    }
+
+    /// Pin the canonical-7-arg requirement: scripts with any other
+    /// arity (4/5/6/8) must fail at load time with a clear, actionable
+    /// error mentioning the canonical signature.
+    #[test]
+    fn test_load_script_rejects_non_seven_arg_signatures() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+
+        let cases: &[(&str, &str)] = &[
+            ("4-arg legacy",  "def process(i, o, f, s): pass\n"),
+            ("5-arg",          "def process(i, o, f, s, p): pass\n"),
+            ("6-arg",          "def process(i, o, f, s, p, t): pass\n"),
+            ("8-arg",          "def process(i, o, f, s, p, t, tel, x): pass\n"),
+        ];
+
+        for (label, src) in cases {
+            let script = write_temp_script(src);
+            let mut kernel = DSPKernel::new();
+            let loaded = kernel.load_script(&python_home, script.to_str().unwrap());
+            assert!(
+                !loaded,
+                "{label}: expected load to fail for non-7-arg process()"
+            );
+            let err = kernel.last_error().expect("last_error should be set");
+            assert!(
+                err.contains("must take exactly 7 arguments"),
+                "{label}: error should mention the 7-arg requirement, got: {err}"
+            );
+            std::fs::remove_file(script).ok();
+        }
     }
 
     // --- Group B3: Benchmarking ---
@@ -2319,7 +2356,7 @@ mod tests {
             }
         };
         let script = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sr):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 10.0\n",
+            "import numpy as np\ndef process(inputs, outputs, frame_count, sr, _params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 10.0\n",
         );
         let mut kernel = DSPKernel::new();
         assert!(kernel.load_script(&python_home, script.to_str().unwrap()));

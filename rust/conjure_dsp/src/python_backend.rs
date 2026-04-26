@@ -23,11 +23,11 @@ static PYTHON_ENV_INIT: OnceLock<()> = OnceLock::new();
 ///
 /// Loads a Python script containing a
 /// `process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry)`
-/// function (canonical 7-arg form) and calls it each render callback with
-/// pre-allocated numpy arrays. The kernel additionally accepts legacy
-/// 4/5/6-arg forms for back-compat with older user presets — see the
-/// arity dispatch below — but new code should always declare all
-/// seven, using `_transport`/`_telemetry` for unused trailing args.
+/// function (canonical 7-arg form) and calls it each render callback
+/// with pre-allocated numpy arrays. Scripts with anything other than
+/// exactly 7 args are rejected at load time — use `_transport` /
+/// `_telemetry` (Python's underscore-prefix convention for unused
+/// args) when you don't read them.
 pub struct PythonBackend {
     py_process_fn: Py<PyAny>,
     py_input_arrays: Vec<Py<PyAny>>,
@@ -38,13 +38,6 @@ pub struct PythonBackend {
     /// Rich parameter metadata from `PARAMS` dict. When present, process()
     /// passes a dict of denormalized values instead of a list of 0–1 floats.
     param_metadata: Option<Vec<ParamMetadata>>,
-    /// Cached arity of the Python `process()` function.
-    /// 7 = with telemetry dict, 6 = with transport, 5 = with params, 4 = legacy.
-    /// Each level subsumes the previous: a 7-arg signature must accept all
-    /// of (inputs, outputs, frame_count, sample_rate, params, transport,
-    /// telemetry). Authors who want telemetry but not transport accept
-    /// transport as an unused arg.
-    process_arity: usize,
     /// Script-declared telemetry slot metadata (from `TELEMETRY` dict).
     /// `None` when the script doesn't declare one — matches the missing-
     /// metadata-export semantics in the WASM backend.
@@ -125,7 +118,7 @@ impl PythonBackend {
             std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
         });
 
-        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, Option<Vec<TelemetryMetadata>>, usize, u32, String), PyErr> =
+        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, Option<Vec<TelemetryMetadata>>, u32, String), PyErr> =
             Python::with_gil(|py| {
                 let code = std::fs::read_to_string(script_path)
                     .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
@@ -152,12 +145,24 @@ impl PythonBackend {
                 let module = PyModule::from_code(py, &code_c, &path_c, &module_name)?;
                 let process_fn = module.getattr("process")?;
 
-                // Detect process() arity via __code__.co_argcount for fast dispatch.
-                // 6 = with transport, 5 = with params, 4 = legacy.
+                // Require the canonical 7-arg signature. We pass all seven
+                // args every render block; a function declaring fewer would
+                // raise TypeError at call time, which is much more confusing
+                // than a clear load-time error pointing at the convention.
                 let arity: usize = process_fn
                     .getattr("__code__")?
                     .getattr("co_argcount")?
                     .extract()?;
+                if arity != 7 {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "process() must take exactly 7 arguments \
+                        (inputs, outputs, frame_count, sample_rate, params, \
+                        transport, telemetry); got {} args. Use _transport \
+                        and _telemetry as parameter names if you don't \
+                        read them.",
+                        arity
+                    )));
+                }
 
                 // Try PARAMS dict first (rich metadata):
                 //   PARAMS = {"threshold": {"min": -40, "max": -3, "unit": "dB", "default": -20}, ...}
@@ -176,12 +181,12 @@ impl PythonBackend {
                     .and_then(|v| v.extract::<u32>().ok())
                     .unwrap_or(0);
 
-                Ok((process_fn.unbind(), param_names, param_metadata, telemetry_metadata, arity, latency, mod_name_str))
+                Ok((process_fn.unbind(), param_names, param_metadata, telemetry_metadata, latency, mod_name_str))
             });
 
         match result {
-            Ok((process_fn, param_names, param_metadata, telemetry_metadata, arity, latency, module_name)) => {
-                eprintln!("ConjureDSP-Rust: Python script loaded successfully (arity={}, latency={})", arity, latency);
+            Ok((process_fn, param_names, param_metadata, telemetry_metadata, latency, module_name)) => {
+                eprintln!("ConjureDSP-Rust: Python script loaded successfully (latency={})", latency);
                 Ok(Self {
                     py_process_fn: process_fn,
                     py_input_arrays: Vec::new(),
@@ -190,7 +195,6 @@ impl PythonBackend {
                     last_error: None,
                     param_names,
                     param_metadata,
-                    process_arity: arity,
                     telemetry_metadata,
                     py_telemetry_dict: None,
                     telemetry_buf: [0.0; TELEMETRY_LEN],
@@ -427,16 +431,14 @@ impl PythonBackend {
             }
 
             // Cache transport dict (keys are stable, values updated in-place each callback)
-            if self.process_arity >= 6 {
-                let dict = PyDict::new(py);
-                let _ = dict.set_item("tempo", 120.0f64);
-                let _ = dict.set_item("beat", 0.0f64);
-                let _ = dict.set_item("playing", false);
-                let _ = dict.set_item("time_sig_num", 4.0f64);
-                let _ = dict.set_item("time_sig_den", 4.0f64);
-                let _ = dict.set_item("sample_pos", 0.0f64);
-                self.py_transport_dict = Some(dict.into_any().unbind());
-            }
+            let dict = PyDict::new(py);
+            let _ = dict.set_item("tempo", 120.0f64);
+            let _ = dict.set_item("beat", 0.0f64);
+            let _ = dict.set_item("playing", false);
+            let _ = dict.set_item("time_sig_num", 4.0f64);
+            let _ = dict.set_item("time_sig_den", 4.0f64);
+            let _ = dict.set_item("sample_pos", 0.0f64);
+            self.py_transport_dict = Some(dict.into_any().unbind());
 
             // Cache params dict (keys are stable, values updated in-place each callback)
             if let Some(ref metadata) = self.param_metadata {
@@ -467,7 +469,6 @@ impl PythonBackend {
         params: &[f32; PARAM_COUNT],
         transport: &TransportState,
     ) -> bool {
-        let arity = self.process_arity;
         let result: Result<(), PyErr> = Python::with_gil(|py| {
             // Copy input audio data into pre-allocated numpy arrays
             for ch in 0..channel_count {
@@ -515,100 +516,57 @@ impl PythonBackend {
                 PyList::new(py, params.iter())?.into_any()
             };
 
-            // Dispatch by cached arity (detected at load time):
-            // 7-arg: process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry)
-            // 6-arg: process(inputs, outputs, frame_count, sample_rate, params, transport)
-            // 5-arg: process(inputs, outputs, frame_count, sample_rate, params)
-            // 4-arg: process(inputs, outputs, frame_count, sample_rate)  [legacy]
-            //
-            // The 6-arg branch is also used by the 7-arg path to construct
-            // the transport dict; pulled out into a helper-style closure
-            // would obscure the borrow flow, so it's duplicated inline.
-            let needs_transport = arity >= 6;
-            let transport_obj_opt: Option<Bound<'_, PyAny>> = if needs_transport {
-                let obj = if let Some(ref cached) = self.py_transport_dict {
-                    let dict = cached.bind(py);
-                    dict.set_item("tempo", transport.tempo)?;
-                    dict.set_item("beat", transport.beat_position)?;
-                    dict.set_item("playing", transport.is_playing)?;
-                    dict.set_item("time_sig_num", transport.time_sig_numerator)?;
-                    dict.set_item("time_sig_den", transport.time_sig_denominator)?;
-                    dict.set_item("sample_pos", transport.sample_position)?;
-                    dict.clone()
-                } else {
-                    let dict = PyDict::new(py);
-                    dict.set_item("tempo", transport.tempo)?;
-                    dict.set_item("beat", transport.beat_position)?;
-                    dict.set_item("playing", transport.is_playing)?;
-                    dict.set_item("time_sig_num", transport.time_sig_numerator)?;
-                    dict.set_item("time_sig_den", transport.time_sig_denominator)?;
-                    dict.set_item("sample_pos", transport.sample_position)?;
-                    dict.into_any()
-                };
-                Some(obj)
+            // Update the cached transport dict in place. Allocated by
+            // allocate_render_resources; should always be present here.
+            let transport_obj: Bound<'_, PyAny> = if let Some(ref cached) = self.py_transport_dict {
+                let dict = cached.bind(py);
+                dict.set_item("tempo", transport.tempo)?;
+                dict.set_item("beat", transport.beat_position)?;
+                dict.set_item("playing", transport.is_playing)?;
+                dict.set_item("time_sig_num", transport.time_sig_numerator)?;
+                dict.set_item("time_sig_den", transport.time_sig_denominator)?;
+                dict.set_item("sample_pos", transport.sample_position)?;
+                dict.clone()
             } else {
-                None
+                let dict = PyDict::new(py);
+                dict.set_item("tempo", transport.tempo)?;
+                dict.set_item("beat", transport.beat_position)?;
+                dict.set_item("playing", transport.is_playing)?;
+                dict.set_item("time_sig_num", transport.time_sig_numerator)?;
+                dict.set_item("time_sig_den", transport.time_sig_denominator)?;
+                dict.set_item("sample_pos", transport.sample_position)?;
+                dict.into_any()
             };
 
-            // Build / update the telemetry dict only when the script
-            // accepts it. Pre-seeded with declared-slot keys at zero so
+            // Telemetry dict pre-seeded with declared-slot keys at zero so
             // the script's `telemetry["x"] = …` writes are dict updates,
             // never key insertions. Cached on first build to avoid
             // per-block PyDict allocation on the hot path.
-            let telemetry_obj_opt: Option<Bound<'_, PyAny>> = if arity >= 7 {
-                let dict = if let Some(ref cached) = self.py_telemetry_dict {
-                    cached.bind(py).clone()
-                } else {
-                    let new_dict = PyDict::new(py);
-                    if let Some(ref meta) = self.telemetry_metadata {
-                        for slot in meta {
-                            new_dict.set_item(&slot.key, 0.0_f32)?;
-                        }
-                    }
-                    let any = new_dict.into_any();
-                    self.py_telemetry_dict = Some(any.clone().unbind());
-                    any
-                };
-                Some(dict)
+            let telemetry_obj: Bound<'_, PyAny> = if let Some(ref cached) = self.py_telemetry_dict {
+                cached.bind(py).clone()
             } else {
-                None
+                let new_dict = PyDict::new(py);
+                if let Some(ref meta) = self.telemetry_metadata {
+                    for slot in meta {
+                        new_dict.set_item(&slot.key, 0.0_f32)?;
+                    }
+                }
+                let any = new_dict.into_any();
+                self.py_telemetry_dict = Some(any.clone().unbind());
+                any
             };
 
-            match arity {
-                7.. => {
-                    self.py_process_fn.call1(
-                        py,
-                        (
-                            input_list, output_list, frame_count as u32, sample_rate,
-                            params_obj,
-                            transport_obj_opt.as_ref().expect("transport built for arity>=6"),
-                            telemetry_obj_opt.as_ref().expect("telemetry built for arity>=7"),
-                        ),
-                    )?;
-                }
-                6 => {
-                    self.py_process_fn.call1(
-                        py,
-                        (
-                            input_list, output_list, frame_count as u32, sample_rate,
-                            params_obj,
-                            transport_obj_opt.as_ref().expect("transport built for arity>=6"),
-                        ),
-                    )?;
-                }
-                5 => {
-                    self.py_process_fn.call1(
-                        py,
-                        (input_list, output_list, frame_count as u32, sample_rate, params_obj),
-                    )?;
-                }
-                _ => {
-                    self.py_process_fn.call1(
-                        py,
-                        (input_list, output_list, frame_count as u32, sample_rate),
-                    )?;
-                }
-            }
+            // Canonical 7-arg call. Anything else was rejected at load
+            // time (see PythonBackend::load).
+            self.py_process_fn.call1(
+                py,
+                (
+                    input_list, output_list, frame_count as u32, sample_rate,
+                    params_obj,
+                    &transport_obj,
+                    &telemetry_obj,
+                ),
+            )?;
 
             // Snapshot the telemetry dict back into the f32 buffer the
             // kernel reads via `read_telemetry`. Slots without a numeric
@@ -623,16 +581,14 @@ impl PythonBackend {
             // time and never mutated during process(), a quick clone of
             // the keys is acceptable; this path runs only when telemetry
             // is in use, and the slot count is ≤8.
-            if let Some(ref tele_obj) = telemetry_obj_opt {
-                if let Some(ref meta) = self.telemetry_metadata {
-                    let dict = tele_obj.downcast::<PyDict>()?;
-                    let keys: Vec<&str> = meta.iter().map(|s| s.key.as_str()).collect();
-                    for (i, key) in keys.iter().enumerate() {
-                        if i >= TELEMETRY_LEN { break; }
-                        if let Ok(Some(val)) = dict.get_item(key) {
-                            if let Ok(v) = val.extract::<f32>() {
-                                self.telemetry_buf[i] = v;
-                            }
+            if let Some(ref meta) = self.telemetry_metadata {
+                let dict = telemetry_obj.downcast::<PyDict>()?;
+                let keys: Vec<&str> = meta.iter().map(|s| s.key.as_str()).collect();
+                for (i, key) in keys.iter().enumerate() {
+                    if i >= TELEMETRY_LEN { break; }
+                    if let Ok(Some(val)) = dict.get_item(key) {
+                        if let Ok(v) = val.extract::<f32>() {
+                            self.telemetry_buf[i] = v;
                         }
                     }
                 }
