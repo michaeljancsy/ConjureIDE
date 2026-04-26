@@ -23,14 +23,14 @@ impl Context {
     ///
     /// # Safety
     /// Caller must guarantee that `input` and `output` are valid for
-    /// `channels * frame_count` elements, `params` is valid for 16
+    /// `channel_count * frame_count` elements, `params` is valid for 16
     /// elements, and `telemetry` is valid for [`TELEMETRY_LEN`] writes
     /// (or is null, in which case `set_telemetry` becomes a no-op).
     #[inline]
     pub unsafe fn new(
         input: *const f32,
         output: *mut f32,
-        channels: i32,
+        channel_count: i32,
         frame_count: i32,
         sample_rate: f32,
         params: *const f32,
@@ -41,7 +41,7 @@ impl Context {
             out: output,
             params,
             telemetry,
-            channels: channels as usize,
+            channels: channel_count as usize,
             frames: frame_count as usize,
             sample_rate,
         }

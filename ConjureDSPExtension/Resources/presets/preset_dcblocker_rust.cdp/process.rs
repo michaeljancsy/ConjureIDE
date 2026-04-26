@@ -26,11 +26,11 @@ static mut PREV_Y: [f64; MAX_CH] = [0.0; MAX_CH];
 pub extern "C" fn process(
     input: *const f32,
     output: *mut f32,
-    channels: i32,
+    channel_count: i32,
     frame_count: i32,
     sample_rate: f32,
 ) {
-    let ctx = ctx(input, output, channels, frame_count, sample_rate);
+    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
 
     let cutoff_hz = ctx.param(CUTOFF) as f64;
     let r = (-2.0 * core::f64::consts::PI * cutoff_hz / (sample_rate as f64)).exp();

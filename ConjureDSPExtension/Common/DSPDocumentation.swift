@@ -74,6 +74,65 @@ enum DSPDocumentation {
     With PARAMS metadata: scripts receive denormalized actual values (e.g., 1000.0 Hz).
     Without PARAMS: scripts receive raw 0-1 normalized floats (legacy mode).
     Python params arg is a dict keyed by name. Rust params are accessed via ctx.param(INDEX).
+
+    ## Rust process() signature — copy this verbatim
+
+    The `setup!()` macro provides the buffers + helpers, but the
+    `process()` extern function is YOUR responsibility. The host calls
+    it with this EXACT shape, including the parameter names. Use this
+    template — do not rename the parameters:
+
+      use conjuredsp::*;
+
+      setup!();
+
+      params! {
+          DRIVE = db().min(0.0).max(24.0).default(6.0),
+          MIX   = mix().default(0.5),
+      }
+
+      #[unsafe(no_mangle)]
+      pub extern "C" fn process(
+          input: *const f32,
+          output: *mut f32,
+          channel_count: i32,
+          frame_count: i32,
+          sample_rate: f32,
+      ) {
+          let ctx = unsafe { ctx(input, output, channel_count, frame_count, sample_rate) };
+
+          let drive_gain = db_to_gain(ctx.param(DRIVE) as f64) as f32;
+          let mix_val    = ctx.param(MIX);
+
+          for c in 0..ctx.channels() {
+              for i in 0..ctx.frames() {
+                  let dry = ctx.input(c, i);
+                  let wet = (dry * drive_gain).tanh();
+                  ctx.set_output(c, i, crossfade(dry, wet, mix_val));
+              }
+          }
+      }
+
+    Why the names matter, even though Rust doesn't care:
+
+    The host's WASM bridge calls `process` with positional args
+    `(input, output, channel_count, frame_count, sample_rate)`. If you
+    rename the third arg to anything that suggests "frames" — or the
+    fourth to anything that suggests "channels" — it's very easy to
+    write a loop that uses your local var names as bounds and ends up
+    walking the buffer with the wrong stride. Both args are `i32`, so
+    the compiler can't catch the swap. Most `ctx.set_output` calls
+    then write past the end of OUTPUT_BUF into adjacent WASM memory,
+    the kernel reads leftover/zero output, and the audio looks
+    unchanged or intermittently silent. No compile error, no runtime
+    panic, just silently wrong output.
+
+    Every factory Rust preset uses these exact parameter names. Match
+    them, and the loop pattern below is guaranteed to be correct:
+    `for c in 0..ctx.channels() { for i in 0..ctx.frames() { ... } }`
+    — using `ctx.channels()` and `ctx.frames()` (NOT the raw
+    `channel_count` / `frame_count` parameters) means the loop can
+    never disagree with what Context thinks the buffer shape is.
     """
 
     static let filters = """

@@ -17,9 +17,9 @@
 //! #[no_mangle]
 //! pub extern "C" fn process(
 //!     input: *const f32, output: *mut f32,
-//!     channels: i32, frame_count: i32, sample_rate: f32,
+//!     channel_count: i32, frame_count: i32, sample_rate: f32,
 //! ) {
-//!     let ctx = ctx(input, output, channels, frame_count, sample_rate);
+//!     let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
 //!     for c in 0..ctx.channels() {
 //!         for i in 0..ctx.frames() {
 //!             ctx.set_output(c, i, ctx.input(c, i));
@@ -118,12 +118,17 @@ macro_rules! setup {
         }
 
         /// Create a [`conjuredsp::Context`] for safe buffer access.
+        ///
+        /// Argument order matches the host's `process()` calling
+        /// convention: `(input, output, channel_count, frame_count,
+        /// sample_rate)`. Pass your `process()` parameters through in
+        /// the same positions and order.
         #[inline]
         #[allow(dead_code)]
         fn ctx(
             input: *const f32,
             output: *mut f32,
-            channels: i32,
+            channel_count: i32,
             frame_count: i32,
             sample_rate: f32,
         ) -> conjuredsp::Context {
@@ -131,7 +136,7 @@ macro_rules! setup {
                 conjuredsp::Context::new(
                     input,
                     output,
-                    channels,
+                    channel_count,
                     frame_count,
                     sample_rate,
                     PARAMS_BUF.as_ptr(),
@@ -325,9 +330,9 @@ macro_rules! latency {
 /// #[no_mangle]
 /// pub extern "C" fn process(
 ///     input: *const f32, output: *mut f32,
-///     channels: i32, frame_count: i32, sample_rate: f32,
+///     channel_count: i32, frame_count: i32, sample_rate: f32,
 /// ) {
-///     let ctx = ctx(input, output, channels, frame_count, sample_rate);
+///     let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
 ///     unsafe {
 ///         for c in 0..ctx.channels() {
 ///             let n = ctx.frames();
