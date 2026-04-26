@@ -715,23 +715,18 @@
 /* Begin PBXShellScriptBuildPhase section */
 		AABB00012F5013850036AAB6 /* Build Rust DSP Library */ = {
 			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"$(SRCROOT)/rust/conjure_dsp/src/lib.rs",
-				"$(SRCROOT)/rust/conjure_dsp/src/kernel.rs",
-				"$(SRCROOT)/rust/conjure_dsp/src/params.rs",
-				"$(SRCROOT)/rust/conjure_dsp/Cargo.toml",
 			);
 			name = "Build Rust DSP Library";
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(BUILT_PRODUCTS_DIR)/libconjure_dsp.a",
-				"$(SRCROOT)/rust/include/conjure_dsp.h",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
@@ -759,19 +754,18 @@
 		};
 		AABB00092F5013850036AAB6 /* Copy Rust Compiler */ = {
 			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"$(SRCROOT)/rustc-dist/bin/rustc",
 			);
 			name = "Copy Rust Compiler";
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/rustc-dist/bin/rustc",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
