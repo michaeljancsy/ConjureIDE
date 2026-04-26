@@ -40,17 +40,17 @@ pub mod params;
 
 // Re-export everything at crate root for `use conjuredsp::*;`
 pub use buffers::DelayLine;
-pub use context::Context;
+pub use context::{Context, TELEMETRY_LEN};
 pub use dsp::*;
 pub use filters::{Biquad, BiquadCoeffs};
 pub use osc::{advance_phase, saw, sine, triangle, Lfo, Waveform};
-pub use params::{param, ParamSpec};
+pub use params::{param, ParamSpec, TelemetrySpec};
 
 // Re-export param builders (these are functions, not macros)
-pub use params::{choice, db, freq, integer, mix, pct, ratio, time_ms, toggle};
+pub use params::{choice, db, freq, integer, mix, pct, ratio, telemetry, time_ms, toggle};
 
-// Re-export JSON builder for macro use
-pub use json::{write_param_json, JsonBuf};
+// Re-export JSON builders for macro use
+pub use json::{write_param_json, write_telemetry_json, JsonBuf};
 
 // NAM (Neural Amp Modeler) inference
 pub use nam::NamModel;
@@ -73,6 +73,12 @@ macro_rules! setup {
         static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
         static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
         static mut TRANSPORT_BUF: [f32; 6] = [0.0; 6];
+        // Always allocated even when no telemetry is declared — 32 bytes,
+        // and `Context::set_telemetry` is a no-op if the script never
+        // writes. The host treats a missing `get_telemetry_metadata_*`
+        // export as "no telemetry" and never reads from this buffer.
+        static mut TELEMETRY_BUF: [f32; conjuredsp::TELEMETRY_LEN] =
+            [0.0; conjuredsp::TELEMETRY_LEN];
 
         const T_TEMPO: usize = 0;
         const T_BEAT: usize = 1;
@@ -101,6 +107,16 @@ macro_rules! setup {
             unsafe { TRANSPORT_BUF.as_ptr() as i32 }
         }
 
+        #[no_mangle]
+        pub extern "C" fn get_telemetry_buf_ptr() -> i32 {
+            unsafe { TELEMETRY_BUF.as_ptr() as i32 }
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_telemetry_buf_len() -> i32 {
+            unsafe { TELEMETRY_BUF.len() as i32 }
+        }
+
         /// Create a [`conjuredsp::Context`] for safe buffer access.
         #[inline]
         #[allow(dead_code)]
@@ -119,6 +135,7 @@ macro_rules! setup {
                     frame_count,
                     sample_rate,
                     PARAMS_BUF.as_ptr(),
+                    TELEMETRY_BUF.as_mut_ptr(),
                 )
             }
         }
@@ -181,6 +198,83 @@ macro_rules! params {
         #[no_mangle]
         pub extern "C" fn get_param_metadata_len() -> i32 {
             METADATA.len() as i32
+        }
+    };
+}
+
+/// Declares telemetry slot metadata and index constants.
+///
+/// Telemetry is the read-back twin of `params!()`: the DSP publishes
+/// internal state (envelope follower output, computed gain reduction,
+/// sidechain RMS, NAM model magnitude…) once per render block via
+/// [`Context::set_telemetry`], and the host UI reads it from the
+/// `audio.onFrame` payload's `telemetry` field.
+///
+/// Generates:
+/// - `const NAME: usize = N;` for each slot (sequential indices, 0-based)
+/// - `TELEMETRY_METADATA` static string with JSON `[{name, unit}, …]`
+/// - `get_telemetry_metadata_ptr()` and `get_telemetry_metadata_len()` WASM exports
+///
+/// The buffer itself is allocated by [`setup!`] regardless of whether
+/// `telemetry!` is used. When this macro is omitted, the host treats
+/// the missing metadata exports as "no telemetry" and never reads the
+/// buffer — opt-in with zero overhead for scripts that don't need it.
+///
+/// # Example
+///
+/// ```ignore
+/// use conjuredsp::*;
+/// setup!();
+/// params! { THRESHOLD = db().min(-60.0).max(0.0).default(-20.0) }
+/// telemetry! {
+///     ENV_LEVEL = telemetry(),                  // unitless 0..1
+///     GR_DB     = telemetry().unit("dB"),       // formatted as "-3.2 dB"
+/// }
+///
+/// // Inside process():
+/// ctx.set_telemetry(ENV_LEVEL, env);
+/// ctx.set_telemetry(GR_DB, gr_db);
+/// ```
+#[macro_export]
+macro_rules! telemetry {
+    ( $( $NAME:ident = $spec:expr ),* $(,)? ) => {
+        // Generate sequential index constants (independent of params).
+        conjuredsp::_params_indices!(0usize; $( $NAME ),*);
+
+        // Build metadata JSON at compile time, mirroring `params!()`.
+        static TELEMETRY_METADATA: &str = {
+            const SPECS: &[(&'static str, conjuredsp::TelemetrySpec)] = &[
+                $( (stringify!($NAME), $spec) ),*
+            ];
+
+            const BUF: conjuredsp::JsonBuf = {
+                let mut buf = conjuredsp::JsonBuf::new();
+                buf = buf.push_byte(b'[');
+                let mut i = 0;
+                while i < SPECS.len() {
+                    if i > 0 {
+                        buf = buf.push_byte(b',');
+                    }
+                    buf = conjuredsp::write_telemetry_json(buf, SPECS[i].0, &SPECS[i].1);
+                    i += 1;
+                }
+                buf = buf.push_byte(b']');
+                buf
+            };
+
+            // SAFETY: JsonBuf only writes valid ASCII/UTF-8 bytes.
+            const BYTES: &[u8] = BUF.as_bytes();
+            unsafe { core::str::from_utf8_unchecked(BYTES) }
+        };
+
+        #[no_mangle]
+        pub extern "C" fn get_telemetry_metadata_ptr() -> i32 {
+            TELEMETRY_METADATA.as_ptr() as i32
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_telemetry_metadata_len() -> i32 {
+            TELEMETRY_METADATA.len() as i32
         }
     };
 }

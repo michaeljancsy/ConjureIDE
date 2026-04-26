@@ -231,6 +231,23 @@ pub const fn write_param_json(buf: JsonBuf, name: &str, spec: &crate::ParamSpec)
     s.push_byte(b'}')
 }
 
+/// Write a single TelemetrySpec as a JSON object into the buffer.
+/// Schema: `{"name": "<TitleCase>", "unit": "<unit>"}`. The unit field
+/// is always emitted (possibly empty) so consumers can rely on its
+/// presence — telemetry metadata is small enough that the bytes don't
+/// matter.
+pub const fn write_telemetry_json(
+    buf: JsonBuf,
+    name: &str,
+    spec: &crate::TelemetrySpec,
+) -> JsonBuf {
+    let s = buf.push_str(r#"{"name":""#);
+    let s = s.push_title_case(name);
+    let s = s.push_str(r#"","unit":""#);
+    let s = s.push_str(spec.unit_str);
+    s.push_str(r#""}"#)
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -365,6 +382,22 @@ mod tests {
         assert!(s.contains(r#""default":4.0"#), "got: {}", s);
         assert!(!s.contains("options"), "integer should not have options, got: {}", s);
         assert!(!s.contains("curve"), "integer (linear) should omit curve, got: {}", s);
+    }
+
+    #[test]
+    fn test_write_telemetry_json_no_unit() {
+        let spec = crate::telemetry();
+        let buf = write_telemetry_json(JsonBuf::new(), "ENV_LEVEL", &spec);
+        let s = buf_to_string(&buf);
+        assert_eq!(s, r#"{"name":"Env Level","unit":""}"#);
+    }
+
+    #[test]
+    fn test_write_telemetry_json_with_unit() {
+        let spec = crate::telemetry().unit("dB");
+        let buf = write_telemetry_json(JsonBuf::new(), "GR_DB", &spec);
+        let s = buf_to_string(&buf);
+        assert_eq!(s, r#"{"name":"Gr Db","unit":"dB"}"#);
     }
 
     #[test]
