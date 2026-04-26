@@ -66,7 +66,7 @@ struct CustomUIWebView: NSViewRepresentable {
         }
 
         // cdp-ui.js: the component library (primitives + <cdp-slider>,
-        // <cdp-toggle>, <cdp-choice>, <cdp-xy>, <cdp-panel>). Injected
+        // <cdp-toggle>, <cdp-choice>, <cdp-xy>, <cdp-knob>, <cdp-panel>). Injected
         // AFTER the bridge so `window.ConjureDSP` is already defined;
         // `atDocumentStart` guarantees ordering across user scripts.
         if let uiLibSource = Self.uiLibrarySource() {

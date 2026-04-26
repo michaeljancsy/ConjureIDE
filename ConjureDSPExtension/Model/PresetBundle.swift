@@ -186,7 +186,7 @@ extension PresetBundle {
               padding: 20px 24px;
             }
             /* Theme the cdp-ui components via CSS custom properties. */
-            cdp-panel, cdp-slider, cdp-toggle, cdp-choice, cdp-xy {
+            cdp-panel, cdp-slider, cdp-toggle, cdp-choice, cdp-xy, cdp-knob {
               --cdp-accent: currentColor;
             }
           </style>
@@ -199,6 +199,7 @@ extension PresetBundle {
               <cdp-toggle param="Bypass"></cdp-toggle>
               <cdp-choice param="Mode"></cdp-choice>
               <cdp-xy param-x="0" param-y="1"></cdp-xy>
+              <cdp-knob param="cutoff"></cdp-knob>
             The library is documented at `window.ConjureDSP.ui` —
             primitives (ConjureDSP.ui.control(i), formatValue, ...) are
             available when you want to render your own widgets.

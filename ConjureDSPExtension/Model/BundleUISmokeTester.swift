@@ -578,7 +578,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             errors: state.errors || [],
             components: [],
         };
-        var tags = ['cdp-slider', 'cdp-toggle', 'cdp-choice', 'cdp-xy', 'cdp-panel'];
+        var tags = ['cdp-slider', 'cdp-toggle', 'cdp-choice', 'cdp-xy', 'cdp-knob', 'cdp-panel'];
         tags.forEach(function (tag) {
             var nodes = document.querySelectorAll(tag);
             for (var i = 0; i < nodes.length; i++) {
@@ -600,11 +600,12 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                         reason = 'cdp-xy never bound — param-x and/or param-y unresolved';
                     }
                 } else {
-                    // cdp-slider / cdp-toggle / cdp-choice all store
-                    // their resolved handle as _ctrl. Absence means
-                    // resolveParamAttr returned -1 (typoed name, no
-                    // manifest.params to search) and the component is
-                    // left with a disabled input and an 'unknown' label.
+                    // cdp-slider / cdp-toggle / cdp-choice / cdp-knob
+                    // all store their resolved handle as _ctrl. Absence
+                    // means resolveParamAttr returned -1 (typoed name,
+                    // no manifest.params to search) and the component
+                    // is left with a disabled input and an 'unknown'
+                    // label.
                     if (!el._ctrl) {
                         bound = false;
                         reason = 'param=\"' + (param || '') + '\" did not resolve to any registered parameter';

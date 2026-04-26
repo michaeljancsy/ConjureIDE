@@ -643,7 +643,19 @@ final class PTYManager {
     - The webview is pre-injected with `window.ConjureDSP` and \
       `cdp-ui.js`. DO NOT include `<script src="...">` for either.
     - Components available: `<cdp-slider>`, `<cdp-toggle>`, `<cdp-choice>`, \
-      `<cdp-xy>`, `<cdp-panel auto>`.
+      `<cdp-xy>`, `<cdp-knob>`, `<cdp-panel auto>`. For circular knobs \
+      reach for `<cdp-knob param="…">` instead of hand-rolling SVG — \
+      it covers drag (Shift = fine), wheel, keyboard, double-click-to- \
+      default, and ARIA. Theme via `--cdp-knob-*` properties; for \
+      non-circular geometry slot in your own SVG and react to the \
+      published `--cdp-knob-norm` CSS variable.
+    - `parameters.set(i, v)` fires `onChange`/`onAnyChange` synchronously \
+      (with a dedupe-on-equal guard). Use `ctrl.onChange(cb)` as your \
+      single source of truth for visual updates — the same handler \
+      runs on the user's drag AND on DAW automation. Never write a \
+      pattern that "manually redraws after setValue but ignores \
+      onChange" — that worked under an older bridge contract and is \
+      now redundant + fragile.
     - The webview's CSP blocks fetch/XHR/WebSocket. All assets must live \
       inside the bundle — no CDN imports, no external fonts.
     - File watcher hot-reloads ~300ms after every `write_bundle_file`, so \

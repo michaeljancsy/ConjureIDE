@@ -323,7 +323,7 @@ enum BundleUIValidator {
     private static func checkHasInteractiveSurface(html: String, bundle: PresetBundle) -> [Issue] {
         guard let params = bundle.manifest.params, !params.isEmpty else { return [] }
 
-        let interactiveTags = ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-panel"]
+        let interactiveTags = ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-knob", "cdp-panel"]
         let foundInteractiveTag = interactiveTags.contains { tag in
             html.range(of: "<\(tag)", options: .caseInsensitive) != nil
         }
@@ -336,7 +336,7 @@ enum BundleUIValidator {
                 severity: .warn,
                 check: "no_interactive_surface",
                 file: "ui/index.html",
-                message: "UI has \(params.count) declared parameter\(params.count == 1 ? "" : "s") but no cdp-slider / cdp-toggle / cdp-choice / cdp-xy / cdp-panel / <input type=\"range\"> — users will have no way to change them.",
+                message: "UI has \(params.count) declared parameter\(params.count == 1 ? "" : "s") but no cdp-slider / cdp-toggle / cdp-choice / cdp-xy / cdp-knob / cdp-panel / <input type=\"range\"> — users will have no way to change them.",
                 suggestion: "Add per-param controls, or drop in <cdp-panel auto></cdp-panel> as a catch-all. Fully decorative UIs are fine for display-only presets, but every parameter should have at least one way to be edited."
             )
         ]
