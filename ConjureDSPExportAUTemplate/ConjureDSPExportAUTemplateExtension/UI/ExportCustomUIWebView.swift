@@ -337,6 +337,12 @@ struct ExportCustomUIWebView: NSViewRepresentable {
                 if let fft = frame.fftOutDB { payload["fftOut"] = fft }
                 if let fft = frame.fftInDB { payload["fftIn"] = fft }
             }
+            // Telemetry: same shape as the main extension's payload so
+            // a UI that reads `frame.telemetry.<slot>` works identically
+            // inside an exported AU.
+            if let telemetry = frame.telemetry, !telemetry.isEmpty {
+                payload["telemetry"] = telemetry
+            }
 
             guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
                   let json = String(data: data, encoding: .utf8) else { return }

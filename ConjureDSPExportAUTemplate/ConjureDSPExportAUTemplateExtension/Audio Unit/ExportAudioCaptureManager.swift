@@ -30,6 +30,11 @@ struct AudioFrame {
     let peakOut: Float
     let fftInDB: [Float]?
     let fftOutDB: [Float]?
+    /// Script-published telemetry slots, keyed by declared name. `nil`
+    /// when the loaded preset declares no telemetry. Mirrors the main
+    /// extension's `AudioFrame.telemetry` shape so author UIs that
+    /// read `frame.telemetry.gr_db` work unchanged inside an exported AU.
+    let telemetry: [String: Float]?
     let timestamp: CFTimeInterval
 }
 
@@ -115,6 +120,13 @@ final class ExportAudioCaptureManager: ObservableObject {
     private var fftDBValues: [Float] = []
     private var fftInputScratch: [Float] = []
     private var fftOutputScratch: [Float] = []
+
+    // Telemetry — mirrors the main extension's pattern. Pointer-comparison
+    // cache against the kernel's metadata CString re-parses the slot
+    // name list only when it changes (i.e. on script load).
+    private var telemetryNames: [String] = []
+    private var lastTelemetryMetaPtr: UnsafePointer<CChar>?
+    private var telemetryReadBuffer: [Float] = []
 
     // MARK: - Init
 
@@ -256,6 +268,8 @@ final class ExportAudioCaptureManager: ObservableObject {
             outputAccumulator.removeAll(keepingCapacity: true)
         }
 
+        let telemetry = readTelemetry(kernel: kernel)
+
         audioFramePublisher.send(AudioFrame(
             rmsIn: rmsIn,
             rmsOut: rmsOut,
@@ -263,8 +277,56 @@ final class ExportAudioCaptureManager: ObservableObject {
             peakOut: peakOut,
             fftInDB: producedFFTColumn ? fftInputScratch : nil,
             fftOutDB: producedFFTColumn ? fftOutputScratch : nil,
+            telemetry: telemetry,
             timestamp: CACurrentMediaTime()
         ))
+    }
+
+    // MARK: - Telemetry
+
+    /// Snapshot script-published telemetry into a name→value dict.
+    /// Returns nil when the loaded preset declares no slots — same
+    /// shape + cost profile as the main extension's implementation.
+    private func readTelemetry(kernel: DSPKernelRef) -> [String: Float]? {
+        refreshTelemetryNamesIfChanged(kernel: kernel)
+        guard !telemetryNames.isEmpty else { return nil }
+
+        let n = Int(dsp_kernel_read_telemetry(
+            kernel,
+            &telemetryReadBuffer,
+            UInt32(telemetryReadBuffer.count)
+        ))
+        let count = min(n, telemetryNames.count)
+        guard count > 0 else { return nil }
+
+        var dict: [String: Float] = [:]
+        dict.reserveCapacity(count)
+        for i in 0..<count {
+            dict[telemetryNames[i]] = telemetryReadBuffer[i]
+        }
+        return dict
+    }
+
+    private func refreshTelemetryNamesIfChanged(kernel: DSPKernelRef) {
+        let ptr = dsp_kernel_telemetry_metadata_json(kernel)
+        if ptr == lastTelemetryMetaPtr { return }
+        lastTelemetryMetaPtr = ptr
+        guard let ptr = ptr else {
+            telemetryNames = []
+            return
+        }
+        let json = String(cString: ptr)
+        guard let data = json.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data)
+                as? [[String: Any]] else {
+            telemetryNames = []
+            return
+        }
+        telemetryNames = array.compactMap { $0["name"] as? String }
+        let needed = max(telemetryNames.count, 8)
+        if telemetryReadBuffer.count < needed {
+            telemetryReadBuffer = [Float](repeating: 0, count: needed)
+        }
     }
 
     // MARK: - FFT
