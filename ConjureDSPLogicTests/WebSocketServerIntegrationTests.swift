@@ -121,15 +121,22 @@ struct WebSocketServerIntegrationTests {
 
         #expect(received.contains(#"{"type":"claudeNotInstalled"}"#))
         #expect(received.contains("BANNER"))
-        #expect(server.clientCount == 1)           // verified
-        #expect(server.pendingBanner == nil)       // consumed
-        #expect(server.pendingControlMessage == nil)
+        #expect(server.clientCount == 1)
+        // Pending fields are RETAINED after the first verified client receives them.
+        // They represent the PTY's *current* display state, so a second client
+        // connecting moments later (editor + DevTools, rapid reconnect) needs to
+        // see the same state. Supersession happens on `onControlMessage`
+        // overwrite or PTY .idle clearing the fields explicitly — see
+        // `WebSocketServer.verifyAndFlushIfNeeded` and
+        // `ConjureDSPTerminalApp.onStateChange`.
+        #expect(server.pendingBanner == "BANNER")
+        #expect(server.pendingControlMessage != nil)
 
         task.cancel(with: .normalClosure, reason: nil)
         server.stop()
     }
 
-    @Test("Probe THEN real client — only real client flushes")
+    @Test("Probe THEN real client — only real client receives the pending banner")
     func probeThenRealClient() async throws {
         let (server, port) = try await Self.startServer()
         server.pendingBanner = "DELAYED"
@@ -140,7 +147,7 @@ struct WebSocketServerIntegrationTests {
         }
         await Self.waitFor(timeout: 0.3) { false }
 
-        // Probes shouldn't have consumed the banner.
+        // Probes don't verify, so the banner stays queued for a real client.
         #expect(server.pendingBanner == "DELAYED")
         #expect(server.clientCount == 0)
 
@@ -157,7 +164,73 @@ struct WebSocketServerIntegrationTests {
 
         #expect(text == "DELAYED")
         #expect(server.clientCount == 1)
+        // Banner is retained — see `realClientReceivesPending` for the rationale.
+        #expect(server.pendingBanner == "DELAYED")
+
+        task.cancel(with: .normalClosure, reason: nil)
+        server.stop()
+    }
+
+    @Test("Two clients in sequence both receive the pending banner (rapid-reconnect / editor + DevTools)")
+    func twoSequentialClientsBothReceivePending() async throws {
+        let (server, port) = try await Self.startServer()
+        server.pendingBanner = "STATE"
+
+        // First real client.
+        let session = URLSession(configuration: .ephemeral)
+        let task1 = session.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)")!)
+        task1.resume()
+        try await task1.send(.string("hi-1"))
+        let msg1 = try await task1.receive()
+        var text1 = ""
+        if case .string(let s) = msg1 { text1 = s }
+        #expect(text1 == "STATE")
+
+        // Banner is retained.
+        #expect(server.pendingBanner == "STATE")
+
+        // Second real client connects shortly after — must also see the banner.
+        let task2 = session.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)")!)
+        task2.resume()
+        try await task2.send(.string("hi-2"))
+        let msg2 = try await task2.receive()
+        var text2 = ""
+        if case .string(let s) = msg2 { text2 = s }
+        #expect(text2 == "STATE")
+
+        task1.cancel(with: .normalClosure, reason: nil)
+        task2.cancel(with: .normalClosure, reason: nil)
+        server.stop()
+    }
+
+    @Test("Externally clearing pendingBanner (PTY .idle path) drops state for late clients")
+    func externalClearOfPendingBanner() async throws {
+        let (server, port) = try await Self.startServer()
+        server.pendingBanner = "STALE"
+
+        // Simulate the PTY going idle: the app-level handler nils both pending fields.
+        // (See `ConjureDSPTerminalApp.onStateChange` for the actual edge.)
+        server.pendingBanner = nil
+        server.pendingControlMessage = nil
+
+        // A client connecting AFTER the clear receives nothing.
+        let session = URLSession(configuration: .ephemeral)
+        let task = session.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)")!)
+        task.resume()
+        try await task.send(.string("hello"))
+
+        // Race a receive against a short deadline. Nothing should arrive.
+        let receiveTask = Task<String?, Error> {
+            let msg = try await task.receive()
+            if case .string(let s) = msg { return s }
+            if case .data(let d) = msg { return String(data: d, encoding: .utf8) }
+            return nil
+        }
+        try? await Task.sleep(for: .milliseconds(200))
+        receiveTask.cancel()
+
         #expect(server.pendingBanner == nil)
+        #expect(server.pendingControlMessage == nil)
 
         task.cancel(with: .normalClosure, reason: nil)
         server.stop()
