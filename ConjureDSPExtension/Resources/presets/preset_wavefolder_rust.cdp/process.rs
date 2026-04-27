@@ -13,7 +13,7 @@ use conjuredsp::*;
 setup!();
 
 params! {
-    DRIVE = param(1.0, 20.0).default(5.0),
+    DRIVE = param(1.0, 20.0).default(5.0).unit("x"),
 }
 
 #[no_mangle]

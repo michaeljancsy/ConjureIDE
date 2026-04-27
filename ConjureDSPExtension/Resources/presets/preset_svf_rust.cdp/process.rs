@@ -14,7 +14,7 @@ setup!();
 
 params! {
     CUTOFF = freq(),
-    RESONANCE = param(0.5, 10.0).default(1.0),
+    RESONANCE = param(0.5, 10.0).default(1.0).unit("Q"),
 }
 
 const MODE: usize = 0; // 0=LP, 1=HP, 2=BP, 3=Notch
