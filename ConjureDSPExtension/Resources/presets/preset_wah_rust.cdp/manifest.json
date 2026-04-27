@@ -1,5 +1,60 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "entry": "process.rs",
-  "language": "rust"
+  "language": "rust",
+  "params": [
+    {
+      "name": "sensitivity",
+      "min": -40.0,
+      "max": 0.0,
+      "default": -20.0,
+      "unit": "dB"
+    },
+    {
+      "name": "depth",
+      "min": 0.0,
+      "max": 100.0,
+      "default": 80.0,
+      "unit": "%"
+    },
+    {
+      "name": "min_freq",
+      "min": 200.0,
+      "max": 800.0,
+      "default": 400.0,
+      "unit": "Hz",
+      "curve": "log"
+    },
+    {
+      "name": "max_freq",
+      "min": 1000.0,
+      "max": 8000.0,
+      "default": 3000.0,
+      "unit": "Hz",
+      "curve": "log"
+    },
+    {
+      "name": "q",
+      "min": 0.5,
+      "max": 10.0,
+      "default": 3.0,
+      "unit": ""
+    },
+    {
+      "name": "attack",
+      "min": 0.5,
+      "max": 50.0,
+      "default": 5.0,
+      "unit": "ms",
+      "curve": "log"
+    },
+    {
+      "name": "release",
+      "min": 10.0,
+      "max": 500.0,
+      "default": 50.0,
+      "unit": "ms",
+      "curve": "log"
+    }
+  ]
 }

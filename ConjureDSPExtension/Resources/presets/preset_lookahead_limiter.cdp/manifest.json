@@ -1,5 +1,22 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "entry": "process.py",
-  "language": "python"
+  "language": "python",
+  "params": [
+    {
+      "name": "threshold",
+      "min": -24,
+      "max": 0,
+      "default": -3,
+      "unit": "dB"
+    },
+    {
+      "name": "release",
+      "min": 10,
+      "max": 500,
+      "default": 100,
+      "unit": "ms",
+      "curve": "log"
+    }
+  ]
 }

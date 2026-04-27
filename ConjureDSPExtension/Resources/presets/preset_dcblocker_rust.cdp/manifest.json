@@ -1,5 +1,15 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "entry": "process.rs",
-  "language": "rust"
+  "language": "rust",
+  "params": [
+    {
+      "name": "cutoff",
+      "min": 4.0,
+      "max": 70.0,
+      "default": 4.0,
+      "unit": "Hz",
+      "curve": "log"
+    }
+  ]
 }

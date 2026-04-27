@@ -1,5 +1,14 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "entry": "process.py",
-  "language": "python"
+  "language": "python",
+  "params": [
+    {
+      "name": "drive",
+      "min": 1,
+      "max": 20,
+      "default": 5,
+      "unit": "x"
+    }
+  ]
 }

@@ -1,5 +1,14 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "entry": "process.py",
-  "language": "python"
+  "language": "python",
+  "params": [
+    {
+      "name": "width",
+      "min": 0,
+      "max": 2,
+      "default": 1,
+      "unit": "x"
+    }
+  ]
 }

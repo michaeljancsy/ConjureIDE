@@ -1,5 +1,14 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "entry": "process.rs",
-  "language": "rust"
+  "language": "rust",
+  "params": [
+    {
+      "name": "drive",
+      "min": 1.0,
+      "max": 15.0,
+      "default": 3.0,
+      "unit": ""
+    }
+  ]
 }

@@ -1,5 +1,14 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "entry": "process.rs",
-  "language": "rust"
+  "language": "rust",
+  "params": [
+    {
+      "name": "level",
+      "min": 0.0,
+      "max": 1.0,
+      "default": 0.5,
+      "unit": ""
+    }
+  ]
 }

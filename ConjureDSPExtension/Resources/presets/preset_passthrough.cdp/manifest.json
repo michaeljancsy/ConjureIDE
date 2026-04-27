@@ -1,5 +1,6 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "entry": "process.py",
-  "language": "python"
+  "language": "python",
+  "params": []
 }

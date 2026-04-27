@@ -1,5 +1,15 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "entry": "process.py",
-  "language": "python"
+  "language": "python",
+  "params": [
+    {
+      "name": "frequency",
+      "min": 20,
+      "max": 20000,
+      "default": 440,
+      "unit": "Hz",
+      "curve": "log"
+    }
+  ]
 }

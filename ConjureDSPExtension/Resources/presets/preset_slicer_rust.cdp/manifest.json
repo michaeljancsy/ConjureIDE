@@ -1,5 +1,15 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "entry": "process.rs",
-  "language": "rust"
+  "language": "rust",
+  "params": [
+    {
+      "name": "rate",
+      "min": 10.0,
+      "max": 500.0,
+      "default": 100.0,
+      "unit": "ms",
+      "curve": "log"
+    }
+  ]
 }
