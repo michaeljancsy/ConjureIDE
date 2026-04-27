@@ -157,7 +157,7 @@ MyPreset.cdp/
     assets/              # CSS/JS/images/fonts
 ```
 
-**Manifest schema versions:** `schemaVersion: 1` bundles extract parameter metadata from the compiled DSP (after script load). `schemaVersion: 2` bundles declare a `params: [{name, min, max, default, unit?, curve?, style?, options?}]` array that populates the AU parameter tree BEFORE the script compiles — so custom UIs render with correct defaults during a slow Rust compile instead of showing placeholders. New presets should always use v2; v1 is preserved for backward compat. The validator warns on v1 bundles that ship a custom UI.
+**Manifest schema versions:** `schemaVersion: 2` is the current schema and what every new bundle should use — the `params: [{name, min, max, default, unit, curve?, style?, options?}]` array populates the AU parameter tree before the DSP script compiles, so custom UIs render with correct defaults during a slow Rust compile. `schemaVersion: 1` (no `params` array; AU populates the tree from kernel metadata after script load) remains supported as a read-only compatibility path for old user bundles — `PresetBundle.create` always emits v2, so any save naturally migrates v1 data forward. All factory presets are v2 (commit `df964fc`). Full design + the decision to keep v1 reading: `docs/preset-manifest-schema.md`.
 
 **Where bundles live:**
 - **Factory:** `ConjureDSPExtension/Resources/presets/preset_<name>.cdp/`. Copied verbatim into the appex via `PBXFileSystemSynchronizedRootGroup.explicitFolders = ("Resources/presets")`. Read-only at runtime (the appex's Resources aren't writable under hardened runtime). When a user wants to modify a factory preset, they Save As to create an editable user bundle.
