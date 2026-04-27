@@ -404,6 +404,112 @@ struct MCPProtocolGetParametersTests {
 }
 
 // =============================================================================
+// MARK: - ParamMetadata equality (Phase 3 of Round 5 follow-up)
+// =============================================================================
+//
+// Mirror of `ConjureDSPExtensionAudioUnit.ParamMetadata` for unit testing
+// equality. The MCP `compile_and_run` handler relies on this `==` to decide
+// whether the kernel's freshly-extracted metadata differs from what the AU
+// already has — and so a param-tree rebuild is needed. Missing a field in the
+// comparison would silently skip the rebuild for a real change.
+//
+// If you change either side, change the other. The integration is also
+// covered by manual MCP verification (load preset A with N params, then
+// `compile_and_run` source for preset B with M params, confirm
+// `param_tree_rebuilt: true`).
+
+private struct ParamMetadataMock: Equatable {
+    let name: String
+    let key: String?
+    let min: Float
+    let max: Float
+    let `default`: Float
+    let unit: String
+    let curve: String?
+    let style: String?
+    let options: [String]?
+
+    // Copy of the manual `==` we added on ParamMetadata in
+    // ConjureDSPExtensionAudioUnit.swift.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        return lhs.name == rhs.name
+            && lhs.key == rhs.key
+            && lhs.min == rhs.min
+            && lhs.max == rhs.max
+            && lhs.default == rhs.default
+            && lhs.unit == rhs.unit
+            && lhs.curve == rhs.curve
+            && lhs.style == rhs.style
+            && lhs.options == rhs.options
+    }
+}
+
+@Suite("ParamMetadata equality")
+struct ParamMetadataEqualityTests {
+
+    private static let drive = ParamMetadataMock(
+        name: "Drive", key: nil, min: 1, max: 20, default: 5,
+        unit: "", curve: "linear", style: "slider", options: nil
+    )
+
+    @Test("Identical metadata is equal")
+    func identical() {
+        let a = Self.drive
+        let b = Self.drive
+        #expect(a == b)
+    }
+
+    @Test("Name difference breaks equality")
+    func nameDiffers() {
+        var b = Self.drive
+        b = ParamMetadataMock(name: "Tone", key: b.key, min: b.min, max: b.max,
+                               default: b.default, unit: b.unit, curve: b.curve,
+                               style: b.style, options: b.options)
+        #expect(Self.drive != b)
+    }
+
+    @Test("Min/max/default/unit/curve/style/options each break equality independently")
+    func eachFieldBreaksEquality() {
+        let base = Self.drive
+        let cases: [(name: String, mutated: ParamMetadataMock)] = [
+            ("key", ParamMetadataMock(name: base.name, key: "drive_v2", min: base.min, max: base.max, default: base.default, unit: base.unit, curve: base.curve, style: base.style, options: base.options)),
+            ("min", ParamMetadataMock(name: base.name, key: base.key, min: 0, max: base.max, default: base.default, unit: base.unit, curve: base.curve, style: base.style, options: base.options)),
+            ("max", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: 24, default: base.default, unit: base.unit, curve: base.curve, style: base.style, options: base.options)),
+            ("default", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: 10, unit: base.unit, curve: base.curve, style: base.style, options: base.options)),
+            ("unit", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: base.default, unit: "dB", curve: base.curve, style: base.style, options: base.options)),
+            ("curve", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: base.default, unit: base.unit, curve: "log", style: base.style, options: base.options)),
+            ("style", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: base.default, unit: base.unit, curve: base.curve, style: "toggle", options: base.options)),
+            ("options", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: base.default, unit: base.unit, curve: base.curve, style: base.style, options: ["Low", "High"])),
+        ]
+        for (label, mutated) in cases {
+            #expect(base != mutated, "Equality should break when \(label) differs")
+        }
+    }
+
+    @Test("Empty metadata array equals empty")
+    func emptyArrays() {
+        let a: [ParamMetadataMock] = []
+        let b: [ParamMetadataMock] = []
+        #expect(a == b)
+    }
+
+    @Test("Different array counts break equality")
+    func differentCounts() {
+        let a = [Self.drive]
+        let b = [Self.drive, Self.drive]
+        #expect(a != b)
+    }
+
+    @Test("Optional metadata: nil == nil, nil != some")
+    func optionalEquality() {
+        let none: [ParamMetadataMock]? = nil
+        let some: [ParamMetadataMock]? = [Self.drive]
+        #expect(none == none)
+        #expect(none != some)
+    }
+}
+
+// =============================================================================
 // MARK: - JSON Schema draft 2020-12 wire-format regression tests
 //
 // Triggered by an Anthropic API rejection seen in the wild:

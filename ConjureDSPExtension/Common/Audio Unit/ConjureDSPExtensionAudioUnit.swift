@@ -44,7 +44,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	static let paramCount = 16
 
 	/// Rich metadata for a parameter, declared by scripts via `PARAMS` dict.
-	public struct ParamMetadata: Codable {
+	public struct ParamMetadata: Codable, Equatable {
 		public let name: String
 		public let key: String?
 		public let min: Float
@@ -61,6 +61,22 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		var isToggle: Bool { style == "toggle" }
 		var isChoice: Bool { style == "choice" }
 		var isInteger: Bool { style == "integer" }
+
+		/// Field-by-field equality. Used by the MCP `compile_and_run`
+		/// handler to decide whether the kernel's freshly-extracted
+		/// metadata differs from what the AU already has, and so a
+		/// param-tree rebuild is needed.
+		public static func == (lhs: ParamMetadata, rhs: ParamMetadata) -> Bool {
+			return lhs.name == rhs.name
+				&& lhs.key == rhs.key
+				&& lhs.min == rhs.min
+				&& lhs.max == rhs.max
+				&& lhs.default == rhs.default
+				&& lhs.unit == rhs.unit
+				&& lhs.curve == rhs.curve
+				&& lhs.style == rhs.style
+				&& lhs.options == rhs.options
+		}
 
 		/// Denormalize a 0–1 value to the actual parameter range.
 		/// Integer-styled params snap the result to the nearest whole number
@@ -254,6 +270,59 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			// before. Clearing preemptively would cause a flash of
 			// "no params" between preset select and compile complete.
 		}
+	}
+
+	/// Force a parameter-tree rebuild from the kernel's currently-extracted
+	/// metadata, bypassing the manifest-priority guard in `readParamNames`.
+	///
+	/// Called by the MCP `compile_and_run` handler so scratchpad iteration
+	/// on a script with a different params! / PARAMS shape isn't masked by
+	/// the active bundle's manifest declarations. The normal preset-load
+	/// path keeps manifest-priority semantics — that's what makes the UI
+	/// render with correct defaults during a slow Rust compile. But MCP
+	/// `compile_and_run` is an explicit "test this new code" intent: the
+	/// caller wants the tree to reflect what the new code actually
+	/// declares, not what the bundle's stale manifest still says.
+	///
+	/// Returns true if the tree was rebuilt (kernel metadata differed
+	/// from current), false if the kernel's metadata matches what the AU
+	/// already has (so no work was needed).
+	@MainActor
+	public func rebuildParamTreeFromKernelIfChanged() -> Bool {
+		// Read kernel-extracted metadata (or nil if the script declares none)
+		let kernelMeta: [ParamMetadata]? = {
+			guard let metaPtr = dsp_kernel_param_metadata_json(kernel) else { return nil }
+			let json = String(cString: metaPtr)
+			guard let data = json.data(using: .utf8),
+			      let decoded = try? JSONDecoder().decode([ParamMetadata].self, from: data),
+			      !decoded.isEmpty
+			else { return nil }
+			return decoded
+		}()
+
+		// Compare to current — if identical, nothing to do
+		if kernelMeta == currentParamMetadata { return false }
+
+		// Different. Clear manifest priority and rebuild from kernel.
+		manifestDeclaredMetadata = nil
+
+		if let meta = kernelMeta {
+			currentParamMetadata = meta
+			var nameMap: [Int: String] = [:]
+			for (i, m) in meta.enumerated() { nameMap[i] = m.name }
+			currentParamNames = nameMap
+			// Same critical ordering as readParamNames: rebuild tree
+			// BEFORE broadcasting paramMetadataDidChange.
+			rebuildParameterTree(metadata: meta)
+			paramNamesDidChange.send(nameMap)
+			paramMetadataDidChange.send(meta)
+		} else {
+			// New script declares no metadata — back to legacy generic tree.
+			currentParamMetadata = nil
+			buildParameterTree()
+			paramMetadataDidChange.send(nil)
+		}
+		return true
 	}
 
 	/// Rebuild the parameter tree with rich metadata (real names, ranges, units).

@@ -138,7 +138,25 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         let result = await compileAndRun(source: source)
         if result.success {
             mcpLastError = nil
-            var response: [String: Any] = ["success": true]
+            // After every successful MCP compile_and_run, force the
+            // param tree to reflect the kernel's freshly-extracted
+            // metadata. Otherwise, when the active preset has a
+            // declared `params` block in its manifest (every
+            // schemaVersion-2 bundle), `readParamNames()` returns
+            // early without rebuilding — the manifest takes priority,
+            // by design, so the UI renders correct defaults during a
+            // slow Rust compile. But MCP compile_and_run is an
+            // explicit "test this new code" intent. Without this
+            // explicit rebuild, an agent iterating with a fresh
+            // params!() macro sees `success: true` from the compile
+            // but `get_parameters` still shows the bundle's old
+            // params — the symptom Round 5b's agent worked around
+            // by always saving instead of compile_and_run.
+            let paramTreeRebuilt = self.rebuildParamTreeFromKernelIfChanged()
+            var response: [String: Any] = [
+                "success": true,
+                "param_tree_rebuilt": paramTreeRebuilt,
+            ]
             if let processTimeMs = result.processTimeMs, let budgetMs = result.budgetMs {
                 response["process_time_ms"] = String(format: "%.2f", processTimeMs)
                 response["budget_ms"] = String(format: "%.2f", budgetMs)
