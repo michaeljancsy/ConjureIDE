@@ -499,6 +499,146 @@ struct BundleUIValidatorTests {
         #expect(!report.issues.contains { $0.check == "no_interactive_surface" })
     }
 
+    // MARK: - param_no_ui_binding (inverse coverage check)
+
+    /// Two manifest params; UI binds only one. The unbound one should warn.
+    @Test func declaredParamWithoutUIBindingWarned() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "drive", "min": 1.0, "max": 20.0, "default": 5.0, "unit": "x"},
+            {"name": "tone", "min": 200.0, "max": 20000.0, "default": 4000.0, "unit": "Hz", "curve": "log"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = #"<!doctype html><html><body><cdp-slider param="drive"></cdp-slider></body></html>"#
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let issue = report.issues.first { $0.check == "param_no_ui_binding" }
+        #expect(issue != nil, "tone is declared but not bound — should warn")
+        #expect(issue?.severity == .warn, "deliberate hides are valid; warn not fail")
+        #expect(issue?.message.contains("tone") == true)
+    }
+
+    /// All declared params bound — no warning.
+    @Test func allParamsBoundNoWarning() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "drive", "min": 1.0, "max": 20.0, "default": 5.0, "unit": "x"},
+            {"name": "tone", "min": 200.0, "max": 20000.0, "default": 4000.0, "unit": "Hz", "curve": "log"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="drive"></cdp-slider>
+          <cdp-slider param="tone"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "param_no_ui_binding" })
+    }
+
+    /// `<cdp-panel auto>` is a catch-all that auto-renders one control per
+    /// declared param — no warning even when no individual `<cdp-slider>`
+    /// exists for each.
+    @Test func cdpPanelAutoSuppressesUnboundWarning() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "drive", "min": 1.0, "max": 20.0, "default": 5.0, "unit": "x"},
+            {"name": "tone", "min": 200.0, "max": 20000.0, "default": 4000.0, "unit": "Hz", "curve": "log"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = #"<!doctype html><html><body><cdp-panel auto></cdp-panel></body></html>"#
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "param_no_ui_binding" })
+    }
+
+    /// Loose-match resolution counts: "Low Gain" UI binding still satisfies
+    /// "low_gain" manifest param.
+    @Test func looseMatchedBindingCountsAsBound() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "low_gain", "min": -12.0, "max": 12.0, "default": 0.0, "unit": "dB"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = #"<!doctype html><html><body><cdp-slider param="Low Gain"></cdp-slider></body></html>"#
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "param_no_ui_binding" })
+    }
+
+    /// Numeric-index bindings count too: `param="0"` covers params[0].
+    @Test func numericIndexBindingCountsAsBound() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "drive", "min": 1.0, "max": 20.0, "default": 5.0, "unit": "x"},
+            {"name": "tone", "min": 200.0, "max": 20000.0, "default": 4000.0, "unit": "Hz"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="0"></cdp-slider>
+          <cdp-slider param="1"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "param_no_ui_binding" })
+    }
+
+    /// XY-pad's `param-x` and `param-y` both count as bindings.
+    @Test func xyPadBothAxesCountAsBound() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz"},
+            {"name": "resonance", "min": 0.5, "max": 10.0, "default": 1.0, "unit": "Q"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = #"<!doctype html><html><body><cdp-xy param-x="cutoff" param-y="resonance"></cdp-xy></body></html>"#
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "param_no_ui_binding" })
+    }
+
+    /// Bundles with no manifest.params don't get the warning at all
+    /// (legacy mode — we have nothing to compare against).
+    @Test func noManifestParamsNoWarning() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = #"<!doctype html><html><body><cdp-slider param="0"></cdp-slider></body></html>"#
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "param_no_ui_binding" })
+    }
+
     // MARK: - status aggregation
 
     @Test func statusFailIfAnyFail() throws {

@@ -73,6 +73,11 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 let result = await self.mcpSavePresetImpl(input: input)
                 completion(result.0, result.1)
             }
+        case "duplicate_bundle":
+            Task { @MainActor in
+                let result = await self.mcpDuplicateBundleImpl(input: input)
+                completion(result.0, result.1)
+            }
         case "toggle_bypass":
             Task { @MainActor in
                 let result = self.mcpToggleBypass()
@@ -476,6 +481,107 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             return (jsonStr(response), false)
         } catch {
             return (jsonStr(["error": "Failed to save preset: \(error.localizedDescription)"]), true)
+        }
+    }
+
+    /// Fork an existing preset bundle (factory or user) by copying the
+    /// FULL tree — manifest, ui/, ui/assets/, entry script — to a new
+    /// user bundle. Distinct from `save_preset`, which always produces
+    /// a stripped-down clone (just the entry script with a default
+    /// manifest, no UI/assets carried over).
+    ///
+    /// Optionally replaces the entry script after copying so the agent
+    /// can fork-and-modify in one tool call.
+    @MainActor
+    private func mcpDuplicateBundleImpl(input: [String: Any]) async -> (String, Bool) {
+        guard let sourceName = input["source_name"] as? String, !sourceName.isEmpty else {
+            return (jsonStr(["error": "Missing required parameter: source_name"]), true)
+        }
+        guard let destName = input["dest_name"] as? String, !destName.isEmpty else {
+            return (jsonStr(["error": "Missing required parameter: dest_name"]), true)
+        }
+        let newSource = input["new_source"] as? String
+
+        let pm = presetManager
+        guard let sourcePreset = pm.presets.first(where: { $0.name == sourceName }) else {
+            return (jsonStr(["error": "No preset named '\(sourceName)'. Use list_presets to see available names."]), true)
+        }
+        guard let sourceBundle = pm.loadBundle(for: sourcePreset) else {
+            return (jsonStr(["error": "Failed to load source bundle '\(sourceName)' from disk."]), true)
+        }
+
+        do {
+            let preset = try pm.duplicateBundle(
+                source: sourceBundle,
+                destName: destName,
+                replacingEntryWith: newSource
+            )
+
+            // Same param-tree handoff as save_preset: apply the new
+            // bundle's manifest params BEFORE switching + reload, so
+            // readParamNames doesn't return early on stale priority
+            // metadata. duplicate_bundle COPIES the source's manifest,
+            // so manifest.params reflects whatever the source declared
+            // — that's the correct starting point for the fork.
+            if let newBundle = pm.loadBundle(for: preset) {
+                applyManifestParams(newBundle.manifest.resolvedParamMetadata())
+            } else {
+                applyManifestParams(nil)
+            }
+
+            // Reload the kernel from the new bundle's source so the
+            // running DSP matches what's on disk. If newSource was
+            // provided, the entry was already overwritten; otherwise
+            // read the (now-copied) entry from the new bundle.
+            let runSource: String = {
+                if let newSource { return newSource }
+                if let bundle = pm.loadBundle(for: preset),
+                   let s = try? bundle.readSource() {
+                    return s
+                }
+                return ""
+            }()
+            pm.setCurrentPreset(preset, source: runSource)
+            clearDAWCurrentPreset()
+
+            var kernelReloaded = false
+            var kernelError: String? = nil
+            if !runSource.isEmpty {
+                let result = await compileAndRun(source: runSource)
+                kernelReloaded = result.success
+                kernelError = result.success ? nil : result.error
+                if result.success {
+                    var change = ScriptSourceChange(source: runSource, origin: .mcp)
+                    change.processTimeMs = result.processTimeMs
+                    change.budgetMs = result.budgetMs
+                    scriptSourceDidChange.send(change)
+                }
+            }
+
+            // If the agent supplied a new_source whose param shape
+            // differs from the copied manifest's params block, the
+            // tree needs to follow — same code path as compile_and_run.
+            let paramTreeRebuilt = self.rebuildParamTreeFromKernelIfChanged()
+
+            var response: [String: Any] = [
+                "success": true,
+                "name": preset.name,
+                "switched_current_preset": true,
+                "kernel_reloaded": kernelReloaded,
+                "param_tree_rebuilt": paramTreeRebuilt,
+                "source_was_factory": sourcePreset.isFactory,
+            ]
+            if let err = kernelError {
+                response["kernel_error"] = err
+            }
+            if newSource != nil {
+                response["entry_replaced"] = true
+            }
+            return (jsonStr(response), false)
+        } catch PresetManager.BundleFileError.alreadyExists {
+            return (jsonStr(["error": "A preset named '\(destName)' already exists. Pick a different dest_name or delete the existing one first."]), true)
+        } catch {
+            return (jsonStr(["error": "Failed to duplicate bundle: \(error.localizedDescription)"]), true)
         }
     }
 

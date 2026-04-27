@@ -769,6 +769,68 @@ class PresetManager: ObservableObject {
         return forked
     }
 
+    /// Duplicate a source bundle (factory OR user) into a new user bundle
+    /// with an explicit destination name. Mirrors the right-click
+    /// "Duplicate bundle" UI path but exposes an explicit `destName`
+    /// instead of auto-generating "Copy of …".
+    ///
+    /// Used by the MCP `duplicate_bundle` tool so an agent can fork a
+    /// preset (typically a factory it wants to extend) and end up with a
+    /// FULL copy of the bundle — manifest, ui/, ui/assets/, entry script
+    /// — in one tool call. Without this, agents have only `save_preset`,
+    /// which produces a stripped-down clone (just the entry script with
+    /// a default manifest), silently losing the source bundle's UI.
+    ///
+    /// Optionally replaces the entry script after copying — useful when
+    /// the agent's intent is "fork this and run my modified DSP." The
+    /// caller is still responsible for any subsequent manifest edits
+    /// (e.g. updating the params block to match new metadata).
+    @discardableResult
+    func duplicateBundle(
+        source: PresetBundle,
+        destName: String,
+        replacingEntryWith newSource: String? = nil
+    ) throws -> Preset {
+        let sanitized = sanitizeFilename(destName)
+        guard !sanitized.isEmpty else {
+            throw PresetManagerError.invalidName
+        }
+        let destURL = presetsURL.appendingPathComponent(
+            "\(sanitized).\(PresetBundle.bundleExtension)",
+            isDirectory: true
+        )
+        guard !fileManager.fileExists(atPath: destURL.path) else {
+            throw BundleFileError.alreadyExists
+        }
+        try copyBundleTree(from: source.rootURL, to: destURL)
+
+        // Optional entry replacement. The destination's entry path is
+        // taken from the COPIED manifest (not the source's in-memory
+        // bundle, which could be stale if loaded from a cache). Using
+        // the on-disk manifest also respects any intentional drift
+        // between the source's manifest and entry filename.
+        if let newSource {
+            let manifestURL = destURL.appendingPathComponent(PresetManifest.filename)
+            let manifest: PresetManifest = {
+                if let data = try? Data(contentsOf: manifestURL),
+                   let parsed = try? JSONDecoder().decode(PresetManifest.self, from: data) {
+                    return parsed
+                }
+                return source.manifest
+            }()
+            let entryURL = destURL.appendingPathComponent(manifest.entry)
+            try newSource.write(to: entryURL, atomically: true, encoding: .utf8)
+            AppGroupContainer.stripQuarantine(at: entryURL)
+        }
+
+        refreshPresets()
+        guard let preset = presets.first(where: { $0.id == "user:\(sanitized)" }) else {
+            throw PresetManagerError.saveFailed
+        }
+        log.info("Duplicated bundle \(source.name, privacy: .public) -> \(sanitized, privacy: .public)")
+        return preset
+    }
+
     // MARK: - Delete
 
     /// Delete a user preset. Factory presets cannot be deleted.

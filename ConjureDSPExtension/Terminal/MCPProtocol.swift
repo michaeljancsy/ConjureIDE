@@ -164,7 +164,7 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "save_preset",
-            description: "Create (or re-save) a user preset bundle (.cdp directory). ATOMIC: in a single call, save_preset writes the bundle to disk, switches the plugin's currentPreset to it, AND loads the script into the kernel — you don't need a separate compile_and_run after (response reports `kernel_reloaded: true`). Always produces a fresh bundle — nothing is auto-copied from whatever preset was previously loaded. If you want the new bundle to inherit a UI, assets, or params from another preset (factory or user), call read_bundle_file on that preset FIRST, then call save_preset, then write_bundle_file to drop the inherited content into the new bundle. That keeps disk state consistent with the new source. Response returns `switched_current_preset: true` and `kernel_reloaded: true/false`.",
+            description: "Create (or re-save) a user preset bundle (.cdp directory). ATOMIC: in a single call, save_preset writes the bundle to disk, switches the plugin's currentPreset to it, AND loads the script into the kernel — you don't need a separate compile_and_run after (response reports `kernel_reloaded: true`). Always produces a FRESH bundle — nothing is auto-copied from whatever preset was previously loaded. **For 'fork an existing preset and extend it' (you want the source's UI, assets, and manifest as a starting point), use `duplicate_bundle` instead — it copies the full tree in one call.** save_preset is for 'save my scratchpad as a new preset.' Response returns `switched_current_preset: true` and `kernel_reloaded: true/false`.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -174,6 +174,19 @@ enum MCPProtocol {
                     "scaffold_ui": PropertySchema(type: "boolean", description: "When true, creates a starter ui/index.html + declares the ui block in manifest.json so the preset renders with the custom-UI WebView from the start. Default: false (stock slider panel)."),
                 ],
                 required: ["name"]
+            )
+        ),
+        ToolDefinition(
+            name: "duplicate_bundle",
+            description: "Fork an existing preset bundle (factory OR user) into a new user bundle by copying the FULL tree — manifest.json, ui/index.html, ui/assets/*, and the entry script. Use this (not save_preset) when the agent's intent is 'take this preset and extend it' — the new bundle inherits the source's custom UI, manifest params block, and any assets, so the agent doesn't have to manually re-author them. Atomic: writes to disk, switches the plugin's currentPreset to the new bundle, AND reloads the kernel. Optional `new_source` replaces the entry script after copy in the same call (use this when you've already iterated on DSP via compile_and_run and want to commit it as a fork). Errors clearly when `dest_name` already exists — pick a different name or delete the existing one first. Response returns `success`, `name`, `switched_current_preset`, `kernel_reloaded`, `param_tree_rebuilt` (true if the entry was replaced and the new code's metadata differs from the source's manifest), `source_was_factory`, and `entry_replaced`.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "source_name": PropertySchema(type: "string", description: "Exact name of the preset to duplicate. Use list_presets to see available names. Both factory and user presets work."),
+                    "dest_name": PropertySchema(type: "string", description: "Name for the new forked bundle. Must not already exist (errors otherwise — pick a different name)."),
+                    "new_source": PropertySchema(type: "string", description: "Optional. When provided, the new bundle's entry script is overwritten with this text after the copy. Use to commit a compile_and_run iteration as a fork in one tool call. The COPIED manifest's params block is NOT auto-updated to match new metadata — call write_bundle_file on manifest.json afterwards if your new_source declares different params."),
+                ],
+                required: ["source_name", "dest_name"]
             )
         ),
         ToolDefinition(

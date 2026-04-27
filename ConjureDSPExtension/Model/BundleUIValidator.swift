@@ -88,6 +88,7 @@ enum BundleUIValidator {
         if let url = htmlURL,
            let html = try? String(contentsOf: url, encoding: .utf8) {
             issues.append(contentsOf: checkParamReferences(html: html, bundle: bundle))
+            issues.append(contentsOf: checkUnboundDeclaredParams(html: html, bundle: bundle))
             issues.append(contentsOf: checkNoExternalNetwork(html: html))
             issues.append(contentsOf: checkNoSystemColorInCanvas(html: html))
             issues.append(contentsOf: checkHasInteractiveSurface(html: html, bundle: bundle))
@@ -286,6 +287,82 @@ enum BundleUIValidator {
             )
         }
         return issues
+    }
+
+    /// Inverse of `checkParamReferences`: every parameter the manifest
+    /// declares should have at least one binding in the UI (cdp-* `param=`
+    /// attribute or a numeric-index `cdp-panel auto`). Surfaces the case
+    /// where the agent compiled new DSP that adds a param but forgot to
+    /// extend ui/index.html — the param tree rebuilds correctly, the
+    /// stock slider panel + DAW automation see all params, but the
+    /// custom UI silently renders only the old subset.
+    ///
+    /// Skips:
+    ///   - bundles with no manifest.params (legacy / undeclared — nothing
+    ///     to compare against)
+    ///   - bundles whose UI uses `<cdp-panel auto>` (catch-all that
+    ///     auto-renders one control per declared param)
+    ///
+    /// Severity is `warn`, not `fail`: deliberately hiding a param from
+    /// the UI is a valid authoring choice, but it should be a deliberate
+    /// one and the warning is cheap to dismiss for those cases.
+    private static func checkUnboundDeclaredParams(html: String, bundle: PresetBundle) -> [Issue] {
+        guard let declared = bundle.manifest.params, !declared.isEmpty else { return [] }
+
+        let scanned = stripHTMLComments(html)
+
+        // <cdp-panel auto> is a catch-all renderer; presence implies all
+        // declared params have a fallback control. Don't warn.
+        if scanned.range(of: #"<cdp-panel\b[^>]*\bauto\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return []
+        }
+
+        // Collect every named or numeric `param=` reference in the UI.
+        let attrRegex = try? NSRegularExpression(
+            pattern: #"param(?:-x|-y)?\s*=\s*["']([^"']+)["']"#,
+            options: []
+        )
+        guard let regex = attrRegex else { return [] }
+        let ns = scanned as NSString
+        let matches = regex.matches(in: scanned, range: NSRange(location: 0, length: ns.length))
+
+        // Build the set of declared-param identifiers that the UI actually
+        // touches. Index references resolve to the declared params at
+        // that position; named references resolve via loose match.
+        var boundIndices: Set<Int> = []
+        let declaredNorms: [String] = declared.map { looseNormalize($0.name) }
+        for match in matches where match.numberOfRanges >= 2 {
+            let value = ns.substring(with: match.range(at: 1))
+            if let idx = Int(value), idx >= 0, idx < declared.count {
+                boundIndices.insert(idx)
+                continue
+            }
+            let norm = looseNormalize(value)
+            if let idx = declaredNorms.firstIndex(of: norm) {
+                boundIndices.insert(idx)
+            }
+            // Unresolved named refs are flagged by checkParamReferences;
+            // here we only care about the positive (which params ARE bound).
+        }
+
+        // Anything declared but not bound is an unbound param.
+        var unbound: [String] = []
+        for (idx, param) in declared.enumerated() where !boundIndices.contains(idx) {
+            unbound.append(param.name)
+        }
+        if unbound.isEmpty { return [] }
+
+        let preview = unbound.prefix(3).map { "\"\($0)\"" }.joined(separator: ", ")
+        let andMore = unbound.count > 3 ? " and \(unbound.count - 3) more" : ""
+        return [
+            Issue(
+                severity: .warn,
+                check: "param_no_ui_binding",
+                file: "ui/index.html",
+                message: "manifest declares \(declared.count) param\(declared.count == 1 ? "" : "s") but the UI binds only \(declared.count - unbound.count) — \(unbound.count) param\(unbound.count == 1 ? " is" : "s are") not reachable from the custom UI: \(preview)\(andMore). Stock slider panel + DAW automation still see them; only the custom UI renders short.",
+                suggestion: "Add a `<cdp-slider param=\"\(unbound[0])\">` (or appropriate widget) for each missing param, OR drop in `<cdp-panel auto></cdp-panel>` as a catch-all. If the omission is deliberate, ignore this warning."
+            )
+        ]
     }
 
     /// The custom UI webview runs with a strict CSP that blocks fetch, XHR,
