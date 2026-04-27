@@ -115,13 +115,30 @@ enum DSPDocumentation {
     - `params` — dict keyed by parameter name when `PARAMS` metadata
       is declared (the recommended path), or a plain list of 0–1
       normalized floats in legacy mode (no PARAMS dict).
-    - `_transport` — dict with `tempo`, `beat`, `playing`,
-      `time_sig_num`, `time_sig_den`, `sample_pos`. Accept it even if
-      you don't use it; rename to `transport` when you do.
+    - `_transport` — dict from the host's transport state. **Exact
+      keys** (use these verbatim — wrong keys silently return None /
+      your fallback default and the bug is invisible until someone
+      changes tempo and you can't tell):
+
+      ```python
+      transport = {
+          "tempo":        120.0,   # BPM — NOT "bpm". Use transport["tempo"].
+          "beat":         0.0,     # current beat position (float)
+          "playing":      False,   # bool
+          "time_sig_num": 4.0,     # time signature numerator
+          "time_sig_den": 4.0,     # time signature denominator
+          "sample_pos":   0.0,     # absolute sample position
+      }
+      ```
+
+      Accept it even if you don't use it; rename to `transport` when
+      you do.
     - `_telemetry` — dict pre-seeded with declared `TELEMETRY` slot
       keys at zero. Write to it (e.g. `_telemetry["gr_db"] = -3.5`)
       to publish per-block values to the host UI's `audio.onFrame`.
-      Rename to `telemetry` when you use it.
+      Rename to `telemetry` when you use it. **Reading telemetry from
+      JS also requires `manifest.ui.audioFrames: true`** — see the
+      `ui` topic for the manifest snippet.
 
     The kernel still supports legacy 4/5/6-arg forms (back-compat for
     older user presets). New code should always use the 7-arg
@@ -144,7 +161,7 @@ enum DSPDocumentation {
           MIX   = mix().default(0.5),
       }
 
-      #[unsafe(no_mangle)]
+      #[no_mangle]
       pub extern "C" fn process(
           input: *const f32,
           output: *mut f32,
@@ -152,7 +169,7 @@ enum DSPDocumentation {
           frame_count: i32,
           sample_rate: f32,
       ) {
-          let ctx = unsafe { ctx(input, output, channel_count, frame_count, sample_rate) };
+          let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
 
           let drive_gain = db_to_gain(ctx.param(DRIVE) as f64) as f32;
           let mix_val    = ctx.param(MIX);
@@ -653,9 +670,12 @@ enum DSPDocumentation {
     - `width` / `height` — pt; the webview is pinned to this height, so
       authors control vertical space. Window is user-resizable horizontally.
     - `fps` — tick rate hint for `window.ConjureDSP.audio.onFrame`.
-    - `audioFrames` — set true if your UI subscribes to audio frames (RMS/
-      peak/FFT). Toggles the capture consumer so the pipeline isn't
-      computing frames for nothing.
+    - `audioFrames` — **REQUIRED `true` if your UI calls
+      `ConjureDSP.audio.onFrame(...)` or reads telemetry slots.** When
+      false (the default), the audio capture consumer doesn't run,
+      `onFrame` never fires, and your meters silently sit at zero with
+      no error in the console. Toggle on for visualizers / meters /
+      telemetry consumers; leave off for pure-control UIs.
 
     When `schemaVersion: 2` ships `params: [...]`, the AU parameter tree
     is populated from the manifest BEFORE the DSP script compiles —
@@ -788,14 +808,29 @@ enum DSPDocumentation {
 
     ## Audio frames (opt-in, for visualizers)
 
-    When `manifest.ui.audioFrames: true`, subscribe in JS:
+    Two-step setup — **both steps required, or onFrame never fires**:
 
-    ```js
-    ConjureDSP.audio.onFrame(frame => {
-        // frame = { peakIn, peakOut, rmsIn, rmsOut, fft?, telemetry? }
-        drawMeter(frame.peakOut);
-    });
-    ```
+    1. Declare in manifest:
+
+       ```json
+       "ui": { "entryHTML": "ui/index.html", "width": 520, "height": 380,
+               "fps": 30, "audioFrames": true }
+       ```
+
+    2. Subscribe in JS:
+
+       ```js
+       ConjureDSP.audio.onFrame(frame => {
+           // frame = { peakIn, peakOut, rmsIn, rmsOut, fft?, telemetry? }
+           drawMeter(frame.peakOut);
+       });
+       ```
+
+    If you call `onFrame` without `audioFrames: true` in the manifest,
+    your callback registers but the capture pipeline isn't consuming —
+    so no frames are ever delivered. There's no warning; the meter
+    just stays at zero. This is the most common cause of "my meter
+    doesn't move" reports.
 
     Pass `{ fft: true }` as a second arg to opt in to FFT (heavier
     payload; default payload is ~80 bytes).
@@ -850,11 +885,133 @@ enum DSPDocumentation {
     const gr = frame.telemetry["GR_DB"] ?? frame.telemetry["gr_db"];
     ```
 
+    **Telemetry rides on `audio.onFrame`** — so the manifest still
+    needs `"audioFrames": true`. Without it, the DSP keeps writing to
+    its slots but no frames are ever delivered to JS, and your meter
+    sits at zero. See "Audio frames" above for the manifest snippet.
+
     Don't mirror DSP math in JS to compute these values — parameter
     changes leak between block boundaries, attack/release state is
     hard to track from outside, and the result drifts from the audio
     whenever you tweak the script. 8 slots max per script. Zero
     overhead for presets that don't declare any.
+
+    ## Worked example: telemetry meter + tempo-sync
+
+    A complete three-file preset that exercises every piece authors
+    most often fumble: 7-arg Python signature, transport BPM, telemetry
+    slot, `audioFrames: true`, schemaVersion 2 declared params, and a
+    cdp-ui meter driven by the slot. Copy verbatim and edit.
+
+    `process.py`:
+
+    ```python
+    import math
+    from conjuredsp import db, mix
+
+    PARAMS = {
+        "depth":      db(min=0.0, max=24.0, default=6.0),   # duck depth
+        "rate_div":   {"name": "Rate", "min": 0, "max": 2,
+                        "default": 1, "style": "choice",
+                        "options": ["1/4", "1/8", "1/16"]},
+    }
+    TELEMETRY = {"gr_db": {"unit": "dB"}}
+
+    _phase = 0.0  # 0..1 cycle position
+
+    def process(inputs, outputs, frame_count, sample_rate, params,
+                transport, telemetry):
+        global _phase
+        depth_db = params["depth"]
+        beats_per_cycle = [1.0, 0.5, 0.25][int(params["rate_div"])]
+        bpm = transport["tempo"]               # NOT "bpm" — see params docs
+        rate_hz = (bpm / 60.0) / beats_per_cycle
+        gain_floor = 10.0 ** (-depth_db / 20.0)
+
+        max_gr_db = 0.0
+        for i in range(frame_count):
+            _phase = (_phase + rate_hz / sample_rate) % 1.0
+            # Triangle envelope: peaks at depth at phase=0, returns to 1.0 at 0.5
+            env = gain_floor + (1.0 - gain_floor) * abs(2.0 * _phase - 1.0)
+            gr_db_now = -20.0 * math.log10(max(env, 1e-9))
+            if gr_db_now > max_gr_db:
+                max_gr_db = gr_db_now
+            for ch in range(len(inputs)):
+                outputs[ch][i] = inputs[ch][i] * env
+
+        telemetry["gr_db"] = max_gr_db        # peak GR over the block
+    ```
+
+    `manifest.json`:
+
+    ```json
+    {
+        "schemaVersion": 2,
+        "entry": "process.py",
+        "language": "python",
+        "params": [
+            {"name": "depth", "min": 0, "max": 24, "default": 6, "unit": "dB"},
+            {"name": "Rate",  "min": 0, "max": 2,  "default": 1,
+             "style": "choice", "options": ["1/4", "1/8", "1/16"]}
+        ],
+        "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 360,
+            "height": 200,
+            "fps": 30,
+            "audioFrames": true
+        }
+    }
+    ```
+
+    `ui/index.html`:
+
+    ```html
+    <!doctype html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body { margin: 0; padding: 14px 16px;
+                   font: 12px -apple-system, system-ui, sans-serif;
+                   background: Canvas; color: CanvasText; }
+            cdp-slider, cdp-choice { display: block; margin: 6px 0; }
+            #meter { height: 14px; background: color-mix(in srgb,
+                     CanvasText 12%, transparent); border-radius: 4px;
+                     overflow: hidden; margin-top: 10px; }
+            #bar { height: 100%; width: 0%; background: CanvasText;
+                   transition: width 60ms linear; }
+        </style>
+    </head>
+    <body>
+        <cdp-slider param="depth"></cdp-slider>
+        <cdp-choice param="Rate"></cdp-choice>
+        <div id="meter"><div id="bar"></div></div>
+        <script>
+            ConjureDSP.ready(() => {
+                const bar = document.getElementById('bar');
+                const CEILING_DB = 24.0;
+                ConjureDSP.audio.onFrame(frame => {
+                    if (!frame.telemetry) return;
+                    const gr = frame.telemetry["gr_db"] ?? 0;
+                    bar.style.width = Math.min(100, gr / CEILING_DB * 100) + '%';
+                });
+            });
+        </script>
+    </body>
+    </html>
+    ```
+
+    What this exercises end-to-end:
+    - 7-arg `process` (Python takes `transport` + `telemetry` by name)
+    - `transport["tempo"]` (not `"bpm"`)
+    - `TELEMETRY = {...}` declaration → `telemetry["gr_db"] = ...` in
+      `process` → `frame.telemetry["gr_db"]` in JS
+    - `manifest.ui.audioFrames: true` so the frame pipeline runs
+    - `schemaVersion: 2` with declared `params` so the UI renders
+      correct defaults during script load
+    - `cdp-choice` for the rate division (segmented control, ≤2 options
+      becomes segmented; here 3 options → dropdown)
 
     ## Canvas pattern
 

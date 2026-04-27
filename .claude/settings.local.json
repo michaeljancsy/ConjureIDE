@@ -97,7 +97,13 @@
       "Bash(git checkout -b export-phase3-ui)",
       "Bash(git add BearBone.xcodeproj/project.pbxproj BearBone/BearBoneApp.swift BearBone/ContentView.swift BearBone/Model/PendingExportHandler.swift BearBoneExtension/BearBoneExtension.entitlements BearBoneExtension/Common/Audio Unit/BearBoneExtensionAudioUnit.swift BearBoneExtension/Common/UI/AudioUnitViewController.swift BearBoneExtension/Export/ExportManager.swift BearBoneExtension/UI/BearBoneExtensionMainView.swift BearBoneExtension/UI/PresetToolbar.swift BearBoneExtension/UI/ExportPopover.swift BearBoneTests/ExportManager.swift BearBoneTests/ExportTests.swift backlog.md docs/export-au-plan.md)",
       "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__get_projects",
-      "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__create_tasks"
+      "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__create_tasks",
+      "mcp__Claude_Preview__preview_start",
+      "Read(//private/tmp/**)",
+      "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__get_project",
+      "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__search_tasks",
+      "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__get_tasks",
+      "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__update_tasks"
     ]
   }
 }
