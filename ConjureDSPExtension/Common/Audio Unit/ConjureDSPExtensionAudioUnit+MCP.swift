@@ -477,8 +477,26 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 scriptSourceDidChange.send(change)
             }
 
+            // Top-level `success` reflects the WHOLE atomic operation:
+            // disk save AND kernel reload. The bundle was committed to
+            // disk and the current preset switched (those are tracked
+            // separately via `switched_current_preset` for callers that
+            // care to disambiguate), but if the kernel couldn't load
+            // the new source then audio is now broken — treating that
+            // as `success: true` is misleading and breaks the MCP
+            // tool-error contract. `isError` flips with `success` so
+            // MCP clients see this as a failed call when the kernel
+            // didn't reload.
+            //
+            // Round 9 of the agent UX experiment caught this: agent
+            // saved a preset whose `freq()` call had a bad kwarg, got
+            // back `success: true` + populated `kernel_error`, and
+            // was confused about whether their preset had really saved.
+            // Sentry comment 3142737220 flagged the same shape earlier
+            // but was misattributed as "resolved in 84d264c" (which is
+            // actually a docs-only commit — the fix never landed).
             var response: [String: Any] = [
-                "success": true,
+                "success": kernelReloaded,
                 "name": preset.name,
                 "switched_current_preset": true,
                 "kernel_reloaded": kernelReloaded,
@@ -490,7 +508,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 response["scaffolded_ui"] = true
                 response["note"] = "Starter ui/index.html written. Edit it via write_bundle_file to customize the custom HTML/JS UI."
             }
-            return (jsonStr(response), false)
+            return (jsonStr(response), !kernelReloaded)
         } catch {
             return (jsonStr(["error": "Failed to save preset: \(error.localizedDescription)"]), true)
         }
