@@ -143,8 +143,14 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "get_parameters",
-            description: "Read all active parameter values with names, ranges, and units.",
-            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+            description: "Read declared parameter values with names, ranges, units, style, options, default, and curve. By default returns ONLY the params the script declared (the ones that actually do something) — not the 16 raw AU slots. Top-level fields: `parameters: [...]`, `count: N` (declared params returned), `total_slots: 16` (always — the AU has 16 fixed slots). Set `include_unused: true` to return all 16 slots including the generic ones beyond the script's declared count (rarely needed; useful only when debugging slot allocation). Values are rounded to sensible precision based on each param's range — no more `150.00001525878906` for a default of 150.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "include_unused": PropertySchema(type: "boolean", description: "Return all 16 AU parameter slots including unused/generic ones beyond the script's declared count. Defaults to false.")
+                ],
+                required: nil
+            )
         ),
         ToolDefinition(
             name: "get_audio_state",

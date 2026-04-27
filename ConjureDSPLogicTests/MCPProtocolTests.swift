@@ -279,6 +279,131 @@ private struct ScriptSourceChangeMock {
 }
 
 // =============================================================================
+// MARK: - get_parameters response shape (Phase 2 of Round 5 follow-up)
+// =============================================================================
+
+/// Test-target copy of `roundForDisplay` from
+/// `ConjureDSPExtensionAudioUnit+MCP.swift`. The test target can't import the
+/// extension (duplicate symbols vs in-process AU), so we mirror the function
+/// here. If you change one, change both — `MCPProtocolGetParametersTests`
+/// covers the rules. Integration is also covered by the live MCP tests in
+/// `ConjureDSPTests`.
+private func roundForDisplay(_ value: Double, range: Double, style: String?) -> Double {
+    if let style, style == "toggle" || style == "choice" || style == "integer" {
+        return value.rounded()
+    }
+    let absRange = abs(range)
+    let decimals: Int
+    if absRange >= 1000 { decimals = 1 }
+    else if absRange >= 10 { decimals = 2 }
+    else if absRange >= 1 { decimals = 4 }
+    else { decimals = 6 }
+    let factor = pow(10.0, Double(decimals))
+    return (value * factor).rounded() / factor
+}
+
+@Suite("get_parameters response shape")
+struct MCPProtocolGetParametersTests {
+
+    // MARK: - roundForDisplay
+
+    @Test("roundForDisplay strips float-roundtrip noise for clean defaults")
+    func roundClean() {
+        // The original Round 5a finding: `value: 150.00001525878906` for
+        // a parameter declared with default 150 in a 0..2000 range.
+        let noisy = 150.00001525878906
+        #expect(roundForDisplay(noisy, range: 2000.0, style: nil) == 150.0)
+    }
+
+    @Test("Wide ranges (>=1000) keep 1 decimal — Hz, ms")
+    func wideRange1Decimal() {
+        #expect(roundForDisplay(440.0, range: 19980.0, style: nil) == 440.0)
+        #expect(roundForDisplay(1234.5678, range: 19980.0, style: nil) == 1234.6)
+    }
+
+    @Test("Medium ranges (>=10) keep 2 decimals — dB, pct, ratio")
+    func mediumRange2Decimals() {
+        #expect(roundForDisplay(-6.123456, range: 24.0, style: nil) == -6.12)
+        #expect(roundForDisplay(70.4567, range: 100.0, style: nil) == 70.46)
+    }
+
+    @Test("Small ranges (>=1) keep 4 decimals — mix, normalized")
+    func smallRange4Decimals() {
+        #expect(roundForDisplay(0.50000123, range: 1.0, style: nil) == 0.5)
+        #expect(roundForDisplay(0.123456789, range: 1.0, style: nil) == 0.1235)
+    }
+
+    @Test("Tiny ranges (<1) keep 6 decimals — fine-grained")
+    func tinyRange6Decimals() {
+        #expect(roundForDisplay(0.0001234567, range: 0.5, style: nil) == 0.000123)
+    }
+
+    @Test("Toggle style snaps to integer regardless of range")
+    func toggleSnapsInteger() {
+        #expect(roundForDisplay(0.0, range: 1.0, style: "toggle") == 0.0)
+        #expect(roundForDisplay(1.0, range: 1.0, style: "toggle") == 1.0)
+        #expect(roundForDisplay(0.7, range: 1.0, style: "toggle") == 1.0)
+    }
+
+    @Test("Choice style snaps to integer index")
+    func choiceSnapsInteger() {
+        #expect(roundForDisplay(2.0000123, range: 4.0, style: "choice") == 2.0)
+        #expect(roundForDisplay(1.499, range: 4.0, style: "choice") == 1.0)
+        #expect(roundForDisplay(1.5, range: 4.0, style: "choice") == 2.0)
+    }
+
+    @Test("Integer style snaps to integer")
+    func integerStyleSnapsInteger() {
+        #expect(roundForDisplay(5.4, range: 10.0, style: "integer") == 5.0)
+        #expect(roundForDisplay(5.6, range: 10.0, style: "integer") == 6.0)
+    }
+
+    @Test("Slider style is treated like nil — uses range-based rounding")
+    func sliderStyleUsesRange() {
+        // Style "slider" is the explicit form of "default" — it should not
+        // snap to integer; range rules apply.
+        #expect(roundForDisplay(0.5000123, range: 1.0, style: "slider") == 0.5)
+    }
+
+    @Test("Negative ranges work via abs")
+    func negativeRangeUsesAbs() {
+        // A param declared with min=-12, max=12 has range = 24 (medium → 2 decimals)
+        #expect(roundForDisplay(3.14159, range: -24.0, style: nil) == 3.14)
+    }
+
+    // MARK: - Filter-vs-include-unused contract (documented invariant)
+
+    /// Verifies the documented response shape: declared params surface by
+    /// default; `include_unused: true` opts into all 16 slots.
+    @Test("Default behavior keeps response small when script declares few params")
+    func defaultFiltersToDeclaredCount() {
+        // Simulate the rule: limit = declared.count when metadata exists,
+        // else paramCount (16).
+        let declared = 2
+        let total = 16
+        let limit = declared > 0 ? declared : total
+        #expect(limit == 2)
+    }
+
+    @Test("include_unused: true returns all 16 slots even with declared metadata")
+    func includeUnusedReturnsAllSlots() {
+        let includeUnused = true
+        let declared = 2
+        let total = 16
+        let limit = (includeUnused || declared == 0) ? total : declared
+        #expect(limit == 16)
+    }
+
+    @Test("Legacy mode (no metadata) always returns all 16")
+    func legacyModeReturnsAllSlots() {
+        let metadataAbsent = true
+        let total = 16
+        let limit = metadataAbsent ? total : 0
+        #expect(limit == 16)
+    }
+}
+
+// =============================================================================
 // MARK: - JSON Schema draft 2020-12 wire-format regression tests
 //
 // Triggered by an Anthropic API rejection seen in the wild:

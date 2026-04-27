@@ -55,7 +55,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             }
         case "get_parameters":
             Task { @MainActor in
-                let result = self.mcpGetParameters()
+                let result = self.mcpGetParameters(input: input)
                 completion(result.0, result.1)
             }
         case "get_audio_state":
@@ -195,25 +195,86 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     }
 
     @MainActor
-    private func mcpGetParameters() -> (String, Bool) {
+    private func mcpGetParameters(input: [String: Any]) -> (String, Bool) {
         let metadata = currentParamMetadata
-        var params: [[String: Any]] = []
-        for i in 0..<Self.paramCount {
-            if let param = parameterTree?.parameter(withAddress: AUParameterAddress(i)) {
-                var entry: [String: Any] = [
-                    "index": i,
-                    "name": param.displayName,
-                    "value": Double(param.value),
-                    "min": Double(param.minValue),
-                    "max": Double(param.maxValue),
-                ]
-                if let meta = metadata, i < meta.count {
-                    entry["unit"] = meta[i].unit
-                }
-                params.append(entry)
-            }
+        let includeUnused = (input["include_unused"] as? Bool) ?? false
+
+        // Default behavior: when the script declares metadata, only
+        // surface the declared params. Generic Param 0..15 entries
+        // beyond `metadata.count` are kernel slots the script doesn't
+        // actually read — surfacing them used to confuse agents into
+        // thinking their PARAMS dict had been parsed when it hadn't.
+        // Legacy mode (no metadata declared at all) keeps returning
+        // all 16 since we can't tell which the script reads.
+        let limit: Int
+        if let meta = metadata, !includeUnused {
+            limit = meta.count
+        } else {
+            limit = Self.paramCount
         }
-        return (jsonStr(["parameters": params]), false)
+
+        var params: [[String: Any]] = []
+        for i in 0..<limit {
+            guard let param = parameterTree?.parameter(withAddress: AUParameterAddress(i)) else {
+                continue
+            }
+            let meta = metadata.flatMap { i < $0.count ? $0[i] : nil }
+            let style = meta?.style
+            let minD = Self.roundForDisplay(Double(param.minValue), range: Double(param.maxValue - param.minValue), style: style)
+            let maxD = Self.roundForDisplay(Double(param.maxValue), range: Double(param.maxValue - param.minValue), style: style)
+            let valueD = Self.roundForDisplay(Double(param.value), range: Double(param.maxValue - param.minValue), style: style)
+            var entry: [String: Any] = [
+                "index": i,
+                "name": param.displayName,
+                "value": valueD,
+                "min": minD,
+                "max": maxD,
+            ]
+            if let m = meta {
+                entry["unit"] = m.unit
+                if let style = m.style { entry["style"] = style }
+                if let options = m.options { entry["options"] = options }
+                entry["default"] = Self.roundForDisplay(Double(m.default), range: Double(m.max - m.min), style: m.style)
+                if let curve = m.curve { entry["curve"] = curve }
+            }
+            params.append(entry)
+        }
+
+        var response: [String: Any] = [
+            "parameters": params,
+            "count": params.count,
+            "total_slots": Self.paramCount,
+        ]
+        if metadata == nil {
+            response["legacy_mode"] = true
+        }
+        return (jsonStr(response), false)
+    }
+
+    /// Round a parameter value to a sensible display precision based on
+    /// the parameter's range. Eliminates the
+    /// "150.00001525878906 for default 150" cosmetic noise from the
+    /// AU's normalize/denormalize roundtrip while preserving meaningful
+    /// precision across multiple orders of magnitude.
+    ///
+    /// Rules:
+    /// - toggle / choice / integer styles → integer (rounded)
+    /// - range >= 1000 (freq, ms)         → 1 decimal
+    /// - range >= 10   (dB, pct, ratio)    → 2 decimals
+    /// - range >= 1    (mix, normalized)   → 4 decimals
+    /// - range <  1    (fine)               → 6 decimals
+    static func roundForDisplay(_ value: Double, range: Double, style: String?) -> Double {
+        if let style, style == "toggle" || style == "choice" || style == "integer" {
+            return value.rounded()
+        }
+        let absRange = abs(range)
+        let decimals: Int
+        if absRange >= 1000 { decimals = 1 }
+        else if absRange >= 10 { decimals = 2 }
+        else if absRange >= 1 { decimals = 4 }
+        else { decimals = 6 }
+        let factor = pow(10.0, Double(decimals))
+        return (value * factor).rounded() / factor
     }
 
     @MainActor
