@@ -121,11 +121,12 @@ final class ExportAudioCaptureManager: ObservableObject {
     private var fftInputScratch: [Float] = []
     private var fftOutputScratch: [Float] = []
 
-    // Telemetry — mirrors the main extension's pattern. Pointer-comparison
-    // cache against the kernel's metadata CString re-parses the slot
-    // name list only when it changes (i.e. on script load).
+    // Telemetry — mirrors the main extension's pattern. Cached JSON content
+    // (not raw pointer) so that allocator address reuse can't cause a
+    // metadata change to be missed and stale slot names paired with new
+    // values silently. Same fix as the extension side (commit 9c9fe55).
     private var telemetryNames: [String] = []
-    private var lastTelemetryMetaPtr: UnsafePointer<CChar>?
+    private var lastTelemetryMetaJSON: String?
     private var telemetryReadBuffer: [Float] = []
 
     // MARK: - Init
@@ -309,13 +310,13 @@ final class ExportAudioCaptureManager: ObservableObject {
 
     private func refreshTelemetryNamesIfChanged(kernel: DSPKernelRef) {
         let ptr = dsp_kernel_telemetry_metadata_json(kernel)
-        if ptr == lastTelemetryMetaPtr { return }
-        lastTelemetryMetaPtr = ptr
-        guard let ptr = ptr else {
+        let currentJSON: String? = ptr.map { String(cString: $0) }
+        if currentJSON == lastTelemetryMetaJSON { return }
+        lastTelemetryMetaJSON = currentJSON
+        guard let json = currentJSON else {
             telemetryNames = []
             return
         }
-        let json = String(cString: ptr)
         guard let data = json.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data)
                 as? [[String: Any]] else {

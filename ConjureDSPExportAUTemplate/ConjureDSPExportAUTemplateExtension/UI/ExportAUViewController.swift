@@ -26,7 +26,17 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
     /// the kernel handle from the AU.
     private var captureManager: ExportAudioCaptureManager?
 
-    private static let viewWidth: CGFloat = 500
+    /// Fallback window width when the manifest doesn't declare one. Old
+    /// exports without `ui.width` in their runtime-config (or generic-slider
+    /// presets that ship no `ui` block at all) fall back to this.
+    private static let defaultViewWidth: CGFloat = 500
+
+    /// Resolved window width — populated from `runtime-config.json`'s
+    /// `ui.width` at `loadView` time (so the very first frame uses the
+    /// right size and the host doesn't see a brief 500pt → declared-width
+    /// jump). Falls back to `defaultViewWidth` when the manifest doesn't
+    /// declare a width.
+    private var resolvedViewWidth: CGFloat = defaultViewWidth
 
     public override var preferredMinimumSize: NSSize {
         NSSize(width: 300, height: 150)
@@ -50,11 +60,21 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
             hasCustomUI: customUIEntryURL != nil,
             customUIHeight: customUIHeight,
             paramCount: paramCount,
-            viewWidth: Self.viewWidth
+            viewWidth: resolvedViewWidth
         )
     }
 
     public override func loadView() {
+        // Resolve the manifest-declared width up front so the window opens
+        // at the right size on the very first frame. ExportManager writes
+        // manifest.ui.width into runtime-config.json.ui.width during export;
+        // if the field is absent (old exports, generic-slider presets) we
+        // keep the 500pt fallback.
+        let bundle = Bundle(for: type(of: self))
+        if let cfg = RuntimeConfig.load(from: bundle), let w = cfg.ui?.width {
+            self.resolvedViewWidth = CGFloat(w)
+        }
+
         let initial = computeSize(showDebug: false, showError: false)
         self.view = NSView(frame: NSRect(origin: .zero, size: initial))
         self.preferredContentSize = initial
