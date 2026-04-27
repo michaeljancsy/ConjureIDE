@@ -533,14 +533,36 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // running DSP matches what's on disk. If newSource was
             // provided, the entry was already overwritten; otherwise
             // read the (now-copied) entry from the new bundle.
+            //
+            // We surface a readSource() failure as a tool-level error
+            // rather than swallowing it: a `try?` here would leave
+            // runSource empty, skip the kernel reload, and report
+            // success: true with kernel_reloaded: false and no
+            // explanation — exactly the "guess what went wrong"
+            // shape the agent UX experiment told us to avoid.
+            var sourceReadError: String? = nil
             let runSource: String = {
                 if let newSource { return newSource }
-                if let bundle = pm.loadBundle(for: preset),
-                   let s = try? bundle.readSource() {
-                    return s
+                guard let bundle = pm.loadBundle(for: preset) else {
+                    sourceReadError = "Could not re-load duplicated bundle from disk."
+                    return ""
                 }
-                return ""
+                do {
+                    return try bundle.readSource()
+                } catch {
+                    sourceReadError = "Could not read entry script from duplicated bundle: \(error.localizedDescription)"
+                    return ""
+                }
             }()
+            if let err = sourceReadError {
+                return (jsonStr([
+                    "success": false,
+                    "error": err,
+                    "name": preset.name,
+                    "switched_current_preset": false,
+                    "kernel_reloaded": false,
+                ]), true)
+            }
             pm.setCurrentPreset(preset, source: runSource)
             clearDAWCurrentPreset()
 

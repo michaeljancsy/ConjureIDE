@@ -321,6 +321,17 @@ class TerminalAppServer {
                     session.wsServer?.broadcastText("\r\n\u{1b}[31m● Error: \(msg)\u{1b}[0m\r\n")
                 case .idle:
                     session.claudeState = "Idle"
+                    // Drop any banner/control message queued by the
+                    // previous PTY run. Otherwise a restart() that
+                    // happens before any client has connected leaves
+                    // the *old* run's control message sitting in the
+                    // queue, where it gets overwritten by the new
+                    // run's message — and the original is lost. Once
+                    // the PTY has gone idle the queued message is
+                    // semantically stale anyway: it described state
+                    // that no longer exists.
+                    session.wsServer?.pendingControlMessage = nil
+                    session.wsServer?.pendingBanner = nil
                 }
                 self?.updateStatus()
             }

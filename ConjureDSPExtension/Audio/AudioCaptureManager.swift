@@ -285,12 +285,19 @@ final class AudioCaptureManager: ObservableObject {
     private var fftOutputScratch: [Float] = []
 
     // Telemetry: cached metadata + reusable read buffer.
-    // The pointer-comparison cache lets us re-parse names only when the
-    // kernel's metadata CString changes (i.e. on script load), keeping
-    // the per-tick cost down to one comparison + one FFI call when
-    // telemetry is in use, zero when it isn't.
+    // The cached-JSON string lets us re-parse names only when the
+    // kernel's metadata content changes (i.e. on script load), keeping
+    // the per-tick cost down to one C-string read + one Swift String
+    // equality check when telemetry is in use, zero when it isn't.
+    //
+    // Earlier we cached the raw pointer and compared addresses — that
+    // misses the case where the system allocator hands the new CString
+    // the same address as the freed old one, leaving stale slot names
+    // paired with new values. Comparing the JSON content costs one
+    // String() construction per tick (cheap; metadata strings are tiny)
+    // and is correctness-by-construction.
     private var telemetryNames: [String] = []
-    private var lastTelemetryMetaPtr: UnsafePointer<CChar>?
+    private var lastTelemetryMetaJSON: String?
     private var telemetryReadBuffer: [Float] = []
 
     // MARK: - Init
@@ -533,19 +540,19 @@ final class AudioCaptureManager: ObservableObject {
     }
 
     /// Re-read the kernel's telemetry metadata when it changes. Detected
-    /// by pointer comparison against the previously-cached CString — the
-    /// kernel allocates a fresh CString on every script load, so a stale
-    /// name list is impossible without us noticing. Parses on the
+    /// by comparing the metadata JSON string against the previously
+    /// cached copy — the kernel rewrites this string on every script
+    /// load, so any content change forces a re-parse. Parses on the
     /// display-link tick at most once per script load (rare).
     private func refreshTelemetryNamesIfChanged(kernel: DSPKernelRef) {
         let ptr = dsp_kernel_telemetry_metadata_json(kernel)
-        if ptr == lastTelemetryMetaPtr { return }
-        lastTelemetryMetaPtr = ptr
-        guard let ptr = ptr else {
+        let currentJSON: String? = ptr.map { String(cString: $0) }
+        if currentJSON == lastTelemetryMetaJSON { return }
+        lastTelemetryMetaJSON = currentJSON
+        guard let json = currentJSON else {
             telemetryNames = []
             return
         }
-        let json = String(cString: ptr)
         guard let data = json.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data)
                 as? [[String: Any]] else {
