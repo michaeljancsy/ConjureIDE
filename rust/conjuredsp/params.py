@@ -26,7 +26,19 @@ def param(
 
     Returns:
         A ParamSpec dict suitable for use in PARAMS.
+
+    Raises:
+        ValueError: if `default` is outside `[min, max]`. The named builders
+            (`mix`, `pct`, `toggle`, `ratio`) bake in their range and route
+            through here, so a `mix(default=100.0)` (mistakenly using the
+            0..100 percentage convention) raises immediately at script-load
+            time instead of silently clamping to 1.0.
     """
+    if default is not None and not (min <= default <= max):
+        raise ValueError(
+            f"param() default {default} is outside the declared range "
+            f"[{min}, {max}]. Did you mix up mix() (0..1) with pct() (0..100)?"
+        )
     spec: ParamSpec = {"min": min, "max": max, "unit": unit, "curve": curve}  # type: ignore[typeddict-item]
     if default is not None:
         spec["default"] = default
@@ -131,6 +143,7 @@ def integer(
     Returns:
         A ParamSpec dict with ``style="integer"`` and a linear curve.
     """
+    # `param()` validates default \u2208 [min, max] and raises ValueError otherwise.
     spec = param(float(min), float(max), unit=unit, default=float(default if default is not None else min))
     spec["style"] = "integer"
     return spec

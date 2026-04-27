@@ -55,13 +55,23 @@ enum BundleUIValidator {
     static func validate(_ bundle: PresetBundle) -> Report {
         var issues: [Issue] = []
 
-        // A bundle without any UI intent has nothing to validate — the
-        // stock slider panel renders for it either way. "UI intent" =
-        // either the manifest declares a ui block OR there's a physical
-        // ui/index.html on disk. Check the file system directly since
-        // `bundle.uiIndexURL` is nil when the manifest has no ui block
-        // even if the file exists (that's the orphan case we want to
-        // flag, not skip).
+        // Default-out-of-range is checked regardless of UI intent — even a
+        // generic-slider preset stores a wrong default if the script
+        // declared one outside [min, max]. The AU's denormalize clamps,
+        // so the bundle still loads, but the slider's initial position
+        // doesn't match what the author intended (caught Round 9 of the
+        // agent UX experiment: `mix(default=100.0)` clamped to 1.0
+        // silently because the agent confused the 0..1 mix range with
+        // the 0..100 pct range).
+        issues.append(contentsOf: checkParamDefaultsInRange(bundle))
+
+        // A bundle without any UI intent has nothing else to validate —
+        // the stock slider panel renders for it either way. "UI intent"
+        // = either the manifest declares a ui block OR there's a
+        // physical ui/index.html on disk. Check the file system
+        // directly since `bundle.uiIndexURL` is nil when the manifest
+        // has no ui block even if the file exists (that's the orphan
+        // case we want to flag, not skip).
         let hasUIBlock = bundle.manifest.ui != nil
         let defaultIndexPath = bundle.rootURL
             .appendingPathComponent("ui")
@@ -69,7 +79,7 @@ enum BundleUIValidator {
             .path
         let hasIndexOnDisk = FileManager.default.fileExists(atPath: defaultIndexPath)
         guard hasUIBlock || hasIndexOnDisk else {
-            return Report(status: .pass, issues: [])
+            return Self.report(from: issues)
         }
 
         issues.append(contentsOf: checkManifestUIBlock(bundle))
@@ -95,6 +105,13 @@ enum BundleUIValidator {
             issues.append(contentsOf: checkTextContrast(html: html))
         }
 
+        return Self.report(from: issues)
+    }
+
+    /// Build a `Report` whose status reflects the worst-severity issue.
+    /// Pulled out so the early-return path (no UI intent) and the full
+    /// path can both ship the same status-derivation rule.
+    private static func report(from issues: [Issue]) -> Report {
         let status: ReportStatus
         if issues.contains(where: { $0.severity == .fail }) {
             status = .fail
@@ -193,6 +210,39 @@ enum BundleUIValidator {
                 suggestion: "Update manifest.ui.entryHTML to match one of the existing files, or rename the file on disk."
             )
         ]
+    }
+
+    /// Each declared param's `default` must lie within `[min, max]`.
+    /// Defaults outside the declared range are clamped silently by the
+    /// AU's denormalize — the bundle loads, audio runs, but the slider's
+    /// initial position doesn't reflect what the author wrote.
+    /// Almost always indicates a unit confusion (e.g. mix() at 100 when
+    /// the author meant pct() at 100). Warn rather than fail because
+    /// older bundles in the wild may have minor drift; surfacing it via
+    /// validate_bundle and inline write_bundle_file is enough to nudge
+    /// authors to fix it on the next save.
+    private static func checkParamDefaultsInRange(_ bundle: PresetBundle) -> [Issue] {
+        guard let params = bundle.manifest.params, !params.isEmpty else {
+            return []
+        }
+        var issues: [Issue] = []
+        for p in params {
+            // Allow tiny float drift — IEEE float comparison around the
+            // boundary can flag a default that's computed from the same
+            // min/max literals. 1e-4 is invisibly small in any real
+            // parameter range.
+            let tol: Float = 1e-4
+            if p.default < p.min - tol || p.default > p.max + tol {
+                issues.append(Issue(
+                    severity: .warn,
+                    check: "param_default_out_of_range",
+                    file: PresetManifest.filename,
+                    message: "Param '\(p.name)' has default \(p.default) outside its declared range [\(p.min), \(p.max)]. The AU silently clamps to the boundary; the slider's initial position won't match author intent.",
+                    suggestion: "Did you confuse two builders? mix() is 0..1, pct() is 0..100. Adjust the default to a value within [\(p.min), \(p.max)]."
+                ))
+            }
+        }
+        return issues
     }
 
     /// Using schemaVersion 1 for a bundle with a custom UI means param
