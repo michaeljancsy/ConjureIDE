@@ -4,6 +4,30 @@
 /// Maximum number of parameters exposed to the DAW.
 pub const PARAM_COUNT: usize = 16;
 
+/// Maximum number of telemetry slots a script can publish per render
+/// block. Telemetry is the read-back twin of params: scripts write
+/// internal DSP state (envelope follower, computed GR, sidechain RMS)
+/// once per block and the host UI reads the snapshot via
+/// `audio.onFrame`'s `telemetry` field. Mirrors `conjuredsp::TELEMETRY_LEN`
+/// in the author crate.
+pub const TELEMETRY_LEN: usize = 8;
+
+/// Metadata for a single telemetry slot, declared by the script via
+/// `telemetry!()` (Rust) or `TELEMETRY = {…}` (Python).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TelemetryMetadata {
+    /// Display name (title-cased) the host UI uses as the slot key.
+    pub name: String,
+    /// Original key from the Python `TELEMETRY` dict (e.g. "gr_db").
+    /// Empty for Rust-declared slots, which use the const-name's
+    /// title-cased form for both display and key.
+    #[serde(default)]
+    pub key: String,
+    /// Display unit (e.g. "dB", "Hz", "%"). Empty when the value is
+    /// unitless. The cdp-ui.js `formatValue` helper consumes this.
+    pub unit: String,
+}
+
 /// Rich metadata for a single parameter, declared by scripts via `PARAMS` dict.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ParamMetadata {

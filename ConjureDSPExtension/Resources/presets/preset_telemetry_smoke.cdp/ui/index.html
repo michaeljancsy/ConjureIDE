@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Telemetry Smoke</title>
+  <style>
+    :root { color-scheme: light dark; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      font: 13px -apple-system, system-ui, sans-serif;
+      background: Canvas; color: CanvasText;
+    }
+    body {
+      display: flex; flex-direction: column; gap: 14px;
+      padding: 18px 22px;
+    }
+    cdp-slider { --cdp-accent: currentColor; }
+    .meter-row {
+      display: grid;
+      grid-template-columns: 96px 1fr 64px;
+      align-items: center;
+      gap: 10px;
+      min-height: 24px;
+    }
+    .meter-row .label {
+      font-weight: 500;
+    }
+    .meter-row .bar {
+      height: 10px;
+      background: color-mix(in srgb, CanvasText 14%, transparent);
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    .meter-row .fill {
+      height: 100%;
+      width: 0%;
+      background: color-mix(in srgb, CanvasText 65%, transparent);
+      transition: width 60ms linear;
+    }
+    .meter-row .value {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: color-mix(in srgb, CanvasText 60%, transparent);
+    }
+    .hint {
+      margin-top: 6px;
+      font-size: 11px;
+      color: color-mix(in srgb, CanvasText 50%, transparent);
+    }
+  </style>
+</head>
+<body>
+  <cdp-slider param="drive"></cdp-slider>
+
+  <div class="meter-row">
+    <span class="label">Peak</span>
+    <div class="bar"><div class="fill" id="peakFill"></div></div>
+    <span class="value" id="peakValue">— dB</span>
+  </div>
+
+  <div class="meter-row">
+    <span class="label">Envelope</span>
+    <div class="bar"><div class="fill" id="envFill"></div></div>
+    <span class="value" id="envValue">— dB</span>
+  </div>
+
+  <div class="hint">
+    Both meters are driven by <code>frame.telemetry</code> values
+    published by the DSP each block. Play audio to see them respond.
+  </div>
+
+  <script>
+    // Map a dB value (-60..+12 expected range) to 0..1 fill width.
+    function dbToFill(db) {
+      const min = -60, max = 12;
+      const t = Math.max(0, Math.min(1, (db - min) / (max - min)));
+      return (t * 100).toFixed(1) + '%';
+    }
+    function fmtDb(db) {
+      if (db <= -120) return '-∞ dB';
+      return db.toFixed(1) + ' dB';
+    }
+
+    const peakFill = document.getElementById('peakFill');
+    const peakValue = document.getElementById('peakValue');
+    const envFill = document.getElementById('envFill');
+    const envValue = document.getElementById('envValue');
+
+    ConjureDSP.ready(() => {
+      ConjureDSP.audio.onFrame((frame) => {
+        if (!frame.telemetry) return;
+        // Telemetry slot names pass through verbatim from the script:
+        //   Rust   `telemetry! { PEAK_DB = ... }`           → "PEAK_DB"
+        //   Python `TELEMETRY = {"peak_db": {...}}`         → "peak_db"
+        // This shared UI serves both the Rust and Python smoke
+        // presets, so we read both forms via `??`. Production UIs
+        // that target only one backend can drop the fallback.
+        const peak = frame.telemetry['PEAK_DB']     ?? frame.telemetry['peak_db'];
+        const env  = frame.telemetry['ENVELOPE_DB'] ?? frame.telemetry['envelope_db'];
+        if (peak !== undefined) {
+          peakFill.style.width = dbToFill(peak);
+          peakValue.textContent = fmtDb(peak);
+        }
+        if (env !== undefined) {
+          envFill.style.width = dbToFill(env);
+          envValue.textContent = fmtDb(env);
+        }
+      });
+    });
+  </script>
+</body>
+</html>

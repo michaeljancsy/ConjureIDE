@@ -546,12 +546,14 @@ final class PTYManager {
         "ratio": ratio(),           # 1:1-20:1 compression ratio, default 4
     }
 
-    def process(inputs, outputs, frame_count, sample_rate, params):
-        # inputs/outputs: list of numpy.float32 arrays, one per channel
-        # params: dict keyed by PARAMS names (e.g. params["cutoff"] = 1000.0)
+    def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+        # ALWAYS declare all 7 args. Use _transport / _telemetry (underscore
+        # prefix = unused) when you don't read them; drop the underscore later
+        # if you start using them. inputs/outputs: list of numpy.float32 arrays,
+        # one per channel. params: dict keyed by PARAMS names
+        # (e.g. params["cutoff"] = 1000.0).
         for ch in range(len(inputs)):
-            for i in range(frame_count):
-                outputs[ch][i] = inputs[ch][i]  # passthrough
+            outputs[ch][:frame_count] = inputs[ch][:frame_count]  # passthrough
     ```
 
     Persistent state: module-level globals (e.g. `_filters = None`, initialized on first call). \
@@ -575,9 +577,14 @@ final class PTYManager {
     #[no_mangle]
     pub extern "C" fn process(
         input: *const f32, output: *mut f32,
-        channels: i32, frame_count: i32, sample_rate: f32,
+        channel_count: i32, frame_count: i32, sample_rate: f32,
     ) {
-        let ctx = ctx(input, output, channels, frame_count, sample_rate);
+        // Copy your process() args into ctx() in the same order. Don't rename
+        // the third arg to anything that suggests "frames" — Context indexes
+        // via channel * frames + frame; mixing the two compiles fine but
+        // walks the buffer with the wrong stride and produces silently-wrong
+        // output.
+        let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
         unsafe {
             let cutoff = ctx.param(CUTOFF);  // actual value (1000.0 Hz), not 0-1
             for c in 0..ctx.channels() {
@@ -620,6 +627,156 @@ final class PTYManager {
     **Internal precision** — All conjuredsp library types use f64 internally even though WASM \
     I/O buffers are f32. In Rust, cast to/from f64 at library boundaries. In Python, automatic.
 
+    ## Custom HTML/JS UIs (only when the user asks for one)
+
+    The extension renders a stock slider panel for every preset \
+    automatically. Don't touch UI unless the user specifically asks for \
+    one — phrases like "custom UI," "visualization," "XY pad," "make it \
+    look like X," "skin this," "animated UI." Plain DSP tasks ("write a \
+    compressor," "change the attack time," "fix this bug in the script") \
+    do NOT need UI work; the stock sliders already cover them.
+
+    When the user IS asking for a custom UI, FIRST call `get_docs` with \
+    topic `"ui"` for the full component reference, Canvas patterns, \
+    audio-frame API, theming hooks, and gotchas. Don't guess the \
+    component API from memory — the most common failure mode of \
+    custom UIs is hand-rolling param math against invented metadata \
+    field names, producing NaN readouts and dead sliders.
+
+    Quick orientation (full details in the docs):
+
+    - Bundles ship `ui/index.html` + optional `ui/assets/*`; the manifest \
+      needs a `ui` block pointing at entryHTML.
+    - The webview is pre-injected with `window.ConjureDSP` and \
+      `cdp-ui.js`. DO NOT include `<script src="...">` for either.
+    - Components available: `<cdp-slider>`, `<cdp-toggle>`, `<cdp-choice>`, \
+      `<cdp-xy>`, `<cdp-knob>`, `<cdp-panel auto>`. For circular knobs \
+      reach for `<cdp-knob param="…">` instead of hand-rolling SVG — \
+      it covers drag (Shift = fine), wheel, keyboard, double-click-to- \
+      default, and ARIA. Theme via `--cdp-knob-*` properties; for \
+      non-circular geometry slot in your own SVG and react to the \
+      published `--cdp-knob-norm` CSS variable.
+    - Every cdp-slider / cdp-knob / cdp-choice already renders its own \
+      label and formatted value (with units) inside its shadow DOM. \
+      DO NOT add a sibling `<span>` / `<div>` / readout that displays \
+      the same param value — it shows up twice and the user has to \
+      mentally reconcile them. If the default position doesn't fit, \
+      style the built-in value via `--cdp-value-width` / \
+      `::part(value)` instead of duplicating it.
+    - `parameters.set(i, v)` fires `onChange`/`onAnyChange` synchronously \
+      (with a dedupe-on-equal guard). Use `ctrl.onChange(cb)` as your \
+      single source of truth for visual updates — the same handler \
+      runs on the user's drag AND on DAW automation. Never write a \
+      pattern that "manually redraws after setValue but ignores \
+      onChange" — that worked under an older bridge contract and is \
+      now redundant + fragile.
+    - The webview's CSP blocks fetch/XHR/WebSocket. All assets must live \
+      inside the bundle — no CDN imports, no external fonts.
+    - File watcher hot-reloads ~300ms after every `write_bundle_file`, so \
+      iterate quickly. To scaffold a new bundle with a starter UI, pass \
+      `scaffold_ui=true` to `save_preset`.
+    - DO NOT draw the preset's own name ANYWHERE inside `ui/index.html` — \
+      not as a header, not as a footer, not as a watermark, not as a \
+      subtitle. The plugin/DAW host already shows it in the window title \
+      bar. Repeating it wastes vertical viewport space and duplicates the \
+      label. Use the UI canvas for the actual controls and visualization \
+      only, unless the user asks for it.
+
+    Working examples to copy from: `read_bundle_file` on `preset_svf`, \
+    `preset_compressor`, `preset_wavefolder`, `preset_mockingbird_at_night_rust`.
+
+    **Save first, atomically. Don't juggle compile_and_run + save_preset.**
+
+    `save_preset` is atomic: in ONE call it writes the bundle to disk, \
+    switches the plugin's current preset to it, AND loads the script \
+    into the kernel. You don't need a separate `compile_and_run` after. \
+    `compile_and_run` is ONLY for iterative script edits against an \
+    already-saved bundle, not for creating new presets.
+
+    `save_preset` always produces a fresh bundle. Nothing is auto-copied \
+    from whatever preset the user was previously on. Decide whether the \
+    user's request builds on the loaded preset or replaces it:
+
+    - Build-on signals: "add", "change this X", "tweak", "make it more Y", \
+      references to visible UI elements or specific params.
+    - Start-fresh signals: "make me a", "create a", naming a different \
+      effect class than what's loaded.
+    - When unsure, start fresh — the recovery is cheap.
+
+    Recommended flow when the user asks for a new preset from scratch \
+    (or a completely different preset class from what's loaded):
+
+    1. Call `save_preset(name, source=<DSP script text>, scaffold_ui=true_or_false)`. \
+    One call creates the bundle, switches the plugin to it, and loads \
+    the script into the kernel. Response has `switched_current_preset: true` \
+    and `kernel_reloaded: true`. \
+    **Pass `scaffold_ui=true` whenever you plan to ship a custom UI — \
+    even if you're about to overwrite `ui/index.html` with your own HTML \
+    anyway.** It makes the manifest declare a `ui` block in the same \
+    atomic write that creates the bundle. Without it, the plugin renders \
+    generic sliders until a later `write_bundle_file` on `manifest.json` \
+    adds the block — a visible flash for the user between save and the \
+    first UI paint.
+    2. If the user wants a custom UI, call `write_bundle_file(\"ui/index.html\", \
+    …)` (and any ui/assets/*) to author it. Read the inline `validation` \
+    block on each write.
+    3. Call `smoke_test_ui` when done to verify the UI works at runtime.
+
+    When the user wants to build on what's currently loaded (e.g. \
+    \"tweak the threshold slider color on this compressor\"): \
+    `read_bundle_file` the files you want to inherit into your context \
+    BEFORE `save_preset`, then after save_preset use `write_bundle_file` \
+    to drop the inherited (possibly edited) files into the new bundle. \
+    Three explicit steps — no hidden cloning. This keeps the bundle on \
+    disk consistent with whatever `source` you save. If the loaded \
+    preset ships a custom UI you're inheriting, pass `scaffold_ui=true` \
+    to `save_preset` for the same reason as above — avoids the \
+    generic-slider flash between save and your first UI overwrite.
+
+    Don't call `compile_and_run` FIRST just to get a script into the \
+    kernel before save_preset — pass the source straight to save_preset. \
+    Mixing the two tools in sequence creates coordination problems that \
+    have burned past sessions: the bundle on disk drifts from what the \
+    kernel is running.
+
+    After save_preset, tell the user what you named the new bundle so \
+    they can find it in the preset browser.
+
+    **Validation protocol (mandatory before claiming done on a UI task):**
+
+    Two tools, used in sequence. Static lint first (catches authoring \
+    mistakes in the source text), then the runtime smoke test (catches \
+    failures that only manifest when the UI actually renders).
+
+    - Every `write_bundle_file` to `ui/*` or `manifest.json` returns a \
+    `validation` block with a `status` (`pass` / `warn` / `fail`) and an \
+    `issues` array. Read it. If `status: "fail"`, fix the failures before \
+    continuing — the UI is broken in a way the user will notice.
+    - Common failures the static validator catches: unresolved `param="X"` \
+    references (including when manifest.params is missing entirely), \
+    external `<script src>` / `fetch()` / `WebSocket` calls that the CSP \
+    blocks, missing manifest.ui block, Canvas 2D fillStyle set to a CSS \
+    system color keyword that won't parse, UIs that declare parameters \
+    but expose zero interactive controls, and low text contrast — \
+    including cross-rule cases like `body { background: #0a0a0a; }` \
+    paired with `.label { color: #555; }` in a separate rule.
+    - When you're done with a UI task, call `smoke_test_ui` as a runtime \
+    check. It loads the UI in an offscreen WKWebView using the same \
+    bridge + cdp-ui.js injection the live plugin uses, then reports: \
+    whether `ConjureDSP.ready` fired, every JS error (including ones \
+    thrown inside `ready(cb)` that the bridge catches), per-component \
+    binding state ("did every cdp-slider actually resolve its param= \
+    attribute at runtime?"), and per-declared-parameter coverage ("does \
+    every AU parameter have at least one working UI control?"). Don't \
+    say "done" until `smoke_test_ui` returns `status: "pass"` (or "warn" \
+    with issues you've read and deliberately accepted).
+    - The static `validate_bundle` tool re-runs the same lint sweep on \
+    demand. Use it when you want to re-check without another write.
+    - Do NOT try to validate a UI by asking yourself whether the code \
+    looks right — this has produced NaN readouts, dead sliders, dark \
+    text on dark backgrounds, and pointer-event ghosts in past sessions. \
+    Run the tools.
+
     ## Latency Reporting
 
     Scripts that introduce algorithmic latency (lookahead, FFT windowing, oversampling) must \
@@ -635,9 +792,26 @@ final class PTYManager {
 
     Tools are exposed under the `conjuredsp__` namespace. The core set:
 
-    - `get_script`, `compile_and_run`, `get_error`, `get_parameters`, `set_parameter`, `toggle_bypass`
-    - `get_audio_state`, `list_presets`, `save_preset`, `list_packages`, `list_tones`
-    - `get_docs` — language-specific conjuredsp API reference by topic
+    - No file I/O or network calls in process() — runs on the real-time audio thread
+    - Up to 16 parameters per script
+    - Use `compile_and_run` to load scripts, `get_parameters` to check state, `toggle_bypass` for A/B
+    - Call `list_packages` to see what Python packages are available for import (built-in and user-installed). \
+    Do not assume a package is unavailable — always check first.
+    - Before writing a script, call `get_docs` for the language-specific API reference. Topics: \
+    params, filters, delays, oscillators, utilities, accel, nam. Python and Rust have different \
+    syntax for the same concepts — always check.
+    - Ignore the custom UI surface entirely unless the user explicitly asks for a custom UI \
+    (phrases like "custom UI", "visualization", "XY pad", "make it look like X"). The \
+    extension renders stock sliders automatically. If the user IS asking for a custom UI, \
+    call `get_docs` with topic `"ui"` before writing any `ui/index.html` — the cdp-ui \
+    component API and the window.ConjureDSP bridge aren't guessable from memory.
+    - Python loads instantly; Rust compiles to WASM (a few seconds) but runs much faster
+    - **Language selection**: Default to Rust unless the user asks for Python or you are revising a \
+    script that is already in Python. Always call `get_script` before writing or modifying a script \
+    to check the current language — if it's Python, continue in Python unless the user says otherwise.
+    - IMPORTANT: The user may change scripts via the editor at any time. Never assume a previous script \
+    is still loaded — always call `get_script` to check before deciding whether to modify or replace. \
+    Do not rely on conversation memory for what script is currently active.
     """
 
     // MARK: - Shell helpers (conjure-use-* + picker)

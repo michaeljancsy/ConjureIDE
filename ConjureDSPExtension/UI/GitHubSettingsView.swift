@@ -19,6 +19,11 @@ struct RemoteSyncSettingsView: View {
     @State private var remoteURLInput = ""
     @State private var statusMessage: String?
     @State private var errorMessage: String?
+    /// Full stderr / diagnostic text for the current errorMessage, when the
+    /// failure came from PresetGitCoordinator and carried real detail.
+    /// Rendered below the summary in a scrollable block so the user can see
+    /// exactly what git complained about instead of staring at "push failed".
+    @State private var errorDetails: String?
     @State private var isWorking = false
 
     var body: some View {
@@ -42,9 +47,34 @@ struct RemoteSyncSettingsView: View {
                     .foregroundColor(.green)
             }
             if let msg = errorMessage {
-                Label(msg, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundColor(.red)
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(msg, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                    if let detail = errorDetails, !detail.isEmpty {
+                        ScrollView {
+                            Text(detail)
+                                .font(.system(.caption2, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 140)
+                        .padding(6)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                        )
+                        HStack {
+                            Button("Copy error details") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(msg + "\n\n" + detail, forType: .string)
+                            }
+                            .controlSize(.small)
+                            Spacer()
+                        }
+                    }
+                }
             }
 
             HStack {
@@ -162,6 +192,7 @@ struct RemoteSyncSettingsView: View {
                 Task {
                     isWorking = true
                     errorMessage = nil
+                    errorDetails = nil
                     let result = await gitCoordinator.pushIfRemoteConfigured()
                     isWorking = false
                     switch result {
@@ -169,6 +200,7 @@ struct RemoteSyncSettingsView: View {
                         statusMessage = "Pushed"
                     case .failure(let e):
                         errorMessage = e.localizedDescription
+                        errorDetails = (e as? PresetGitError)?.stderr
                     }
                 }
             }
@@ -178,6 +210,7 @@ struct RemoteSyncSettingsView: View {
                 Task {
                     isWorking = true
                     errorMessage = nil
+                    errorDetails = nil
                     let result = await gitCoordinator.clearRemote()
                     isWorking = false
                     remoteURLInput = ""
@@ -186,6 +219,7 @@ struct RemoteSyncSettingsView: View {
                         statusMessage = "Remote cleared"
                     case .failure(let e):
                         errorMessage = e.localizedDescription
+                        errorDetails = (e as? PresetGitError)?.stderr
                     }
                 }
             }
@@ -215,6 +249,7 @@ struct RemoteSyncSettingsView: View {
                 Task {
                     isWorking = true
                     errorMessage = nil
+                    errorDetails = nil
                     let result = await gitCoordinator.setRemote(url: remoteURLInput)
                     isWorking = false
                     switch result {
@@ -222,6 +257,7 @@ struct RemoteSyncSettingsView: View {
                         statusMessage = "Remote set"
                     case .failure(let e):
                         errorMessage = e.localizedDescription
+                        errorDetails = (e as? PresetGitError)?.stderr
                     }
                 }
             }

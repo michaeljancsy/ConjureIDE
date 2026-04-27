@@ -4,6 +4,7 @@
 //
 
 import AudioToolbox
+import Combine
 import Foundation
 import SwiftUI
 
@@ -29,8 +30,16 @@ final class ExportParameterState: ObservableObject {
     /// Static plugin identity snapshot. Passed through to the debug pane.
     let pluginInfo: PluginInfo
 
+    /// Fires ONLY when a parameter changes from an external source (DAW
+    /// automation, MIDI, preset load) — not when the UI writes via
+    /// `binding(for:)`. The custom-UI webview subscribes to this so
+    /// user-initiated slider drags don't echo back and fight themselves.
+    /// See ConjureDSPExtension/UI/ParameterState.swift for the full
+    /// rationale.
+    let externalValueChange = PassthroughSubject<(index: Int, value: Float), Never>()
+
     private var parameterTree: AUParameterTree?
-    private var observerToken: AUParameterObserverToken?
+    internal private(set) var observerToken: AUParameterObserverToken?
 
     init(
         paramCount: Int = 8,
@@ -59,12 +68,17 @@ final class ExportParameterState: ObservableObject {
             }
         }
 
-        // Observe changes from ANY source (DAW automation, MIDI learn, etc.)
+        // Observer fires ONLY for EXTERNAL changes because `binding(for:)`
+        // writes with this same token as originator — AU excludes the
+        // originator from its own callback. DAW automation / MIDI land
+        // here; UI writes don't.
         let count = paramCount
         observerToken = parameterTree.token(byAddingParameterObserver: { [weak self] address, value in
             guard Int(address) < count else { return }
             DispatchQueue.main.async {
-                self?.values[Int(address)] = value
+                guard let self else { return }
+                self.values[Int(address)] = value
+                self.externalValueChange.send((index: Int(address), value: value))
             }
         })
     }
@@ -78,17 +92,30 @@ final class ExportParameterState: ObservableObject {
     }
 
     /// Creates a binding for a specific parameter index.
-    /// The setter writes through `AUParameter.value`, which triggers
-    /// `implementorValueObserver` → `dsp_kernel_set_parameter()`.
+    /// Uses `setValue(_:originator:)` with our observer token so UI
+    /// writes don't re-fire our observer (and consequently don't echo
+    /// back into the custom-UI webview). Kernel still gets the write
+    /// via `implementorValueObserver`.
     func binding(for index: Int) -> Binding<Float> {
         Binding<Float>(
-            get: { self.values[index] },
+            get: {
+                // Bounds-check: custom-UI JS (`parameters.get(i)`) can
+                // pass any integer. Don't crash the exported appex on a
+                // misbehaving UI.
+                guard index >= 0, index < self.values.count else { return 0 }
+                return self.values[index]
+            },
             set: { newValue in
+                guard index >= 0, index < self.values.count else { return }
                 self.values[index] = newValue
                 if let param = self.parameterTree?.parameter(
                     withAddress: AUParameterAddress(index)
                 ) {
-                    param.value = newValue
+                    if let token = self.observerToken {
+                        param.setValue(newValue, originator: token)
+                    } else {
+                        param.value = newValue
+                    }
                 }
             }
         )

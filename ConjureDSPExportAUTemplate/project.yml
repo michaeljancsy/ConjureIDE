@@ -75,6 +75,13 @@ targets:
         OTHER_LDFLAGS:
           - "-lconjure_dsp"
           - "-lpython3.14t"
+          # libconjure_dsp.a calls into vDSP (Accelerate) via the conjuredsp
+          # accel module — NAM wavenet + vec_* helpers. The main extension
+          # links Accelerate implicitly via its own Swift imports, but the
+          # template has no Swift-side Accelerate calls, so the framework
+          # must be linked explicitly.
+          - "-framework"
+          - "Accelerate"
         GENERATE_INFOPLIST_FILE: NO
         ENABLE_APP_SANDBOX: YES
         LD_RUNPATH_SEARCH_PATHS:
@@ -92,18 +99,28 @@ targets:
     postBuildScripts:
       - name: Copy Python Dylib
         script: |
+          set -euo pipefail
+          # Mirrors the main extension's Copy Python Dylib phase — separate
+          # copy-skip from always-verify-then-resign so a silent first-time
+          # codesign failure can't leave an unsigned dylib in the appex.
+          # Hardened runtime rejects unsigned dylibs, and the resulting
+          # Py_Initialize abort produces exit 1 with no crash report.
           FRAMEWORKS_DIR="${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}"
+          SRC_DYLIB="${SRCROOT}/../rust/python-dist/lib/libpython3.14t.dylib"
+          DST_DYLIB="${FRAMEWORKS_DIR}/libpython3.14t.dylib"
           mkdir -p "${FRAMEWORKS_DIR}"
-
-          PYTHON_LIB="${SRCROOT}/../rust/python-dist/lib/libpython3.14t.dylib"
-          if [ -f "${PYTHON_LIB}" ]; then
-              cp "${PYTHON_LIB}" "${FRAMEWORKS_DIR}/"
-              if [ -n "${EXPANDED_CODE_SIGN_IDENTITY}" ]; then
+          if [ ! -f "${SRC_DYLIB}" ]; then
+              echo "warning: libpython3.14t.dylib not found at ${SRC_DYLIB}" >&2
+              exit 0
+          fi
+          if [ ! -f "${DST_DYLIB}" ] || [ "${SRC_DYLIB}" -nt "${DST_DYLIB}" ]; then
+              cp "${SRC_DYLIB}" "${DST_DYLIB}"
+          fi
+          if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
+              if ! codesign --verify --strict "${DST_DYLIB}" 2>/dev/null; then
                   codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" \
-                      "${FRAMEWORKS_DIR}/libpython3.14t.dylib"
+                      --options runtime --timestamp "${DST_DYLIB}"
               fi
-          else
-              echo "warning: libpython3.14t.dylib not found at ${PYTHON_LIB}" >&2
           fi
         outputFiles:
           - "$(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libpython3.14t.dylib"

@@ -11,6 +11,32 @@ import AppKit
 import Combine
 import QuartzCore
 
+// MARK: - Custom UI audio frames
+
+/// A tick-synchronous snapshot of audio activity, published to custom HTML/JS
+/// UIs via `window.ConjureDSP.audio.onFrame(...)`. Emitted by
+/// `AudioCaptureManager` once per display-link tick whenever at least one
+/// consumer is active.
+///
+/// `fftInDB` / `fftOutDB` are included only on ticks that produced a new FFT
+/// column (limited by the 50% hop size); on ticks without new FFT data the
+/// arrays are nil and subscribers should keep their last value.
+struct AudioFrame {
+    let rmsIn: Float
+    let rmsOut: Float
+    let peakIn: Float
+    let peakOut: Float
+    let fftInDB: [Float]?
+    let fftOutDB: [Float]?
+    /// Script-published telemetry slots, keyed by declared name (e.g.
+    /// `"Gr Db"` → -3.2). `nil` when the loaded preset declares no
+    /// telemetry — the common case for legacy scripts. `CustomUIWebView`
+    /// only attaches the field to its `audio.onFrame` payload when this
+    /// is non-nil and non-empty, so authors don't see a stub key.
+    let telemetry: [String: Float]?
+    let timestamp: CFTimeInterval
+}
+
 // MARK: - ColumnRingBuffer
 
 /// Pre-allocated contiguous ring buffer for FFT magnitude columns.
@@ -171,14 +197,36 @@ final class AudioCaptureManager: ObservableObject {
 
     // MARK: - State
 
-    /// When true, reads from ring buffers and computes FFT.
-    /// Setting to false stops the display link and disables capture in the kernel.
-    var isActive: Bool = false {
-        didSet {
-            guard isActive != oldValue else { return }
-            updateCaptureState()
-        }
+    /// True when at least one consumer (spectrogram panel, custom UI frame
+    /// subscriber, etc.) has registered interest. Computed from `consumers`.
+    private(set) var isActive: Bool = false
+
+    /// Ref-counted set of active consumers, keyed by a stable opaque id. A
+    /// consumer registers itself when it starts needing audio data and
+    /// unregisters when it no longer does. The display link + kernel capture
+    /// flag is gated on this set being non-empty.
+    private var consumers: Set<String> = []
+
+    /// Register or unregister a consumer. Idempotent per-id. Toggling the
+    /// overall set between empty and non-empty starts/stops the display link
+    /// and flips the kernel capture flag.
+    ///
+    /// `id` should be a stable string: `"spectrogram"` for the spectrogram
+    /// panel; a per-webview unique string (e.g. ObjectIdentifier hex) for
+    /// custom-UI audio-frame subscriptions.
+    func setConsumer(id: String, active: Bool) {
+        let wasActive = !consumers.isEmpty
+        if active { consumers.insert(id) } else { consumers.remove(id) }
+        let isActiveNow = !consumers.isEmpty
+        guard wasActive != isActiveNow else { return }
+        isActive = isActiveNow
+        updateCaptureState()
     }
+
+    /// Per-tick audio frames for custom-UI visualisations. Only emits while
+    /// capture is active; subscribing alone doesn't activate capture — call
+    /// `setConsumer(id:active:)` for that.
+    let audioFramePublisher = PassthroughSubject<AudioFrame, Never>()
 
     /// Reference to the Rust DSP kernel (set once after AU creation).
     var kernel: DSPKernelRef? {
@@ -235,6 +283,22 @@ final class AudioCaptureManager: ObservableObject {
     // Pre-allocated scratch buffers for FFT results (reused across tick calls)
     private var fftInputScratch:  [Float] = []
     private var fftOutputScratch: [Float] = []
+
+    // Telemetry: cached metadata + reusable read buffer.
+    // The cached-JSON string lets us re-parse names only when the
+    // kernel's metadata content changes (i.e. on script load), keeping
+    // the per-tick cost down to one C-string read + one Swift String
+    // equality check when telemetry is in use, zero when it isn't.
+    //
+    // Earlier we cached the raw pointer and compared addresses — that
+    // misses the case where the system allocator hands the new CString
+    // the same address as the freed old one, leaving stale slot names
+    // paired with new values. Comparing the JSON content costs one
+    // String() construction per tick (cheap; metadata strings are tiny)
+    // and is correctness-by-construction.
+    private var telemetryNames: [String] = []
+    private var lastTelemetryMetaJSON: String?
+    private var telemetryReadBuffer: [Float] = []
 
     // MARK: - Init
 
@@ -368,6 +432,21 @@ final class AudioCaptureManager: ObservableObject {
             UInt32(Self.maxReadSamples)
         ))
 
+        // RMS + peak from this tick's samples, for AudioFrame consumers.
+        // Zero-cost when no custom UI is subscribed (we skip emit below).
+        var rmsIn: Float = 0
+        var rmsOut: Float = 0
+        var peakIn: Float = 0
+        var peakOut: Float = 0
+        if inputCount > 0 {
+            vDSP_rmsqv(inputReadBuffer, 1, &rmsIn, vDSP_Length(inputCount))
+            vDSP_maxmgv(inputReadBuffer, 1, &peakIn, vDSP_Length(inputCount))
+        }
+        if outputCount > 0 {
+            vDSP_rmsqv(outputReadBuffer, 1, &rmsOut, vDSP_Length(outputCount))
+            vDSP_maxmgv(outputReadBuffer, 1, &peakOut, vDSP_Length(outputCount))
+        }
+
         if inputCount > 0 {
             inputAccumulator.append(contentsOf: inputReadBuffer[0..<inputCount])
         }
@@ -407,6 +486,86 @@ final class AudioCaptureManager: ObservableObject {
 
         if producedColumns {
             updateCounter &+= 1
+        }
+
+        // Snapshot script-published telemetry, if any. Kept in step with
+        // the kernel's cached metadata via pointer comparison so script
+        // reloads (which produce a new CString) automatically refresh
+        // the name list.
+        let telemetry: [String: Float]? = readTelemetry(kernel: kernel)
+
+        // Emit a frame for custom-UI subscribers. FFT arrays only ride along
+        // on ticks that produced a new column; otherwise nil. `send` on a
+        // subject with no observers is a cheap no-op, so there's no gate.
+        let fftIn: [Float]? = producedColumns ? fftInputScratch : nil
+        let fftOut: [Float]? = producedColumns ? fftOutputScratch : nil
+        audioFramePublisher.send(AudioFrame(
+            rmsIn: rmsIn,
+            rmsOut: rmsOut,
+            peakIn: peakIn,
+            peakOut: peakOut,
+            fftInDB: fftIn,
+            fftOutDB: fftOut,
+            telemetry: telemetry,
+            timestamp: CACurrentMediaTime()
+        ))
+    }
+
+    // MARK: - Telemetry
+
+    /// Snapshot the kernel's per-block telemetry slots into a name→value
+    /// dict. Returns nil when the loaded preset doesn't declare any
+    /// telemetry (the common case for legacy scripts), so consumers can
+    /// short-circuit. Cheap: a single CString pointer comparison + FFI
+    /// snapshot read when telemetry is active, no allocations or FFI
+    /// calls when it isn't.
+    private func readTelemetry(kernel: DSPKernelRef) -> [String: Float]? {
+        refreshTelemetryNamesIfChanged(kernel: kernel)
+        guard !telemetryNames.isEmpty else { return nil }
+
+        let n = Int(dsp_kernel_read_telemetry(
+            kernel,
+            &telemetryReadBuffer,
+            UInt32(telemetryReadBuffer.count)
+        ))
+        let count = min(n, telemetryNames.count)
+        guard count > 0 else { return nil }
+
+        var dict: [String: Float] = [:]
+        dict.reserveCapacity(count)
+        for i in 0..<count {
+            dict[telemetryNames[i]] = telemetryReadBuffer[i]
+        }
+        return dict
+    }
+
+    /// Re-read the kernel's telemetry metadata when it changes. Detected
+    /// by comparing the metadata JSON string against the previously
+    /// cached copy — the kernel rewrites this string on every script
+    /// load, so any content change forces a re-parse. Parses on the
+    /// display-link tick at most once per script load (rare).
+    private func refreshTelemetryNamesIfChanged(kernel: DSPKernelRef) {
+        let ptr = dsp_kernel_telemetry_metadata_json(kernel)
+        let currentJSON: String? = ptr.map { String(cString: $0) }
+        if currentJSON == lastTelemetryMetaJSON { return }
+        lastTelemetryMetaJSON = currentJSON
+        guard let json = currentJSON else {
+            telemetryNames = []
+            return
+        }
+        guard let data = json.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data)
+                as? [[String: Any]] else {
+            telemetryNames = []
+            return
+        }
+        telemetryNames = array.compactMap { $0["name"] as? String }
+        // Buffer must hold at least the full slot count so the FFI
+        // snapshot can fill it; pad to 8 (the kernel TELEMETRY_LEN) so
+        // we always pass a sensible capacity even if names trim short.
+        let needed = max(telemetryNames.count, 8)
+        if telemetryReadBuffer.count < needed {
+            telemetryReadBuffer = [Float](repeating: 0, count: needed)
         }
     }
 

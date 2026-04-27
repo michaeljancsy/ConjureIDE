@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 2,
+  "entry": "process.rs",
+  "language": "rust",
+  "params": [
+    { "name": "density",   "min": 0.0,   "max": 100.0,  "default": 40.0,   "unit": "%" },
+    { "name": "pitch",     "min": 0.0,   "max": 100.0,  "default": 55.0,   "unit": "%" },
+    { "name": "pitch_var", "min": 0.0,   "max": 100.0,  "default": 25.0,   "unit": "%" },
+    { "name": "syll_ms",   "min": 80.0,  "max": 500.0,  "default": 220.0,  "unit": "ms", "curve": "log" },
+    { "name": "repeats",   "min": 0.0,   "max": 100.0,  "default": 45.0,   "unit": "%" },
+    { "name": "tone",      "min": 800.0, "max": 6000.0, "default": 2800.0, "unit": "Hz", "curve": "log" },
+    { "name": "reverb",    "min": 0.0,   "max": 1.0,    "default": 0.65,   "unit": "" },
+    { "name": "night",     "min": 0.0,   "max": 1.0,    "default": 0.18,   "unit": "" },
+    { "name": "wet",       "min": 0.0,   "max": 1.0,    "default": 1.0,    "unit": "" }
+  ],
+  "ui": {
+    "entryHTML": "ui/index.html",
+    "width": 560,
+    "height": 420,
+    "fps": 30,
+    "audioFrames": true
+  }
+}

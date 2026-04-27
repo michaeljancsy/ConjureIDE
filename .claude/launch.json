@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "svf-ui",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8765", "--directory", ".claude/preview/svf"],
+      "port": 8765
+    },
+    {
+      "name": "compressor-ui",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8766", "--directory", ".claude/preview/compressor"],
+      "port": 8766
+    }
+  ]
+}

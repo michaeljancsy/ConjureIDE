@@ -241,7 +241,7 @@ struct ExportDSPIntegrationTests {
 
         // 1. Read and compile Rust passthrough preset
         let resourcesURL = try Self.extensionResourcesURL
-        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_passthrough_rust.rs"), encoding: .utf8)
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_passthrough_rust.cdp/process.rs"), encoding: .utf8)
         let wasmData = try Self.compileToWasm(source: source)
 
         // 2. Export
@@ -301,7 +301,7 @@ struct ExportDSPIntegrationTests {
 
         // 1. Read Python passthrough preset
         let resourcesURL = try Self.extensionResourcesURL
-        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_passthrough.py"), encoding: .utf8)
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_passthrough.cdp/process.py"), encoding: .utf8)
 
         // 2. Export
         let registry = ExportRegistry(registryURL: registryURL)
@@ -364,7 +364,7 @@ struct ExportDSPIntegrationTests {
 
         // 1. Read and compile Rust gainpan preset (has rich params)
         let resourcesURL = try Self.extensionResourcesURL
-        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_gainpan_rust.rs"), encoding: .utf8)
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_gainpan_rust.cdp/process.rs"), encoding: .utf8)
         let wasmData = try Self.compileToWasm(source: source)
 
         // 2. Export with param metadata
@@ -518,7 +518,7 @@ struct ExportDSPIntegrationTests {
         // Export Python preset
         let pyURL = try manager.exportPreset(
             name: "ConfigTest_Python_\(testId)",
-            source: "def process(inputs, outputs, frame_count, sample_rate, params): pass",
+            source: "def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry): pass",
             wasmData: nil,
             language: .python,
             templateURL: templateURL,
@@ -641,7 +641,7 @@ struct ExportDSPIntegrationTests {
     func namLstmPresetProducesCorrectAudio() throws {
         // 1. Compile NAM preset source to WASM
         let resourcesURL = try Self.extensionResourcesURL
-        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam_rust.rs"), encoding: .utf8)
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_nam_rust.cdp/process.rs"), encoding: .utf8)
         let wasmData = try Self.compileToWasm(source: source)
 
         // 2. Create kernel and load WASM
@@ -707,7 +707,7 @@ struct ExportDSPIntegrationTests {
     func namWavenetPresetProducesCorrectAudio() throws {
         // 1. Compile NAM preset source to WASM
         let resourcesURL = try Self.extensionResourcesURL
-        let source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam_rust.rs"), encoding: .utf8)
+        let source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_nam_rust.cdp/process.rs"), encoding: .utf8)
         let wasmData = try Self.compileToWasm(source: source)
 
         // 2. Create kernel and load WASM
@@ -788,7 +788,7 @@ struct ExportDSPIntegrationTests {
         // 1. Read Python NAM preset and replace the default tone3000 URL with a real absolute path
         let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/lstm_tiny.nam")
         let resourcesURL = try Self.extensionResourcesURL
-        var source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam.py"), encoding: .utf8)
+        var source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_nam.cdp/process.py"), encoding: .utf8)
         source = source.replacingOccurrences(of: "tone3000://19/56", with: namURL.path)
         #expect(source.contains(namURL.path), "Source should contain absolute NAM path after substitution")
 
@@ -850,7 +850,7 @@ struct ExportDSPIntegrationTests {
         // 1. Read Rust NAM preset and replace the default tone3000 URL with a real absolute path
         let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/lstm_tiny.nam")
         let resourcesURL = try Self.extensionResourcesURL
-        var source = try String(contentsOf: resourcesURL.appendingPathComponent("preset_nam_rust.rs"), encoding: .utf8)
+        var source = try String(contentsOf: resourcesURL.appendingPathComponent("presets/preset_nam_rust.cdp/process.rs"), encoding: .utf8)
         source = source.replacingOccurrences(of: "tone3000://19/56", with: namURL.path)
         #expect(source.contains(namURL.path), "Source should contain absolute NAM path after substitution")
 
@@ -957,7 +957,7 @@ struct ExportDSPIntegrationTests {
         let source = """
             from conjuredsp.nam import load_model
             model = load_model("/nonexistent/bogus/model.nam")
-            def process(inputs, outputs, frame_count, sample_rate, params):
+            def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
                 pass
             """
 
@@ -975,6 +975,368 @@ struct ExportDSPIntegrationTests {
                 skipSigning: true
             )
         }
+    }
+
+    // MARK: - Custom UI
+
+    /// Export a Python preset with a `ui/index.html` attached. Verify the
+    /// exported appex carries the UI files in Resources/ui/ and that
+    /// runtime-config.json has `hasCustomUI: true` plus a `ui` block. This
+    /// is the path that fails when a user exports a custom-UI preset and
+    /// finds a blank webview in their DAW.
+    @Test("Export preset with custom UI: ui/ copied, runtime-config has hasCustomUI + ui block")
+    func exportWithCustomUI() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        // 1. Build a fake bundle UI directory on disk with an index.html + asset.
+        let fm = FileManager.default
+        let fakeBundleUIDir = fm.temporaryDirectory
+            .appendingPathComponent("ExportUITestBundle_\(testId)")
+            .appendingPathComponent("ui", isDirectory: true)
+        try fm.createDirectory(at: fakeBundleUIDir, withIntermediateDirectories: true)
+        defer {
+            try? fm.removeItem(at: fakeBundleUIDir.deletingLastPathComponent())
+        }
+
+        let indexHTML = """
+            <!DOCTYPE html>
+            <html><body><h1>Custom</h1>
+            <script src="ui/assets/bridge.js"></script>
+            </body></html>
+            """
+        try indexHTML.write(
+            to: fakeBundleUIDir.appendingPathComponent("index.html"),
+            atomically: true, encoding: .utf8
+        )
+        let assetsDir = fakeBundleUIDir.appendingPathComponent("assets", isDirectory: true)
+        try fm.createDirectory(at: assetsDir, withIntermediateDirectories: true)
+        try "/* style */".write(
+            to: assetsDir.appendingPathComponent("style.css"),
+            atomically: true, encoding: .utf8
+        )
+
+        // 2. Source script — any simple Python will do; the UI is what we're
+        //    testing.
+        let source = """
+            def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+                for ch in range(len(inputs)):
+                    outputs[ch][:frame_count] = inputs[ch][:frame_count]
+            """
+
+        // 3. Export with a CustomUIPayload pointing at the fake ui/ tree.
+        let payload = ExportManager.CustomUIPayload(
+            directory: fakeBundleUIDir,
+            entryHTML: "index.html",
+            width: 520,
+            height: 260,
+            fps: 30,
+            audioFrames: false
+        )
+
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: "ExportTest_CustomUI_\(testId)",
+            source: source,
+            wasmData: nil,
+            language: .python,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true,
+            customUI: payload
+        )
+
+        // 4. Verify ui/ and its contents landed inside the appex.
+        let appexResources = appexResourcesPath(in: appURL)
+        let embeddedUI = appexResources.appendingPathComponent("ui", isDirectory: true)
+        #expect(fm.fileExists(atPath: embeddedUI.path),
+                "Exported appex must contain Resources/ui/ directory")
+
+        let embeddedIndex = embeddedUI.appendingPathComponent("index.html")
+        #expect(fm.fileExists(atPath: embeddedIndex.path),
+                "Exported appex must contain ui/index.html")
+        let embeddedIndexContents = try String(contentsOf: embeddedIndex, encoding: .utf8)
+        #expect(embeddedIndexContents == indexHTML,
+                "Embedded index.html should match source verbatim")
+
+        let embeddedAsset = embeddedUI.appendingPathComponent("assets/style.css")
+        #expect(fm.fileExists(atPath: embeddedAsset.path),
+                "Exported appex must preserve ui/assets/ subtree")
+
+        // 5. Verify runtime-config.json carries the hasCustomUI flag + ui block.
+        let configURL = appexResources.appendingPathComponent("runtime-config.json")
+        let configData = try Data(contentsOf: configURL)
+        guard let configJSON = try JSONSerialization.jsonObject(with: configData) as? [String: Any] else {
+            Issue.record("runtime-config.json could not be parsed as an object")
+            return
+        }
+        #expect(configJSON["hasCustomUI"] as? Bool == true,
+                "runtime-config.json must set hasCustomUI: true — without this the AU falls back to generic sliders")
+        guard let uiBlock = configJSON["ui"] as? [String: Any] else {
+            Issue.record("runtime-config.json missing `ui` block — the export template's RuntimeConfig.customUIEntryURL(in:) will return nil and render generic sliders")
+            return
+        }
+        #expect(uiBlock["entryHTML"] as? String == "index.html")
+        #expect(uiBlock["width"] as? Int == 520)
+        #expect(uiBlock["height"] as? Int == 260)
+        #expect(uiBlock["fps"] as? Int == 30)
+    }
+
+    /// The exported AU's WebContent process needs
+    /// `com.apple.security.network.client` or it crashes on launch with
+    /// "Application does not have permission to communicate with network
+    /// resources", causing the custom UI to render blank. This test reads
+    /// the entitlements embedded in the ExportTemplate.zip's signed appex
+    /// and fails loudly if that entitlement is missing.
+    ///
+    /// Does NOT require an export — inspects the template directly so it
+    /// catches an entitlements regression the moment the template is
+    /// rebuilt, not after a user tries to load an exported AU in a DAW.
+    @Test("Export template ships com.apple.security.network.client — required for WKWebView WebContent process")
+    func exportTemplateHasNetworkClientEntitlement() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory
+            .appendingPathComponent("ExportEntitlementsTest_\(UUID().uuidString.prefix(8))")
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tmp) }
+
+        // Unzip template into temp dir.
+        let unzip = Process()
+        unzip.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        unzip.arguments = ["-q", templateURL.path, "-d", tmp.path]
+        try unzip.run()
+        unzip.waitUntilExit()
+        #expect(unzip.terminationStatus == 0, "unzip failed")
+
+        let appexURL = tmp
+            .appendingPathComponent("ConjureDSPExportAUTemplate.app")
+            .appendingPathComponent("Contents/PlugIns/ConjureDSPExportAUTemplateExtension.appex")
+        guard fm.fileExists(atPath: appexURL.path) else {
+            Issue.record("Expected extracted appex at \(appexURL.path)")
+            return
+        }
+
+        // Read embedded entitlements via codesign.
+        let codesign = Process()
+        codesign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        codesign.arguments = ["-d", "--entitlements", "-", "--xml", appexURL.path]
+        let stdout = Pipe()
+        codesign.standardOutput = stdout
+        codesign.standardError = Pipe()
+        try codesign.run()
+        codesign.waitUntilExit()
+        #expect(codesign.terminationStatus == 0, "codesign failed with status \(codesign.terminationStatus)")
+
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        guard let xml = String(data: data, encoding: .utf8) else {
+            Issue.record("Entitlements output was not UTF-8")
+            return
+        }
+
+        // Text-based assertion is more robust than plist parsing across
+        // codesign's various output prefix formats (XML, CMS-wrapped XML,
+        // etc.). We're looking for the key followed by <true/>.
+        let pattern = #"<key>com\.apple\.security\.network\.client</key>\s*<true/>"#
+        #expect(xml.range(of: pattern, options: .regularExpression) != nil,
+                "Export template appex is MISSING com.apple.security.network.client — WKWebView's WebContent process will crash on launch in every exported AU. Add the entitlement to ConjureDSPExportAUTemplateExtension.entitlements and rebuild the template. Full entitlements dump: \(xml)")
+    }
+
+    /// End-to-end roundtrip: call the same `PresetManager.savePreset(scaffoldUI:)`
+    /// the UI's "+ Add Custom UI" / Save-As-with-Custom-UI paths use, then
+    /// export that bundle via `ExportManager`, then verify the ui/index.html
+    /// in the exported appex byte-for-byte matches `PresetBundle.starterIndexHTML()`.
+    ///
+    /// Catches three classes of regression in one shot:
+    ///   1. scaffoldUI produces an HTML file that drifts from the canonical
+    ///      `starterIndexHTML()` (e.g. someone edited the scaffold path).
+    ///   2. ExportManager drops or modifies the ui/ payload between source
+    ///      bundle and exported appex.
+    ///   3. The CSS/layout improvements we ship in `starterIndexHTML()`
+    ///      fail to reach the exported bundle.
+    ///
+    /// Doesn't verify visual rendering (WKWebView layout still needs a
+    /// DAW or manual test), but it eliminates the "did my change actually
+    /// propagate through save + export" question.
+    @Test("End-to-end: scaffoldUI save → export → starter HTML matches byte-for-byte")
+    @MainActor
+    func scaffoldSaveExportRoundtrip() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let fm = FileManager.default
+        let testId = UUID().uuidString.prefix(8)
+
+        // 1. Set up an isolated preset directory and save a bundle with
+        //    scaffoldUI: true — same path the in-plugin "+ Add Custom UI"
+        //    and Save-As-with-Custom-UI buttons take.
+        let presetsDir = fm.temporaryDirectory
+            .appendingPathComponent("RoundtripPresets_\(testId)", isDirectory: true)
+        try fm.createDirectory(at: presetsDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: presetsDir) }
+
+        guard let extensionBundleURL = Bundle.main.builtInPlugInsURL?
+                .appendingPathComponent("ConjureDSPExtension.appex"),
+              let extensionBundle = Bundle(url: extensionBundleURL) else {
+            Issue.record("Extension bundle not available")
+            return
+        }
+
+        let presetName = "RoundtripPreset_\(testId)"
+        let source = """
+            def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+                for ch in range(len(inputs)):
+                    outputs[ch][:frame_count] = inputs[ch][:frame_count]
+            """
+        let mgr = PresetManager(extensionBundle: extensionBundle, presetsURL: presetsDir)
+        let preset = try mgr.savePreset(
+            name: presetName, source: source,
+            language: .python, scaffoldUI: true
+        )
+        guard let savedBundleURL = preset.fileURL else {
+            Issue.record("Saved preset has no fileURL")
+            return
+        }
+
+        // 2. The bundle's ui/index.html must match starterIndexHTML() exactly.
+        let savedHTMLURL = savedBundleURL.appendingPathComponent("ui/index.html")
+        let savedHTML = try String(contentsOf: savedHTMLURL, encoding: .utf8)
+        let canonicalHTML = PresetBundle.starterIndexHTML()
+        #expect(savedHTML == canonicalHTML,
+                "Bundle's ui/index.html drifted from PresetBundle.starterIndexHTML() — the scaffold is writing something different than the source of truth")
+
+        // 3. Canonical HTML must include the markers that tie the starter
+        //    to the injected `cdp-ui` component library. If someone reverts
+        //    the library integration — swapping back to a hand-rolled slider
+        //    list or breaking the vertical centering layout — this fails
+        //    loudly instead of silently regressing.
+        #expect(canonicalHTML.contains("justify-content: center"),
+                "Starter HTML must center rows vertically (single-param UIs otherwise leave a huge empty region below the slider)")
+        #expect(canonicalHTML.contains("<cdp-panel auto"),
+                "Starter HTML must use the <cdp-panel auto> component from the injected cdp-ui library")
+
+        // 4. Build a CustomUIPayload from the saved bundle and run export.
+        guard let bundle = PresetBundle.load(from: savedBundleURL) else {
+            Issue.record("Failed to load saved bundle for export")
+            return
+        }
+        guard let uiDir = bundle.uiDirectoryURL else {
+            Issue.record("Saved bundle missing uiDirectoryURL despite scaffoldUI: true")
+            return
+        }
+        let uiMeta = bundle.manifest.ui
+        let payload = ExportManager.CustomUIPayload(
+            directory: uiDir,
+            entryHTML: {
+                let p = bundle.manifest.uiEntryHTMLPath
+                return p.hasPrefix("ui/") ? String(p.dropFirst(3)) : p
+            }(),
+            width: uiMeta?.width,
+            height: uiMeta?.height,
+            fps: bundle.manifest.resolvedFPS,
+            audioFrames: bundle.manifest.audioFramesEnabled
+        )
+
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? fm.removeItem(at: outputDir)
+            try? fm.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: "RoundtripExport_\(testId)",
+            source: source,
+            wasmData: nil,
+            language: .python,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true,
+            customUI: payload
+        )
+
+        // 5. The exported appex's ui/index.html must be byte-identical to
+        //    what we saved and to the canonical starter. If ExportManager
+        //    ever starts rewriting ui/* files, this catches it.
+        let exportedHTMLURL = appexResourcesPath(in: appURL)
+            .appendingPathComponent("ui/index.html")
+        let exportedHTML = try String(contentsOf: exportedHTMLURL, encoding: .utf8)
+        #expect(exportedHTML == savedHTML,
+                "Exported ui/index.html drifted from the saved bundle's copy")
+        #expect(exportedHTML == canonicalHTML,
+                "Exported ui/index.html drifted from PresetBundle.starterIndexHTML()")
+    }
+
+    /// Export without a custom UI must NOT produce a ui/ directory in the
+    /// appex and must NOT set hasCustomUI. Exists to prove the export path
+    /// is only invasive when explicitly opted into.
+    @Test("Export without custom UI leaves runtime-config.hasCustomUI unset and creates no ui/ directory")
+    func exportWithoutCustomUIIsClean() throws {
+        guard let templateURL = findRealTemplate() else {
+            print("Skipping: ExportTemplate.zip not found")
+            return
+        }
+
+        let testId = UUID().uuidString.prefix(8)
+        let (outputDir, registryURL) = try makeTempOutputDir(testId: String(testId))
+        defer {
+            try? FileManager.default.removeItem(at: outputDir)
+            try? FileManager.default.removeItem(at: registryURL.deletingLastPathComponent())
+        }
+
+        let source = """
+            def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+                pass
+            """
+
+        let registry = ExportRegistry(registryURL: registryURL)
+        let manager = ExportManager(registry: registry)
+        let appURL = try manager.exportPreset(
+            name: "ExportTest_NoCustomUI_\(testId)",
+            source: source,
+            wasmData: nil,
+            language: .python,
+            templateURL: templateURL,
+            outputDirectory: outputDir,
+            skipSigning: true
+        )
+
+        let appexResources = appexResourcesPath(in: appURL)
+        let fm = FileManager.default
+
+        // No ui/ embedded — either the directory doesn't exist, or the
+        // template shipped one and the exporter didn't touch it. A test
+        // that asserts absence of a `ui/index.html` is defensible either
+        // way, since the template shouldn't ship user-facing UI files.
+        let embeddedIndex = appexResources.appendingPathComponent("ui/index.html")
+        #expect(!fm.fileExists(atPath: embeddedIndex.path),
+                "Export without custom UI must not leave ui/index.html in appex")
+
+        let configURL = appexResources.appendingPathComponent("runtime-config.json")
+        let configData = try Data(contentsOf: configURL)
+        guard let configJSON = try JSONSerialization.jsonObject(with: configData) as? [String: Any] else {
+            Issue.record("runtime-config.json could not be parsed")
+            return
+        }
+        let hasCustomUI = configJSON["hasCustomUI"] as? Bool ?? false
+        #expect(!hasCustomUI,
+                "Export without custom UI must NOT set hasCustomUI — otherwise the template switches to the (empty) custom UI path")
     }
 }
 
@@ -1024,7 +1386,7 @@ struct ExportNamReferenceTests {
         let source = """
         from conjuredsp.nam import load_model
         model = load_model("tone3000://60092/351559")
-        def process(inputs, outputs, frame_count, sample_rate, params):
+        def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
             pass
         """
         #expect(ExportManager.containsNamReference(source: source, language: .python))
@@ -1055,7 +1417,7 @@ struct ExportNamReferenceTests {
 
     @Test func pythonWithoutNamReference() {
         let source = """
-        def process(inputs, outputs, frame_count, sample_rate, params):
+        def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
             outputs[:] = inputs * params["gain"]
         """
         #expect(!ExportManager.containsNamReference(source: source, language: .python))

@@ -334,7 +334,7 @@ struct SyntaxHighlighterTests {
     @Test func highlightsDefaultScript() {
         let theme = PythonSyntaxHighlighter.Theme.dark
         let source = """
-        def process(inputs, outputs, frame_count, sample_rate):
+        def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):
             for ch in range(len(inputs)):
                 outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5
         """

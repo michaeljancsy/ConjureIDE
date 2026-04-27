@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Compressor</title>
+  <style>
+    :root { color-scheme: light dark; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      font: 12px -apple-system, system-ui, sans-serif;
+      background: Canvas; color: CanvasText;
+    }
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      align-content: start;
+      gap: 10px;
+      padding: 14px 16px; box-sizing: border-box;
+    }
+    .head { display: flex; justify-content: space-between; align-items: baseline; }
+    .title {
+      font-weight: 600; letter-spacing: 0.02em;
+      text-transform: uppercase; font-size: 0.75em; opacity: 0.55;
+    }
+    .gr-readout { font-variant-numeric: tabular-nums; font-size: 1.05em; opacity: 0.85; }
+
+    /* Curve area: transfer-function canvas on the left, GR meter column on
+       the right so they share a fixed height and align baselines. */
+    .curve-row {
+      display: grid;
+      grid-template-columns: 1fr 26px;
+      gap: 10px;
+      min-height: 0;
+    }
+    .curve-wrap { position: relative; min-height: 0; }
+    #curve {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%; display: block;
+      border-radius: 6px;
+      background: color-mix(in srgb, CanvasText 6%, Canvas);
+    }
+    .meter { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .meter-bar {
+      position: relative; width: 12px; flex: 1 1 0;
+      background: color-mix(in srgb, CanvasText 8%, Canvas);
+      border-radius: 3px; overflow: hidden;
+    }
+    .meter-fill {
+      position: absolute; left: 0; right: 0; top: 0;
+      background: color-mix(in srgb, CanvasText 65%, transparent);
+      transition: height 60ms linear;
+    }
+    .meter-label {
+      font-size: 0.7em; opacity: 0.55;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+
+    /* Parameter rows use cdp-slider's native label | track | value grid so
+       every row's columns line up — labels left-aligned, tracks in the
+       middle, values right-aligned. Cleaner than the previous 5-up grid of
+       mini-sliders, and reads top-down like every other compressor UI. */
+    .controls { display: flex; flex-direction: column; gap: 2px; }
+    .controls cdp-slider {
+      --cdp-label-width: 90px;
+      --cdp-value-width: 72px;
+      --cdp-font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="head">
+    <span class="title">Transfer curve</span>
+    <span class="gr-readout" id="grReadout">GR 0.0 dB</span>
+  </div>
+  <div class="curve-row">
+    <div class="curve-wrap">
+      <canvas id="curve" width="800" height="500"></canvas>
+    </div>
+    <div class="meter">
+      <div class="meter-bar"><div class="meter-fill" id="grFill"></div></div>
+      <div class="meter-label">GR</div>
+    </div>
+  </div>
+  <div class="controls">
+    <cdp-slider param="threshold"></cdp-slider>
+    <cdp-slider param="ratio"></cdp-slider>
+    <cdp-slider param="makeup"></cdp-slider>
+    <cdp-slider param="attack"></cdp-slider>
+    <cdp-slider param="release"></cdp-slider>
+  </div>
+  <script>
+  (function () {
+    const CDP = window.ConjureDSP;
+    const canvas = document.getElementById('curve');
+    const ctx = canvas.getContext('2d');
+
+    function idx(key) {
+      // Case-insensitive so this UI serves both Python (lowercase)
+      // and Rust (uppercase from params!()) variants.
+      const low = String(key).toLowerCase();
+      for (let i = 0; i < CDP.parameters.count; i++) {
+        const m = CDP.parameters.metadata(i);
+        if (!m) continue;
+        if ((m.name && m.name.toLowerCase() === low) ||
+            (m.key && m.key.toLowerCase() === low)) return i;
+      }
+      return -1;
+    }
+
+    // Input dB axis: -60..0. Output dB: -60..+6 (lets makeup gain lift above zero).
+    const IN_MIN = -60, IN_MAX = 0;
+    const OUT_MIN = -60, OUT_MAX = 6;
+
+    // Resolve CanvasText to an actual rgb() string via a hidden probe;
+    // canvas 2D can't parse the `CanvasText` keyword directly, and
+    // CDP.theme isn't always reliable (WebView can be in dark mode even
+    // when CDP reports 'light').
+    function resolveFG() {
+      const probe = document.createElement('span');
+      probe.style.cssText = 'color: CanvasText; position: absolute; visibility: hidden;';
+      document.body.appendChild(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
+    }
+    let FG = resolveFG();
+    window.addEventListener('themechange', () => { FG = resolveFG(); scheduleCurve(); });
+
+    function drawCurve() {
+      const w = canvas.width = canvas.clientWidth * devicePixelRatio;
+      const h = canvas.height = canvas.clientHeight * devicePixelRatio;
+      if (w === 0 || h === 0) return;
+      ctx.clearRect(0, 0, w, h);
+      const padL = 28 * devicePixelRatio;   // left gutter for Y labels
+      const padR = 10 * devicePixelRatio;
+      const padT = 10 * devicePixelRatio;
+      const padB = 18 * devicePixelRatio;   // bottom for X labels
+      const iw = w - padL - padR, ih = h - padT - padB;
+
+      const xAt = (db) => padL + iw * (db - IN_MIN) / (IN_MAX - IN_MIN);
+      const yAt = (db) => padT + ih * (1 - (db - OUT_MIN) / (OUT_MAX - OUT_MIN));
+
+      // Grid every 12 dB, with axis labels along the edges.
+      ctx.strokeStyle = FG;
+      ctx.fillStyle = FG;
+      ctx.lineWidth = 1;
+      ctx.font = (10 * devicePixelRatio) + 'px -apple-system, system-ui, sans-serif';
+      ctx.textBaseline = 'middle';
+
+      ctx.globalAlpha = 0.1;
+      for (let db = IN_MIN; db <= IN_MAX; db += 12) {
+        ctx.beginPath(); ctx.moveTo(xAt(db), padT); ctx.lineTo(xAt(db), h - padB); ctx.stroke();
+      }
+      for (let db = OUT_MIN; db <= OUT_MAX; db += 12) {
+        ctx.beginPath(); ctx.moveTo(padL, yAt(db)); ctx.lineTo(w - padR, yAt(db)); ctx.stroke();
+      }
+      ctx.globalAlpha = 0.55;
+      // Y-axis labels — output dB at each horizontal grid line.
+      ctx.textAlign = 'right';
+      for (let db = OUT_MIN; db <= OUT_MAX; db += 12) {
+        ctx.fillText(String(db), padL - 4 * devicePixelRatio, yAt(db));
+      }
+      // X-axis labels — just the endpoints, to stay uncluttered.
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(IN_MIN + ' dB in', xAt(IN_MIN) + 12 * devicePixelRatio, h - padB + 3 * devicePixelRatio);
+      ctx.fillText(IN_MAX + ' dB in', xAt(IN_MAX) - 12 * devicePixelRatio, h - padB + 3 * devicePixelRatio);
+      ctx.textBaseline = 'middle';
+      ctx.globalAlpha = 1;
+
+      // 1:1 reference.
+      ctx.globalAlpha = 0.22;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(xAt(IN_MIN), yAt(IN_MIN)); ctx.lineTo(xAt(IN_MAX), yAt(IN_MAX)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+
+      const threshold = CDP.parameters.get(idx('threshold'));
+      const ratio = CDP.parameters.get(idx('ratio'));
+      const makeup = CDP.parameters.get(idx('makeup'));
+
+      // Compression transfer: output = min(input, threshold + (input - threshold)/ratio) + makeup
+      ctx.strokeStyle = FG;
+      ctx.lineWidth = 2.5 * devicePixelRatio;
+      ctx.beginPath();
+      const N = 200;
+      for (let i = 0; i <= N; i++) {
+        const x = IN_MIN + (IN_MAX - IN_MIN) * i / N;
+        const over = x - threshold;
+        const compressed = over > 0 ? threshold + over / ratio : x;
+        const y = compressed + makeup;
+        const px = xAt(x), py = yAt(y);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+
+      // Threshold marker.
+      ctx.globalAlpha = 0.45;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(xAt(threshold), padT); ctx.lineTo(xAt(threshold), h - padB); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+
+    const grFill = document.getElementById('grFill');
+    const grReadout = document.getElementById('grReadout');
+
+    let smoothedGR = 0;
+
+    function onFrame(frame) {
+      // Read the gain computer's actual per-block decision via the
+      // DSP→UI telemetry channel (set in process.rs). Replaces a
+      // peakIn/peakOut/makeup arithmetic estimate that under-reported
+      // during transients (the input peak arrives before the envelope
+      // follower has finished attacking) and depended on makeup gain
+      // for cancellation. Telemetry shows the actual reduction
+      // independent of makeup.
+      //
+      // Slot key matches the macro identifier verbatim — `telemetry!()`
+      // doesn't canonicalize names. Rust convention is
+      // SCREAMING_SNAKE_CASE.
+      const gr = (frame.telemetry && frame.telemetry['GR_DB']) || 0;
+      // Smooth the reading so the bar doesn't strobe.
+      smoothedGR = smoothedGR * 0.7 + gr * 0.3;
+      const clamped = Math.min(24, smoothedGR);
+      grFill.style.height = (clamped / 24 * 100) + '%';
+      grReadout.textContent = 'GR −' + smoothedGR.toFixed(1) + ' dB';
+    }
+
+    let raf = 0;
+    function scheduleCurve() {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; drawCurve(); });
+    }
+
+    function init() {
+      CDP.parameters.onAnyChange(scheduleCurve);
+      window.addEventListener('resize', scheduleCurve);
+      CDP.audio.onFrame(onFrame);
+      scheduleCurve();
+    }
+    if (CDP && CDP.ready) CDP.ready(init);
+    else window.addEventListener('ConjureDSPReady', init);
+  })();
+  </script>
+</body>
+</html>

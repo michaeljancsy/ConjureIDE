@@ -1,6 +1,12 @@
 import SwiftUI
 
-/// Popover for naming and saving a new preset.
+/// Popover for naming and saving (duplicating) a preset.
+///
+/// Save As is a "copy this preset with a new name" action — the UI type
+/// (Basic UI vs. Custom UI) is inherited from the source bundle, not chosen
+/// here. When the user wants a different UI type, `+ Add Custom UI` in the
+/// toggle bar flips an existing Basic-UI bundle, or New Preset picks both
+/// dimensions up front.
 ///
 /// When `commitMessageMode == .alwaysPrompt`, a commit-message field is shown
 /// below the name. An empty message falls back to `defaultCommitMessage(for:)`.
@@ -12,7 +18,9 @@ struct SaveAsPopover: View {
     let commitMessageMode: CommitMessageMode
     /// Pre-filled default text for the commit-message field (e.g. "Add <name>").
     let defaultCommitMessagePrefix: String
-    /// Called with the chosen name and an optional commit message (nil means "use default").
+    /// Called with the chosen name and optional commit message (nil = use
+    /// default). The caller forwards the source bundle's `hasCustomUI` into
+    /// `PresetManager.savePreset(scaffoldUI:)` — Save As no longer asks.
     let onSave: (_ name: String, _ commitMessage: String?) -> Void
     let onDontAskAgain: () -> Void
     let onCancel: () -> Void

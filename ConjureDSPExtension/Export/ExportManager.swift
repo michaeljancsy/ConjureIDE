@@ -7,6 +7,21 @@ private let log = Logger(subsystem: "com.MichaelJancsy.ConjureDSP", category: "E
 ///
 /// Pipeline: copy template → inject preset → patch plists → code sign → register.
 final class ExportManager {
+    /// Snapshot of a preset bundle's custom UI that the exporter should carry
+    /// into the exported AU. Callers construct this from
+    /// `PresetBundle.uiDirectoryURL` + `manifest.ui`; the exporter copies the
+    /// directory into `.appex/Contents/Resources/ui/` and writes matching
+    /// fields into `runtime-config.json` so the template AU knows to render
+    /// the custom UI instead of generic sliders.
+    struct CustomUIPayload {
+        let directory: URL
+        let entryHTML: String
+        let width: Int?
+        let height: Int?
+        let fps: Int?
+        let audioFrames: Bool
+    }
+
     enum ExportError: LocalizedError {
         case templateNotFound
         case missingWasmData
@@ -75,7 +90,8 @@ final class ExportManager {
         skipSigning: Bool = false,
         paramNames: [Int: String]? = nil,
         paramMetadata: [ConjureDSPExtensionAudioUnit.ParamMetadata]? = nil,
-        latencySamples: UInt32 = 0
+        latencySamples: UInt32 = 0,
+        customUI: CustomUIPayload? = nil
     ) throws -> URL {
         guard FileManager.default.fileExists(atPath: templateURL.path) else {
             throw ExportError.templateNotFound
@@ -118,8 +134,22 @@ final class ExportManager {
             appexResourcesURL: appexResourcesURL
         )
 
+        // 3c. Copy the preset bundle's custom UI into the appex Resources.
+        // The template AU reads from `.appex/Contents/Resources/ui/` via the
+        // same custom URL scheme used in the main extension — so the WebContent
+        // process never touches the host app's Application Support container
+        // and can't trip TCC prompts.
+        let carriedUI = try embedCustomUIIfProvided(
+            customUI: customUI, appexResourcesURL: appexResourcesURL
+        )
+
         // 4. Write runtime-config.json
-        let config = makeRuntimeConfig(name: name, language: language, paramNames: paramNames, paramMetadata: paramMetadata, latencySamples: latencySamples, namModelFile: namModelFile)
+        let config = makeRuntimeConfig(
+            name: name, language: language,
+            paramNames: paramNames, paramMetadata: paramMetadata,
+            latencySamples: latencySamples, namModelFile: namModelFile,
+            customUI: carriedUI
+        )
         try config.write(to: appexResourcesURL.appendingPathComponent("runtime-config.json"))
 
         // 5. Patch host app Info.plist
@@ -279,13 +309,50 @@ final class ExportManager {
         return destFileName
     }
 
+    /// Copy the preset bundle's `ui/` directory into the exported appex's
+    /// `Contents/Resources/ui/`. Returns the payload unchanged when the
+    /// source directory existed and was successfully copied; returns `nil`
+    /// when no custom UI was provided or when the source was empty/missing
+    /// (we log the warning and fall back to generic sliders — the author
+    /// can re-export once they add `ui/index.html`).
+    private func embedCustomUIIfProvided(
+        customUI: CustomUIPayload?, appexResourcesURL: URL
+    ) throws -> CustomUIPayload? {
+        guard let payload = customUI else { return nil }
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: payload.directory.path, isDirectory: &isDir), isDir.boolValue else {
+            log.warning("Custom UI directory missing at \(payload.directory.path, privacy: .public); export falls back to generic sliders")
+            return nil
+        }
+        let entryURL = payload.directory.appendingPathComponent(payload.entryHTML)
+        guard fm.fileExists(atPath: entryURL.path) else {
+            log.warning("Custom UI entry \(payload.entryHTML, privacy: .public) missing from bundle; export falls back to generic sliders")
+            return nil
+        }
+
+        let destUI = appexResourcesURL.appendingPathComponent("ui", isDirectory: true)
+        // Remove any pre-existing `ui/` from the template so we never ship
+        // a half-copy if the source changed between exports.
+        if fm.fileExists(atPath: destUI.path) {
+            try fm.removeItem(at: destUI)
+        }
+        do {
+            try fm.copyItem(at: payload.directory, to: destUI)
+        } catch {
+            throw ExportError.copyFailed("Custom UI copy failed: \(error.localizedDescription)")
+        }
+        return payload
+    }
+
     private func makeRuntimeConfig(
         name: String,
         language: ScriptLanguage,
         paramNames: [Int: String]?,
         paramMetadata: [ConjureDSPExtensionAudioUnit.ParamMetadata]? = nil,
         latencySamples: UInt32 = 0,
-        namModelFile: String? = nil
+        namModelFile: String? = nil,
+        customUI: CustomUIPayload? = nil
     ) -> Data {
         var config: [String: Any] = [
             "version": 1,
@@ -301,6 +368,22 @@ final class ExportManager {
 
         if let namFile = namModelFile {
             config["namModelFile"] = namFile
+        }
+
+        // Carry custom-UI info through to the template AU so it can render
+        // the preset's HTML page instead of generic sliders. `hasCustomUI`
+        // is the gate the view controller checks; the `ui` block mirrors
+        // the manifest's layout hints (width/height/fps/audioFrames).
+        if let ui = customUI {
+            config["hasCustomUI"] = true
+            var uiDict: [String: Any] = [
+                "entryHTML": ui.entryHTML,
+                "audioFrames": ui.audioFrames,
+            ]
+            if let w = ui.width { uiDict["width"] = w }
+            if let h = ui.height { uiDict["height"] = h }
+            if let fps = ui.fps { uiDict["fps"] = fps }
+            config["ui"] = uiDict
         }
 
         // Include rich metadata if available (v2 format)

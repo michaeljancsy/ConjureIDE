@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 2,
+  "entry": "process.py",
+  "language": "python",
+  "params": [
+    {
+      "name": "cutoff",
+      "min": 4,
+      "max": 70,
+      "default": 4,
+      "unit": "Hz",
+      "curve": "log"
+    }
+  ]
+}

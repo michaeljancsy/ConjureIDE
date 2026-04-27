@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 2,
+  "entry": "process.py",
+  "language": "python",
+  "params": [
+    {
+      "name": "rate",
+      "min": 10,
+      "max": 500,
+      "default": 100,
+      "unit": "ms",
+      "curve": "log"
+    }
+  ]
+}

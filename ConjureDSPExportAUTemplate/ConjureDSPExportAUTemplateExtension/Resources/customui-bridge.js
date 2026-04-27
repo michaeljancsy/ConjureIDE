@@ -1,0 +1,1 @@
+../../../ConjureDSPExtension/Resources/customui-bridge.js
