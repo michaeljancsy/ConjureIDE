@@ -1,5 +1,22 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "entry": "process.rs",
-  "language": "rust"
+  "language": "rust",
+  "params": [
+    {
+      "name": "threshold",
+      "min": -24.0,
+      "max": 0.0,
+      "default": -3.0,
+      "unit": "dB"
+    },
+    {
+      "name": "release",
+      "min": 10.0,
+      "max": 500.0,
+      "default": 100.0,
+      "unit": "ms",
+      "curve": "log"
+    }
+  ]
 }

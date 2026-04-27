@@ -57,7 +57,7 @@ class _S:
         self.gate_env = 1.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     global _st, _sr
     nch = len(inputs)
     if _st is None or _sr != sample_rate:

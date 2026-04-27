@@ -161,14 +161,14 @@ mod tests {
 
         let script_half = r#"
 import numpy as np
-def process(inputs, outputs, frame_count, sample_rate):
+def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):
     for ch in range(len(inputs)):
         outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5
 "#;
 
         let script_double = r#"
 import numpy as np
-def process(inputs, outputs, frame_count, sample_rate):
+def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):
     for ch in range(len(inputs)):
         outputs[ch][:frame_count] = inputs[ch][:frame_count] * 2.0
 "#;
@@ -205,7 +205,7 @@ import numpy as np
 call_count = 0
 instance_id = "{id}"
 
-def process(inputs, outputs, frame_count, sample_rate):
+def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):
     global call_count
     call_count += 1
     outputs[0][0] = float(call_count)
@@ -253,7 +253,7 @@ def process(inputs, outputs, frame_count, sample_rate):
             format!(
                 r#"
 import numpy as np
-def process(inputs, outputs, frame_count, sample_rate):
+def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):
     for ch in range(len(inputs)):
         outputs[ch][:frame_count] = inputs[ch][:frame_count] * {gain}
 "#
@@ -300,14 +300,14 @@ def process(inputs, outputs, frame_count, sample_rate):
 
         let script_passthrough = r#"
 import numpy as np
-def process(inputs, outputs, frame_count, sample_rate):
+def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):
     for ch in range(len(inputs)):
         outputs[ch][:frame_count] = inputs[ch][:frame_count]
 "#;
 
         let script_silence = r#"
 import numpy as np
-def process(inputs, outputs, frame_count, sample_rate):
+def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):
     for ch in range(len(inputs)):
         outputs[ch][:frame_count] = 0.0
 "#;
@@ -354,7 +354,7 @@ def process(inputs, outputs, frame_count, sample_rate):
         let script_a = r#"
 import numpy as np
 INSTANCE_MARKER = "I_AM_SCRIPT_A"
-def process(inputs, outputs, frame_count, sample_rate):
+def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):
     for ch in range(len(inputs)):
         outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5
 "#;
@@ -362,7 +362,7 @@ def process(inputs, outputs, frame_count, sample_rate):
         let script_b = r#"
 import numpy as np
 INSTANCE_MARKER = "I_AM_SCRIPT_B"
-def process(inputs, outputs, frame_count, sample_rate):
+def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):
     for ch in range(len(inputs)):
         outputs[ch][:frame_count] = inputs[ch][:frame_count] * 2.0
 "#;

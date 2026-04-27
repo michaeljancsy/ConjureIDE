@@ -55,7 +55,7 @@ class _S:
         self.lfo_flutter = LFO(sr, freq=7.0, waveform="sine")
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     global _st, _sr
     nch = len(inputs)
     if _st is None or _sr != sample_rate:

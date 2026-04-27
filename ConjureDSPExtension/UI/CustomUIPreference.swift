@@ -50,7 +50,12 @@ final class CustomUIPreference: ObservableObject {
         return keyPrefix + bundleKey
     }
 
-    private static func read(key: String?) -> Bool {
+    /// Read the persisted "show custom UI" preference for `key`. Default
+    /// is `true` (custom UI shows when one exists) for keys with no
+    /// stored value yet. Public so MCP handlers can report the
+    /// user-visible state of a bundle's toggle without instantiating a
+    /// CustomUIPreference observer.
+    static func read(key: String?) -> Bool {
         guard let storageKey = storageKey(key) else { return true }
         // Default true — if no explicit preference is stored, custom UIs
         // render. UserDefaults.bool returns false for missing keys, so

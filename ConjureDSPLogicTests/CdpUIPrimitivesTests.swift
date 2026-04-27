@@ -309,6 +309,60 @@ struct CdpUIPrimitivesTests {
         #expect(label == "5.00 kHz")
     }
 
+    /// `control()` should accept a param name string and resolve it to
+    /// the same control as the equivalent index — same loose-match
+    /// rules `<cdp-slider param="...">` already uses. Without this,
+    /// hand-rolled UIs that follow the obvious "I'll just use the
+    /// param name" pattern silently no-op (the inner onChange
+    /// registration ends up under the string key while real updates
+    /// fire under the index key — different buckets).
+    @Test func controlAcceptsParamNameString() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "Drive", "min": 0.0, "max": 24.0, "unit": "dB", "default": 6.0]
+        ])
+        let byIndex = ctx.evaluateScript("ConjureDSP.ui.control(0).index")!.toInt32()
+        let byName = ctx.evaluateScript("ConjureDSP.ui.control('Drive').index")!.toInt32()
+        #expect(byName == byIndex)
+        #expect(byName == 0)
+    }
+
+    /// Loose match: "low gain", "LOW_GAIN", "lowGain" all resolve to
+    /// the same parameter — same rule cdp-slider uses.
+    @Test func controlAcceptsLooseNameMatch() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "Low_Gain", "min": -12.0, "max": 12.0, "unit": "dB"]
+        ])
+        let withSpace = ctx.evaluateScript("ConjureDSP.ui.control('low gain').index")!.toInt32()
+        let withCamel = ctx.evaluateScript("ConjureDSP.ui.control('lowGain').index")!.toInt32()
+        let withUpper = ctx.evaluateScript("ConjureDSP.ui.control('LOW_GAIN').index")!.toInt32()
+        #expect(withSpace == 0)
+        #expect(withCamel == 0)
+        #expect(withUpper == 0)
+    }
+
+    /// Unknown name returns null — better than a no-op object that
+    /// silently swallows callbacks. Authors writing `if (c)
+    /// c.onChange(...)` are protected; authors blindly chaining get a
+    /// loud TypeError pointing at the typo line.
+    @Test func controlReturnsNullForUnknownName() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "Drive", "min": 0.0, "max": 24.0, "unit": "dB"]
+        ])
+        let result = ctx.evaluateScript("ConjureDSP.ui.control('Drvie')")
+        #expect(result?.isNull == true || result?.isUndefined == true)
+    }
+
+    /// Numeric strings ("0", "1") still work for backwards-compat
+    /// with code that reads attributes off DOM elements.
+    @Test func controlAcceptsNumericString() throws {
+        let ctx = try Self.makeContext(paramMetadata: [
+            ["name": "Drive", "min": 0.0, "max": 24.0, "unit": "dB"],
+            ["name": "Mix", "min": 0.0, "max": 1.0]
+        ])
+        let idx = ctx.evaluateScript("ConjureDSP.ui.control('1').index")!.toInt32()
+        #expect(idx == 1)
+    }
+
     // MARK: - formatValue edge cases
 
     @Test func formatValuePercentRoundsInteger() throws {
@@ -372,7 +426,7 @@ struct CdpUIPrimitivesTests {
         """)
         ctx.evaluateScript(try Self.loadLibrarySource())
         let tags = ctx.evaluateScript("definedTags.join(',')")!.toString()!
-        for expected in ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-panel"] {
+        for expected in ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-knob", "cdp-panel"] {
             #expect(tags.contains(expected), "expected \(expected) to be registered; got: \(tags)")
         }
     }

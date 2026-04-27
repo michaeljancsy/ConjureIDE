@@ -142,7 +142,6 @@ final class ParameterState: ObservableObject {
                 // guard before the array write. `paramCount` is 16 but
                 // `values.count` is authoritative.
                 guard index >= 0, index < self.values.count else { return }
-                // paramFlow.notice("[4.swift.binding.set] idx=\(index, privacy: .public) v=\(newValue, privacy: .public) hasToken=\(self.observerToken != nil, privacy: .public)")
                 self.values[index] = newValue
                 if let param = self.parameterTree?.parameter(
                     withAddress: AUParameterAddress(index)
@@ -155,8 +154,6 @@ final class ParameterState: ObservableObject {
                         // implementorValueObserver regardless.
                         param.value = newValue
                     }
-                } else {
-                    // paramFlow.notice("[4.swift.binding.set.NO_PARAM] idx=\(index, privacy: .public) — tree missing or address invalid")
                 }
             }
         )

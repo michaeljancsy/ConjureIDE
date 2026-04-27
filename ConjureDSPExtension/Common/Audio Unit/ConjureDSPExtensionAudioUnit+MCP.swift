@@ -55,7 +55,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             }
         case "get_parameters":
             Task { @MainActor in
-                let result = self.mcpGetParameters()
+                let result = self.mcpGetParameters(input: input)
                 completion(result.0, result.1)
             }
         case "get_audio_state":
@@ -70,7 +70,12 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             }
         case "save_preset":
             Task { @MainActor in
-                let result = self.mcpSavePresetImpl(input: input)
+                let result = await self.mcpSavePresetImpl(input: input)
+                completion(result.0, result.1)
+            }
+        case "duplicate_bundle":
+            Task { @MainActor in
+                let result = await self.mcpDuplicateBundleImpl(input: input)
                 completion(result.0, result.1)
             }
         case "toggle_bypass":
@@ -138,7 +143,25 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         let result = await compileAndRun(source: source)
         if result.success {
             mcpLastError = nil
-            var response: [String: Any] = ["success": true]
+            // After every successful MCP compile_and_run, force the
+            // param tree to reflect the kernel's freshly-extracted
+            // metadata. Otherwise, when the active preset has a
+            // declared `params` block in its manifest (every
+            // schemaVersion-2 bundle), `readParamNames()` returns
+            // early without rebuilding — the manifest takes priority,
+            // by design, so the UI renders correct defaults during a
+            // slow Rust compile. But MCP compile_and_run is an
+            // explicit "test this new code" intent. Without this
+            // explicit rebuild, an agent iterating with a fresh
+            // params!() macro sees `success: true` from the compile
+            // but `get_parameters` still shows the bundle's old
+            // params — the symptom Round 5b's agent worked around
+            // by always saving instead of compile_and_run.
+            let paramTreeRebuilt = self.rebuildParamTreeFromKernelIfChanged()
+            var response: [String: Any] = [
+                "success": true,
+                "param_tree_rebuilt": paramTreeRebuilt,
+            ]
             if let processTimeMs = result.processTimeMs, let budgetMs = result.budgetMs {
                 response["process_time_ms"] = String(format: "%.2f", processTimeMs)
                 response["budget_ms"] = String(format: "%.2f", budgetMs)
@@ -195,25 +218,86 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     }
 
     @MainActor
-    private func mcpGetParameters() -> (String, Bool) {
+    private func mcpGetParameters(input: [String: Any]) -> (String, Bool) {
         let metadata = currentParamMetadata
-        var params: [[String: Any]] = []
-        for i in 0..<Self.paramCount {
-            if let param = parameterTree?.parameter(withAddress: AUParameterAddress(i)) {
-                var entry: [String: Any] = [
-                    "index": i,
-                    "name": param.displayName,
-                    "value": Double(param.value),
-                    "min": Double(param.minValue),
-                    "max": Double(param.maxValue),
-                ]
-                if let meta = metadata, i < meta.count {
-                    entry["unit"] = meta[i].unit
-                }
-                params.append(entry)
-            }
+        let includeUnused = (input["include_unused"] as? Bool) ?? false
+
+        // Default behavior: when the script declares metadata, only
+        // surface the declared params. Generic Param 0..15 entries
+        // beyond `metadata.count` are kernel slots the script doesn't
+        // actually read — surfacing them used to confuse agents into
+        // thinking their PARAMS dict had been parsed when it hadn't.
+        // Legacy mode (no metadata declared at all) keeps returning
+        // all 16 since we can't tell which the script reads.
+        let limit: Int
+        if let meta = metadata, !includeUnused {
+            limit = meta.count
+        } else {
+            limit = Self.paramCount
         }
-        return (jsonStr(["parameters": params]), false)
+
+        var params: [[String: Any]] = []
+        for i in 0..<limit {
+            guard let param = parameterTree?.parameter(withAddress: AUParameterAddress(i)) else {
+                continue
+            }
+            let meta = metadata.flatMap { i < $0.count ? $0[i] : nil }
+            let style = meta?.style
+            let minD = Self.roundForDisplay(Double(param.minValue), range: Double(param.maxValue - param.minValue), style: style)
+            let maxD = Self.roundForDisplay(Double(param.maxValue), range: Double(param.maxValue - param.minValue), style: style)
+            let valueD = Self.roundForDisplay(Double(param.value), range: Double(param.maxValue - param.minValue), style: style)
+            var entry: [String: Any] = [
+                "index": i,
+                "name": param.displayName,
+                "value": valueD,
+                "min": minD,
+                "max": maxD,
+            ]
+            if let m = meta {
+                entry["unit"] = m.unit
+                if let style = m.style { entry["style"] = style }
+                if let options = m.options { entry["options"] = options }
+                entry["default"] = Self.roundForDisplay(Double(m.default), range: Double(m.max - m.min), style: m.style)
+                if let curve = m.curve { entry["curve"] = curve }
+            }
+            params.append(entry)
+        }
+
+        var response: [String: Any] = [
+            "parameters": params,
+            "count": params.count,
+            "total_slots": Self.paramCount,
+        ]
+        if metadata == nil {
+            response["legacy_mode"] = true
+        }
+        return (jsonStr(response), false)
+    }
+
+    /// Round a parameter value to a sensible display precision based on
+    /// the parameter's range. Eliminates the
+    /// "150.00001525878906 for default 150" cosmetic noise from the
+    /// AU's normalize/denormalize roundtrip while preserving meaningful
+    /// precision across multiple orders of magnitude.
+    ///
+    /// Rules:
+    /// - toggle / choice / integer styles → integer (rounded)
+    /// - range >= 1000 (freq, ms)         → 1 decimal
+    /// - range >= 10   (dB, pct, ratio)    → 2 decimals
+    /// - range >= 1    (mix, normalized)   → 4 decimals
+    /// - range <  1    (fine)               → 6 decimals
+    static func roundForDisplay(_ value: Double, range: Double, style: String?) -> Double {
+        if let style, style == "toggle" || style == "choice" || style == "integer" {
+            return value.rounded()
+        }
+        let absRange = abs(range)
+        let decimals: Int
+        if absRange >= 1000 { decimals = 1 }
+        else if absRange >= 10 { decimals = 2 }
+        else if absRange >= 1 { decimals = 4 }
+        else { decimals = 6 }
+        let factor = pow(10.0, Double(decimals))
+        return (value * factor).rounded() / factor
     }
 
     @MainActor
@@ -258,11 +342,23 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // "the one with the custom UI". loadBundle is cached for
             // factory presets so this doesn't re-parse the manifest
             // every time list_presets runs.
-            // Every preset is a bundle now (factory or user). Surface
-            // `has_custom_ui` so Claude Code can pick the right preset
-            // when a user asks for "the one with the custom UI".
-            // loadBundle is cached for factory presets so this doesn't
-            // re-parse the manifest every time list_presets runs.
+            //
+            // Broken bundles (manifest fails to parse, entry script
+            // missing, etc.) are kept in the list so users + agents can
+            // see them and diagnose, instead of silently disappearing.
+            // The shape carries a `broken: true` flag and an `error`
+            // string in that case; working bundles match the existing
+            // shape exactly (no `broken` / no `error` field).
+            if let brokenError = preset.brokenError {
+                return [
+                    "name": preset.name,
+                    "is_factory": preset.isFactory,
+                    "language": NSNull(),
+                    "has_custom_ui": false,
+                    "broken": true,
+                    "error": brokenError,
+                ]
+            }
             let bundle = pm.loadBundle(for: preset)
             return [
                 "name": preset.name,
@@ -275,35 +371,73 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     }
 
     @MainActor
-    private func mcpSavePresetImpl(input: [String: Any]) -> (String, Bool) {
+    private func mcpSavePresetImpl(input: [String: Any]) async -> (String, Bool) {
         guard let name = input["name"] as? String else {
             return (jsonStr(["error": "Missing required parameter: name"]), true)
         }
-        guard let source = scriptSource else {
-            return (jsonStr(["error": "No script loaded to save"]), true)
+
+        // Source precedence: explicit `source` param from the caller >
+        // kernel's current scriptSource > error. The explicit-source
+        // path lets the agent save from scratchpad state ("make me a
+        // compressor") in a single call without a prior
+        // compile_and_run. The fallback preserves today's "fork what's
+        // loaded" behavior (UI Save As, save from a loaded preset).
+        let suppliedSource = input["source"] as? String
+        let source = suppliedSource ?? scriptSource
+        guard let source else {
+            return (
+                jsonStr(["error": "Missing `source` parameter and no script is loaded in the kernel yet — pass the DSP source text you want the new preset to contain, or call compile_and_run first to load one."]),
+                true
+            )
         }
+
+        // Language precedence mirrors source: explicit > detect from
+        // source text > kernel's current language.
+        let language: ScriptLanguage = {
+            if let langStr = input["language"] as? String,
+               let parsed = ScriptLanguage(rawValue: langStr) {
+                return parsed
+            }
+            if suppliedSource != nil {
+                // New source text — detect from heuristics (fn process
+                // = rust, def process = python, etc.) so the bundle's
+                // entry extension matches the content.
+                return ScriptLanguage.detect(from: source)
+            }
+            return currentScriptLanguage
+        }()
+
         let scaffoldUI = (input["scaffold_ui"] as? Bool) ?? false
         let pm = presetManager
-
-        // Factory-only clone scope: if the user is currently on a factory
-        // preset, copy its entire .cdp/ tree (manifest + ui/ + assets)
-        // into the new user bundle so the agent inherits the factory's
-        // custom UI as a starting point for further write_bundle_file
-        // edits. User-preset flows get nil here and keep today's
-        // fresh-or-resave behavior.
-        let cloneFrom: PresetBundle? = {
-            guard let current = pm.currentPreset, current.isFactory else { return nil }
-            return pm.loadBundle(for: current)
-        }()
-        let factorySourceName: String? = cloneFrom.map { _ in pm.currentPreset?.name ?? "" }
 
         do {
             let preset = try pm.savePreset(
                 name: name, source: source,
-                language: currentScriptLanguage,
-                scaffoldUI: scaffoldUI,
-                cloneFrom: cloneFrom
+                language: language,
+                scaffoldUI: scaffoldUI
             )
+
+            // CRITICAL: apply the new bundle's manifest params BEFORE
+            // setCurrentPreset + compileAndRun. Fresh user bundles have
+            // no `params` block in manifest.json, so
+            // `resolvedParamMetadata()` returns nil. Passing nil clears
+            // the stale `manifestDeclaredMetadata` from the PREVIOUS
+            // preset — otherwise `readParamNames()` (called after the
+            // kernel reload) sees non-empty manifest metadata, runs the
+            // drift validator, and returns early WITHOUT rebuilding the
+            // parameter tree. Result: sliders keep showing the previous
+            // preset's params (e.g. SVF's cutoff + resonance) even
+            // though the kernel runs the new DSP.
+            //
+            // Same ordering rule as `selectPreset`: apply params before
+            // `setCurrentPreset` so SwiftUI's view update (which may
+            // recreate CustomUIWebView) sees the right metadata on the
+            // first `sendInit`.
+            if let newBundle = pm.loadBundle(for: preset) {
+                applyManifestParams(newBundle.manifest.resolvedParamMetadata())
+            } else {
+                applyManifestParams(nil)
+            }
 
             // Switch the plugin to the new bundle so follow-up
             // write_bundle_file calls edit it (instead of continuing
@@ -315,21 +449,203 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // factory name alongside the new user bundle.
             clearDAWCurrentPreset()
 
+            // Always reload the kernel from `source`, mirroring
+            // `selectPreset`'s post-state. Even when the kernel already
+            // has the same source (because the agent called
+            // `compile_and_run` earlier), the param-tree rebuild we
+            // just did via `applyManifestParams` can leave the
+            // kernel's parameter wiring inconsistent with the new
+            // tree — selecting the preset later "fixes" it because
+            // selectPreset reloads, but until then audio runs
+            // passthrough. Reloading unconditionally costs one
+            // compile (WasmCache hit for Rust, ~ms for Python) and
+            // guarantees disk + tree + kernel are coherent.
+            //
+            // On success, fan the new source out to Monaco via
+            // `scriptSourceDidChange`. Without this, the editor keeps
+            // showing the previous preset's source while the kernel
+            // runs the new DSP — the next ⌘R would silently overwrite
+            // the agent's change with the stale buffer. Mirrors the
+            // explicit publish in the `compile_and_run` MCP dispatch.
+            let result = await compileAndRun(source: source)
+            let kernelReloaded = result.success
+            let kernelError = result.success ? nil : result.error
+            if result.success {
+                var change = ScriptSourceChange(source: source, origin: .mcp)
+                change.processTimeMs = result.processTimeMs
+                change.budgetMs = result.budgetMs
+                scriptSourceDidChange.send(change)
+            }
+
+            // Top-level `success` reflects the WHOLE atomic operation:
+            // disk save AND kernel reload. The bundle was committed to
+            // disk and the current preset switched (those are tracked
+            // separately via `switched_current_preset` for callers that
+            // care to disambiguate), but if the kernel couldn't load
+            // the new source then audio is now broken — treating that
+            // as `success: true` is misleading and breaks the MCP
+            // tool-error contract. `isError` flips with `success` so
+            // MCP clients see this as a failed call when the kernel
+            // didn't reload.
+            //
+            // Round 9 of the agent UX experiment caught this: agent
+            // saved a preset whose `freq()` call had a bad kwarg, got
+            // back `success: true` + populated `kernel_error`, and
+            // was confused about whether their preset had really saved.
+            // Sentry comment 3142737220 flagged the same shape earlier
+            // but was misattributed as "resolved in 84d264c" (which is
+            // actually a docs-only commit — the fix never landed).
             var response: [String: Any] = [
-                "success": true,
+                "success": kernelReloaded,
                 "name": preset.name,
                 "switched_current_preset": true,
+                "kernel_reloaded": kernelReloaded,
             ]
-            if let src = factorySourceName, !src.isEmpty {
-                response["cloned_from_factory"] = src
-                response["note"] = "Copied the factory bundle's manifest + ui/ subtree. Edit ui/index.html via write_bundle_file to iterate on the inherited UI."
-            } else if scaffoldUI {
+            if let err = kernelError {
+                response["kernel_error"] = err
+            }
+            if scaffoldUI {
                 response["scaffolded_ui"] = true
                 response["note"] = "Starter ui/index.html written. Edit it via write_bundle_file to customize the custom HTML/JS UI."
             }
-            return (jsonStr(response), false)
+            return (jsonStr(response), !kernelReloaded)
         } catch {
             return (jsonStr(["error": "Failed to save preset: \(error.localizedDescription)"]), true)
+        }
+    }
+
+    /// Fork an existing preset bundle (factory or user) by copying the
+    /// FULL tree — manifest, ui/, ui/assets/, entry script — to a new
+    /// user bundle. Distinct from `save_preset`, which always produces
+    /// a stripped-down clone (just the entry script with a default
+    /// manifest, no UI/assets carried over).
+    ///
+    /// Optionally replaces the entry script after copying so the agent
+    /// can fork-and-modify in one tool call.
+    @MainActor
+    private func mcpDuplicateBundleImpl(input: [String: Any]) async -> (String, Bool) {
+        guard let sourceName = input["source_name"] as? String, !sourceName.isEmpty else {
+            return (jsonStr(["error": "Missing required parameter: source_name"]), true)
+        }
+        guard let destName = input["dest_name"] as? String, !destName.isEmpty else {
+            return (jsonStr(["error": "Missing required parameter: dest_name"]), true)
+        }
+        let newSource = input["new_source"] as? String
+
+        let pm = presetManager
+        guard let sourcePreset = pm.presets.first(where: { $0.name == sourceName }) else {
+            return (jsonStr(["error": "No preset named '\(sourceName)'. Use list_presets to see available names."]), true)
+        }
+        guard let sourceBundle = pm.loadBundle(for: sourcePreset) else {
+            return (jsonStr(["error": "Failed to load source bundle '\(sourceName)' from disk."]), true)
+        }
+
+        do {
+            let preset = try pm.duplicateBundle(
+                source: sourceBundle,
+                destName: destName,
+                replacingEntryWith: newSource
+            )
+
+            // Resolve the source FIRST so we can fail-fast on a read
+            // error before we mutate any AU-side state (param tree,
+            // current preset, kernel).
+            //
+            // We surface readSource() failures explicitly: a `try?`
+            // here would leave runSource empty, skip the kernel
+            // reload, and report success: true / kernel_reloaded:
+            // false with no explanation — exactly the "guess what
+            // went wrong" shape the agent UX experiment told us to
+            // avoid. (Earlier shape applied applyManifestParams
+            // BEFORE this check, so a read error left the param
+            // tree half-mutated even on the success: false return —
+            // Sentry flagged that as a partial-state bug.)
+            var sourceReadError: String? = nil
+            let runSource: String = {
+                if let newSource { return newSource }
+                guard let bundle = pm.loadBundle(for: preset) else {
+                    sourceReadError = "Could not re-load duplicated bundle from disk."
+                    return ""
+                }
+                do {
+                    return try bundle.readSource()
+                } catch {
+                    sourceReadError = "Could not read entry script from duplicated bundle: \(error.localizedDescription)"
+                    return ""
+                }
+            }()
+            if let err = sourceReadError {
+                return (jsonStr([
+                    "success": false,
+                    "error": err,
+                    "name": preset.name,
+                    "switched_current_preset": false,
+                    "kernel_reloaded": false,
+                ]), true)
+            }
+
+            // Now safe to mutate AU state. Same param-tree handoff
+            // as save_preset: apply the new bundle's manifest params
+            // BEFORE switching + reload, so readParamNames doesn't
+            // return early on stale priority metadata.
+            // duplicate_bundle COPIES the source's manifest, so
+            // manifest.params reflects whatever the source declared
+            // — that's the correct starting point for the fork.
+            if let newBundle = pm.loadBundle(for: preset) {
+                applyManifestParams(newBundle.manifest.resolvedParamMetadata())
+            } else {
+                applyManifestParams(nil)
+            }
+
+            pm.setCurrentPreset(preset, source: runSource)
+            clearDAWCurrentPreset()
+
+            var kernelReloaded = false
+            var kernelError: String? = nil
+            if !runSource.isEmpty {
+                let result = await compileAndRun(source: runSource)
+                kernelReloaded = result.success
+                kernelError = result.success ? nil : result.error
+                if result.success {
+                    var change = ScriptSourceChange(source: runSource, origin: .mcp)
+                    change.processTimeMs = result.processTimeMs
+                    change.budgetMs = result.budgetMs
+                    scriptSourceDidChange.send(change)
+                }
+            }
+
+            // If the agent supplied a new_source whose param shape
+            // differs from the copied manifest's params block, the
+            // tree needs to follow — same code path as compile_and_run.
+            let paramTreeRebuilt = self.rebuildParamTreeFromKernelIfChanged()
+
+            // Top-level `success` reflects the WHOLE atomic operation
+            // (mirrors save_preset b17506e): bundle copy + switch +
+            // kernel reload. If the kernel didn't reload, `success`
+            // is false and the MCP isError tuple element flips so
+            // clients see this as a failed call. The disk copy +
+            // current-preset switch are tracked separately
+            // (`switched_current_preset`) for callers that want to
+            // disambiguate.
+            var response: [String: Any] = [
+                "success": kernelReloaded,
+                "name": preset.name,
+                "switched_current_preset": true,
+                "kernel_reloaded": kernelReloaded,
+                "param_tree_rebuilt": paramTreeRebuilt,
+                "source_was_factory": sourcePreset.isFactory,
+            ]
+            if let err = kernelError {
+                response["kernel_error"] = err
+            }
+            if newSource != nil {
+                response["entry_replaced"] = true
+            }
+            return (jsonStr(response), !kernelReloaded)
+        } catch PresetManager.BundleFileError.alreadyExists {
+            return (jsonStr(["error": "A preset named '\(destName)' already exists. Pick a different dest_name or delete the existing one first."]), true)
+        } catch {
+            return (jsonStr(["error": "Failed to duplicate bundle: \(error.localizedDescription)"]), true)
         }
     }
 
@@ -342,11 +658,64 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     /// file list because write_bundle_file takes UTF-8 only.
     @MainActor
     private func mcpGetBundleInfo() -> (String, Bool) {
-        guard let preset = presetManager.currentPreset,
-              let bundle = presetManager.loadBundle(for: preset) else {
-            // Legacy single-file presets have no bundle view — surface
-            // that explicitly rather than returning an error.
-            return (jsonStr(["bundle": NSNull()]), false)
+        // Two no-bundle cases worth distinguishing for the agent. A bare
+        // `bundle: null` has historically left fresh agents guessing
+        // whether scratchpad mode is normal, something is broken, or
+        // they should call list_presets first. Surface the actual state
+        // and a one-line hint so the next tool call is obvious.
+        guard let preset = presetManager.currentPreset else {
+            // Scratchpad mode. The kernel may or may not have a script
+            // loaded; surface that too so the agent knows whether
+            // compile_and_run is needed before save_preset.
+            let kernelHasScript = scriptSource != nil
+            let hint: String
+            if kernelHasScript {
+                hint = "Scratchpad mode — no preset selected, but the kernel has a script loaded (use get_script to read it). Call save_preset(name, source) to commit it as a new preset, or duplicate_bundle to fork an existing preset and load THAT into the kernel."
+            } else {
+                hint = "Scratchpad mode — no preset selected and no script loaded. Call list_presets to see available bundles, duplicate_bundle to fork an existing one, or compile_and_run with source text to start authoring."
+            }
+            return (jsonStr([
+                "bundle": NSNull(),
+                "state": "scratchpad",
+                "kernel_has_script": kernelHasScript,
+                "hint": hint,
+            ]), false)
+        }
+        guard let bundle = presetManager.loadBundle(for: preset) else {
+            // currentPreset exists but the bundle on disk failed to
+            // load. Two sub-cases worth distinguishing:
+            //
+            //  1. `broken_manifest` — bundle directory is present and
+            //     contains a manifest.json, but the manifest fails to
+            //     decode (or `entry` points at a missing script). The
+            //     agent has a concrete fix path: read manifest.json,
+            //     find the bug, write it back. We re-run the loader
+            //     here to recover the underlying parse error.
+            //  2. `preset_unloadable` — fallback for everything else
+            //     (legacy single-file preset, missing root, etc.).
+            if let userURL = preset.fileURL {
+                if case .broken(_, _, let parseError) =
+                    PresetBundle.loadResult(from: userURL) {
+                    let manifestPath = userURL
+                        .appendingPathComponent(PresetManifest.filename).path
+                    return (jsonStr([
+                        "bundle": NSNull(),
+                        "state": "broken_manifest",
+                        "preset_name": preset.name,
+                        "is_factory": preset.isFactory,
+                        "manifest_path": manifestPath,
+                        "error": parseError,
+                        "hint": "currentPreset is '\(preset.name)' but its manifest.json (or entry script) is broken. Read the manifest with read_bundle_file('manifest.json'), fix the JSON / `entry` field, and write it back with write_bundle_file. Underlying error: \(parseError)",
+                    ]), false)
+                }
+            }
+            return (jsonStr([
+                "bundle": NSNull(),
+                "state": "preset_unloadable",
+                "preset_name": preset.name,
+                "is_factory": preset.isFactory,
+                "hint": "currentPreset is '\(preset.name)' but its bundle directory can't be loaded — it may be a legacy single-file preset, or its manifest.json is malformed. Use list_presets to verify what's on disk, or pick a different preset.",
+            ]), false)
         }
 
         let entries = BundleFilePickerEntries.entries(for: bundle)
@@ -378,6 +747,39 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             "files": files,
         ]
         if !uiInfo.isEmpty { bundleInfo["ui"] = uiInfo }
+
+        // user_visible_state — what the user is ACTUALLY seeing right
+        // now, not just what the bundle declares on disk. Lets the
+        // agent detect "I built it correctly but the user is staring
+        // at stale kernel code / a Basic UI fallback / an unsaved-edit
+        // asterisk" without having to ask.
+        var visibility: [String: Any] = [
+            "is_modified": presetManager.isModified,
+        ]
+        let onDiskSource = try? String(contentsOf: bundle.entryScriptURL, encoding: .utf8)
+        let kernelInSync: Bool = {
+            guard let disk = onDiskSource, let kernel = self.scriptSource else { return false }
+            return disk == kernel
+        }()
+        visibility["kernel_in_sync"] = kernelInSync
+        if bundle.hasCustomUI {
+            // Only meaningful when a custom UI exists. False = user
+            // toggled it off and is looking at the stock slider panel
+            // instead.
+            visibility["custom_ui_visible"] = CustomUIPreference.read(key: bundle.name)
+        }
+        var issues: [String] = []
+        if presetManager.isModified {
+            issues.append("isModified=true: host title bar shows the '*' modified marker; user sees this as 'unsaved changes'.")
+        }
+        if !kernelInSync {
+            issues.append("Kernel-loaded script differs from the bundle's entry script on disk; audio is running stale code. Call save_preset (or compile_and_run with the on-disk source) to resync.")
+        }
+        if bundle.hasCustomUI, CustomUIPreference.read(key: bundle.name) == false {
+            issues.append("Bundle ships a custom UI but the user has toggled it off; they're seeing the stock slider panel instead. The user can flip the toggle in the host UI's Custom UI bar.")
+        }
+        visibility["issues"] = issues
+        bundleInfo["user_visible_state"] = visibility
 
         return (jsonStr(["bundle": bundleInfo]), false)
     }
@@ -445,6 +847,24 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         if preset.isFactory {
             return (jsonStr(["error": "Factory presets are read-only. Save the preset with save_preset first to create an editable user bundle."]), true)
         }
+
+        // Pre-flight validation for manifest.json writes. A malformed
+        // manifest or one pointing at a missing `entry` file makes
+        // `PresetBundle.load` return nil — the bundle silently becomes
+        // unloadable, `get_bundle_info` reports `bundle: null`, and the
+        // agent perceives the preset as "dropped" even though
+        // `currentPreset` is still set. Catching the bad write here
+        // means the file never lands in a broken state, and the agent
+        // gets an actionable error instead of a mysterious unload.
+        if url.lastPathComponent == PresetManifest.filename {
+            if let errorMessage = PresetManifest.validateProposedWrite(
+                content: content,
+                bundleRoot: url.deletingLastPathComponent()
+            ) {
+                return (jsonStr(["error": errorMessage]), true)
+            }
+        }
+
         do {
             // Parent dirs may not exist yet — e.g. first write to
             // ui/assets/style.css in a bundle that only had ui/.
@@ -456,10 +876,35 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         } catch {
             return (jsonStr(["error": "Write failed: \(error.localizedDescription)"]), true)
         }
-        // Manifest edits can flip hasCustomUI on or off; refresh so the
-        // in-plugin UI toggle state tracks the new state.
-        if url.lastPathComponent == PresetManifest.filename {
-            presetManager.refreshPresets()
+        // Any bundle file write can flip what the host UI sees: a
+        // manifest edit can add/remove the `ui` block; writing
+        // ui/index.html for the first time (after manifest already
+        // declared `ui`) lands the file `hasCustomUI` is gated on; a
+        // ui/assets/* write doesn't change hasCustomUI but does
+        // affect what the live webview will reload. Refresh in all
+        // cases — re-enumerating the user presets dir + re-parsing
+        // the current manifest is cheap, and it guarantees
+        // `presetManager.currentBundle` reflects the on-disk state
+        // before the agent's next tool call (or the user's next
+        // glance at the toggle bar) reads it.
+        presetManager.refreshPresets()
+
+        let pathStr = (input["path"] as? String) ?? ""
+
+        // When the write lands the entry script payload, treat it as
+        // an explicit save — the disk now equals what the kernel will
+        // see on the next compile_and_run, so the dirty-flag baseline
+        // (`loadedSource`) needs to follow. Otherwise the canonical
+        // agent flow (write entry, then compile_and_run with the same
+        // text) flips isModified=true on the downstream
+        // scriptSourceDidChange echo. Look up the entry path on the
+        // refreshed bundle so an in-the-same-call manifest write that
+        // changed `entry` is honored.
+        let refreshedBundle = presetManager.currentPreset.flatMap {
+            presetManager.loadBundle(for: $0)
+        }
+        if let refreshedBundle, pathStr == refreshedBundle.manifest.entry {
+            presetManager.markEntryScriptSaved(content)
         }
 
         // For edits that could affect the custom UI (ui/*, manifest.json),
@@ -471,19 +916,19 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             "path": input["path"] ?? "",
             "bytes_written": content.utf8.count,
         ]
-        let pathStr = (input["path"] as? String) ?? ""
         let touchesUISurface = pathStr.hasPrefix("ui/")
             || pathStr == PresetManifest.filename
             || url.lastPathComponent == PresetManifest.filename
-        if touchesUISurface,
-           let refreshed = presetManager.currentPreset.flatMap({ presetManager.loadBundle(for: $0) }) {
-            response["validation"] = validationReportAsJSON(BundleUIValidator.validate(refreshed))
+        if touchesUISurface, let refreshedBundle {
+            response["validation"] = validationReportAsJSON(BundleUIValidator.validate(refreshedBundle))
         }
         return (jsonStr(response), false)
     }
 
     @MainActor
     private func mcpSmokeTestUI() async -> (String, Bool) {
+        mcpLog.info("[uaf-trace] smoke_test_ui.enter")
+        defer { mcpLog.info("[uaf-trace] smoke_test_ui.exit") }
         guard let preset = presetManager.currentPreset,
               let bundle = presetManager.loadBundle(for: preset) else {
             return (jsonStr(["error": "No current preset with a loadable bundle."]), true)

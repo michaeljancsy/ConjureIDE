@@ -52,7 +52,7 @@ class _S:
         self.comb_lp = [Biquad() for _ in range(nch)]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     global _st, _sr
     nch = len(inputs)
     if _st is None or _sr != sample_rate:

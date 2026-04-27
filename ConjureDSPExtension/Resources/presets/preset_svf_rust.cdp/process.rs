@@ -14,7 +14,7 @@ setup!();
 
 params! {
     CUTOFF = freq(),
-    RESONANCE = param(0.5, 10.0).default(1.0),
+    RESONANCE = param(0.5, 10.0).default(1.0).unit("Q"),
 }
 
 const MODE: usize = 0; // 0=LP, 1=HP, 2=BP, 3=Notch
@@ -28,11 +28,11 @@ static mut IC2EQ: [f64; MAX_CH] = [0.0; MAX_CH];
 pub extern "C" fn process(
     input: *const f32,
     output: *mut f32,
-    channels: i32,
+    channel_count: i32,
     frame_count: i32,
     sample_rate: f32,
 ) {
-    let ctx = ctx(input, output, channels, frame_count, sample_rate);
+    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

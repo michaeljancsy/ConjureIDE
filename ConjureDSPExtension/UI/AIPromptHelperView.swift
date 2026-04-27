@@ -190,7 +190,7 @@ struct AIPromptHelperView: View {
             parts.append("## Current Script\n\n```\n\(currentScript)\n```")
         }
 
-        parts.append("## ConjureDSP API Reference\n\n\(DSPDocumentation.allDocs)")
+        parts.append("## ConjureDSP API Reference\n\n\(DSPDocumentation.docs(for: lang))")
 
         parts.append(conventions)
 

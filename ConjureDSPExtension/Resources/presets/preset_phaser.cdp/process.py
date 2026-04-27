@@ -17,7 +17,7 @@ _ap_state = [[[0.0, 0.0] for _ in range(MAX_STAGES)] for _ in range(2)]
 _lfo_phase = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     Phaser — cascaded allpass filters with LFO-swept frequency.
 

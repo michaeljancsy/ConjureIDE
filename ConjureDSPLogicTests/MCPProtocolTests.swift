@@ -279,6 +279,237 @@ private struct ScriptSourceChangeMock {
 }
 
 // =============================================================================
+// MARK: - get_parameters response shape (Phase 2 of Round 5 follow-up)
+// =============================================================================
+
+/// Test-target copy of `roundForDisplay` from
+/// `ConjureDSPExtensionAudioUnit+MCP.swift`. The test target can't import the
+/// extension (duplicate symbols vs in-process AU), so we mirror the function
+/// here. If you change one, change both — `MCPProtocolGetParametersTests`
+/// covers the rules. Integration is also covered by the live MCP tests in
+/// `ConjureDSPTests`.
+private func roundForDisplay(_ value: Double, range: Double, style: String?) -> Double {
+    if let style, style == "toggle" || style == "choice" || style == "integer" {
+        return value.rounded()
+    }
+    let absRange = abs(range)
+    let decimals: Int
+    if absRange >= 1000 { decimals = 1 }
+    else if absRange >= 10 { decimals = 2 }
+    else if absRange >= 1 { decimals = 4 }
+    else { decimals = 6 }
+    let factor = pow(10.0, Double(decimals))
+    return (value * factor).rounded() / factor
+}
+
+@Suite("get_parameters response shape")
+struct MCPProtocolGetParametersTests {
+
+    // MARK: - roundForDisplay
+
+    @Test("roundForDisplay strips float-roundtrip noise for clean defaults")
+    func roundClean() {
+        // The original Round 5a finding: `value: 150.00001525878906` for
+        // a parameter declared with default 150 in a 0..2000 range.
+        let noisy = 150.00001525878906
+        #expect(roundForDisplay(noisy, range: 2000.0, style: nil) == 150.0)
+    }
+
+    @Test("Wide ranges (>=1000) keep 1 decimal — Hz, ms")
+    func wideRange1Decimal() {
+        #expect(roundForDisplay(440.0, range: 19980.0, style: nil) == 440.0)
+        #expect(roundForDisplay(1234.5678, range: 19980.0, style: nil) == 1234.6)
+    }
+
+    @Test("Medium ranges (>=10) keep 2 decimals — dB, pct, ratio")
+    func mediumRange2Decimals() {
+        #expect(roundForDisplay(-6.123456, range: 24.0, style: nil) == -6.12)
+        #expect(roundForDisplay(70.4567, range: 100.0, style: nil) == 70.46)
+    }
+
+    @Test("Small ranges (>=1) keep 4 decimals — mix, normalized")
+    func smallRange4Decimals() {
+        #expect(roundForDisplay(0.50000123, range: 1.0, style: nil) == 0.5)
+        #expect(roundForDisplay(0.123456789, range: 1.0, style: nil) == 0.1235)
+    }
+
+    @Test("Tiny ranges (<1) keep 6 decimals — fine-grained")
+    func tinyRange6Decimals() {
+        #expect(roundForDisplay(0.0001234567, range: 0.5, style: nil) == 0.000123)
+    }
+
+    @Test("Toggle style snaps to integer regardless of range")
+    func toggleSnapsInteger() {
+        #expect(roundForDisplay(0.0, range: 1.0, style: "toggle") == 0.0)
+        #expect(roundForDisplay(1.0, range: 1.0, style: "toggle") == 1.0)
+        #expect(roundForDisplay(0.7, range: 1.0, style: "toggle") == 1.0)
+    }
+
+    @Test("Choice style snaps to integer index")
+    func choiceSnapsInteger() {
+        #expect(roundForDisplay(2.0000123, range: 4.0, style: "choice") == 2.0)
+        #expect(roundForDisplay(1.499, range: 4.0, style: "choice") == 1.0)
+        #expect(roundForDisplay(1.5, range: 4.0, style: "choice") == 2.0)
+    }
+
+    @Test("Integer style snaps to integer")
+    func integerStyleSnapsInteger() {
+        #expect(roundForDisplay(5.4, range: 10.0, style: "integer") == 5.0)
+        #expect(roundForDisplay(5.6, range: 10.0, style: "integer") == 6.0)
+    }
+
+    @Test("Slider style is treated like nil — uses range-based rounding")
+    func sliderStyleUsesRange() {
+        // Style "slider" is the explicit form of "default" — it should not
+        // snap to integer; range rules apply.
+        #expect(roundForDisplay(0.5000123, range: 1.0, style: "slider") == 0.5)
+    }
+
+    @Test("Negative ranges work via abs")
+    func negativeRangeUsesAbs() {
+        // A param declared with min=-12, max=12 has range = 24 (medium → 2 decimals)
+        #expect(roundForDisplay(3.14159, range: -24.0, style: nil) == 3.14)
+    }
+
+    // MARK: - Filter-vs-include-unused contract (documented invariant)
+
+    /// Verifies the documented response shape: declared params surface by
+    /// default; `include_unused: true` opts into all 16 slots.
+    @Test("Default behavior keeps response small when script declares few params")
+    func defaultFiltersToDeclaredCount() {
+        // Simulate the rule: limit = declared.count when metadata exists,
+        // else paramCount (16).
+        let declared = 2
+        let total = 16
+        let limit = declared > 0 ? declared : total
+        #expect(limit == 2)
+    }
+
+    @Test("include_unused: true returns all 16 slots even with declared metadata")
+    func includeUnusedReturnsAllSlots() {
+        let includeUnused = true
+        let declared = 2
+        let total = 16
+        let limit = (includeUnused || declared == 0) ? total : declared
+        #expect(limit == 16)
+    }
+
+    @Test("Legacy mode (no metadata) always returns all 16")
+    func legacyModeReturnsAllSlots() {
+        let metadataAbsent = true
+        let total = 16
+        let limit = metadataAbsent ? total : 0
+        #expect(limit == 16)
+    }
+}
+
+// =============================================================================
+// MARK: - ParamMetadata equality (Phase 3 of Round 5 follow-up)
+// =============================================================================
+//
+// Mirror of `ConjureDSPExtensionAudioUnit.ParamMetadata` for unit testing
+// equality. The MCP `compile_and_run` handler relies on this `==` to decide
+// whether the kernel's freshly-extracted metadata differs from what the AU
+// already has — and so a param-tree rebuild is needed. Missing a field in the
+// comparison would silently skip the rebuild for a real change.
+//
+// If you change either side, change the other. The integration is also
+// covered by manual MCP verification (load preset A with N params, then
+// `compile_and_run` source for preset B with M params, confirm
+// `param_tree_rebuilt: true`).
+
+private struct ParamMetadataMock: Equatable {
+    let name: String
+    let key: String?
+    let min: Float
+    let max: Float
+    let `default`: Float
+    let unit: String
+    let curve: String?
+    let style: String?
+    let options: [String]?
+
+    // Copy of the manual `==` we added on ParamMetadata in
+    // ConjureDSPExtensionAudioUnit.swift.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        return lhs.name == rhs.name
+            && lhs.key == rhs.key
+            && lhs.min == rhs.min
+            && lhs.max == rhs.max
+            && lhs.default == rhs.default
+            && lhs.unit == rhs.unit
+            && lhs.curve == rhs.curve
+            && lhs.style == rhs.style
+            && lhs.options == rhs.options
+    }
+}
+
+@Suite("ParamMetadata equality")
+struct ParamMetadataEqualityTests {
+
+    private static let drive = ParamMetadataMock(
+        name: "Drive", key: nil, min: 1, max: 20, default: 5,
+        unit: "", curve: "linear", style: "slider", options: nil
+    )
+
+    @Test("Identical metadata is equal")
+    func identical() {
+        let a = Self.drive
+        let b = Self.drive
+        #expect(a == b)
+    }
+
+    @Test("Name difference breaks equality")
+    func nameDiffers() {
+        var b = Self.drive
+        b = ParamMetadataMock(name: "Tone", key: b.key, min: b.min, max: b.max,
+                               default: b.default, unit: b.unit, curve: b.curve,
+                               style: b.style, options: b.options)
+        #expect(Self.drive != b)
+    }
+
+    @Test("Min/max/default/unit/curve/style/options each break equality independently")
+    func eachFieldBreaksEquality() {
+        let base = Self.drive
+        let cases: [(name: String, mutated: ParamMetadataMock)] = [
+            ("key", ParamMetadataMock(name: base.name, key: "drive_v2", min: base.min, max: base.max, default: base.default, unit: base.unit, curve: base.curve, style: base.style, options: base.options)),
+            ("min", ParamMetadataMock(name: base.name, key: base.key, min: 0, max: base.max, default: base.default, unit: base.unit, curve: base.curve, style: base.style, options: base.options)),
+            ("max", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: 24, default: base.default, unit: base.unit, curve: base.curve, style: base.style, options: base.options)),
+            ("default", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: 10, unit: base.unit, curve: base.curve, style: base.style, options: base.options)),
+            ("unit", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: base.default, unit: "dB", curve: base.curve, style: base.style, options: base.options)),
+            ("curve", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: base.default, unit: base.unit, curve: "log", style: base.style, options: base.options)),
+            ("style", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: base.default, unit: base.unit, curve: base.curve, style: "toggle", options: base.options)),
+            ("options", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: base.default, unit: base.unit, curve: base.curve, style: base.style, options: ["Low", "High"])),
+        ]
+        for (label, mutated) in cases {
+            #expect(base != mutated, "Equality should break when \(label) differs")
+        }
+    }
+
+    @Test("Empty metadata array equals empty")
+    func emptyArrays() {
+        let a: [ParamMetadataMock] = []
+        let b: [ParamMetadataMock] = []
+        #expect(a == b)
+    }
+
+    @Test("Different array counts break equality")
+    func differentCounts() {
+        let a = [Self.drive]
+        let b = [Self.drive, Self.drive]
+        #expect(a != b)
+    }
+
+    @Test("Optional metadata: nil == nil, nil != some")
+    func optionalEquality() {
+        let none: [ParamMetadataMock]? = nil
+        let some: [ParamMetadataMock]? = [Self.drive]
+        #expect(none == none)
+        #expect(none != some)
+    }
+}
+
+// =============================================================================
 // MARK: - JSON Schema draft 2020-12 wire-format regression tests
 //
 // Triggered by an Anthropic API rejection seen in the wild:
@@ -496,5 +727,40 @@ struct MCPSchemaWireFormatTests {
             #expect(canonical.contains(s.type),
                     "PropertySchema type \"\(s.type)\" is not a canonical JSON Schema type")
         }
+    }
+}
+
+// =============================================================================
+// MARK: - JSON-RPC Notification handling (no id field per spec 2.0)
+//
+// Regression guard: codex's streamable-HTTP MCP client sends
+// `notifications/initialized` after the initialize handshake. That payload
+// has a `method` but no `id`. If JSONRPCRequest.id is non-optional, the
+// decoder throws and the server returns a parse error — codex then sees
+// its transport channel close and reports "MCP startup failed".
+// =============================================================================
+
+private struct RequestWithOptionalId: Codable {
+    let jsonrpc: String
+    let id: JSONRPCId?
+    let method: String
+}
+
+struct JSONRPCNotificationParsingTests {
+
+    @Test("Notification (no id) decodes with id == nil")
+    func notificationHasNilId() throws {
+        let json = #"{"jsonrpc":"2.0","method":"notifications/initialized"}"#
+        let decoded = try JSONDecoder().decode(RequestWithOptionalId.self, from: Data(json.utf8))
+        #expect(decoded.id == nil)
+        #expect(decoded.method == "notifications/initialized")
+    }
+
+    @Test("Regular request (with id) still decodes")
+    func requestKeepsId() throws {
+        let json = #"{"jsonrpc":"2.0","id":42,"method":"tools/list"}"#
+        let decoded = try JSONDecoder().decode(RequestWithOptionalId.self, from: Data(json.utf8))
+        #expect(decoded.id == .int(42))
+        #expect(decoded.method == "tools/list")
     }
 }

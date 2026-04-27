@@ -157,25 +157,43 @@ class PresetManager: ObservableObject {
 
         var result: [Preset] = []
         for url in bundleDirs {
-            guard let bundle = PresetBundle.load(from: url) else {
-                log.warning("Skipping malformed bundle at \(url.path, privacy: .public)")
+            switch PresetBundle.loadResult(from: url) {
+            case .ok(let bundle):
+                let name = bundle.name
+                let category: PresetCategory = {
+                    guard let raw = bundle.manifest.meta?.category else { return .other }
+                    return PresetCategory(rawValue: raw.lowercased()) ?? .other
+                }()
+                result.append(Preset(
+                    id: "user:\(name)",
+                    name: name,
+                    source: .user(url: url),
+                    factoryPresetNumber: nil,
+                    language: bundle.language,
+                    category: category,
+                    descriptionText: bundle.manifest.meta?.description,
+                    author: bundle.manifest.meta?.author
+                ))
+            case .broken(let name, let rootURL, let error):
+                // Surface broken bundles in the list with an error string
+                // so the browser can render them with a warning glyph and
+                // the user has a starting point for diagnosis. Without
+                // this, a hand-edited manifest with a typo (e.g. invalid
+                // JSON like `"height": 00`) makes the preset silently
+                // vanish from the list with no signal anywhere about why.
+                log.error("Broken bundle at \(rootURL.path, privacy: .public): \(error, privacy: .public)")
+                result.append(Preset(
+                    id: "user:\(name)",
+                    name: name,
+                    source: .user(url: rootURL),
+                    factoryPresetNumber: nil,
+                    language: .python, // best-effort guess — manifest is unparsable
+                    category: .other,
+                    brokenError: error
+                ))
+            case .notABundle:
                 continue
             }
-            let name = bundle.name
-            let category: PresetCategory = {
-                guard let raw = bundle.manifest.meta?.category else { return .other }
-                return PresetCategory(rawValue: raw.lowercased()) ?? .other
-            }()
-            result.append(Preset(
-                id: "user:\(name)",
-                name: name,
-                source: .user(url: url),
-                factoryPresetNumber: nil,
-                language: bundle.language,
-                category: category,
-                descriptionText: bundle.manifest.meta?.description,
-                author: bundle.manifest.meta?.author
-            ))
         }
         return result
     }
@@ -288,6 +306,24 @@ class PresetManager: ObservableObject {
         isModified = (newSource != loaded)
     }
 
+    /// The disk-truth equivalent of `setCurrentPreset(_:source:)` for
+    /// out-of-band writes that land an entry-script payload directly to
+    /// disk (MCP `write_bundle_file`). Without this, the typical agent
+    /// flow — `write_bundle_file('process.py', NEW)` followed by
+    /// `compile_and_run(NEW)` — leaves `loadedSource` set to the OLD
+    /// content from the bundle's prior load. The downstream
+    /// `scriptSourceDidChange` echo from `compile_and_run` then drives
+    /// `scriptDidChange(NEW)`, which compares NEW to the stale
+    /// `loadedSource` (OLD) and flips `isModified = true` even though
+    /// kernel and disk are perfectly in sync. Updating `loadedSource`
+    /// here makes the comparison a no-op and keeps the dirty flag
+    /// honest. `selectPreset` / `save_preset` don't need an analogous
+    /// call because they go through `setCurrentPreset` first.
+    func markEntryScriptSaved(_ content: String) {
+        loadedSource = content
+        isModified = false
+    }
+
     /// Record that the debounced editor has written `url` to disk. The main
     /// view calls this after each successful `scheduleAltFileSave` write so
     /// the UI can reflect "save available" without requiring a commit.
@@ -312,13 +348,19 @@ class PresetManager: ObservableObject {
     /// already authored — we capture the subtree, rewrite the bundle, and
     /// restore ui files. The scaffold flag is a no-op in that case (the
     /// user already has a UI to keep).
+    ///
+    /// No implicit cloning. If a caller wants the new bundle to inherit
+    /// content from another preset (factory or user), it reads the files
+    /// it cares about and writes them into the new bundle afterwards.
+    /// Keeping save_preset minimal avoids the manifest-vs-source
+    /// mismatch that auto-cloning a factory bundle used to produce when
+    /// the new source declared different params.
     @discardableResult
     func savePreset(
         name: String,
         source: String,
         language: ScriptLanguage = .python,
-        scaffoldUI: Bool = false,
-        cloneFrom: PresetBundle? = nil
+        scaffoldUI: Bool = false
     ) throws -> Preset {
         let sanitized = sanitizeFilename(name)
         guard !sanitized.isEmpty else {
@@ -331,22 +373,12 @@ class PresetManager: ObservableObject {
 
         let bundleExists = fileManager.fileExists(atPath: bundleURL.path)
 
-        // Three branches:
+        // Two branches:
         //
         //  1. Target bundle already exists → re-save. Preserve manifest
-        //     and ui/; overwrite entry script only. `cloneFrom` is ignored
-        //     because the existing user bundle's state wins. Same as the
-        //     pre-cloneFrom behavior.
-        //  2. Target doesn't exist AND cloneFrom is non-nil → fork. Copy
-        //     the source bundle's .cdp/ tree verbatim, then overwrite its
-        //     entry script with `source`. `scaffoldUI` is ignored — the
-        //     source's ui/ is authoritative (present or absent).
-        //  3. Target doesn't exist AND cloneFrom is nil → fresh bundle
-        //     with manifest + script + optional starter ui/index.html.
-        //
-        // Only the MCP save_preset handler currently passes `cloneFrom`,
-        // and only when the current preset is a factory bundle; user-
-        // preset flows (UI Save As, Cmd+S) keep the nil default.
+        //     and ui/; overwrite entry script only.
+        //  2. Target doesn't exist → fresh bundle with manifest + script
+        //     + optional starter ui/index.html.
         if bundleExists {
             let manifestURL = bundleURL.appendingPathComponent(PresetManifest.filename)
             let existingManifest: PresetManifest? = {
@@ -388,26 +420,6 @@ class PresetManager: ObservableObject {
             }
 
             log.info("Updated user bundle (preserved manifest): \(bundleURL.path, privacy: .public)")
-        } else if let sourceBundle = cloneFrom {
-            // Fork: copy the whole .cdp/ tree (manifest, ui/, assets),
-            // then overwrite the entry script. This is how MCP
-            // save_preset forks a factory preset — the resulting user
-            // bundle starts with the factory's exact UI + manifest so
-            // subsequent write_bundle_file calls can iterate on it.
-            try copyBundleTree(from: sourceBundle.rootURL, to: bundleURL)
-            // Re-read the manifest from the copy to find the correct
-            // entry path (the factory may have used process.rs vs .py).
-            let clonedManifestURL = bundleURL.appendingPathComponent(PresetManifest.filename)
-            let clonedManifest: PresetManifest = {
-                guard let data = try? Data(contentsOf: clonedManifestURL),
-                      let m = try? JSONDecoder().decode(PresetManifest.self, from: data)
-                else { return PresetBundle.defaultManifest(language: language, includeUI: false) }
-                return m
-            }()
-            let scriptURL = bundleURL.appendingPathComponent(clonedManifest.entry)
-            try source.write(to: scriptURL, atomically: true, encoding: .utf8)
-            AppGroupContainer.stripQuarantine(at: scriptURL)
-            log.info("Forked bundle from \(sourceBundle.name, privacy: .public) → \(bundleURL.path, privacy: .public)")
         } else {
             try fileManager.createDirectory(at: bundleURL, withIntermediateDirectories: true)
             AppGroupContainer.stripQuarantine(at: bundleURL)
@@ -439,8 +451,10 @@ class PresetManager: ObservableObject {
         return preset
     }
 
-    /// Copy a bundle directory tree in its entirety. Used by the fork
-    /// path in `savePreset(cloneFrom:)` and by `duplicateFactoryBundle`.
+    /// Copy a bundle directory tree in its entirety. Used by
+    /// `duplicateFactoryBundle` (the right-click "Duplicate bundle and
+    /// edit this file" UI path — a deliberate user action that copies
+    /// the whole tree, distinct from `savePreset`'s fresh-bundle path).
     /// Caller is responsible for ensuring `dest` doesn't already exist.
     private func copyBundleTree(from src: URL, to dest: URL) throws {
         try fileManager.copyItem(at: src, to: dest)
@@ -789,6 +803,68 @@ class PresetManager: ObservableObject {
             throw PresetManagerError.saveFailed
         }
         return forked
+    }
+
+    /// Duplicate a source bundle (factory OR user) into a new user bundle
+    /// with an explicit destination name. Mirrors the right-click
+    /// "Duplicate bundle" UI path but exposes an explicit `destName`
+    /// instead of auto-generating "Copy of …".
+    ///
+    /// Used by the MCP `duplicate_bundle` tool so an agent can fork a
+    /// preset (typically a factory it wants to extend) and end up with a
+    /// FULL copy of the bundle — manifest, ui/, ui/assets/, entry script
+    /// — in one tool call. Without this, agents have only `save_preset`,
+    /// which produces a stripped-down clone (just the entry script with
+    /// a default manifest), silently losing the source bundle's UI.
+    ///
+    /// Optionally replaces the entry script after copying — useful when
+    /// the agent's intent is "fork this and run my modified DSP." The
+    /// caller is still responsible for any subsequent manifest edits
+    /// (e.g. updating the params block to match new metadata).
+    @discardableResult
+    func duplicateBundle(
+        source: PresetBundle,
+        destName: String,
+        replacingEntryWith newSource: String? = nil
+    ) throws -> Preset {
+        let sanitized = sanitizeFilename(destName)
+        guard !sanitized.isEmpty else {
+            throw PresetManagerError.invalidName
+        }
+        let destURL = presetsURL.appendingPathComponent(
+            "\(sanitized).\(PresetBundle.bundleExtension)",
+            isDirectory: true
+        )
+        guard !fileManager.fileExists(atPath: destURL.path) else {
+            throw BundleFileError.alreadyExists
+        }
+        try copyBundleTree(from: source.rootURL, to: destURL)
+
+        // Optional entry replacement. The destination's entry path is
+        // taken from the COPIED manifest (not the source's in-memory
+        // bundle, which could be stale if loaded from a cache). Using
+        // the on-disk manifest also respects any intentional drift
+        // between the source's manifest and entry filename.
+        if let newSource {
+            let manifestURL = destURL.appendingPathComponent(PresetManifest.filename)
+            let manifest: PresetManifest = {
+                if let data = try? Data(contentsOf: manifestURL),
+                   let parsed = try? JSONDecoder().decode(PresetManifest.self, from: data) {
+                    return parsed
+                }
+                return source.manifest
+            }()
+            let entryURL = destURL.appendingPathComponent(manifest.entry)
+            try newSource.write(to: entryURL, atomically: true, encoding: .utf8)
+            AppGroupContainer.stripQuarantine(at: entryURL)
+        }
+
+        refreshPresets()
+        guard let preset = presets.first(where: { $0.id == "user:\(sanitized)" }) else {
+            throw PresetManagerError.saveFailed
+        }
+        log.info("Duplicated bundle \(source.name, privacy: .public) -> \(sanitized, privacy: .public)")
+        return preset
     }
 
     // MARK: - Delete

@@ -27,8 +27,19 @@ final class WebSocketServer {
     /// Called when the listener is ready and the port is available.
     var onReady: ((UInt16) -> Void)?
 
+    /// Text to send to the first client that connects (e.g. welcome banner).
+    var pendingBanner: String?
+
+    /// JSON control message to send to the first client that connects (alongside pendingBanner).
+    var pendingControlMessage: Data?
+
     private var listener: NWListener?
     private var clients: [ObjectIdentifier: NWConnection] = [:]
+    /// Clients that have successfully received at least one WebSocket frame,
+    /// proving the upgrade handshake completed. Raw TCP probes (e.g. from
+    /// DaemonStatusChecker.canConnect) never graduate into this set, so the
+    /// banner/control-message queue correctly waits for a real xterm client.
+    private var verifiedClients: Set<ObjectIdentifier> = []
 
     // MARK: - Lifecycle
 
@@ -75,12 +86,13 @@ final class WebSocketServer {
         port = nil
     }
 
-    /// Send data to all connected clients (pty output → xterm.js).
+    /// Send data to all verified clients (pty output → xterm.js).
     func broadcast(_ data: Data) {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
         let context = NWConnection.ContentContext(identifier: "ws", metadata: [metadata])
 
-        for (id, client) in clients {
+        for id in verifiedClients {
+            guard let client = clients[id] else { continue }
             client.send(content: data, contentContext: context, completion: .contentProcessed { [weak self] error in
                 if let error {
                     wsLog.debug("Failed to send to client: \(error.localizedDescription, privacy: .public)")
@@ -92,13 +104,30 @@ final class WebSocketServer {
         }
     }
 
-    /// Send a text message to all connected clients.
+    /// Send a JSON control message to all verified clients.
+    func broadcastJSON(_ dict: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        let context = NWConnection.ContentContext(identifier: "ws", metadata: [metadata])
+        for id in verifiedClients {
+            guard let client = clients[id] else { continue }
+            client.send(content: data, contentContext: context, completion: .contentProcessed { [weak self] error in
+                if let error {
+                    wsLog.debug("Failed to send JSON to client: \(error.localizedDescription, privacy: .public)")
+                    DispatchQueue.main.async { self?.removeClient(id) }
+                }
+            })
+        }
+    }
+
+    /// Send a text message to all verified clients.
     func broadcastText(_ text: String) {
         guard let data = text.data(using: .utf8) else { return }
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "ws", metadata: [metadata])
 
-        for (id, client) in clients {
+        for id in verifiedClients {
+            guard let client = clients[id] else { continue }
             client.send(content: data, contentContext: context, completion: .contentProcessed { [weak self] error in
                 if let error {
                     wsLog.debug("Failed to send text to client: \(error.localizedDescription, privacy: .public)")
@@ -110,7 +139,9 @@ final class WebSocketServer {
         }
     }
 
-    var clientCount: Int { clients.count }
+    /// Count of clients that have completed the WebSocket handshake (verified).
+    /// Raw TCP probes are NOT counted.
+    var clientCount: Int { verifiedClients.count }
 
     // MARK: - Private
 
@@ -133,7 +164,10 @@ final class WebSocketServer {
         let id = ObjectIdentifier(connection)
         clients[id] = connection
         wsLog.info("WebSocket client connected (total: \(self.clients.count))")
-        onClientCountChange?(clients.count)
+        // Don't fire onClientCountChange here — at this point we don't know
+        // yet whether this is a real WebSocket handshake or a raw TCP probe.
+        // The callback fires from verifyAndFlushIfNeeded (upgrade proven) and
+        // from removeClient (client gone).
 
         connection.stateUpdateHandler = { [weak self] state in
             DispatchQueue.main.async {
@@ -147,14 +181,58 @@ final class WebSocketServer {
         }
 
         connection.start(queue: .main)
+        // Pending banner/control message flush is deferred until the client
+        // sends its first WebSocket frame (verifying handshake complete).
+        // See verifyAndFlushIfNeeded called from receiveFromClient.
+        //
+        // We do NOT force-evict un-verified clients on a timer: real xterm
+        // clients have taken longer than expected to send their first frame
+        // in some configurations, and killing them causes the extension to
+        // think the daemon is down. Zombies accumulate in the raw `clients`
+        // dict, but they're excluded from every broadcast (we only iterate
+        // `verifiedClients`), so their impact is bounded. They get cleaned
+        // up via the error path of subsequent send attempts.
         receiveFromClient(connection, id: id)
     }
 
     private func removeClient(_ id: ObjectIdentifier) {
+        verifiedClients.remove(id)
         if let client = clients.removeValue(forKey: id) {
             client.cancel()
-            wsLog.info("WebSocket client disconnected (total: \(self.clients.count))")
-            onClientCountChange?(clients.count)
+            wsLog.info("WebSocket client disconnected (total: \(self.clients.count), verified: \(self.verifiedClients.count))")
+            onClientCountChange?(verifiedClients.count)
+        }
+    }
+
+    /// Promote a client to "verified" on its first received WebSocket frame
+    /// and send any pending banner/control message to it.
+    ///
+    /// The pending fields represent the PTY's *current* display state
+    /// (e.g. agent picker JSON), so we leave them in place rather than
+    /// clearing after the first verified client — otherwise a second
+    /// client connecting moments later (think: editor + DevTools, or
+    /// rapid reconnect) sees nothing and ends up with a blank UI.
+    /// Supersession happens on two well-defined edges instead:
+    /// `onControlMessage` overwrites the pending field with the new
+    /// state, and PTY `.idle` clears both fields entirely (see
+    /// `ConjureDSPTerminalApp.onStateChange`).
+    private func verifyAndFlushIfNeeded(connection: NWConnection, id: ObjectIdentifier) {
+        guard !verifiedClients.contains(id) else { return }
+        verifiedClients.insert(id)
+        wsLog.info("WebSocket client verified (total: \(self.clients.count), verified: \(self.verifiedClients.count))")
+        onClientCountChange?(verifiedClients.count)
+
+        let textMeta = NWProtocolWebSocket.Metadata(opcode: .text)
+        let textCtx = NWConnection.ContentContext(identifier: "ws", metadata: [textMeta])
+        if let ctrl = pendingControlMessage {
+            wsLog.warning("Sending pendingControlMessage to verified client (len=\(ctrl.count))")
+            connection.send(content: ctrl, contentContext: textCtx, completion: .idempotent)
+        }
+        if let banner = pendingBanner {
+            wsLog.warning("Sending pendingBanner to verified client (len=\(banner.count))")
+            if let data = banner.data(using: .utf8) {
+                connection.send(content: data, contentContext: textCtx, completion: .idempotent)
+            }
         }
     }
 
@@ -167,6 +245,7 @@ final class WebSocketServer {
                     switch metadata.opcode {
                     case .text, .binary:
                         DispatchQueue.main.async {
+                            self.verifyAndFlushIfNeeded(connection: connection, id: id)
                             self.onClientInput?(data)
                         }
                     case .close:

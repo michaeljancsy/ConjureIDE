@@ -13,18 +13,18 @@ use conjuredsp::*;
 setup!();
 
 params! {
-    DRIVE = param(1.0, 20.0).default(5.0),
+    DRIVE = param(1.0, 20.0).default(5.0).unit("x"),
 }
 
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32,
     output: *mut f32,
-    channels: i32,
+    channel_count: i32,
     frame_count: i32,
     _sample_rate: f32,
 ) {
-    let ctx = ctx(input, output, channels, frame_count, _sample_rate);
+    let ctx = ctx(input, output, channel_count, frame_count, _sample_rate);
 
     unsafe {
         let drive = ctx.param(DRIVE);

@@ -19,7 +19,7 @@ _delay_buf = None
 _write_pos = 0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, transport):
+def process(inputs, outputs, frame_count, sample_rate, params, transport, _telemetry):
     """
     Tempo-Synced Delay — delay time locked to host BPM.
 

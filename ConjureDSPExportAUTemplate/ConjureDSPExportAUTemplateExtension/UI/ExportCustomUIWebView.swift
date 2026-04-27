@@ -337,6 +337,12 @@ struct ExportCustomUIWebView: NSViewRepresentable {
                 if let fft = frame.fftOutDB { payload["fftOut"] = fft }
                 if let fft = frame.fftInDB { payload["fftIn"] = fft }
             }
+            // Telemetry: same shape as the main extension's payload so
+            // a UI that reads `frame.telemetry.<slot>` works identically
+            // inside an exported AU.
+            if let telemetry = frame.telemetry, !telemetry.isEmpty {
+                payload["telemetry"] = telemetry
+            }
 
             guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
                   let json = String(data: data, encoding: .utf8) else { return }
@@ -432,8 +438,33 @@ struct ExportCustomUIWebView: NSViewRepresentable {
             case "paramSet":
                 guard let body = message.body as? [String: Any],
                       let index = body["index"] as? Int,
-                      let value = (body["value"] as? Double).map(Float.init) ?? (body["value"] as? Float),
                       let state = parameterState else { return }
+                // Resolve the JS Number to a Float. The JS bridge posts a JS
+                // Number; WebKit hands it across as NSNumber-backed Double.
+                //
+                // Why the explicit `Float($0)` and not `.map(Float.init)`:
+                // unlabeled `Float.init` lets Swift's type inference pick the
+                // FAILABLE `Float.init?(exactly:)` overload, which returns
+                // nil for any Double that isn't exactly representable as
+                // Float. The cdp-xy pad's cutoff drag posts ~150 fractional
+                // doubles per second (e.g. 1002.6279…); every one of them
+                // failed `init?(exactly:)`, the `??` fallback `as? Float`
+                // ALSO failed (NSNumber→Float bridging uses the same exact-
+                // conversion check), and the whole `guard let` silently
+                // dropped the message — so the kernel only ever saw the
+                // integer-valued extremes 20.0 and 20000.0 that the user's
+                // drag clamped to. Symptom: drag to edge silenced audio,
+                // drag back to center stayed silent. The extension's
+                // CustomUIWebView avoided this by writing `Float(d)`
+                // explicitly, which selects the non-failable narrowing init.
+                let value: Float
+                if let d = body["value"] as? Double {
+                    value = Float(d)
+                } else if let f = body["value"] as? Float {
+                    value = f
+                } else {
+                    return
+                }
                 state.binding(for: index).wrappedValue = value
 
             case "log":

@@ -106,7 +106,15 @@ struct BundleUIValidatorTests {
 
     // MARK: - ui_entry_html_missing
 
-    @Test func manifestPointsAtNonexistentHTMLFlagged() throws {
+    /// Mid-authoring: manifest declares entryHTML but ui/ has no HTML
+    /// files yet (or no ui/ directory at all). This is the standard
+    /// save_preset → write manifest → write ui/index.html sequence,
+    /// captured at step 2. Validator should warn, not fail — a `fail`
+    /// here spooks literal-minded MCP agents into retrying or
+    /// backtracking on what's actually transient state. The next
+    /// write resolves it and a final validate_bundle pass returns
+    /// clean.
+    @Test func manifestPointsAtNonexistentHTMLWithEmptyUIDirWarnsOnly() throws {
         let manifest = """
         {
           "schemaVersion": 2, "entry": "process.py", "language": "python",
@@ -115,8 +123,31 @@ struct BundleUIValidatorTests {
         """
         let bundle = try makeBundle(manifest: manifest, uiHTML: nil)
         let report = BundleUIValidator.validate(bundle)
-        #expect(report.status == .fail)
-        #expect(report.issues.contains { $0.check == "ui_entry_html_missing" })
+        let entryIssue = report.issues.first { $0.check == "ui_entry_html_missing" }
+        #expect(entryIssue != nil, "expected ui_entry_html_missing to fire")
+        #expect(entryIssue?.severity == .warn, "empty ui/ is the transient mid-authoring case — should warn, not fail")
+    }
+
+    /// Real typo: ui/ contains other HTML files, but entryHTML names a
+    /// different one. The author shipped some HTML, just not the one
+    /// the manifest references. Validator should still fail — this is
+    /// not transient state, it's a config bug that silently disables
+    /// the custom UI.
+    @Test func manifestPointsAtNonexistentHTMLWithOtherHTMLPresentFails() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "ui": {"entryHTML": "ui/main.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        // makeBundle writes uiHTML to ui/index.html. So manifest points at
+        // ui/main.html, ui/ contains index.html — entryHTML typo.
+        let bundle = try makeBundle(manifest: manifest, uiHTML: baselineUI)
+        let report = BundleUIValidator.validate(bundle)
+        let entryIssue = report.issues.first { $0.check == "ui_entry_html_missing" }
+        #expect(entryIssue != nil, "expected ui_entry_html_missing to fire")
+        #expect(entryIssue?.severity == .fail, "ui/ has other HTML — entryHTML typo is a real failure")
+        #expect(entryIssue?.message.contains("index.html") == true, "fail message should list the HTML files actually present so the author can correct the typo")
     }
 
     // MARK: - schema_v2_recommended
@@ -205,6 +236,61 @@ struct BundleUIValidatorTests {
         #expect(issue?.suggestion?.contains("resonance") == true)
     }
 
+    @Test func paramRefsInsideHTMLCommentsIgnored() throws {
+        // The starter scaffold's example block lists hand-rolled bindings
+        // like `<cdp-toggle param="Bypass">` inside an HTML comment so
+        // authors can copy them out. They aren't real bindings; the
+        // validator must not flag them. Reproduces the embedded-agent
+        // turn that wasted a tool call rewriting the comment.
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "threshold", "min": -60.0, "max": 0.0, "default": -20.0, "unit": "dB"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="threshold"></cdp-slider>
+          <!--
+            Examples authors can copy:
+              <cdp-toggle param="Bypass"></cdp-toggle>
+              <cdp-choice param="Mode"></cdp-choice>
+              <cdp-knob param="cutoff"></cdp-knob>
+          -->
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "params_referenced_in_ui" },
+                "param=\"…\" inside <!-- ... --> must not be flagged")
+    }
+
+    @Test func paramRefsInsideHTMLCommentsIgnoredWhenNoManifestParams() throws {
+        // Same comment-stripping rule applies in the no-manifest-params
+        // branch — the starter scaffold ships v1 manifest + commented
+        // examples, and that combination must be silent.
+        let manifest = """
+        {
+          "schemaVersion": 1, "entry": "process.py", "language": "python",
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-panel auto></cdp-panel>
+          <!-- <cdp-toggle param="Bypass"></cdp-toggle> -->
+          <!-- <cdp-knob param="cutoff"></cdp-knob> -->
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "params_referenced_in_ui" },
+                "no-manifest-params branch must also strip comments")
+    }
+
     // MARK: - external_asset_ref / network_egress_in_ui
 
     @Test func externalScriptFlagged() throws {
@@ -267,6 +353,64 @@ struct BundleUIValidatorTests {
         #expect(report.issues.contains { $0.check == "network_egress_in_ui" })
     }
 
+    @Test func xmlHttpRequestFlagged() throws {
+        // The egress rule table includes XMLHttpRequest but no test covered
+        // it. Pin here so regressions in the regex (e.g. whitespace change)
+        // don't silently disable the check.
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>const xhr = new XMLHttpRequest(); xhr.open("GET", "/data");</script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "network_egress_in_ui" })
+    }
+
+    @Test func eventSourceFlagged() throws {
+        // Symmetric to xhr/websocket — the rule is listed in the table but
+        // untested.
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>const es = new EventSource("/events");</script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "network_egress_in_ui" })
+    }
+
+    @Test func externalImgFlagged() throws {
+        // The external_asset_ref rule matches img/iframe/audio/video/source
+        // too, not just script/link. Pin at least <img> since that's the
+        // most common form preset authors reach for.
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <img src="https://cdn.example.com/logo.png">
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "external_asset_ref" })
+    }
+
+    @Test func protocolRelativeURLFlagged() throws {
+        // `//example.com/x.js` is protocol-relative and reaches the network
+        // just as surely as an `https:` URL. The CSP blocks it; the
+        // validator rule regex includes `//` as a leading form.
+        let ui = """
+        <!doctype html><html><head>
+          <script src="//evil.example.com/tracker.js"></script>
+        </head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "external_asset_ref" })
+    }
+
     // MARK: - canvas_system_color_literal
 
     @Test func canvasTextAssignmentFlagged() throws {
@@ -285,6 +429,45 @@ struct BundleUIValidatorTests {
         let report = BundleUIValidator.validate(bundle)
         let canvasIssues = report.issues.filter { $0.check == "canvas_system_color_literal" }
         #expect(canvasIssues.count >= 1, "should flag CanvasText and color-mix(...)")
+    }
+
+    @Test func canvasPlainKeywordFlagged() throws {
+        // The regex covers the bare "Canvas" keyword (the background-side
+        // system color), not just "CanvasText". Both fail the same way in
+        // Canvas 2D — silent fallback to transparent/black.
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c"></canvas>
+          <script>
+            const ctx = document.getElementById("c").getContext("2d");
+            ctx.fillStyle = "Canvas";
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "canvas_system_color_literal" })
+    }
+
+    @Test func canvasValidColorNotFlagged() throws {
+        // Hex / rgb / named colors should never trip the system-color rule.
+        // Prevents regex over-tightening from producing false positives on
+        // perfectly legal canvas code.
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c"></canvas>
+          <script>
+            const ctx = document.getElementById("c").getContext("2d");
+            ctx.fillStyle = "#3366aa";
+            ctx.strokeStyle = "rgb(100, 200, 50)";
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "canvas_system_color_literal" })
     }
 
     // MARK: - no_interactive_surface
@@ -314,6 +497,146 @@ struct BundleUIValidatorTests {
         let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
         let report = BundleUIValidator.validate(bundle)
         #expect(!report.issues.contains { $0.check == "no_interactive_surface" })
+    }
+
+    // MARK: - param_no_ui_binding (inverse coverage check)
+
+    /// Two manifest params; UI binds only one. The unbound one should warn.
+    @Test func declaredParamWithoutUIBindingWarned() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "drive", "min": 1.0, "max": 20.0, "default": 5.0, "unit": "x"},
+            {"name": "tone", "min": 200.0, "max": 20000.0, "default": 4000.0, "unit": "Hz", "curve": "log"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = #"<!doctype html><html><body><cdp-slider param="drive"></cdp-slider></body></html>"#
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let issue = report.issues.first { $0.check == "param_no_ui_binding" }
+        #expect(issue != nil, "tone is declared but not bound — should warn")
+        #expect(issue?.severity == .warn, "deliberate hides are valid; warn not fail")
+        #expect(issue?.message.contains("tone") == true)
+    }
+
+    /// All declared params bound — no warning.
+    @Test func allParamsBoundNoWarning() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "drive", "min": 1.0, "max": 20.0, "default": 5.0, "unit": "x"},
+            {"name": "tone", "min": 200.0, "max": 20000.0, "default": 4000.0, "unit": "Hz", "curve": "log"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="drive"></cdp-slider>
+          <cdp-slider param="tone"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "param_no_ui_binding" })
+    }
+
+    /// `<cdp-panel auto>` is a catch-all that auto-renders one control per
+    /// declared param — no warning even when no individual `<cdp-slider>`
+    /// exists for each.
+    @Test func cdpPanelAutoSuppressesUnboundWarning() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "drive", "min": 1.0, "max": 20.0, "default": 5.0, "unit": "x"},
+            {"name": "tone", "min": 200.0, "max": 20000.0, "default": 4000.0, "unit": "Hz", "curve": "log"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = #"<!doctype html><html><body><cdp-panel auto></cdp-panel></body></html>"#
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "param_no_ui_binding" })
+    }
+
+    /// Loose-match resolution counts: "Low Gain" UI binding still satisfies
+    /// "low_gain" manifest param.
+    @Test func looseMatchedBindingCountsAsBound() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "low_gain", "min": -12.0, "max": 12.0, "default": 0.0, "unit": "dB"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = #"<!doctype html><html><body><cdp-slider param="Low Gain"></cdp-slider></body></html>"#
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "param_no_ui_binding" })
+    }
+
+    /// Numeric-index bindings count too: `param="0"` covers params[0].
+    @Test func numericIndexBindingCountsAsBound() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "drive", "min": 1.0, "max": 20.0, "default": 5.0, "unit": "x"},
+            {"name": "tone", "min": 200.0, "max": 20000.0, "default": 4000.0, "unit": "Hz"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="0"></cdp-slider>
+          <cdp-slider param="1"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "param_no_ui_binding" })
+    }
+
+    /// XY-pad's `param-x` and `param-y` both count as bindings.
+    @Test func xyPadBothAxesCountAsBound() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz"},
+            {"name": "resonance", "min": 0.5, "max": 10.0, "default": 1.0, "unit": "Q"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = #"<!doctype html><html><body><cdp-xy param-x="cutoff" param-y="resonance"></cdp-xy></body></html>"#
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "param_no_ui_binding" })
+    }
+
+    /// Bundles with no manifest.params don't get the warning at all
+    /// (legacy mode — we have nothing to compare against).
+    @Test func noManifestParamsNoWarning() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = #"<!doctype html><html><body><cdp-slider param="0"></cdp-slider></body></html>"#
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "param_no_ui_binding" })
     }
 
     // MARK: - status aggregation
@@ -603,6 +926,35 @@ struct BundleUIValidatorTests {
         let contrast = report.issues.filter { $0.check == "text_contrast_low" }
         // white on #111 is ~18:1 — neither branch should flag this.
         #expect(contrast.isEmpty)
+    }
+
+    // MARK: - Performance / scale
+
+    @Test func largeUIValidatesInBoundedTime() throws {
+        // 500 cdp-slider rows + a sizeable <style> block — well beyond any
+        // real preset UI but small enough to fit in-memory. Validates in
+        // well under a second; pinning at 5s so CI variance doesn't flake.
+        var body = ""
+        for i in 0..<500 {
+            body += "<cdp-slider param=\"cutoff\" label=\"P\(i)\"></cdp-slider>\n"
+        }
+        var style = ""
+        for i in 0..<200 {
+            style += ".row\(i) { color: #\(String(format: "%06x", i * 113 % 0xffffff)); background: #fff; }\n"
+        }
+        let ui = """
+        <!doctype html><html><head><style>\(style)</style></head>
+        <body>\(body)</body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+
+        let start = Date()
+        let report = BundleUIValidator.validate(bundle)
+        let elapsed = Date().timeIntervalSince(start)
+
+        #expect(elapsed < 5.0, "validator took \(elapsed)s on a 500-component UI — regex backtracking?")
+        // Report should be well-formed regardless of issue count.
+        #expect([.pass, .warn, .fail].contains(report.status))
     }
 
     @Test func statusWarnIfOnlyWarnings() throws {

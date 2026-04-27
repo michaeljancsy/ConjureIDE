@@ -49,9 +49,9 @@ static mut GRAIN_PHASE: f64 = 0.0;
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32, output: *mut f32,
-    channels: i32, frame_count: i32, sample_rate: f32,
+    channel_count: i32, frame_count: i32, sample_rate: f32,
 ) {
-    let ctx = ctx(input, output, channels, frame_count, sample_rate);
+    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

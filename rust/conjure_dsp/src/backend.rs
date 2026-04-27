@@ -1,5 +1,5 @@
 use crate::kernel::TransportState;
-use crate::params::{ParamMetadata, PARAM_COUNT};
+use crate::params::{ParamMetadata, TelemetryMetadata, PARAM_COUNT, TELEMETRY_LEN};
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -69,4 +69,24 @@ pub trait Backend: Any {
     fn memory_bytes(&self) -> u64 {
         0
     }
+
+    /// Returns the script-declared telemetry slot metadata, if any.
+    /// `None` means the script didn't call `telemetry!()` / declare a
+    /// `TELEMETRY` dict — host treats as zero slots and never reads
+    /// from the buffer. Default impl: no telemetry.
+    fn telemetry_metadata(&self) -> Option<&[TelemetryMetadata]> {
+        None
+    }
+
+    /// Snapshot the latest telemetry values written by the most recent
+    /// `process()` call. Backends that publish telemetry copy from
+    /// their internal buffer (WASM linear memory's TELEMETRY_BUF, or
+    /// the Python TELEMETRY dict) into `out`. Slots not written by
+    /// the script remain zero.
+    ///
+    /// Default impl: leaves `out` untouched. The kernel still snapshots
+    /// it into atomics each block, which means a backend without
+    /// telemetry surface produces an all-zeros snapshot — the right
+    /// thing.
+    fn read_telemetry(&self, _out: &mut [f32; TELEMETRY_LEN]) {}
 }

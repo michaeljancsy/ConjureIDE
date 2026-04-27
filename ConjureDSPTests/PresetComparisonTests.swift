@@ -257,10 +257,12 @@ struct PresetComparisonTests {
         dsp_kernel_set_max_frames(kernel, UInt32(chunkSize))
 
         let resourcesURL = try extensionResourcesURL
-        // Factory Python presets ship as `.cdp` bundles; read the entry
-        // script declared in the bundle's manifest. The `process.py`
-        // filename is the convention for every factory bundle today.
+        // Factory Python presets ship as `.cdp` bundles under
+        // `Resources/presets/`. Read the entry script declared in the
+        // bundle's manifest; the `process.py` filename is the convention
+        // for every factory bundle today.
         let presetURL = resourcesURL
+            .appendingPathComponent("presets")
             .appendingPathComponent("preset_\(presetName).cdp")
             .appendingPathComponent("process.py")
         let source = try String(contentsOf: presetURL, encoding: .utf8)
@@ -305,7 +307,10 @@ struct PresetComparisonTests {
         dsp_kernel_set_max_frames(kernel, UInt32(chunkSize))
 
         let resourcesURL = try extensionResourcesURL
+        // Factory Rust presets ship as `.cdp` bundles under
+        // `Resources/presets/`. Mirrors the Python path above.
         let presetURL = resourcesURL
+            .appendingPathComponent("presets")
             .appendingPathComponent("preset_\(presetName)_rust.cdp")
             .appendingPathComponent("process.rs")
         let source = try String(contentsOf: presetURL, encoding: .utf8)

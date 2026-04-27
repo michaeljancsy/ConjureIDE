@@ -23,11 +23,11 @@ params! {
 pub extern "C" fn process(
     input: *const f32,
     output: *mut f32,
-    channels: i32,
+    channel_count: i32,
     frame_count: i32,
     sample_rate: f32,
 ) {
-    let ctx = ctx(input, output, channels, frame_count, sample_rate);
+    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
     let gain = db_to_gain(ctx.param(GAIN) as f64) as f32;
 
     for c in 0..ctx.channels() {

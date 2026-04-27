@@ -229,7 +229,7 @@ struct CdpUIComponentTests {
         try await h.waitForNavigationAndSetup()
 
         // Every component tag must: register, and upgrade on create.
-        let tags = ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-panel"]
+        let tags = ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-knob", "cdp-panel"]
         for tag in tags {
             let registered = try await h.eval("!!customElements.get('\(tag)')") as? Bool
             #expect(registered == true, "\(tag) not registered")
@@ -528,6 +528,117 @@ struct CdpUIComponentTests {
         let top = try await h.eval("document.getElementById('xy').shadowRoot.querySelector('.puck').style.top") as? String
         #expect(left == "25%")
         #expect(top == "75%")
+    }
+
+    // MARK: - <cdp-knob>
+
+    /// Initial render: indicator rotation, label, value, and the
+    /// `--cdp-knob-norm` CSS variable all reflect the bound parameter's
+    /// default value at the moment the element binds.
+    @Test func knobRendersInitialState() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [
+            ["name": "Threshold", "min": -60.0, "max": 0.0, "default": -20.0, "unit": "dB"],
+        ])
+        try await createElement(h, tag: "cdp-knob", id: "k", attrs: ["param": "0"])
+
+        // Default -20 in [-60..0] → norm 0.667 → angle 0.667*270 - 135 = 45°.
+        let label = try await h.eval("document.getElementById('k').shadowRoot.querySelector('.label').textContent") as? String
+        let value = try await h.eval("document.getElementById('k').shadowRoot.querySelector('.value').textContent") as? String
+        let transform = try await h.eval("document.getElementById('k').shadowRoot.querySelector('.indicator-group').getAttribute('transform')") as? String
+        let cssNorm = try await h.eval("document.getElementById('k').style.getPropertyValue('--cdp-knob-norm')") as? String
+        #expect(label == "Threshold")
+        #expect(value == "-20.00 dB")
+        #expect(transform == "rotate(45 32 32)",
+                "indicator should rotate to 45° at norm 0.667; got \(transform ?? "nil")")
+        // Normalized published as a float string. Don't pin exact precision.
+        #expect(cssNorm != nil && cssNorm!.hasPrefix("0.6"),
+                "--cdp-knob-norm should be ~0.667; got \(cssNorm ?? "nil")")
+    }
+
+    /// External `_paramUpdate` (DAW automation, MIDI, MCP) drives all
+    /// three visual surfaces: indicator transform, value text, CSS var.
+    @Test func knobIndicatorRotatesOnExternalUpdate() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [
+            ["name": "Cutoff", "min": 0.0, "max": 1.0, "default": 0.0],
+        ])
+        try await createElement(h, tag: "cdp-knob", id: "k", attrs: ["param": "0"])
+        try await h.eval("ConjureDSP._paramUpdate(0, 0.5)")
+
+        let transform = try await h.eval("document.getElementById('k').shadowRoot.querySelector('.indicator-group').getAttribute('transform')") as? String
+        let cssNorm = try await h.eval("document.getElementById('k').style.getPropertyValue('--cdp-knob-norm')") as? String
+        // norm 0.5 → angle 0.5*270 - 135 = 0
+        #expect(transform == "rotate(0 32 32)",
+                "indicator should be at angle 0 at norm 0.5; got \(transform ?? "nil")")
+        #expect(cssNorm == "0.5")
+    }
+
+    /// Vertical pointerdown→move→up drag updates the parameter value
+    /// and the indicator. Same regression pattern as cdp-xy: the
+    /// component subscribes to onChange via the bridge, but the test
+    /// stub bridge doesn't fire onChange on self-writes (matches the
+    /// pre-fix production behavior). The component's _startDrag.move
+    /// must call `_render()` explicitly so the visual stays in sync
+    /// even when the bridge is silent on self-writes — belt-and-
+    /// suspenders against a bridge regression.
+    @Test func knobDragUpdatesValueAndIndicator() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [
+            ["name": "X", "min": 0.0, "max": 1.0, "default": 0.0],
+        ])
+        try await createElement(h, tag: "cdp-knob", id: "k", attrs: ["param": "0"])
+        // Drag up by 100px → 0.5 normalized step (200px = 0..1 default sensitivity).
+        try await h.eval("""
+            var k = document.getElementById('k');
+            var v = k.shadowRoot.querySelector('.visual');
+            var rect = v.getBoundingClientRect();
+            var cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
+            var down = new PointerEvent('pointerdown', {
+                pointerId: 1, clientX: cx, clientY: cy, bubbles: true
+            });
+            var move = new PointerEvent('pointermove', {
+                pointerId: 1, clientX: cx, clientY: cy - 100, buttons: 1, bubbles: true
+            });
+            var up = new PointerEvent('pointerup', {
+                pointerId: 1, clientX: cx, clientY: cy - 100, bubbles: true
+            });
+            v.dispatchEvent(down); v.dispatchEvent(move); v.dispatchEvent(up);
+        """)
+        let paramValue = try await h.eval("ConjureDSP.parameters.get(0)") as? Double
+        let transform = try await h.eval("document.getElementById('k').shadowRoot.querySelector('.indicator-group').getAttribute('transform')") as? String
+        // 0.0 + 100/200 = 0.5 → angle 0
+        #expect(paramValue == 0.5,
+                "drag up 100px from default=0 should yield 0.5; got \(paramValue ?? -1)")
+        #expect(transform == "rotate(0 32 32)",
+                "indicator should match drag delta even when bridge is silent on self-writes; got \(transform ?? "nil")")
+    }
+
+    /// `--cdp-knob-norm` is the contract slotted custom-SVG visuals
+    /// rely on: when the parameter changes, the host element's CSS
+    /// variable must update so the slotted SVG's CSS-driven transforms
+    /// pick up the new value without any per-author JS.
+    @Test func knobPublishesCssVariableForSlottedVisuals() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [
+            ["name": "X", "min": 0.0, "max": 1.0, "default": 0.0],
+        ])
+        try await createElement(h, tag: "cdp-knob", id: "k", attrs: ["param": "0"])
+        // Step through several values and read the CSS variable each time.
+        let values: [Double] = [0.0, 0.25, 0.5, 0.75, 1.0]
+        for v in values {
+            try await h.eval("ConjureDSP._paramUpdate(0, \(v))")
+            // JS `String(0)` is "0" while Swift `String(0.0)` is "0.0";
+            // parse-then-compare as numbers so the test is robust to
+            // either side's number-to-string formatting.
+            let read = try await h.eval("parseFloat(document.getElementById('k').style.getPropertyValue('--cdp-knob-norm'))") as? Double
+            #expect(read != nil && abs(read! - v) < 1e-9,
+                    "--cdp-knob-norm should track parameter value \(v); got \(read?.description ?? "nil")")
+        }
     }
 
     @Test func libraryApiReachableInWebKit() async throws {

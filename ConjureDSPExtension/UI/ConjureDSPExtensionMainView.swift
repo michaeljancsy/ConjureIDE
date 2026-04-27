@@ -94,8 +94,16 @@ struct ConjureDSPExtensionMainView: View {
     /// Flips true the first time keyboard input reaches the terminal's
     /// WebSocket — exposed as a hidden accessibility element for UI tests.
     @State private var terminalFirstInputReceived: Bool = false
+    /// True when the daemon reported zero agents detected on first run
+    /// (kept under its original name for UI-test backwards compatibility).
+    @State private var terminalClaudeNotInstalled: Bool = false
+    /// True when the daemon is showing the multi-agent picker inside the PTY.
+    @State private var terminalAgentPickerShowing: Bool = false
+    /// Names of agents whose presence the daemon has reported (launching, picker, new-agent-hint).
+    /// Each appears as a hidden `terminalAgentInstalled_<name>` marker for UI tests.
+    @State private var terminalInstalledAgents: Set<String> = []
     @State private var showAIPromptTab: Bool = false
-    @State private var chatWidth: CGFloat = 280
+    @State private var chatWidth: CGFloat = 360
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
     @State private var showExportAlert: Bool = false
@@ -309,22 +317,40 @@ struct ConjureDSPExtensionMainView: View {
 
                 if useCustom, let bundle = activeBundle {
                     if isCustomUIExpanded {
-                        // Pin to the manifest-declared height (not
-                        // `minHeight`) — without an upper bound, SwiftUI's
-                        // outer VStack hands the webview all the spare
-                        // vertical space the window has, producing a tall
-                        // dark void around a preset that wants 260pt. The
-                        // preset author controls the height via
-                        // `manifest.ui.height`; users who want more room
-                        // can edit the manifest.
-                        CustomUIWebView(
-                            parameterState: parameterState,
-                            bundle: bundle,
-                            theme: colorScheme,
-                            captureManager: captureManager
-                        )
-                        .frame(height: CGFloat(bundle.manifest.ui?.height ?? 220))
-                        .id(bundle.uiIndexURL)
+                        // Pin to the manifest-declared height + width (not
+                        // `minHeight` / no width constraint at all).
+                        //
+                        // Without a height upper bound, SwiftUI's outer
+                        // VStack hands the webview all the spare vertical
+                        // space the window has, producing a tall dark void
+                        // around a preset that wants 260pt.
+                        //
+                        // Without a width constraint, the webview gets the
+                        // full editor width (often 1000pt+) which is much
+                        // more than the manifest declares — so a preset
+                        // looks roomy in the extension and squashed in the
+                        // exported AU (which honors manifest.ui.width).
+                        // Authors design against the extension width and
+                        // get surprised by the export. Pin both dimensions
+                        // here so what you see is what you get.
+                        //
+                        // Centered with a Spacer pair so the surplus
+                        // editor width letterboxes evenly on both sides
+                        // instead of left-aligning.
+                        let uiW = CGFloat(bundle.manifest.ui?.width ?? 520)
+                        let uiH = CGFloat(bundle.manifest.ui?.height ?? 220)
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            CustomUIWebView(
+                                parameterState: parameterState,
+                                bundle: bundle,
+                                theme: colorScheme,
+                                captureManager: captureManager
+                            )
+                            .frame(width: uiW, height: uiH)
+                            .id(bundle.uiIndexURL)
+                            Spacer(minLength: 0)
+                        }
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 } else {
@@ -378,7 +404,31 @@ struct ConjureDSPExtensionMainView: View {
                                     colorScheme: colorScheme,
                                     appGroupContainerURL: appGroupContainerURL,
                                     instanceID: instanceID,
-                                    onFirstInput: { terminalFirstInputReceived = true }
+                                    onFirstInput: { terminalFirstInputReceived = true },
+                                    onAgentStatus: { status in
+                                        // Picker visibility is bound to the current
+                                        // status — only the .picker case implies it's
+                                        // up. Every other status means the picker
+                                        // is gone (launching → agent chosen,
+                                        // agentMissing → error pane, etc.). Reset
+                                        // every transition so the flag reflects
+                                        // current reality, not the high-water mark.
+                                        // (Sentry: once true, never false.)
+                                        terminalAgentPickerShowing = false
+                                        switch status {
+                                        case .noAgentsInstalled, .claudeNotInstalled:
+                                            terminalClaudeNotInstalled = true
+                                        case .picker(let agents):
+                                            terminalAgentPickerShowing = true
+                                            terminalInstalledAgents.formUnion(agents)
+                                        case .launching(let agent):
+                                            terminalInstalledAgents.insert(agent)
+                                        case .agentMissing:
+                                            break
+                                        case .newAgentHint(let agents):
+                                            terminalInstalledAgents.formUnion(agents)
+                                        }
+                                    }
                                 )
                                     .accessibilityIdentifier("terminalPanel")
                                     .opacity(showAIPromptTab ? 0 : 1)
@@ -390,6 +440,24 @@ struct ConjureDSPExtensionMainView: View {
                                                 .frame(width: 1, height: 1)
                                                 .accessibilityIdentifier("terminalFirstInputReceived")
                                                 .accessibilityLabel("terminalFirstInputReceived")
+                                        }
+                                        if terminalClaudeNotInstalled {
+                                            Color.clear
+                                                .frame(width: 1, height: 1)
+                                                .accessibilityIdentifier("terminalClaudeNotInstalled")
+                                                .accessibilityLabel("terminalClaudeNotInstalled")
+                                        }
+                                        if terminalAgentPickerShowing {
+                                            Color.clear
+                                                .frame(width: 1, height: 1)
+                                                .accessibilityIdentifier("terminalAgentPickerShowing")
+                                                .accessibilityLabel("terminalAgentPickerShowing")
+                                        }
+                                        ForEach(Array(terminalInstalledAgents), id: \.self) { agent in
+                                            Color.clear
+                                                .frame(width: 1, height: 1)
+                                                .accessibilityIdentifier("terminalAgentInstalled_\(agent)")
+                                                .accessibilityLabel("terminalAgentInstalled_\(agent)")
                                         }
                                     }
                             } else {
@@ -419,7 +487,7 @@ struct ConjureDSPExtensionMainView: View {
                             .onChanged { value in
                                 let start = chatResizeStart ?? chatWidth
                                 if chatResizeStart == nil { chatResizeStart = chatWidth }
-                                chatWidth = max(200, min(450, start + value.translation.width))
+                                chatWidth = max(200, min(600, start + value.translation.width))
                             }
                             .onEnded { _ in chatResizeStart = nil }
                     )

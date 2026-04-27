@@ -55,13 +55,23 @@ enum BundleUIValidator {
     static func validate(_ bundle: PresetBundle) -> Report {
         var issues: [Issue] = []
 
-        // A bundle without any UI intent has nothing to validate — the
-        // stock slider panel renders for it either way. "UI intent" =
-        // either the manifest declares a ui block OR there's a physical
-        // ui/index.html on disk. Check the file system directly since
-        // `bundle.uiIndexURL` is nil when the manifest has no ui block
-        // even if the file exists (that's the orphan case we want to
-        // flag, not skip).
+        // Default-out-of-range is checked regardless of UI intent — even a
+        // generic-slider preset stores a wrong default if the script
+        // declared one outside [min, max]. The AU's denormalize clamps,
+        // so the bundle still loads, but the slider's initial position
+        // doesn't match what the author intended (caught Round 9 of the
+        // agent UX experiment: `mix(default=100.0)` clamped to 1.0
+        // silently because the agent confused the 0..1 mix range with
+        // the 0..100 pct range).
+        issues.append(contentsOf: checkParamDefaultsInRange(bundle))
+
+        // A bundle without any UI intent has nothing else to validate —
+        // the stock slider panel renders for it either way. "UI intent"
+        // = either the manifest declares a ui block OR there's a
+        // physical ui/index.html on disk. Check the file system
+        // directly since `bundle.uiIndexURL` is nil when the manifest
+        // has no ui block even if the file exists (that's the orphan
+        // case we want to flag, not skip).
         let hasUIBlock = bundle.manifest.ui != nil
         let defaultIndexPath = bundle.rootURL
             .appendingPathComponent("ui")
@@ -69,7 +79,7 @@ enum BundleUIValidator {
             .path
         let hasIndexOnDisk = FileManager.default.fileExists(atPath: defaultIndexPath)
         guard hasUIBlock || hasIndexOnDisk else {
-            return Report(status: .pass, issues: [])
+            return Self.report(from: issues)
         }
 
         issues.append(contentsOf: checkManifestUIBlock(bundle))
@@ -88,12 +98,20 @@ enum BundleUIValidator {
         if let url = htmlURL,
            let html = try? String(contentsOf: url, encoding: .utf8) {
             issues.append(contentsOf: checkParamReferences(html: html, bundle: bundle))
+            issues.append(contentsOf: checkUnboundDeclaredParams(html: html, bundle: bundle))
             issues.append(contentsOf: checkNoExternalNetwork(html: html))
             issues.append(contentsOf: checkNoSystemColorInCanvas(html: html))
             issues.append(contentsOf: checkHasInteractiveSurface(html: html, bundle: bundle))
             issues.append(contentsOf: checkTextContrast(html: html))
         }
 
+        return Self.report(from: issues)
+    }
+
+    /// Build a `Report` whose status reflects the worst-severity issue.
+    /// Pulled out so the early-return path (no UI intent) and the full
+    /// path can both ship the same status-derivation rule.
+    private static func report(from issues: [Issue]) -> Report {
         let status: ReportStatus
         if issues.contains(where: { $0.severity == .fail }) {
             status = .fail
@@ -129,6 +147,17 @@ enum BundleUIValidator {
 
     /// manifest.ui.entryHTML must point at a real file inside the bundle.
     /// Typo here silently disables the custom UI.
+    ///
+    /// Severity is tactically split: a manifest that declares
+    /// entryHTML but ships an empty (or HTML-less) `ui/` directory is
+    /// almost always mid-authoring — the standard sequence is
+    /// save_preset → write manifest.json → write ui/index.html, and
+    /// the manifest write transiently fails this check until the next
+    /// call. Reporting `fail` there spooks literal-minded agents.
+    /// Reserve `fail` for the case that's unambiguously a bug: the
+    /// `ui/` directory has other html files (the author shipped some
+    /// HTML), but the entryHTML name typoed and references a file
+    /// that isn't among them.
     private static func checkEntryHTMLResolves(_ bundle: PresetBundle) -> [Issue] {
         // manifest.ui.entryHTML is itself optional; fall back to the same
         // default the manifest uses when rendering (`ui/index.html`).
@@ -136,15 +165,84 @@ enum BundleUIValidator {
         let entryPath = bundle.manifest.uiEntryHTMLPath
         let entryURL = bundle.rootURL.appendingPathComponent(entryPath)
         guard !FileManager.default.fileExists(atPath: entryURL.path) else { return [] }
+
+        // Look at ui/ to decide severity. `ui/` may not exist at all
+        // (manifest written first, no ui dir created yet) — that's
+        // also the transient "still authoring" case.
+        let uiDir = bundle.rootURL.appendingPathComponent("ui", isDirectory: true)
+        let fm = FileManager.default
+        let uiHTMLFiles: [String] = {
+            guard let entries = try? fm.contentsOfDirectory(
+                at: uiDir,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else { return [] }
+            return entries
+                .filter { $0.pathExtension.lowercased() == "html" }
+                .map { $0.lastPathComponent }
+        }()
+
+        if uiHTMLFiles.isEmpty {
+            // No HTML in ui/ yet — author hasn't gotten there. Warn,
+            // don't fail. The next write_bundle_file('ui/index.html',
+            // ...) will resolve the issue and a subsequent
+            // validate_bundle pass will return clean.
+            return [
+                Issue(
+                    severity: .warn,
+                    check: "ui_entry_html_missing",
+                    file: PresetManifest.filename,
+                    message: "manifest.ui.entryHTML points at \"\(entryPath)\" but ui/ contains no HTML files yet.",
+                    suggestion: "If you're mid-authoring, this resolves once you call write_bundle_file with the entryHTML file. Otherwise update manifest.ui.entryHTML or write the missing file."
+                )
+            ]
+        }
+
+        // ui/ has HTML, just not the one named — almost certainly a
+        // typo. Real failure.
+        let nearby = uiHTMLFiles.sorted().joined(separator: ", ")
         return [
             Issue(
                 severity: .fail,
                 check: "ui_entry_html_missing",
                 file: PresetManifest.filename,
-                message: "manifest.ui.entryHTML points at \"\(entryPath)\" but that file doesn't exist in the bundle.",
-                suggestion: "Either create the file via write_bundle_file, or update manifest.ui.entryHTML to match an existing path."
+                message: "manifest.ui.entryHTML points at \"\(entryPath)\" but that file doesn't exist. ui/ contains: \(nearby).",
+                suggestion: "Update manifest.ui.entryHTML to match one of the existing files, or rename the file on disk."
             )
         ]
+    }
+
+    /// Each declared param's `default` must lie within `[min, max]`.
+    /// Defaults outside the declared range are clamped silently by the
+    /// AU's denormalize — the bundle loads, audio runs, but the slider's
+    /// initial position doesn't reflect what the author wrote.
+    /// Almost always indicates a unit confusion (e.g. mix() at 100 when
+    /// the author meant pct() at 100). Warn rather than fail because
+    /// older bundles in the wild may have minor drift; surfacing it via
+    /// validate_bundle and inline write_bundle_file is enough to nudge
+    /// authors to fix it on the next save.
+    private static func checkParamDefaultsInRange(_ bundle: PresetBundle) -> [Issue] {
+        guard let params = bundle.manifest.params, !params.isEmpty else {
+            return []
+        }
+        var issues: [Issue] = []
+        for p in params {
+            // Allow tiny float drift — IEEE float comparison around the
+            // boundary can flag a default that's computed from the same
+            // min/max literals. 1e-4 is invisibly small in any real
+            // parameter range.
+            let tol: Float = 1e-4
+            if p.default < p.min - tol || p.default > p.max + tol {
+                issues.append(Issue(
+                    severity: .warn,
+                    check: "param_default_out_of_range",
+                    file: PresetManifest.filename,
+                    message: "Param '\(p.name)' has default \(p.default) outside its declared range [\(p.min), \(p.max)]. The AU silently clamps to the boundary; the slider's initial position won't match author intent.",
+                    suggestion: "Did you confuse two builders? mix() is 0..1, pct() is 0..100. Adjust the default to a value within [\(p.min), \(p.max)]."
+                ))
+            }
+        }
+        return issues
     }
 
     /// Using schemaVersion 1 for a bundle with a custom UI means param
@@ -182,8 +280,13 @@ enum BundleUIValidator {
             options: []
         )
         guard let regex = attrRegex else { return [] }
-        let ns = html as NSString
-        let matches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+        // Strip HTML comments first — the starter scaffold lists example
+        // bindings like `<cdp-toggle param="Bypass">` inside `<!-- ... -->`
+        // for authors to copy. Those aren't real bindings; flagging them
+        // wastes the agent's turn rewriting the comment.
+        let scanned = stripHTMLComments(html)
+        let ns = scanned as NSString
+        let matches = regex.matches(in: scanned, range: NSRange(location: 0, length: ns.length))
 
         // Collect every named (non-numeric) reference in the HTML so the
         // two branches below can reason about them.
@@ -234,6 +337,82 @@ enum BundleUIValidator {
             )
         }
         return issues
+    }
+
+    /// Inverse of `checkParamReferences`: every parameter the manifest
+    /// declares should have at least one binding in the UI (cdp-* `param=`
+    /// attribute or a numeric-index `cdp-panel auto`). Surfaces the case
+    /// where the agent compiled new DSP that adds a param but forgot to
+    /// extend ui/index.html — the param tree rebuilds correctly, the
+    /// stock slider panel + DAW automation see all params, but the
+    /// custom UI silently renders only the old subset.
+    ///
+    /// Skips:
+    ///   - bundles with no manifest.params (legacy / undeclared — nothing
+    ///     to compare against)
+    ///   - bundles whose UI uses `<cdp-panel auto>` (catch-all that
+    ///     auto-renders one control per declared param)
+    ///
+    /// Severity is `warn`, not `fail`: deliberately hiding a param from
+    /// the UI is a valid authoring choice, but it should be a deliberate
+    /// one and the warning is cheap to dismiss for those cases.
+    private static func checkUnboundDeclaredParams(html: String, bundle: PresetBundle) -> [Issue] {
+        guard let declared = bundle.manifest.params, !declared.isEmpty else { return [] }
+
+        let scanned = stripHTMLComments(html)
+
+        // <cdp-panel auto> is a catch-all renderer; presence implies all
+        // declared params have a fallback control. Don't warn.
+        if scanned.range(of: #"<cdp-panel\b[^>]*\bauto\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return []
+        }
+
+        // Collect every named or numeric `param=` reference in the UI.
+        let attrRegex = try? NSRegularExpression(
+            pattern: #"param(?:-x|-y)?\s*=\s*["']([^"']+)["']"#,
+            options: []
+        )
+        guard let regex = attrRegex else { return [] }
+        let ns = scanned as NSString
+        let matches = regex.matches(in: scanned, range: NSRange(location: 0, length: ns.length))
+
+        // Build the set of declared-param identifiers that the UI actually
+        // touches. Index references resolve to the declared params at
+        // that position; named references resolve via loose match.
+        var boundIndices: Set<Int> = []
+        let declaredNorms: [String] = declared.map { looseNormalize($0.name) }
+        for match in matches where match.numberOfRanges >= 2 {
+            let value = ns.substring(with: match.range(at: 1))
+            if let idx = Int(value), idx >= 0, idx < declared.count {
+                boundIndices.insert(idx)
+                continue
+            }
+            let norm = looseNormalize(value)
+            if let idx = declaredNorms.firstIndex(of: norm) {
+                boundIndices.insert(idx)
+            }
+            // Unresolved named refs are flagged by checkParamReferences;
+            // here we only care about the positive (which params ARE bound).
+        }
+
+        // Anything declared but not bound is an unbound param.
+        var unbound: [String] = []
+        for (idx, param) in declared.enumerated() where !boundIndices.contains(idx) {
+            unbound.append(param.name)
+        }
+        if unbound.isEmpty { return [] }
+
+        let preview = unbound.prefix(3).map { "\"\($0)\"" }.joined(separator: ", ")
+        let andMore = unbound.count > 3 ? " and \(unbound.count - 3) more" : ""
+        return [
+            Issue(
+                severity: .warn,
+                check: "param_no_ui_binding",
+                file: "ui/index.html",
+                message: "manifest declares \(declared.count) param\(declared.count == 1 ? "" : "s") but the UI binds only \(declared.count - unbound.count) — \(unbound.count) param\(unbound.count == 1 ? " is" : "s are") not reachable from the custom UI: \(preview)\(andMore). Stock slider panel + DAW automation still see them; only the custom UI renders short.",
+                suggestion: "Add a `<cdp-slider param=\"\(unbound[0])\">` (or appropriate widget) for each missing param, OR drop in `<cdp-panel auto></cdp-panel>` as a catch-all. If the omission is deliberate, ignore this warning."
+            )
+        ]
     }
 
     /// The custom UI webview runs with a strict CSP that blocks fetch, XHR,
@@ -323,7 +502,7 @@ enum BundleUIValidator {
     private static func checkHasInteractiveSurface(html: String, bundle: PresetBundle) -> [Issue] {
         guard let params = bundle.manifest.params, !params.isEmpty else { return [] }
 
-        let interactiveTags = ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-panel"]
+        let interactiveTags = ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-knob", "cdp-panel"]
         let foundInteractiveTag = interactiveTags.contains { tag in
             html.range(of: "<\(tag)", options: .caseInsensitive) != nil
         }
@@ -336,7 +515,7 @@ enum BundleUIValidator {
                 severity: .warn,
                 check: "no_interactive_surface",
                 file: "ui/index.html",
-                message: "UI has \(params.count) declared parameter\(params.count == 1 ? "" : "s") but no cdp-slider / cdp-toggle / cdp-choice / cdp-xy / cdp-panel / <input type=\"range\"> — users will have no way to change them.",
+                message: "UI has \(params.count) declared parameter\(params.count == 1 ? "" : "s") but no cdp-slider / cdp-toggle / cdp-choice / cdp-xy / cdp-knob / cdp-panel / <input type=\"range\"> — users will have no way to change them.",
                 suggestion: "Add per-param controls, or drop in <cdp-panel auto></cdp-panel> as a catch-all. Fully decorative UIs are fine for display-only presets, but every parameter should have at least one way to be edited."
             )
         ]
@@ -847,6 +1026,23 @@ enum BundleUIValidator {
     ]
 
     // MARK: - Helpers
+
+    /// Strip `<!-- ... -->` comments from HTML before content scans that
+    /// shouldn't see commented-out example markup (e.g. the starter
+    /// scaffold's "<cdp-toggle param=\"Bypass\">" example block).
+    /// Non-greedy match across newlines.
+    private static func stripHTMLComments(_ html: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: "<!--[\\s\\S]*?-->",
+            options: []
+        ) else { return html }
+        let ns = html as NSString
+        return regex.stringByReplacingMatches(
+            in: html,
+            range: NSRange(location: 0, length: ns.length),
+            withTemplate: ""
+        )
+    }
 
     /// Case-insensitive, underscore-and-space-insensitive comparison key.
     /// Mirrors the loose matching cdp-ui.js uses when resolving `param="…"`

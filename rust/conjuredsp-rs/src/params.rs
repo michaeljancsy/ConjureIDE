@@ -177,6 +177,29 @@ pub const fn param(min: f64, max: f64) -> ParamSpec {
     }
 }
 
+/// Specification for a single telemetry slot — a read-only float the
+/// DSP publishes per-block for the host UI to read via `audio.onFrame`'s
+/// `telemetry` field. Use `.unit("dB")` etc. to attach a unit string
+/// for display formatting (the same `formatValue` helper that handles
+/// param units in cdp-ui.js consumes this).
+#[derive(Clone, Copy)]
+pub struct TelemetrySpec {
+    pub unit_str: &'static str,
+}
+
+impl TelemetrySpec {
+    /// Set the display unit (e.g., "dB", "Hz", "%").
+    pub const fn unit(mut self, unit: &'static str) -> Self {
+        self.unit_str = unit;
+        self
+    }
+}
+
+/// Default telemetry slot — no unit. Customize with `.unit("dB")`.
+pub const fn telemetry() -> TelemetrySpec {
+    TelemetrySpec { unit_str: "" }
+}
+
 /// Integer-valued parameter with explicit min/max.
 ///
 /// Renders as a slider/knob in the in-plugin UI and as a discrete-stepped
@@ -319,6 +342,18 @@ mod tests {
         assert!(approx_eq(p.default_val, 8.0, 1e-10));
         assert_eq!(p.unit_str, "bits");
         assert_eq!(p.style_str, "integer");
+    }
+
+    #[test]
+    fn test_telemetry_default_unit() {
+        let t = telemetry();
+        assert_eq!(t.unit_str, "");
+    }
+
+    #[test]
+    fn test_telemetry_with_unit() {
+        let t = telemetry().unit("dB");
+        assert_eq!(t.unit_str, "dB");
     }
 
     #[test]

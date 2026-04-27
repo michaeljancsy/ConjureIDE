@@ -10,7 +10,7 @@ PARAMS = {
 _lfo = None
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     Ring Modulator — multiplies the signal by a sine-wave carrier.
 

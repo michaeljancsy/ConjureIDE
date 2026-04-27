@@ -20,7 +20,7 @@ class LFO:
 
         _lfo = None
 
-        def process(inputs, outputs, frame_count, sample_rate, params):
+        def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
             global _lfo
             if _lfo is None:
                 _lfo = LFO(sample_rate)

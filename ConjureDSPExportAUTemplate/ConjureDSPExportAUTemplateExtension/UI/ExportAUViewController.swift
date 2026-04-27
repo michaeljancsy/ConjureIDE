@@ -26,14 +26,30 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
     /// the kernel handle from the AU.
     private var captureManager: ExportAudioCaptureManager?
 
-    private static let viewWidth: CGFloat = 500
+    /// Fallback window width when the manifest doesn't declare one. Old
+    /// exports without `ui.width` in their runtime-config (or generic-slider
+    /// presets that ship no `ui` block at all) fall back to this.
+    private static let defaultViewWidth: CGFloat = 500
+
+    /// Resolved window width — populated from `runtime-config.json`'s
+    /// `ui.width` at `loadView` time (so the very first frame uses the
+    /// right size and the host doesn't see a brief 500pt → declared-width
+    /// jump). Falls back to `defaultViewWidth` when the manifest doesn't
+    /// declare a width.
+    private var resolvedViewWidth: CGFloat = defaultViewWidth
 
     public override var preferredMinimumSize: NSSize {
         NSSize(width: 300, height: 150)
     }
 
     public override var preferredMaximumSize: NSSize {
-        NSSize(width: 800, height: 900)
+        // Generous cap. Authors can declare manifest.ui.width up to 1600pt
+        // and manifest.ui.height up to ~1080pt without the host clamping;
+        // anything past that, they're outside our supported range and the
+        // host can clip if it wants. The earlier 800×900 cap clipped any
+        // preset wider than 800pt (Round 8's Dyn EQ Triad declared 1200pt,
+        // got squeezed back to 800pt by Ableton).
+        NSSize(width: 1600, height: 1080)
     }
 
     /// Compute the ideal window height based on content. Values here are
@@ -50,11 +66,39 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
             hasCustomUI: customUIEntryURL != nil,
             customUIHeight: customUIHeight,
             paramCount: paramCount,
-            viewWidth: Self.viewWidth
+            viewWidth: resolvedViewWidth
         )
     }
 
     public override func loadView() {
+        // Resolve the manifest-declared dimensions up front so the window
+        // opens at the right size on the very first frame.
+        //
+        // ExportManager writes manifest.ui.{width,height,entryHTML} into
+        // runtime-config.json during export. Without reading them here in
+        // loadView, computeSize falls back to (default 500pt × 320pt body)
+        // for the initial preferredContentSize — and SwiftUI re-layouts
+        // triggered by configureSwiftUIView later don't update
+        // preferredContentSize unless an explicit `onLayoutChange` fires
+        // (which only happens on debug-toggle / error-banner show). Result:
+        // the window opens too small and stays too small.
+        //
+        // Reading the full UI block here means the window opens at exactly
+        // the manifest-declared size on first paint. Old exports / generic-
+        // slider presets that don't have a `ui` block in runtime-config
+        // fall through to the existing defaults.
+        let bundle = Bundle(for: type(of: self))
+        if let cfg = RuntimeConfig.load(from: bundle) {
+            if let w = cfg.ui?.width { self.resolvedViewWidth = CGFloat(w) }
+            if let h = cfg.ui?.height { self.customUIHeight = h }
+            // hasCustomUI is gated on customUIEntryURL being non-nil, so
+            // we need the resolved URL here too — otherwise computeSize
+            // would treat this as a generic-slider preset and use the
+            // paramCount * 28 body-height formula instead of the
+            // manifest's customUIHeight.
+            self.customUIEntryURL = cfg.customUIEntryURL(in: bundle)
+        }
+
         let initial = computeSize(showDebug: false, showError: false)
         self.view = NSView(frame: NSRect(origin: .zero, size: initial))
         self.preferredContentSize = initial

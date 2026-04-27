@@ -112,6 +112,58 @@ struct BundleAssetSchemeHandlerTests {
         }
     }
 
+    @Test func resolveRejectsURLEncodedDotDot() throws {
+        // Foundation's URL decodes percent-encoded path components when
+        // `.path` is evaluated, so `%2e%2e` should end up as `..` and get
+        // caught by the same standardization pass. Pin the behavior — a
+        // regression that bypasses standardization here would let a UI
+        // read arbitrary files.
+        let root = try Self.makeBundle()
+        defer { Self.cleanup(root) }
+        let handler = BundleAssetSchemeHandler(rootURL: root)
+
+        // `%2e%2e%2f` = `../`
+        let url = URL(string: "conjuredsp-preset://preset/%2e%2e/%2e%2e/%2e%2e/etc/passwd")!
+        #expect(throws: BundleAssetSchemeHandler.ResolveError.self) {
+            try handler.resolve(requestURL: url)
+        }
+    }
+
+    @Test func resolveRejectsMixedSlashEscape() throws {
+        // Pathological mix of literal and encoded path separators —
+        // pre-standardization, it can confuse naive string checks. After
+        // `.standardizedFileURL`, any form that still lands outside the
+        // root must be rejected.
+        let root = try Self.makeBundle()
+        defer { Self.cleanup(root) }
+        let handler = BundleAssetSchemeHandler(rootURL: root)
+
+        let url = URL(string: "conjuredsp-preset://preset/ui/..%2f..%2f..%2fetc/passwd")!
+        #expect(throws: BundleAssetSchemeHandler.ResolveError.self) {
+            try handler.resolve(requestURL: url)
+        }
+    }
+
+    @Test func resolveRejectsNullByteInjection() throws {
+        // A URL-encoded null byte can truncate a path in naive C-string
+        // APIs. Foundation's URL decodes it into the path; we expect the
+        // sandbox check (or the file existence check) to reject — never
+        // to silently serve a file.
+        let root = try Self.makeBundle()
+        defer { Self.cleanup(root) }
+        let handler = BundleAssetSchemeHandler(rootURL: root)
+
+        let url = URL(string: "conjuredsp-preset://preset/ui/index.html%00.png")
+        // Some URL implementations drop null-byte URLs at parse time; if
+        // the URL survives, expect resolve() to refuse it one way or
+        // another (notFound or outsideBundle).
+        if let url {
+            #expect(throws: BundleAssetSchemeHandler.ResolveError.self) {
+                try handler.resolve(requestURL: url)
+            }
+        }
+    }
+
     @Test func resolveRejectsSiblingDirectoryWithPathPrefix() throws {
         // rootURL is `…/MyBundle.cdp`; a sibling `…/MyBundle.cdpEvil/secret.txt`
         // must not resolve even though its absolute path starts with the

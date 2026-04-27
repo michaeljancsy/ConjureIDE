@@ -62,7 +62,7 @@ class _S:
         self.lfo_trem = LFO(sr, freq=4.0, waveform="triangle")
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     global _st, _sr
     nch = len(inputs)
     if _st is None or _sr != sample_rate:

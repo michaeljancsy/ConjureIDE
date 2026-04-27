@@ -17,7 +17,7 @@ DIVISIONS = [4.0, 2.0, 1.0, 0.5, 0.25, 2.0 / 3.0, 1.0 / 3.0]
 _lfo = None
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, transport):
+def process(inputs, outputs, frame_count, sample_rate, params, transport, _telemetry):
     """
     Tremolo — sine-based amplitude modulation.
 

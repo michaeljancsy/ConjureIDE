@@ -16,7 +16,7 @@ _left_dl = None
 _right_dl = None
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     Ping-Pong Delay — stereo bouncing echo.
 

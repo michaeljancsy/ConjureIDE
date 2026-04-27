@@ -41,10 +41,15 @@ Edit `ConjureDSPExtension/Resources/process.py`. The `process()` function is cal
 ```python
 import numpy as np
 
-def process(inputs, outputs, frame_count, sample_rate):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     for ch in range(len(inputs)):
         outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5
 ```
+
+The 7-arg signature is the canonical convention. `params` is a dict
+keyed by parameter name (when a `PARAMS` dict is declared); `_transport`
+and `_telemetry` carry the host's transport state and the per-block
+telemetry dict. Use the underscore prefix when you don't read them.
 
 **Parameters:**
 - `inputs` — list of numpy float32 arrays (one per channel, pre-allocated to `max_frames`)

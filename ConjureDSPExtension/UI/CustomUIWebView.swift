@@ -66,7 +66,7 @@ struct CustomUIWebView: NSViewRepresentable {
         }
 
         // cdp-ui.js: the component library (primitives + <cdp-slider>,
-        // <cdp-toggle>, <cdp-choice>, <cdp-xy>, <cdp-panel>). Injected
+        // <cdp-toggle>, <cdp-choice>, <cdp-xy>, <cdp-knob>, <cdp-panel>). Injected
         // AFTER the bridge so `window.ConjureDSP` is already defined;
         // `atDocumentStart` guarantees ordering across user scripts.
         if let uiLibSource = Self.uiLibrarySource() {
@@ -463,37 +463,17 @@ struct CustomUIWebView: NSViewRepresentable {
                 sendInit()
 
             case "paramSet":
-                // Log BEFORE the guard so we see every message that
-                // arrives, not just the ones that parse cleanly. If a
-                // drag fires 20 JS postMessages but only 3 show up as
-                // [3.swift.paramSet], the guard is silently dropping
-                // the other 17 — previously impossible to see.
-                let rawBodyType = String(describing: type(of: message.body))
-                // paramFlow.notice("[3.swift.paramSet.arrived] body=\(String(describing: message.body), privacy: .public) type=\(rawBodyType, privacy: .public)")
-                guard let body = message.body as? [String: Any] else {
-                    // paramFlow.notice("[3.swift.paramSet.DROP] reason=body-not-dict type=\(rawBodyType, privacy: .public)")
-                    return
-                }
-                guard let index = body["index"] as? Int else {
-                    let indexType = body["index"].map { String(describing: type(of: $0)) } ?? "nil"
-                    // paramFlow.notice("[3.swift.paramSet.DROP] reason=index-not-int got=\(String(describing: body["index"]), privacy: .public) type=\(indexType, privacy: .public)")
-                    return
-                }
+                guard let body = message.body as? [String: Any] else { return }
+                guard let index = body["index"] as? Int else { return }
                 let value: Float
                 if let d = body["value"] as? Double {
                     value = Float(d)
                 } else if let f = body["value"] as? Float {
                     value = f
                 } else {
-                    let valueType = body["value"].map { String(describing: type(of: $0)) } ?? "nil"
-                    // paramFlow.notice("[3.swift.paramSet.DROP] reason=value-not-number got=\(String(describing: body["value"]), privacy: .public) type=\(valueType, privacy: .public)")
                     return
                 }
-                guard let state = parameterState else {
-                    // paramFlow.notice("[3.swift.paramSet.DROP] reason=no-parameterState idx=\(index, privacy: .public) v=\(value, privacy: .public)")
-                    return
-                }
-                // paramFlow.notice("[3.swift.paramSet] idx=\(index, privacy: .public) v=\(value, privacy: .public)")
+                guard let state = parameterState else { return }
                 // Route through the existing binding so the AUParameter setter
                 // fires (same path DAW automation uses). UI writes use our
                 // observer token as originator so the observer is excluded
@@ -604,6 +584,17 @@ struct CustomUIWebView: NSViewRepresentable {
             if includeFFT {
                 if let fft = frame.fftOutDB { payload["fftOut"] = fft }
                 if let fft = frame.fftInDB { payload["fftIn"] = fft }
+            }
+            // Telemetry: per-block scalars the DSP published via
+            // `ctx.set_telemetry(IDX, value)` (Rust) or the `TELEMETRY`
+            // dict (Python). Always attached when present (no opt-in
+            // flag) — the payload is small (≤8 floats keyed by short
+            // strings, ~150 bytes worst case) and the use cases (GR
+            // meters, envelope visualizers) don't tolerate the extra
+            // round-trip an opt-in would require. Only emitted when the
+            // loaded preset declared at least one slot.
+            if let telemetry = frame.telemetry, !telemetry.isEmpty {
+                payload["telemetry"] = telemetry
             }
 
             guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),

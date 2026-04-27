@@ -29,11 +29,11 @@ fn next_f32() -> f32 {
 pub extern "C" fn process(
     _input: *const f32,
     output: *mut f32,
-    channels: i32,
+    channel_count: i32,
     frame_count: i32,
     _sample_rate: f32,
 ) {
-    let ctx = ctx(_input, output, channels, frame_count, _sample_rate);
+    let ctx = ctx(_input, output, channel_count, frame_count, _sample_rate);
 
     let amplitude = ctx.param(LEVEL);
 

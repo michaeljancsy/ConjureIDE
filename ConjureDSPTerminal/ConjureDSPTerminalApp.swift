@@ -150,6 +150,7 @@ class TerminalAppServer {
                 guard let self else { return }
 
                 self.reconcileInstances()
+                self.checkForRelaunchRequest()
 
                 // Package/crate install requests
                 if let installer = self.packageInstaller {
@@ -228,6 +229,28 @@ class TerminalAppServer {
         }
     }
 
+    // MARK: - Relaunch signal
+
+    /// The extension's Settings pane touches `<AppGroup>/relaunch-requested` when
+    /// the user clicks "Relaunch terminal". Delete the signal and restart every
+    /// active session's PTY. Consuming the file is atomic-ish: if two clicks
+    /// land within one reconcile tick, we restart once, which is fine.
+    private func checkForRelaunchRequest() {
+        let url = AppGroupContainer.url.appendingPathComponent("relaunch-requested")
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return }
+        try? fm.removeItem(at: url)
+        log.info("Relaunch requested — restarting \(self.sessions.count) session(s)")
+        // ESC c  = RIS (Reset to Initial State). xterm.js treats this as "clear
+        // screen + scrollback + reset cursor", which is the UX we want on a
+        // manual relaunch — leftover output from the old agent is just noise.
+        let clearSequence = "\u{1b}c".data(using: .utf8) ?? Data()
+        for session in sessions.values {
+            session.wsServer?.broadcast(clearSequence)
+            session.pty?.restart()
+        }
+    }
+
     // MARK: - Session lifecycle
 
     private func startSession(uuid: String, mcpPort: UInt16) {
@@ -256,8 +279,21 @@ class TerminalAppServer {
             ws?.broadcast(data)
         }
 
+        p.onControlMessage = { [weak ws] dict in
+            if let ws, ws.clientCount > 0 {
+                ws.broadcastJSON(dict)
+            } else if let data = try? JSONSerialization.data(withJSONObject: dict) {
+                ws?.pendingControlMessage = data
+            }
+        }
+
         p.onDisplayText = { [weak ws] text in
-            ws?.broadcastText(text)
+            // If no verified clients are connected yet, queue the banner.
+            if let ws, ws.clientCount > 0 {
+                ws.broadcastText(text)
+            } else {
+                ws?.pendingBanner = text
+            }
         }
 
         ws.onClientInput = { [weak p] data in
@@ -285,9 +321,28 @@ class TerminalAppServer {
                     session.wsServer?.broadcastText("\r\n\u{1b}[31m● Error: \(msg)\u{1b}[0m\r\n")
                 case .idle:
                     session.claudeState = "Idle"
+                    // Drop any banner/control message queued by the
+                    // previous PTY run. Otherwise a restart() that
+                    // happens before any client has connected leaves
+                    // the *old* run's control message sitting in the
+                    // queue, where it gets overwritten by the new
+                    // run's message — and the original is lost. Once
+                    // the PTY has gone idle the queued message is
+                    // semantically stale anyway: it described state
+                    // that no longer exists.
+                    session.wsServer?.pendingControlMessage = nil
+                    session.wsServer?.pendingBanner = nil
                 }
                 self?.updateStatus()
             }
+        }
+
+        // PTYManager queries verified-client count to decide whether to write the
+        // launch command now or queue it. Capturing `ws` weakly; if the server is
+        // gone the answer is "no client".
+        p.hasVerifiedClient = { [weak ws] in
+            guard let ws else { return false }
+            return ws.clientCount > 0
         }
 
         ws.onClientCountChange = { [weak p] count in
@@ -297,6 +352,11 @@ class TerminalAppServer {
                 case .idle, .exited(_):
                     p.start()
                 case .running:
+                    // A client just verified. Start the PTY if needed, OR if already
+                    // running flush any queued launch command (for the picker case
+                    // and banner cases where the launch was deferred until verify)
+                    // and SIGWINCH the child so it redraws.
+                    p.flushPendingLaunch()
                     p.sendSIGWINCH()
                 case .error:
                     break

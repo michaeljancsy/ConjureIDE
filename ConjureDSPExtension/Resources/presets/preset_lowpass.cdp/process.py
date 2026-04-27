@@ -9,7 +9,7 @@ PARAMS = {
 _prev_out = [0.0, 0.0]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params):
+def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
     """
     Low-Pass Filter — simple 1-pole IIR low-pass.
 
