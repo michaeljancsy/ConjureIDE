@@ -547,29 +547,19 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 replacingEntryWith: newSource
             )
 
-            // Same param-tree handoff as save_preset: apply the new
-            // bundle's manifest params BEFORE switching + reload, so
-            // readParamNames doesn't return early on stale priority
-            // metadata. duplicate_bundle COPIES the source's manifest,
-            // so manifest.params reflects whatever the source declared
-            // — that's the correct starting point for the fork.
-            if let newBundle = pm.loadBundle(for: preset) {
-                applyManifestParams(newBundle.manifest.resolvedParamMetadata())
-            } else {
-                applyManifestParams(nil)
-            }
-
-            // Reload the kernel from the new bundle's source so the
-            // running DSP matches what's on disk. If newSource was
-            // provided, the entry was already overwritten; otherwise
-            // read the (now-copied) entry from the new bundle.
+            // Resolve the source FIRST so we can fail-fast on a read
+            // error before we mutate any AU-side state (param tree,
+            // current preset, kernel).
             //
-            // We surface a readSource() failure as a tool-level error
-            // rather than swallowing it: a `try?` here would leave
-            // runSource empty, skip the kernel reload, and report
-            // success: true with kernel_reloaded: false and no
-            // explanation — exactly the "guess what went wrong"
-            // shape the agent UX experiment told us to avoid.
+            // We surface readSource() failures explicitly: a `try?`
+            // here would leave runSource empty, skip the kernel
+            // reload, and report success: true / kernel_reloaded:
+            // false with no explanation — exactly the "guess what
+            // went wrong" shape the agent UX experiment told us to
+            // avoid. (Earlier shape applied applyManifestParams
+            // BEFORE this check, so a read error left the param
+            // tree half-mutated even on the success: false return —
+            // Sentry flagged that as a partial-state bug.)
             var sourceReadError: String? = nil
             let runSource: String = {
                 if let newSource { return newSource }
@@ -593,6 +583,20 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                     "kernel_reloaded": false,
                 ]), true)
             }
+
+            // Now safe to mutate AU state. Same param-tree handoff
+            // as save_preset: apply the new bundle's manifest params
+            // BEFORE switching + reload, so readParamNames doesn't
+            // return early on stale priority metadata.
+            // duplicate_bundle COPIES the source's manifest, so
+            // manifest.params reflects whatever the source declared
+            // — that's the correct starting point for the fork.
+            if let newBundle = pm.loadBundle(for: preset) {
+                applyManifestParams(newBundle.manifest.resolvedParamMetadata())
+            } else {
+                applyManifestParams(nil)
+            }
+
             pm.setCurrentPreset(preset, source: runSource)
             clearDAWCurrentPreset()
 
@@ -615,8 +619,16 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // tree needs to follow — same code path as compile_and_run.
             let paramTreeRebuilt = self.rebuildParamTreeFromKernelIfChanged()
 
+            // Top-level `success` reflects the WHOLE atomic operation
+            // (mirrors save_preset b17506e): bundle copy + switch +
+            // kernel reload. If the kernel didn't reload, `success`
+            // is false and the MCP isError tuple element flips so
+            // clients see this as a failed call. The disk copy +
+            // current-preset switch are tracked separately
+            // (`switched_current_preset`) for callers that want to
+            // disambiguate.
             var response: [String: Any] = [
-                "success": true,
+                "success": kernelReloaded,
                 "name": preset.name,
                 "switched_current_preset": true,
                 "kernel_reloaded": kernelReloaded,
@@ -629,7 +641,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             if newSource != nil {
                 response["entry_replaced"] = true
             }
-            return (jsonStr(response), false)
+            return (jsonStr(response), !kernelReloaded)
         } catch PresetManager.BundleFileError.alreadyExists {
             return (jsonStr(["error": "A preset named '\(destName)' already exists. Pick a different dest_name or delete the existing one first."]), true)
         } catch {

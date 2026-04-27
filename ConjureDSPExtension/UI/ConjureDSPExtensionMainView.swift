@@ -406,6 +406,15 @@ struct ConjureDSPExtensionMainView: View {
                                     instanceID: instanceID,
                                     onFirstInput: { terminalFirstInputReceived = true },
                                     onAgentStatus: { status in
+                                        // Picker visibility is bound to the current
+                                        // status — only the .picker case implies it's
+                                        // up. Every other status means the picker
+                                        // is gone (launching → agent chosen,
+                                        // agentMissing → error pane, etc.). Reset
+                                        // every transition so the flag reflects
+                                        // current reality, not the high-water mark.
+                                        // (Sentry: once true, never false.)
+                                        terminalAgentPickerShowing = false
                                         switch status {
                                         case .noAgentsInstalled, .claudeNotInstalled:
                                             terminalClaudeNotInstalled = true
