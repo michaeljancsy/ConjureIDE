@@ -7,6 +7,32 @@ with sensible defaults for common parameter types.
 from .types import ParamSpec
 
 
+def _reject_unknown_kwargs(builder: str, baked: dict, kwargs: dict) -> None:
+    """Raise a TypeError that tells the author exactly what to do instead.
+
+    The named builders (freq, db, time_ms, mix, pct, toggle, ratio) bake in
+    their unit / curve / range, so passing them `unit=` or `curve=` raises
+    a default Python TypeError ("got an unexpected keyword argument") that
+    is technically correct but doesn't tell the author what to write
+    instead. This helper produces an actionable message: it lists what the
+    builder bakes in and points at `param()` for the override path.
+
+    Caught Round 9 of the agent UX experiment: agent wrote
+    `freq(unit="Hz")` (redundant but reasonable) and got the default
+    TypeError without a useful next step.
+    """
+    if not kwargs:
+        return
+    bad = sorted(kwargs)
+    baked_str = ", ".join(f"{k}={v!r}" for k, v in baked.items())
+    raise TypeError(
+        f"{builder}() got unexpected keyword argument(s) {bad}. "
+        f"{builder}() bakes in {baked_str}. "
+        f"For a custom unit / curve / range, use "
+        f"`param(min, max, unit=..., curve=..., default=...)` instead."
+    )
+
+
 def param(
     min: float,
     max: float,
@@ -48,43 +74,58 @@ def param(
 
 
 def freq(
-    min: float = 20.0, max: float = 20000.0, default: float = 1000.0
+    min: float = 20.0, max: float = 20000.0, default: float = 1000.0, **kwargs
 ) -> ParamSpec:
     """Frequency parameter with Hz unit and log curve.
 
-    Default range: 20 Hz to 20 kHz (audible spectrum).
+    Default range: 20 Hz to 20 kHz (audible spectrum). Unit and curve are
+    baked in — pass them explicitly to `param()` if you need overrides.
     """
+    _reject_unknown_kwargs("freq", {"unit": "Hz", "curve": "log"}, kwargs)
     return param(min, max, unit="Hz", default=default, curve="log")
 
 
-def db(min: float = -60.0, max: float = 12.0, default: float = 0.0) -> ParamSpec:
+def db(min: float = -60.0, max: float = 12.0, default: float = 0.0, **kwargs) -> ParamSpec:
     """Decibel parameter with dB unit and linear curve."""
+    _reject_unknown_kwargs("db", {"unit": "dB", "curve": "linear"}, kwargs)
     return param(min, max, unit="dB", default=default)
 
 
 def time_ms(
-    min: float = 0.1, max: float = 1000.0, default: float = 100.0
+    min: float = 0.1, max: float = 1000.0, default: float = 100.0, **kwargs
 ) -> ParamSpec:
     """Time parameter in milliseconds with log curve.
 
     Log curve gives fine control at short times (attack) and coarse
     control at long times (release).
     """
+    _reject_unknown_kwargs("time_ms", {"unit": "ms", "curve": "log"}, kwargs)
     return param(min, max, unit="ms", default=default, curve="log")
 
 
-def pct(default: float = 50.0) -> ParamSpec:
+def pct(default: float = 50.0, **kwargs) -> ParamSpec:
     """Percentage parameter, 0-100 with % unit."""
+    _reject_unknown_kwargs(
+        "pct", {"min": 0.0, "max": 100.0, "unit": "%", "curve": "linear"}, kwargs
+    )
     return param(0.0, 100.0, unit="%", default=default)
 
 
-def mix(default: float = 0.5) -> ParamSpec:
+def mix(default: float = 0.5, **kwargs) -> ParamSpec:
     """Wet/dry mix parameter, 0.0 (dry) to 1.0 (wet)."""
+    _reject_unknown_kwargs(
+        "mix", {"min": 0.0, "max": 1.0, "unit": "", "curve": "linear"}, kwargs
+    )
     return param(0.0, 1.0, default=default)
 
 
-def toggle(default: float = 0.0) -> ParamSpec:
+def toggle(default: float = 0.0, **kwargs) -> ParamSpec:
     """On/off toggle parameter (0 or 1)."""
+    _reject_unknown_kwargs(
+        "toggle",
+        {"min": 0.0, "max": 1.0, "unit": "", "curve": "linear", "style": "toggle"},
+        kwargs,
+    )
     spec = param(0.0, 1.0, default=default)
     spec["style"] = "toggle"
     return spec
@@ -115,8 +156,9 @@ def choice(*labels: str, default: str | None = None) -> ParamSpec:
     return spec
 
 
-def ratio(min: float = 1.0, max: float = 20.0, default: float = 4.0) -> ParamSpec:
+def ratio(min: float = 1.0, max: float = 20.0, default: float = 4.0, **kwargs) -> ParamSpec:
     """Compression/expansion ratio parameter."""
+    _reject_unknown_kwargs("ratio", {"unit": ":1", "curve": "linear"}, kwargs)
     return param(min, max, unit=":1", default=default)
 
 
