@@ -288,6 +288,24 @@ class PresetManager: ObservableObject {
         isModified = (newSource != loaded)
     }
 
+    /// The disk-truth equivalent of `setCurrentPreset(_:source:)` for
+    /// out-of-band writes that land an entry-script payload directly to
+    /// disk (MCP `write_bundle_file`). Without this, the typical agent
+    /// flow — `write_bundle_file('process.py', NEW)` followed by
+    /// `compile_and_run(NEW)` — leaves `loadedSource` set to the OLD
+    /// content from the bundle's prior load. The downstream
+    /// `scriptSourceDidChange` echo from `compile_and_run` then drives
+    /// `scriptDidChange(NEW)`, which compares NEW to the stale
+    /// `loadedSource` (OLD) and flips `isModified = true` even though
+    /// kernel and disk are perfectly in sync. Updating `loadedSource`
+    /// here makes the comparison a no-op and keeps the dirty flag
+    /// honest. `selectPreset` / `save_preset` don't need an analogous
+    /// call because they go through `setCurrentPreset` first.
+    func markEntryScriptSaved(_ content: String) {
+        loadedSource = content
+        isModified = false
+    }
+
     /// Record that the debounced editor has written `url` to disk. The main
     /// view calls this after each successful `scheduleAltFileSave` write so
     /// the UI can reflect "save available" without requiring a commit.

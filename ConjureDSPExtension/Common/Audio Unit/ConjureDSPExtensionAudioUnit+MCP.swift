@@ -772,6 +772,24 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         // glance at the toggle bar) reads it.
         presetManager.refreshPresets()
 
+        let pathStr = (input["path"] as? String) ?? ""
+
+        // When the write lands the entry script payload, treat it as
+        // an explicit save — the disk now equals what the kernel will
+        // see on the next compile_and_run, so the dirty-flag baseline
+        // (`loadedSource`) needs to follow. Otherwise the canonical
+        // agent flow (write entry, then compile_and_run with the same
+        // text) flips isModified=true on the downstream
+        // scriptSourceDidChange echo. Look up the entry path on the
+        // refreshed bundle so an in-the-same-call manifest write that
+        // changed `entry` is honored.
+        let refreshedBundle = presetManager.currentPreset.flatMap {
+            presetManager.loadBundle(for: $0)
+        }
+        if let refreshedBundle, pathStr == refreshedBundle.manifest.entry {
+            presetManager.markEntryScriptSaved(content)
+        }
+
         // For edits that could affect the custom UI (ui/*, manifest.json),
         // run the static validator and include its report in the response
         // so the agent sees warnings on the same turn it wrote the file —
@@ -781,13 +799,11 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             "path": input["path"] ?? "",
             "bytes_written": content.utf8.count,
         ]
-        let pathStr = (input["path"] as? String) ?? ""
         let touchesUISurface = pathStr.hasPrefix("ui/")
             || pathStr == PresetManifest.filename
             || url.lastPathComponent == PresetManifest.filename
-        if touchesUISurface,
-           let refreshed = presetManager.currentPreset.flatMap({ presetManager.loadBundle(for: $0) }) {
-            response["validation"] = validationReportAsJSON(BundleUIValidator.validate(refreshed))
+        if touchesUISurface, let refreshedBundle {
+            response["validation"] = validationReportAsJSON(BundleUIValidator.validate(refreshedBundle))
         }
         return (jsonStr(response), false)
     }
