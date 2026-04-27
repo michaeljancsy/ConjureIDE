@@ -264,12 +264,28 @@ struct PresetBrowserView: View {
         let isCurrent = currentPreset?.id == preset.id
         let isHovered = hoveredPresetID == preset.id
         let isOddRow = index % 2 == 1
+        let isBroken = preset.isBroken
 
-        Button(action: { onSelectPreset(preset) }) {
+        Button(action: {
+            // Broken bundles can't be loaded — clicking is a no-op. The
+            // row's tooltip (`help`) explains the parse error so the user
+            // has a starting point for diagnosis.
+            guard !isBroken else { return }
+            onSelectPreset(preset)
+        }) {
             HStack(spacing: 0) {
                 // Name column
                 HStack(spacing: 4) {
-                    if isCurrent {
+                    if isBroken {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .frame(width: 12)
+                            .accessibilityIdentifier("brokenBundleBadge")
+                        // Reserve the asterisk slot so columns line up
+                        // with the current/modified rows above/below.
+                        Spacer().frame(width: 6)
+                    } else if isCurrent {
                         Image(systemName: "checkmark")
                             .font(.caption2)
                             .foregroundColor(.accentColor)
@@ -288,7 +304,7 @@ struct PresetBrowserView: View {
 
                     Text(preset.name)
                         .font(.system(size: 12))
-                        .foregroundColor(.primary)
+                        .foregroundColor(isBroken ? .secondary : .primary)
                         .lineLimit(1)
 
                     // Custom-UI badge — signals that the preset ships an
@@ -305,15 +321,17 @@ struct PresetBrowserView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, 12)
 
-                // Category column
-                Text(preset.category?.displayName ?? "\u{2014}")
+                // Category column — when the bundle is broken, replace
+                // category metadata with a short "Broken" label so the
+                // user spots the unloadable preset at a glance.
+                Text(isBroken ? "Broken" : (preset.category?.displayName ?? "\u{2014}"))
                     .font(.system(size: 11))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(isBroken ? .orange : .secondary)
                     .lineLimit(1)
                     .frame(width: Self.categoryWidth, alignment: .leading)
 
                 // Language column
-                Text(preset.language == .rust ? "Rust" : "Python")
+                Text(isBroken ? "\u{2014}" : (preset.language == .rust ? "Rust" : "Python"))
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .frame(width: Self.languageWidth, alignment: .leading)
@@ -335,8 +353,12 @@ struct PresetBrowserView: View {
                             ? Color.secondary.opacity(0.03)
                             : Color.clear
             )
+            // Surface the parse error on hover so the user has somewhere
+            // to start diagnosing without having to dig through Console.
+            .help(preset.brokenError ?? "")
         }
         .buttonStyle(.plain)
+        .disabled(isBroken)
         .onHover { hovering in
             hoveredPresetID = hovering ? preset.id : nil
         }

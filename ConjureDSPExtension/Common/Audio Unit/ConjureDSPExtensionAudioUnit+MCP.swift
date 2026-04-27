@@ -342,11 +342,23 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // "the one with the custom UI". loadBundle is cached for
             // factory presets so this doesn't re-parse the manifest
             // every time list_presets runs.
-            // Every preset is a bundle now (factory or user). Surface
-            // `has_custom_ui` so Claude Code can pick the right preset
-            // when a user asks for "the one with the custom UI".
-            // loadBundle is cached for factory presets so this doesn't
-            // re-parse the manifest every time list_presets runs.
+            //
+            // Broken bundles (manifest fails to parse, entry script
+            // missing, etc.) are kept in the list so users + agents can
+            // see them and diagnose, instead of silently disappearing.
+            // The shape carries a `broken: true` flag and an `error`
+            // string in that case; working bundles match the existing
+            // shape exactly (no `broken` / no `error` field).
+            if let brokenError = preset.brokenError {
+                return [
+                    "name": preset.name,
+                    "is_factory": preset.isFactory,
+                    "language": NSNull(),
+                    "has_custom_ui": false,
+                    "broken": true,
+                    "error": brokenError,
+                ]
+            }
             let bundle = pm.loadBundle(for: preset)
             return [
                 "name": preset.name,
@@ -641,10 +653,32 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         }
         guard let bundle = presetManager.loadBundle(for: preset) else {
             // currentPreset exists but the bundle on disk failed to
-            // load — typically a legacy single-file preset or a
-            // bundle whose manifest can't be parsed. Distinct from
-            // scratchpad: an agent here should investigate the
-            // bundle, not start authoring fresh.
+            // load. Two sub-cases worth distinguishing:
+            //
+            //  1. `broken_manifest` — bundle directory is present and
+            //     contains a manifest.json, but the manifest fails to
+            //     decode (or `entry` points at a missing script). The
+            //     agent has a concrete fix path: read manifest.json,
+            //     find the bug, write it back. We re-run the loader
+            //     here to recover the underlying parse error.
+            //  2. `preset_unloadable` — fallback for everything else
+            //     (legacy single-file preset, missing root, etc.).
+            if let userURL = preset.fileURL {
+                if case .broken(_, _, let parseError) =
+                    PresetBundle.loadResult(from: userURL) {
+                    let manifestPath = userURL
+                        .appendingPathComponent(PresetManifest.filename).path
+                    return (jsonStr([
+                        "bundle": NSNull(),
+                        "state": "broken_manifest",
+                        "preset_name": preset.name,
+                        "is_factory": preset.isFactory,
+                        "manifest_path": manifestPath,
+                        "error": parseError,
+                        "hint": "currentPreset is '\(preset.name)' but its manifest.json (or entry script) is broken. Read the manifest with read_bundle_file('manifest.json'), fix the JSON / `entry` field, and write it back with write_bundle_file. Underlying error: \(parseError)",
+                    ]), false)
+                }
+            }
             return (jsonStr([
                 "bundle": NSNull(),
                 "state": "preset_unloadable",

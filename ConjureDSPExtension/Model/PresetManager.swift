@@ -157,25 +157,43 @@ class PresetManager: ObservableObject {
 
         var result: [Preset] = []
         for url in bundleDirs {
-            guard let bundle = PresetBundle.load(from: url) else {
-                log.warning("Skipping malformed bundle at \(url.path, privacy: .public)")
+            switch PresetBundle.loadResult(from: url) {
+            case .ok(let bundle):
+                let name = bundle.name
+                let category: PresetCategory = {
+                    guard let raw = bundle.manifest.meta?.category else { return .other }
+                    return PresetCategory(rawValue: raw.lowercased()) ?? .other
+                }()
+                result.append(Preset(
+                    id: "user:\(name)",
+                    name: name,
+                    source: .user(url: url),
+                    factoryPresetNumber: nil,
+                    language: bundle.language,
+                    category: category,
+                    descriptionText: bundle.manifest.meta?.description,
+                    author: bundle.manifest.meta?.author
+                ))
+            case .broken(let name, let rootURL, let error):
+                // Surface broken bundles in the list with an error string
+                // so the browser can render them with a warning glyph and
+                // the user has a starting point for diagnosis. Without
+                // this, a hand-edited manifest with a typo (e.g. invalid
+                // JSON like `"height": 00`) makes the preset silently
+                // vanish from the list with no signal anywhere about why.
+                log.error("Broken bundle at \(rootURL.path, privacy: .public): \(error, privacy: .public)")
+                result.append(Preset(
+                    id: "user:\(name)",
+                    name: name,
+                    source: .user(url: rootURL),
+                    factoryPresetNumber: nil,
+                    language: .python, // best-effort guess — manifest is unparsable
+                    category: .other,
+                    brokenError: error
+                ))
+            case .notABundle:
                 continue
             }
-            let name = bundle.name
-            let category: PresetCategory = {
-                guard let raw = bundle.manifest.meta?.category else { return .other }
-                return PresetCategory(rawValue: raw.lowercased()) ?? .other
-            }()
-            result.append(Preset(
-                id: "user:\(name)",
-                name: name,
-                source: .user(url: url),
-                factoryPresetNumber: nil,
-                language: bundle.language,
-                category: category,
-                descriptionText: bundle.manifest.meta?.description,
-                author: bundle.manifest.meta?.author
-            ))
         }
         return result
     }

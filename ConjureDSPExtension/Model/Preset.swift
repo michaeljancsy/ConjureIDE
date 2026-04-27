@@ -45,6 +45,12 @@ struct Preset: Identifiable, Hashable {
     var category: PresetCategory?
     var descriptionText: String?
     var author: String?
+    /// Non-nil iff the preset's bundle directory exists but failed to load
+    /// (bad manifest, missing entry script, etc.). The browser surfaces
+    /// these distinctly so the user can spot and diagnose them instead of
+    /// having presets silently disappear from the list. Selection is
+    /// blocked while this is set — there's no usable bundle to load.
+    var brokenError: String?
 
     var isFactory: Bool {
         if case .factory = source { return true }
@@ -55,6 +61,12 @@ struct Preset: Identifiable, Hashable {
         if case .user = source { return true }
         return false
     }
+
+    /// True iff this preset is a user bundle that failed to load. Factory
+    /// bundles never go through the broken path because they ship with the
+    /// extension; if a factory bundle is ever broken, that's a build bug
+    /// and `FactoryPresetValidationTests` would catch it before release.
+    var isBroken: Bool { brokenError != nil }
 
     /// On-disk URL for mutable presets (nil for factory).
     var fileURL: URL? {
