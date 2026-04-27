@@ -113,6 +113,42 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         }
     }
 
+    /// Reported when the rendered HTML's scroll extent exceeds the
+    /// manifest's declared `ui.width` / `ui.height` by more than
+    /// `overflowToleranceP`. Captures both the declared and rendered
+    /// dimensions so the caller can see exactly how much to bump the
+    /// manifest by — clipping silently in the live plugin (and in
+    /// exported AUs that pin the webview to manifest dimensions) was
+    /// invisible to the static validator. Omitted from the report
+    /// entirely when the content fits.
+    struct ContentOverflow: Encodable, Equatable {
+        struct Size: Encodable, Equatable {
+            let width: Int
+            let height: Int
+        }
+        struct ByPixels: Encodable, Equatable {
+            let width: Int?
+            let height: Int?
+        }
+        let declared: Size
+        let rendered: Size
+        let overflows: [String]   // any subset of ["width", "height"]
+        let byPixels: ByPixels
+
+        enum CodingKeys: String, CodingKey {
+            case declared, rendered, overflows
+            case byPixels = "by_pixels"
+        }
+    }
+
+    /// Pixel slack — render extents within this many pixels of the
+    /// declared bounds are treated as fitting. WebKit's measured
+    /// scroll dimensions can drift by a pixel or two from authored
+    /// CSS due to subpixel rounding and font metrics; 8px gives plenty
+    /// of headroom for that without masking the kind of overflow that
+    /// shipped Round 8's Dyn EQ Triad ~75pt cramped.
+    private static let overflowToleranceP: Int = 8
+
     struct Report: Encodable {
         let status: ReportStatus
         let readyFired: Bool
@@ -121,6 +157,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         let jsErrors: [JSLogEntry]
         let components: [ComponentReport]
         let params: [ParamCoverage]
+        let contentOverflow: ContentOverflow?
 
         enum CodingKeys: String, CodingKey {
             case status
@@ -130,6 +167,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             case jsErrors = "js_errors"
             case components
             case params
+            case contentOverflow = "content_overflow"
         }
     }
 
@@ -147,6 +185,12 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
     private var loadError: String?
     private var hostParameterNames: [Int: String] = [:]
     private var hostParameterCount: Int = 0
+    /// Manifest-declared UI dimensions in points. Used both to size the
+    /// offscreen WKWebView (so layout matches what the live plugin / a
+    /// future export would render) and to compare against the post-load
+    /// scroll extent for overflow detection.
+    private var declaredWidth: Int = 0
+    private var declaredHeight: Int = 0
     private var timeoutTask: DispatchWorkItem?
     /// Messages posted through the bridge's `log` channel. The bridge
     /// funnels user-callback exceptions through here via `safeInvoke`,
@@ -173,6 +217,20 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         self.completion = completion
         self.hostParameterNames = hostParameterNames
         self.hostParameterCount = hostParameterCount
+
+        // Size the offscreen WKWebView to match the manifest's declared
+        // UI dimensions. Without this the webview defaulted to 400×240,
+        // which let oversized content lay out happily in the smoke test
+        // even when the live plugin (which pins the webview to
+        // manifest.ui.{width,height}) would clip it. The overflow check
+        // below relies on this matching — it compares the rendered
+        // scroll extent against the same declared dimensions.
+        // Defaults mirror what CustomUIWebView falls back to when the
+        // manifest omits a `ui` block.
+        let w = bundle.manifest.ui?.width ?? 400
+        let h = bundle.manifest.ui?.height ?? 240
+        self.declaredWidth = w
+        self.declaredHeight = h
 
         let config = WKWebViewConfiguration()
         // ─── Isolation from the plugin's live custom-UI WKWebView ───
@@ -224,7 +282,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         // `ConjureDSP.ready(cb)` silently vanishes.
         config.userContentController.add(self, name: "log")
 
-        let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 240), configuration: config)
+        let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: w, height: h), configuration: config)
         wv.navigationDelegate = self
         // No NSWindow. Adding a second NSWindow to an
         // `NSViewServiceApplication`'s window list has been observed
@@ -300,6 +358,29 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             }
         }
 
+        // Measure the rendered scroll extent. Some pages park their
+        // content on body, some on documentElement (depends on whether
+        // the author set `html { height: 100% }` etc.) — take the max
+        // of both so we report the true content size regardless. Only
+        // collected when ready actually fired; before that the layout
+        // hasn't settled and the numbers are misleading.
+        let renderedDims: (Int, Int)? = await withCheckedContinuation { cont in
+            guard let wv = webView, readyAtMs != nil else {
+                cont.resume(returning: nil); return
+            }
+            wv.evaluateJavaScript(Self.scrollExtentScript) { result, _ in
+                guard let arr = result as? [Any], arr.count >= 4,
+                      let bw = (arr[0] as? NSNumber)?.intValue,
+                      let bh = (arr[1] as? NSNumber)?.intValue,
+                      let dw = (arr[2] as? NSNumber)?.intValue,
+                      let dh = (arr[3] as? NSNumber)?.intValue
+                else {
+                    cont.resume(returning: nil); return
+                }
+                cont.resume(returning: (max(bw, dw), max(bh, dh)))
+            }
+        }
+
         var jsErrors: [JSLogEntry] = []
         var componentsRaw: [ComponentReport] = []
         if let data = probeJSON.data(using: .utf8),
@@ -350,6 +431,33 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             )
         }
 
+        // Build the content_overflow block when the rendered extent
+        // exceeds declared on either axis by more than the tolerance.
+        // Skipped entirely (nil) when ready didn't fire — the rendered
+        // dims are unreliable then, and the report already flags ready
+        // failure as its own status — or when content fits.
+        var contentOverflow: ContentOverflow? = nil
+        if let (rw, rh) = renderedDims {
+            let dw = declaredWidth
+            let dh = declaredHeight
+            let widthOver = rw - dw > Self.overflowToleranceP
+            let heightOver = rh - dh > Self.overflowToleranceP
+            if widthOver || heightOver {
+                var axes: [String] = []
+                if widthOver { axes.append("width") }
+                if heightOver { axes.append("height") }
+                contentOverflow = ContentOverflow(
+                    declared: ContentOverflow.Size(width: dw, height: dh),
+                    rendered: ContentOverflow.Size(width: rw, height: rh),
+                    overflows: axes,
+                    byPixels: ContentOverflow.ByPixels(
+                        width: widthOver ? rw - dw : nil,
+                        height: heightOver ? rh - dh : nil
+                    )
+                )
+            }
+        }
+
         let readyFired = readyAtMs != nil
         var combinedErrors = jsErrors
         // bridge log channel — every entry is a `safeInvoke` catch
@@ -397,7 +505,8 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             loadError: loadError,
             jsErrors: combinedErrors,
             components: componentsRaw,
-            params: paramCoverage
+            params: paramCoverage,
+            contentOverflow: contentOverflow
         )
     }
 
@@ -564,6 +673,19 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         }
         waitReady();
     })();
+    """
+
+    /// Measures the rendered content extent on both the body and the
+    /// document element (some pages put their main content on body,
+    /// some on documentElement). The Swift side takes the max along
+    /// each axis and compares to manifest.ui.{width,height}. Returns a
+    /// 4-element number array — `evaluateJavaScript`'s portable subset
+    /// of return types.
+    private static let scrollExtentScript = """
+    [document.body ? document.body.scrollWidth : 0,
+     document.body ? document.body.scrollHeight : 0,
+     document.documentElement ? document.documentElement.scrollWidth : 0,
+     document.documentElement ? document.documentElement.scrollHeight : 0]
     """
 
     /// Run after ready fires (or on timeout). Enumerates cdp-* custom

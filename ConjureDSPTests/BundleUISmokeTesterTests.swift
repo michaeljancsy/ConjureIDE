@@ -245,6 +245,102 @@ struct BundleUISmokeTesterTests {
         #expect(report.status == .pass)
     }
 
+    // MARK: - Content overflow vs. manifest dimensions
+
+    /// Manifest with a deliberately-tiny ui.height. Used by the
+    /// overflow tests so we don't have to render a giant DOM to make
+    /// content exceed declared.
+    private let tinyUIManifest = """
+    {
+      "schemaVersion": 2,
+      "entry": "process.py",
+      "language": "python",
+      "params": [
+        { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }
+      ],
+      "ui": {
+        "entryHTML": "ui/index.html",
+        "width": 400, "height": 100, "fps": 30, "audioFrames": false
+      }
+    }
+    """
+
+    @Test @MainActor func reportsContentOverflowWhenHeightExceedsManifest() async throws {
+        // Body content forces ~500pt of vertical layout against a
+        // manifest that declared 100pt. The overflow block should
+        // report `height` over by ~400.
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <cdp-slider param="cutoff"></cdp-slider>
+          <div style="height: 500px; width: 10px;"></div>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: tinyUIManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff"],
+            hostParameterCount: 1,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired,
+                "ready must fire for overflow detection to run")
+        let overflow = try #require(report.contentOverflow,
+                "expected content_overflow to be populated when content exceeds declared height")
+        #expect(overflow.overflows.contains("height"),
+                "height axis should be flagged; got \(overflow.overflows)")
+        #expect(overflow.declared.height == 100)
+        // The 500pt spacer + cdp-slider host element should push the
+        // rendered extent comfortably past the 100pt declared budget.
+        // We assert ~400pt with a generous floor — exact pixels depend
+        // on the slider's CSS height and WebKit's box model.
+        let heightOver = overflow.byPixels.height ?? 0
+        #expect(heightOver >= 350,
+                "expected height overflow ~400pt; got \(heightOver)")
+        #expect(overflow.rendered.height >= overflow.declared.height + heightOver)
+    }
+
+    @Test @MainActor func omitsContentOverflowWhenContentFits() async throws {
+        // Manifest declares a generous 240pt height; the UI is a
+        // single cdp-slider that lays out well under that. The
+        // overflow block must be absent — present-but-empty would
+        // mislead the agent into thinking there's a layout problem.
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let fitsManifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.py",
+          "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 600, "height": 240, "fps": 30, "audioFrames": false
+          }
+        }
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: fitsManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff"],
+            hostParameterCount: 1,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        #expect(report.contentOverflow == nil,
+                "content_overflow must be nil when the layout fits within the declared dimensions; got \(String(describing: report.contentOverflow))")
+    }
+
     @Test @MainActor func cdpXYUnboundWhenAxisMissing() async throws {
         // param-y names a param that doesn't exist → xy pad doesn't
         // bind and drags move nothing.

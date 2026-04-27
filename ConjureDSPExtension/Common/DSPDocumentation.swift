@@ -781,6 +781,19 @@ enum DSPDocumentation {
     is symmetric: both static lint and the offscreen WKWebView smoke
     test will tell you which params are unbound.
 
+    `smoke_test_ui` also measures the rendered scroll extent against
+    `manifest.ui.{width,height}` after `ready` fires. If the content
+    needs more space than declared (by more than ~8pt on either axis),
+    the response includes a `content_overflow` block — `{declared,
+    rendered, overflows: ["height"], by_pixels: {height: 75}}` — and
+    the field is omitted entirely when everything fits. The live
+    plugin pins the webview to the manifest dimensions, so anything
+    that overflows there clips silently for the user. When you see
+    overflow, **bump `manifest.ui.height` (or `width`) up to the
+    rendered size** rather than trying to compress the layout into a
+    too-small budget — vertical headroom is cheap, cramped sliders
+    aren't.
+
     ## Author JS API (`window.ConjureDSP.ui`)
 
     For preset JS beyond the components:
