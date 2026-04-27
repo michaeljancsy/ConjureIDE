@@ -755,6 +755,32 @@ enum DSPDocumentation {
     `::part(face)`, `::part(rim)`, `::part(indicator)`, `::part(puck)`,
     `::part(option)`, `::part(thumb)` for restyling without re-rendering.
 
+    ### Hand-rolled bindings need a declarative twin
+
+    The validator's UI-coverage check scans the HTML statically for
+    `<cdp-*>` elements with `param=` (or `param-x=` / `param-y=`)
+    attributes. **Imperative `parameters.set(idx, v)` calls in your
+    own JS — drag handlers on a `<canvas>`, custom widgets, anything
+    not built on cdp-ui — are invisible to that scan.** A preset that
+    drives every param via hand-rolled JS will fail the coverage check
+    even though the param is fully reachable at runtime.
+
+    Three escape hatches, pick whichever fits your layout:
+
+    1. **Visible cdp-* widget alongside your custom UI.** Cleanest —
+       gives the user a fallback control too.
+    2. **Hidden cdp-* widgets in a `<details>` block.** Useful when
+       your canvas-driven control is the primary surface but you want
+       the validator (and DAWs without canvas drag) to see a binding.
+       Collapse it by default; the binding still counts.
+    3. **`<cdp-panel auto>`** — renders one widget per declared param
+       automatically. One line, full coverage. Good as a stock fallback
+       you ship below your hand-rolled canvas.
+
+    `smoke_test_ui` runs the same check at runtime, so the failure mode
+    is symmetric: both static lint and the offscreen WKWebView smoke
+    test will tell you which params are unbound.
+
     ## Author JS API (`window.ConjureDSP.ui`)
 
     For preset JS beyond the components:
