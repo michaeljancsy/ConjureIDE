@@ -594,11 +594,42 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     /// file list because write_bundle_file takes UTF-8 only.
     @MainActor
     private func mcpGetBundleInfo() -> (String, Bool) {
-        guard let preset = presetManager.currentPreset,
-              let bundle = presetManager.loadBundle(for: preset) else {
-            // Legacy single-file presets have no bundle view — surface
-            // that explicitly rather than returning an error.
-            return (jsonStr(["bundle": NSNull()]), false)
+        // Two no-bundle cases worth distinguishing for the agent. A bare
+        // `bundle: null` has historically left fresh agents guessing
+        // whether scratchpad mode is normal, something is broken, or
+        // they should call list_presets first. Surface the actual state
+        // and a one-line hint so the next tool call is obvious.
+        guard let preset = presetManager.currentPreset else {
+            // Scratchpad mode. The kernel may or may not have a script
+            // loaded; surface that too so the agent knows whether
+            // compile_and_run is needed before save_preset.
+            let kernelHasScript = scriptSource != nil
+            let hint: String
+            if kernelHasScript {
+                hint = "Scratchpad mode — no preset selected, but the kernel has a script loaded (use get_script to read it). Call save_preset(name, source) to commit it as a new preset, or duplicate_bundle to fork an existing preset and load THAT into the kernel."
+            } else {
+                hint = "Scratchpad mode — no preset selected and no script loaded. Call list_presets to see available bundles, duplicate_bundle to fork an existing one, or compile_and_run with source text to start authoring."
+            }
+            return (jsonStr([
+                "bundle": NSNull(),
+                "state": "scratchpad",
+                "kernel_has_script": kernelHasScript,
+                "hint": hint,
+            ]), false)
+        }
+        guard let bundle = presetManager.loadBundle(for: preset) else {
+            // currentPreset exists but the bundle on disk failed to
+            // load — typically a legacy single-file preset or a
+            // bundle whose manifest can't be parsed. Distinct from
+            // scratchpad: an agent here should investigate the
+            // bundle, not start authoring fresh.
+            return (jsonStr([
+                "bundle": NSNull(),
+                "state": "preset_unloadable",
+                "preset_name": preset.name,
+                "is_factory": preset.isFactory,
+                "hint": "currentPreset is '\(preset.name)' but its bundle directory can't be loaded — it may be a legacy single-file preset, or its manifest.json is malformed. Use list_presets to verify what's on disk, or pick a different preset.",
+            ]), false)
         }
 
         let entries = BundleFilePickerEntries.entries(for: bundle)
