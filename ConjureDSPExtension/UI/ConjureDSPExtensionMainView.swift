@@ -317,22 +317,40 @@ struct ConjureDSPExtensionMainView: View {
 
                 if useCustom, let bundle = activeBundle {
                     if isCustomUIExpanded {
-                        // Pin to the manifest-declared height (not
-                        // `minHeight`) — without an upper bound, SwiftUI's
-                        // outer VStack hands the webview all the spare
-                        // vertical space the window has, producing a tall
-                        // dark void around a preset that wants 260pt. The
-                        // preset author controls the height via
-                        // `manifest.ui.height`; users who want more room
-                        // can edit the manifest.
-                        CustomUIWebView(
-                            parameterState: parameterState,
-                            bundle: bundle,
-                            theme: colorScheme,
-                            captureManager: captureManager
-                        )
-                        .frame(height: CGFloat(bundle.manifest.ui?.height ?? 220))
-                        .id(bundle.uiIndexURL)
+                        // Pin to the manifest-declared height + width (not
+                        // `minHeight` / no width constraint at all).
+                        //
+                        // Without a height upper bound, SwiftUI's outer
+                        // VStack hands the webview all the spare vertical
+                        // space the window has, producing a tall dark void
+                        // around a preset that wants 260pt.
+                        //
+                        // Without a width constraint, the webview gets the
+                        // full editor width (often 1000pt+) which is much
+                        // more than the manifest declares — so a preset
+                        // looks roomy in the extension and squashed in the
+                        // exported AU (which honors manifest.ui.width).
+                        // Authors design against the extension width and
+                        // get surprised by the export. Pin both dimensions
+                        // here so what you see is what you get.
+                        //
+                        // Centered with a Spacer pair so the surplus
+                        // editor width letterboxes evenly on both sides
+                        // instead of left-aligning.
+                        let uiW = CGFloat(bundle.manifest.ui?.width ?? 520)
+                        let uiH = CGFloat(bundle.manifest.ui?.height ?? 220)
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            CustomUIWebView(
+                                parameterState: parameterState,
+                                bundle: bundle,
+                                theme: colorScheme,
+                                captureManager: captureManager
+                            )
+                            .frame(width: uiW, height: uiH)
+                            .id(bundle.uiIndexURL)
+                            Spacer(minLength: 0)
+                        }
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 } else {
