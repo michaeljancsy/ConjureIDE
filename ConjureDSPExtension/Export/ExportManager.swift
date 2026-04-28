@@ -30,6 +30,7 @@ final class ExportManager {
         case copyFailed(String)
         case validationFailed(String)
         case namModelNotFound(String)
+        case serializationFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -40,6 +41,7 @@ final class ExportManager {
             case .copyFailed(let detail): return "Failed to copy template: \(detail)"
             case .validationFailed(let detail): return "Export validation failed: \(detail)"
             case .namModelNotFound(let path): return "NAM model not found: \(path). Download the tone first."
+            case .serializationFailed(let detail): return "Failed to serialize runtime config: \(detail)"
             }
         }
     }
@@ -144,7 +146,7 @@ final class ExportManager {
         )
 
         // 4. Write runtime-config.json
-        let config = makeRuntimeConfig(
+        let config = try makeRuntimeConfig(
             name: name, language: language,
             paramNames: paramNames, paramMetadata: paramMetadata,
             latencySamples: latencySamples, namModelFile: namModelFile,
@@ -353,7 +355,7 @@ final class ExportManager {
         latencySamples: UInt32 = 0,
         namModelFile: String? = nil,
         customUI: CustomUIPayload? = nil
-    ) -> Data {
+    ) throws -> Data {
         var config: [String: Any] = [
             "version": 1,
             "language": language.rawValue,
@@ -419,8 +421,11 @@ final class ExportManager {
             config["paramCount"] = namesArray.count
         }
 
-        // swiftlint:disable:next force_try
-        return try! JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
+        do {
+            return try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
+        } catch {
+            throw ExportError.serializationFailed(error.localizedDescription)
+        }
     }
 
     private func patchAppPlist(at url: URL, bundleId: String, displayName: String) throws {

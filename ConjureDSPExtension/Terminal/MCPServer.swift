@@ -304,20 +304,18 @@ final class MCPServer {
             instructions: instructions
         )
 
-        if let encoded = try? JSONEncoder().encode(result) {
-            sendJSONRPCResult(connection: connection, id: id, result: AnyCodable(
-                try! JSONSerialization.jsonObject(with: encoded)
-            ))
+        if let encoded = try? JSONEncoder().encode(result),
+           let jsonObject = try? JSONSerialization.jsonObject(with: encoded) {
+            sendJSONRPCResult(connection: connection, id: id, result: AnyCodable(jsonObject))
         }
     }
 
     private func handleToolsList(request: MCPProtocol.JSONRPCRequest, id: JSONRPCId, on connection: NWConnection) {
         let result = MCPProtocol.ToolsListResult(tools: MCPProtocol.tools)
 
-        if let encoded = try? JSONEncoder().encode(result) {
-            sendJSONRPCResult(connection: connection, id: id, result: AnyCodable(
-                try! JSONSerialization.jsonObject(with: encoded)
-            ))
+        if let encoded = try? JSONEncoder().encode(result),
+           let jsonObject = try? JSONSerialization.jsonObject(with: encoded) {
+            sendJSONRPCResult(connection: connection, id: id, result: AnyCodable(jsonObject))
         }
     }
 
@@ -361,11 +359,12 @@ final class MCPServer {
                     isError: isError ? true : nil
                 )
 
-                if let encoded = try? JSONEncoder().encode(toolResult) {
+                if let encoded = try? JSONEncoder().encode(toolResult),
+                   let jsonObject = try? JSONSerialization.jsonObject(with: encoded) {
                     self?.sendJSONRPCResult(
                         connection: connection,
                         id: requestId,
-                        result: AnyCodable(try! JSONSerialization.jsonObject(with: encoded))
+                        result: AnyCodable(jsonObject)
                     )
                 }
             }

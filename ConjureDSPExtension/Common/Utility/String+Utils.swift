@@ -11,13 +11,21 @@ extension String {
     var range: NSRange {
         NSRange(location: 0, length: count)
     }
-    
+
     func isAlphanumeric() -> Bool {
         if self.isEmpty { return false }
-        let regex = try! NSRegularExpression(pattern: "^[a-zA-Z0-9_-]*$", options: .caseInsensitive)
-        guard regex.firstMatch(in: self, options: [], range: range) != nil else {
+        guard String.alphanumericRegex.firstMatch(in: self, options: [], range: range) != nil else {
             return false
         }
         return true
     }
+
+    // Static regex — compiled once. fatalError on bad pattern is intentional:
+    // this is a programmer error that should be caught at dev time.
+    private static let alphanumericRegex: NSRegularExpression = {
+        guard let re = try? NSRegularExpression(pattern: "^[a-zA-Z0-9_-]*$", options: .caseInsensitive) else {
+            fatalError("String.alphanumericRegex: pattern is invalid")
+        }
+        return re
+    }()
 }
