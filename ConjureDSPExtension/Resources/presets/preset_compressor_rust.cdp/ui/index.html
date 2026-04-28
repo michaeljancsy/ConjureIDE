@@ -4,7 +4,15 @@
   <meta charset="utf-8">
   <title>Compressor</title>
   <style>
-    :root { color-scheme: light dark; }
+    :root {
+      color-scheme: light dark;
+      /* Brand palette — matches ParameterSlidersView's gradient and the
+         spectrogram color map. Purple anchors the GR line; the knob arc
+         interpolates purple→ice across its sweep. */
+      --brand-purple: #B06EFF;
+      --brand-ice:    #7B9FFF;
+      --gr-line:      var(--brand-purple);
+    }
     html, body {
       margin: 0; padding: 0; height: 100%;
       font: 12px -apple-system, system-ui, sans-serif;
@@ -13,90 +21,164 @@
     body {
       display: grid;
       grid-template-rows: auto 1fr auto;
-      align-content: start;
-      gap: 10px;
+      align-content: stretch;
+      gap: 12px;
       padding: 14px 16px; box-sizing: border-box;
     }
+
     .head { display: flex; justify-content: space-between; align-items: baseline; }
     .title {
-      font-weight: 600; letter-spacing: 0.02em;
-      text-transform: uppercase; font-size: 0.75em; opacity: 0.55;
+      font-weight: 600; letter-spacing: 0.04em;
+      text-transform: uppercase; font-size: 0.72em; opacity: 0.55;
     }
-    .gr-readout { font-variant-numeric: tabular-nums; font-size: 1.05em; opacity: 0.85; }
+    .gr-readout {
+      font-variant-numeric: tabular-nums;
+      font-size: 1.15em;
+      color: var(--gr-line);
+      opacity: 0.95;
+    }
 
-    /* Curve area: transfer-function canvas on the left, GR meter column on
-       the right so they share a fixed height and align baselines. */
-    .curve-row {
-      display: grid;
-      grid-template-columns: 1fr 26px;
-      gap: 10px;
-      min-height: 0;
-    }
-    .curve-wrap { position: relative; min-height: 0; }
-    #curve {
+    /* Single big display canvas — input/output peak history with the
+       GR line overlaid along the top. Y-axis is 0 dB (top) to -60 dB
+       (bottom), shared by levels and GR (GR pulls down from 0 dB). */
+    .display-wrap { position: relative; min-height: 0; }
+    #display {
       position: absolute; inset: 0;
       width: 100%; height: 100%; display: block;
-      border-radius: 6px;
-      background: color-mix(in srgb, CanvasText 6%, Canvas);
-    }
-    .meter { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-    .meter-bar {
-      position: relative; width: 12px; flex: 1 1 0;
-      background: color-mix(in srgb, CanvasText 8%, Canvas);
-      border-radius: 3px; overflow: hidden;
-    }
-    .meter-fill {
-      position: absolute; left: 0; right: 0; top: 0;
-      background: color-mix(in srgb, CanvasText 65%, transparent);
-      transition: height 60ms linear;
-    }
-    .meter-label {
-      font-size: 0.7em; opacity: 0.55;
-      text-transform: uppercase; letter-spacing: 0.05em;
+      border-radius: 8px;
+      background: color-mix(in srgb, CanvasText 7%, Canvas);
     }
 
-    /* Parameter rows use cdp-slider's native label | track | value grid so
-       every row's columns line up — labels left-aligned, tracks in the
-       middle, values right-aligned. Cleaner than the previous 5-up grid of
-       mini-sliders, and reads top-down like every other compressor UI. */
-    .controls { display: flex; flex-direction: column; gap: 2px; }
-    .controls cdp-slider {
-      --cdp-label-width: 90px;
-      --cdp-value-width: 72px;
-      --cdp-font-size: 12px;
+    /* Knob row — 5 cdp-knobs with slotted custom SVG that uses the
+       brand gradient for the value arc. Knob size and label/value
+       layout come from cdp-knob; the SVG is what gives them the
+       FabFilter-style "filled arc" look. */
+    .knob-row {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+      align-items: end;
+      padding: 4px 0;
+    }
+    .knob-row cdp-knob {
+      --cdp-knob-size: 76px;
+      --cdp-knob-sweep: 270deg;
+      --cdp-knob-face-bg: color-mix(in srgb, CanvasText 10%, Canvas);
+      --cdp-knob-rim-bg: transparent;
+      --cdp-knob-indicator-color: CanvasText;
+      --cdp-knob-indicator-width: 2px;
+    }
+    /* Slotted SVG visual — track ring + brand-colored value arc + face +
+       indicator. Drawing the value arc as a stroked circle that's
+       rotated -135° so its start sits at the 7:30 position; the visible
+       length is driven by stroke-dasharray = norm * 270 (path length). */
+    .knob-svg { width: 100%; height: 100%; }
+    .knob-svg .track {
+      fill: none;
+      stroke: color-mix(in srgb, CanvasText 18%, transparent);
+      stroke-width: 4;
+    }
+    .knob-svg .arc {
+      fill: none;
+      stroke: var(--brand-purple);
+      stroke-width: 4;
+      stroke-linecap: round;
+      /* `transform-box: view-box` pegs transform-origin to the 64×64
+         SVG coordinate system instead of the element's own bbox or
+         the rendered device-pixel box. Without this, WebKit interprets
+         `32px` as device pixels and the rotation pivot drifts off-center
+         once the knob is sized up to 76px. */
+      transform-box: view-box;
+      transform-origin: center;
+      transform: rotate(-135deg);
+      stroke-dasharray: calc(var(--cdp-knob-norm, 0) * 270) 1000;
+    }
+    .knob-svg .face {
+      fill: var(--cdp-knob-face-bg);
+    }
+    .knob-svg .pip {
+      stroke: var(--cdp-knob-indicator-color);
+      stroke-width: var(--cdp-knob-indicator-width);
+      stroke-linecap: round;
+      fill: none;
+      transform-box: view-box;
+      transform-origin: center;
+      transform: rotate(calc(var(--cdp-knob-norm, 0) * 270deg - 135deg));
+    }
+    /* Track ring uses the same rotation start so the dasharray-based
+       drawing aligns with the value arc. */
+    .knob-svg .track {
+      transform-box: view-box;
+      transform-origin: center;
     }
   </style>
 </head>
 <body>
   <div class="head">
-    <span class="title">Transfer curve</span>
+    <span class="title">Compressor</span>
     <span class="gr-readout" id="grReadout">GR 0.0 dB</span>
   </div>
-  <div class="curve-row">
-    <div class="curve-wrap">
-      <canvas id="curve" width="800" height="500"></canvas>
-    </div>
-    <div class="meter">
-      <div class="meter-bar"><div class="meter-fill" id="grFill"></div></div>
-      <div class="meter-label">GR</div>
-    </div>
+
+  <div class="display-wrap">
+    <canvas id="display" width="800" height="420"></canvas>
   </div>
-  <div class="controls">
-    <cdp-slider param="threshold"></cdp-slider>
-    <cdp-slider param="ratio"></cdp-slider>
-    <cdp-slider param="makeup"></cdp-slider>
-    <cdp-slider param="attack"></cdp-slider>
-    <cdp-slider param="release"></cdp-slider>
+
+  <div class="knob-row">
+    <cdp-knob param="threshold">
+      <svg slot="visual" class="knob-svg" viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="track" cx="32" cy="32" r="26" pathLength="270"
+                stroke-dasharray="270 1000" transform="rotate(-135 32 32)"/>
+        <circle class="arc"   cx="32" cy="32" r="26" pathLength="270"/>
+        <circle class="face"  cx="32" cy="32" r="20"/>
+        <line   class="pip"   x1="32" y1="14" x2="32" y2="20"/>
+      </svg>
+    </cdp-knob>
+    <cdp-knob param="ratio">
+      <svg slot="visual" class="knob-svg" viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="track" cx="32" cy="32" r="26" pathLength="270"
+                stroke-dasharray="270 1000" transform="rotate(-135 32 32)"/>
+        <circle class="arc"   cx="32" cy="32" r="26" pathLength="270"/>
+        <circle class="face"  cx="32" cy="32" r="20"/>
+        <line   class="pip"   x1="32" y1="14" x2="32" y2="20"/>
+      </svg>
+    </cdp-knob>
+    <cdp-knob param="attack">
+      <svg slot="visual" class="knob-svg" viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="track" cx="32" cy="32" r="26" pathLength="270"
+                stroke-dasharray="270 1000" transform="rotate(-135 32 32)"/>
+        <circle class="arc"   cx="32" cy="32" r="26" pathLength="270"/>
+        <circle class="face"  cx="32" cy="32" r="20"/>
+        <line   class="pip"   x1="32" y1="14" x2="32" y2="20"/>
+      </svg>
+    </cdp-knob>
+    <cdp-knob param="release">
+      <svg slot="visual" class="knob-svg" viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="track" cx="32" cy="32" r="26" pathLength="270"
+                stroke-dasharray="270 1000" transform="rotate(-135 32 32)"/>
+        <circle class="arc"   cx="32" cy="32" r="26" pathLength="270"/>
+        <circle class="face"  cx="32" cy="32" r="20"/>
+        <line   class="pip"   x1="32" y1="14" x2="32" y2="20"/>
+      </svg>
+    </cdp-knob>
+    <cdp-knob param="makeup">
+      <svg slot="visual" class="knob-svg" viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="track" cx="32" cy="32" r="26" pathLength="270"
+                stroke-dasharray="270 1000" transform="rotate(-135 32 32)"/>
+        <circle class="arc"   cx="32" cy="32" r="26" pathLength="270"/>
+        <circle class="face"  cx="32" cy="32" r="20"/>
+        <line   class="pip"   x1="32" y1="14" x2="32" y2="20"/>
+      </svg>
+    </cdp-knob>
   </div>
+
   <script>
   (function () {
     const CDP = window.ConjureDSP;
-    const canvas = document.getElementById('curve');
+    const canvas = document.getElementById('display');
     const ctx = canvas.getContext('2d');
+    const grReadout = document.getElementById('grReadout');
 
     function idx(key) {
-      // Case-insensitive so this UI serves both Python (lowercase)
-      // and Rust (uppercase from params!()) variants.
       const low = String(key).toLowerCase();
       for (let i = 0; i < CDP.parameters.count; i++) {
         const m = CDP.parameters.metadata(i);
@@ -107,14 +189,9 @@
       return -1;
     }
 
-    // Input dB axis: -60..0. Output dB: -60..+6 (lets makeup gain lift above zero).
-    const IN_MIN = -60, IN_MAX = 0;
-    const OUT_MIN = -60, OUT_MAX = 6;
-
-    // Resolve CanvasText to an actual rgb() string via a hidden probe;
-    // canvas 2D can't parse the `CanvasText` keyword directly, and
-    // CDP.theme isn't always reliable (WebView can be in dark mode even
-    // when CDP reports 'light').
+    // ------------------------------------------------------------------
+    // Theme-aware foreground (CanvasText) for grid/labels.
+    // ------------------------------------------------------------------
     function resolveFG() {
       const probe = document.createElement('span');
       probe.style.cssText = 'color: CanvasText; position: absolute; visibility: hidden;';
@@ -124,120 +201,229 @@
       return c;
     }
     let FG = resolveFG();
-    window.addEventListener('themechange', () => { FG = resolveFG(); scheduleCurve(); });
+    let GR_COLOR = getComputedStyle(document.documentElement)
+      .getPropertyValue('--gr-line').trim() || '#B06EFF';
+    window.addEventListener('themechange', () => {
+      FG = resolveFG();
+      scheduleDraw();
+    });
 
-    function drawCurve() {
-      const w = canvas.width = canvas.clientWidth * devicePixelRatio;
-      const h = canvas.height = canvas.clientHeight * devicePixelRatio;
-      if (w === 0 || h === 0) return;
-      ctx.clearRect(0, 0, w, h);
-      const padL = 28 * devicePixelRatio;   // left gutter for Y labels
-      const padR = 10 * devicePixelRatio;
-      const padT = 10 * devicePixelRatio;
-      const padB = 18 * devicePixelRatio;   // bottom for X labels
-      const iw = w - padL - padR, ih = h - padT - padB;
+    // ------------------------------------------------------------------
+    // History buffers — peak in / peak out, one sample per audio-frame
+    // callback (60 Hz). GR uses two channels: a scalar per slot (drives
+    // the readout pill) and a per-block sample array (drives the line
+    // shape, so attack/release curves render at audio resolution rather
+    // than one stair-step per UI tick).
+    // ------------------------------------------------------------------
+    const HIST_LEN = 240;             // 4 s @ 60 fps
+    const peakInHist  = new Float32Array(HIST_LEN);
+    const peakOutHist = new Float32Array(HIST_LEN);
+    const grHist      = new Float32Array(HIST_LEN);
+    const grBlocks    = new Array(HIST_LEN);    // Float32Array per slot, or null
+    for (let i = 0; i < HIST_LEN; i++) grBlocks[i] = null;
+    let histWrite = 0;
 
-      const xAt = (db) => padL + iw * (db - IN_MIN) / (IN_MAX - IN_MIN);
-      const yAt = (db) => padT + ih * (1 - (db - OUT_MIN) / (OUT_MAX - OUT_MIN));
-
-      // Grid every 12 dB, with axis labels along the edges.
-      ctx.strokeStyle = FG;
-      ctx.fillStyle = FG;
-      ctx.lineWidth = 1;
-      ctx.font = (10 * devicePixelRatio) + 'px -apple-system, system-ui, sans-serif';
-      ctx.textBaseline = 'middle';
-
-      ctx.globalAlpha = 0.1;
-      for (let db = IN_MIN; db <= IN_MAX; db += 12) {
-        ctx.beginPath(); ctx.moveTo(xAt(db), padT); ctx.lineTo(xAt(db), h - padB); ctx.stroke();
-      }
-      for (let db = OUT_MIN; db <= OUT_MAX; db += 12) {
-        ctx.beginPath(); ctx.moveTo(padL, yAt(db)); ctx.lineTo(w - padR, yAt(db)); ctx.stroke();
-      }
-      ctx.globalAlpha = 0.55;
-      // Y-axis labels — output dB at each horizontal grid line.
-      ctx.textAlign = 'right';
-      for (let db = OUT_MIN; db <= OUT_MAX; db += 12) {
-        ctx.fillText(String(db), padL - 4 * devicePixelRatio, yAt(db));
-      }
-      // X-axis labels — just the endpoints, to stay uncluttered.
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      ctx.fillText(IN_MIN + ' dB in', xAt(IN_MIN) + 12 * devicePixelRatio, h - padB + 3 * devicePixelRatio);
-      ctx.fillText(IN_MAX + ' dB in', xAt(IN_MAX) - 12 * devicePixelRatio, h - padB + 3 * devicePixelRatio);
-      ctx.textBaseline = 'middle';
-      ctx.globalAlpha = 1;
-
-      // 1:1 reference.
-      ctx.globalAlpha = 0.22;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath(); ctx.moveTo(xAt(IN_MIN), yAt(IN_MIN)); ctx.lineTo(xAt(IN_MAX), yAt(IN_MAX)); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
-
-      const threshold = CDP.parameters.get(idx('threshold'));
-      const ratio = CDP.parameters.get(idx('ratio'));
-      const makeup = CDP.parameters.get(idx('makeup'));
-
-      // Compression transfer: output = min(input, threshold + (input - threshold)/ratio) + makeup
-      ctx.strokeStyle = FG;
-      ctx.lineWidth = 2.5 * devicePixelRatio;
-      ctx.beginPath();
-      const N = 200;
-      for (let i = 0; i <= N; i++) {
-        const x = IN_MIN + (IN_MAX - IN_MIN) * i / N;
-        const over = x - threshold;
-        const compressed = over > 0 ? threshold + over / ratio : x;
-        const y = compressed + makeup;
-        const px = xAt(x), py = yAt(y);
-        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-      }
-      ctx.stroke();
-
-      // Threshold marker.
-      ctx.globalAlpha = 0.45;
-      ctx.setLineDash([2, 3]);
-      ctx.beginPath(); ctx.moveTo(xAt(threshold), padT); ctx.lineTo(xAt(threshold), h - padB); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
+    // Pre-fill with "silence + no GR" so the visualization spans the
+    // full canvas width on first paint. -120 dB sits well below the
+    // -60 dB floor, so the level history draws invisibly until real
+    // audio arrives.
+    for (let i = 0; i < HIST_LEN; i++) {
+      peakInHist[i]  = -120;
+      peakOutHist[i] = -120;
+      grHist[i]      = 0;
     }
 
-    const grFill = document.getElementById('grFill');
-    const grReadout = document.getElementById('grReadout');
+    function pushFrame(peakInDb, peakOutDb, grDb, grCurve) {
+      peakInHist[histWrite]  = peakInDb;
+      peakOutHist[histWrite] = peakOutDb;
+      grHist[histWrite]      = grDb;
+      // Copy the per-sample GR curve into the slot. Reuse the slot's
+      // typed array when the block size matches (common case — host
+      // buffer size only changes on resample/SR change).
+      if (grCurve && grCurve.length) {
+        let slot = grBlocks[histWrite];
+        if (!slot || slot.length !== grCurve.length) {
+          slot = new Float32Array(grCurve.length);
+          grBlocks[histWrite] = slot;
+        }
+        slot.set(grCurve);
+      } else {
+        grBlocks[histWrite] = null;
+      }
+      histWrite = (histWrite + 1) % HIST_LEN;
+    }
+
+    function ampToDb(a) {
+      if (a <= 0 || !isFinite(a)) return -120;
+      const db = 20 * Math.log10(a);
+      return db < -120 ? -120 : db;
+    }
 
     let smoothedGR = 0;
 
     function onFrame(frame) {
-      // Read the gain computer's actual per-block decision via the
-      // DSP→UI telemetry channel (set in process.rs). Replaces a
-      // peakIn/peakOut/makeup arithmetic estimate that under-reported
-      // during transients (the input peak arrives before the envelope
-      // follower has finished attacking) and depended on makeup gain
-      // for cancellation. Telemetry shows the actual reduction
-      // independent of makeup.
-      //
-      // Slot key matches the macro identifier verbatim — `telemetry!()`
-      // doesn't canonicalize names. Rust convention is
-      // SCREAMING_SNAKE_CASE.
-      const gr = (frame.telemetry && frame.telemetry['GR_DB']) || 0;
-      // Smooth the reading so the bar doesn't strobe.
+      const tele = frame.telemetry;
+      let gr = 0;
+      let grCurve = null;
+      if (tele) {
+        if (typeof tele.GR_DB === 'number') gr = tele.GR_DB;
+        if (Array.isArray(tele.GR_CURVE)) grCurve = tele.GR_CURVE;
+      }
       smoothedGR = smoothedGR * 0.7 + gr * 0.3;
-      const clamped = Math.min(24, smoothedGR);
-      grFill.style.height = (clamped / 24 * 100) + '%';
-      grReadout.textContent = 'GR −' + smoothedGR.toFixed(1) + ' dB';
+      grReadout.textContent = 'GR \u2212' + smoothedGR.toFixed(1) + ' dB';
+
+      const pIn  = ampToDb(frame.peakIn  || 0);
+      const pOut = ampToDb(frame.peakOut || 0);
+      pushFrame(pIn, pOut, gr, grCurve);
+      scheduleDraw();
+    }
+
+    // ------------------------------------------------------------------
+    // Display: -60..0 dB on Y, time on X (newest at right).
+    // ------------------------------------------------------------------
+    const DB_MIN = -60, DB_MAX = 0;
+
+    function drawDisplay() {
+      const w = canvas.width  = canvas.clientWidth  * devicePixelRatio;
+      const h = canvas.height = canvas.clientHeight * devicePixelRatio;
+      if (w === 0 || h === 0) return;
+      ctx.clearRect(0, 0, w, h);
+
+      const padL = 6  * devicePixelRatio;
+      const padR = 32 * devicePixelRatio;   // gutter for dB labels
+      const padT = 6  * devicePixelRatio;
+      const padB = 6  * devicePixelRatio;
+      const iw = w - padL - padR, ih = h - padT - padB;
+
+      const yAt = (db) => {
+        const c = Math.max(DB_MIN, Math.min(DB_MAX, db));
+        return padT + ih * (1 - (c - DB_MIN) / (DB_MAX - DB_MIN));
+      };
+
+      // Horizontal grid + dB labels every 10 dB on the right gutter.
+      ctx.font = (10 * devicePixelRatio) + 'px -apple-system, system-ui, sans-serif';
+      ctx.textBaseline = 'middle';
+      for (let db = DB_MAX; db >= DB_MIN; db -= 10) {
+        const y = yAt(db);
+        ctx.strokeStyle = FG;
+        ctx.globalAlpha = db === 0 ? 0.20 : 0.10;
+        ctx.beginPath();
+        ctx.moveTo(padL, y);
+        ctx.lineTo(padL + iw, y);
+        ctx.stroke();
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = FG;
+        ctx.textAlign = 'left';
+        ctx.fillText(String(db), padL + iw + 4 * devicePixelRatio, y);
+      }
+      ctx.globalAlpha = 1;
+
+      // Threshold dashed line.
+      const tIdx = idx('threshold');
+      if (tIdx >= 0) {
+        const threshold = CDP.parameters.get(tIdx);
+        ctx.setLineDash([4 * devicePixelRatio, 4 * devicePixelRatio]);
+        ctx.strokeStyle = FG;
+        ctx.globalAlpha = 0.4;
+        ctx.beginPath();
+        const ty = yAt(threshold);
+        ctx.moveTo(padL, ty);
+        ctx.lineTo(padL + iw, ty);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      }
+
+      // Buffer is always treated as full (pre-filled with silence on
+      // init), so history spans the canvas immediately. Newest sample
+      // is to the right of histWrite-1; oldest is at histWrite.
+      const start = histWrite;
+      const xOf = (k) => padL + (k + 0.5) * (iw / HIST_LEN);
+
+      // Helper: draw a filled "level history" area for one buffer.
+      function fillLevelArea(buf, alpha) {
+        ctx.beginPath();
+        ctx.moveTo(xOf(0), padT + ih);
+        for (let k = 0; k < HIST_LEN; k++) {
+          const v = buf[(start + k) % HIST_LEN];
+          ctx.lineTo(xOf(k), yAt(v));
+        }
+        ctx.lineTo(xOf(HIST_LEN - 1), padT + ih);
+        ctx.closePath();
+        ctx.fillStyle = FG;
+        ctx.globalAlpha = alpha;
+        ctx.fill();
+      }
+
+      fillLevelArea(peakInHist,  0.10);   // input — softer
+      fillLevelArea(peakOutHist, 0.22);   // output — slightly stronger
+
+      ctx.globalAlpha = 1;
+
+      // GR line — pulled DOWN from 0 dB. When GR = 6 dB, the line sits
+      // at -6 dB on the scale. Drawn from per-block GR_CURVE samples so
+      // the attack/release shape inside each ~16 ms tick is visible
+      // rather than a single stair-step. For each slot, samples are
+      // max-pooled down to the slot's pixel width — one lineTo per pixel
+      // column keeps the path bounded by canvas width, not audio rate.
+      const slotW = iw / HIST_LEN;
+      const grPath = new Path2D();
+      let started = false;
+      for (let k = 0; k < HIST_LEN; k++) {
+        const slotIdx = (start + k) % HIST_LEN;
+        const block = grBlocks[slotIdx];
+        const xLeft = padL + k * slotW;
+        if (!block || block.length === 0) {
+          // No per-sample data for this slot (pre-fill or pre-telemetry
+          // preset) — fall back to the scalar so the line stays continuous.
+          const x = xLeft + slotW * 0.5;
+          const y = yAt(-grHist[slotIdx]);
+          if (!started) { grPath.moveTo(x, y); started = true; }
+          else grPath.lineTo(x, y);
+          continue;
+        }
+        const pxCount = Math.max(1, Math.ceil(slotW));
+        const samplesPerPx = block.length / pxCount;
+        for (let p = 0; p < pxCount; p++) {
+          const sStart = Math.floor(p * samplesPerPx);
+          const sEnd = Math.min(block.length, Math.floor((p + 1) * samplesPerPx));
+          let maxGR = block[sStart] || 0;
+          for (let s = sStart + 1; s < sEnd; s++) {
+            if (block[s] > maxGR) maxGR = block[s];
+          }
+          const x = xLeft + (p + 0.5) * (slotW / pxCount);
+          const y = yAt(-maxGR);
+          if (!started) { grPath.moveTo(x, y); started = true; }
+          else grPath.lineTo(x, y);
+        }
+      }
+      ctx.strokeStyle = GR_COLOR;
+      ctx.lineWidth = 2 * devicePixelRatio;
+      ctx.lineJoin = 'round';
+      ctx.stroke(grPath);
+
+      // Soft fill under the GR line — close the path down to the 0 dB
+      // baseline along the bottom edge of the line's range.
+      grPath.lineTo(padL + iw, yAt(0));
+      grPath.lineTo(padL, yAt(0));
+      grPath.closePath();
+      ctx.fillStyle = GR_COLOR;
+      ctx.globalAlpha = 0.18;
+      ctx.fill(grPath);
+      ctx.globalAlpha = 1;
     }
 
     let raf = 0;
-    function scheduleCurve() {
+    function scheduleDraw() {
       if (raf) return;
-      raf = requestAnimationFrame(() => { raf = 0; drawCurve(); });
+      raf = requestAnimationFrame(() => { raf = 0; drawDisplay(); });
     }
 
     function init() {
-      CDP.parameters.onAnyChange(scheduleCurve);
-      window.addEventListener('resize', scheduleCurve);
+      CDP.parameters.onAnyChange(scheduleDraw);
+      window.addEventListener('resize', scheduleDraw);
       CDP.audio.onFrame(onFrame);
-      scheduleCurve();
+      scheduleDraw();
     }
     if (CDP && CDP.ready) CDP.ready(init);
     else window.addEventListener('ConjureDSPReady', init);

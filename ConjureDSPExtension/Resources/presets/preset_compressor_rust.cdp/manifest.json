@@ -11,9 +11,9 @@
   ],
   "ui": {
     "entryHTML": "ui/index.html",
-    "width": 600,
-    "height": 440,
-    "fps": 30,
+    "width": 640,
+    "height": 460,
+    "fps": 60,
     "audioFrames": true
   }
 }
