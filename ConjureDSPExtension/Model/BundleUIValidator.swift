@@ -103,6 +103,7 @@ enum BundleUIValidator {
             issues.append(contentsOf: checkNoSystemColorInCanvas(html: html))
             issues.append(contentsOf: checkHasInteractiveSurface(html: html, bundle: bundle))
             issues.append(contentsOf: checkTextContrast(html: html))
+            issues.append(contentsOf: checkColorSchemeDeclared(html: html))
         }
 
         return Self.report(from: issues)
@@ -765,6 +766,89 @@ enum BundleUIValidator {
             message: "body has hard-coded \(mode) `color: \(colorStr.trimmingCharacters(in: .whitespaces))` against a theme-aware background — text will be unreadable in \(mode == "light" ? "light" : "dark") mode.",
             suggestion: "Use `color: CanvasText` so the text color follows the host's light/dark mode. If you need a specific palette, set an explicit theme-matching background color too."
         )
+    }
+
+    /// Body declares a hard-coded near-black or near-white background but
+    /// the document doesn't declare a matching `color-scheme`. cdp-ui's
+    /// theme tokens (`--cdp-fg`, `--cdp-muted`, `--cdp-track-bg`) all
+    /// resolve through `CanvasText` / `Canvas`, whose values are picked
+    /// from the user-agent's color-scheme — without a declaration, WebKit
+    /// defaults to light. So a dark page paints cdp-ui text in black:
+    /// invisible against the author's hard-coded dark background.
+    ///
+    /// Live AU dodges this because the host process's NSAppearance
+    /// propagates into WebKit; the trap is for exported AUs and preview
+    /// pages, where the color-scheme has to be declared explicitly.
+    private static func checkColorSchemeDeclared(html: String) -> [Issue] {
+        let rules = extractCSSRules(from: html)
+
+        // Walk page-level rules to find the effective background. First
+        // declaration wins (mirrors cascade approximately for what's
+        // typically a one-rule body declaration).
+        var bgRaw: String?
+        for rule in rules where isPageLevelSelector(rule.selector) {
+            let decls = parseDeclarations(rule.declarations)
+            if let b = decls["background-color"] ?? decls["background"] {
+                bgRaw = b
+                break
+            }
+        }
+        guard let bg = bgRaw else { return [] }
+
+        // Theme-aware backgrounds (Canvas, transparent, ...) are fine —
+        // they already follow the system color-scheme.
+        if isThemeAwareColor(bg) { return [] }
+
+        // Resolve to luminance. Mid-greys aren't a theme-direction
+        // signal; only flag the unambiguous extremes.
+        guard let rgb = parseColor(bg) else { return [] }
+        let lum = luminance(rgb)
+        let needs: String
+        if lum < 0.2 {
+            needs = "dark"
+        } else if lum > 0.8 {
+            needs = "light"
+        } else {
+            return []
+        }
+
+        // Match against `color-scheme` in any rule (typically on :root,
+        // but authors put it on html or body too — accept anywhere).
+        for rule in rules {
+            let decls = parseDeclarations(rule.declarations)
+            if let cs = decls["color-scheme"] {
+                let lc = cs.lowercased()
+                if lc.contains(needs) || lc.contains("light dark") || lc.contains("dark light") {
+                    return []
+                }
+            }
+        }
+
+        // ...or as <meta name="color-scheme" content="...">.
+        let metaPattern = #"<meta[^>]+name\s*=\s*["']color-scheme["'][^>]+content\s*=\s*["']([^"']+)["'][^>]*>"#
+        if let regex = try? NSRegularExpression(pattern: metaPattern, options: [.caseInsensitive]) {
+            let ns = html as NSString
+            let metaMatches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+            for m in metaMatches where m.numberOfRanges >= 2 {
+                let content = ns.substring(with: m.range(at: 1)).lowercased()
+                if content.contains(needs) || content.contains("light dark") || content.contains("dark light") {
+                    return []
+                }
+            }
+        }
+
+        return [
+            Issue(
+                severity: .warn,
+                check: "color_scheme_undeclared",
+                file: "ui/index.html",
+                message: String(
+                    format: "body has a hard-coded %@ background (%@, luminance %.2f) but the document doesn't declare `color-scheme: %@` — CSS system colors (`Canvas`, `CanvasText`) used by cdp-ui will resolve to the wrong shade, making slotted labels and other theme-aware text illegible against your background.",
+                    needs, bg.trimmingCharacters(in: .whitespaces), lum, needs
+                ),
+                suggestion: "Add `:root { color-scheme: \(needs); }` (or `<meta name=\"color-scheme\" content=\"\(needs)\">`) so cdp-ui's CanvasText-based tokens follow your background."
+            )
+        ]
     }
 
     // MARK: - CSS parsing helpers

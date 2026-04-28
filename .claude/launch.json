@@ -12,6 +12,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8766", "--directory", ".claude/preview/compressor"],
       "port": 8766
+    },
+    {
+      "name": "cdp-meter",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8767", "--directory", ".claude/preview/cdp-meter"],
+      "port": 8767
     }
   ]
 }

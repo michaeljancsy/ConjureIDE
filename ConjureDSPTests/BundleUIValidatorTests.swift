@@ -771,8 +771,12 @@ struct BundleUIValidatorTests {
 
     @Test func bodyWithExplicitMatchingBackgroundNotFlagged() throws {
         // If the author hard-codes BOTH text and background in concert,
-        // that's a deliberate opt-out of theme-following — not a bug.
-        // The contrast check still verifies they're legible together.
+        // that's a deliberate opt-out of theme-following — not a bug
+        // for the body's own text. The contrast check verifies they're
+        // legible together. (The cdp-ui-side trap that the author may
+        // not realize they've stepped into — CanvasText-based theme
+        // tokens still need a color-scheme declaration to follow the
+        // hard-coded bg — is reported under `color_scheme_undeclared`.)
         let ui = """
         <!doctype html><html><head><style>
           body { color: white; background: #111; }
@@ -784,6 +788,104 @@ struct BundleUIValidatorTests {
         // text_contrast_low should NOT fire (white on near-black is 20:1).
         #expect(!report.issues.contains { $0.check == "theme_breaking_body_color" })
         #expect(!report.issues.contains { $0.check == "text_contrast_low" })
+    }
+
+    // MARK: - color_scheme_undeclared
+
+    @Test func darkBgWithoutColorSchemeFlagged() throws {
+        // The exact case our cdp-meter preview hit: dark background,
+        // no color-scheme declaration. cdp-ui slotted labels resolved
+        // their muted color through `CanvasText` → black → invisible.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { color: #ddd; background: #1c1c20; }
+        </style></head><body><cdp-meter source="peak-out"></cdp-meter></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "color_scheme_undeclared" })
+    }
+
+    @Test func lightBgWithoutColorSchemeFlagged() throws {
+        // Reverse: hard-coded near-white bg with no `color-scheme: light`
+        // would fire on a system in dark mode — CanvasText would resolve
+        // to white, washed out against the page.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { color: #222; background: #f7f7f7; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "color_scheme_undeclared" })
+    }
+
+    @Test func darkBgWithMatchingColorSchemeNotFlagged() throws {
+        // Author declared `color-scheme: dark` on :root — CanvasText
+        // resolves to white, which is what we want against the dark bg.
+        let ui = """
+        <!doctype html><html><head><style>
+          :root { color-scheme: dark; }
+          body { color: #ddd; background: #1c1c20; }
+        </style></head><body><cdp-meter source="peak-out"></cdp-meter></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "color_scheme_undeclared" })
+    }
+
+    @Test func darkBgWithMetaColorSchemeNotFlagged() throws {
+        // The meta-tag form is equally valid — many authors reach for
+        // it instead of CSS.
+        let ui = """
+        <!doctype html><html><head>
+          <meta name="color-scheme" content="dark">
+          <style>body { color: #ddd; background: #111; }</style>
+        </head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "color_scheme_undeclared" })
+    }
+
+    @Test func lightDarkColorSchemeAcceptsEither() throws {
+        // `color-scheme: light dark` lets the system choose; either
+        // direction should pass.
+        let ui = """
+        <!doctype html><html><head><style>
+          :root { color-scheme: light dark; }
+          body { background: #111; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "color_scheme_undeclared" })
+    }
+
+    @Test func canvasBgNotFlagged() throws {
+        // Theme-aware background (Canvas) by definition follows the
+        // system color-scheme. No declaration needed.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { background: Canvas; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "color_scheme_undeclared" })
+    }
+
+    @Test func midGreyBgNotFlagged() throws {
+        // A mid-grey background (luminance ~0.4) is ambiguous — the
+        // author hasn't picked a side. Don't fire.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { background: #888; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "color_scheme_undeclared" })
     }
 
     // MARK: - params_referenced_in_ui — no-manifest-params branch

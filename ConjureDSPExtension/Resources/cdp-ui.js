@@ -1237,6 +1237,392 @@
     }
 
     // ------------------------------------------------------------------
+    // <cdp-meter> — read-only audio level meter.
+    //
+    // Subscribes to `ConjureDSP.audio.onFrame` and renders a bar with
+    // PPM ballistics, peak-hold marker, and three-zone coloring. Click
+    // anywhere on the meter to reset the peak-hold marker.
+    //
+    // Source modes:
+    //   peak-in | peak-out | rms-in | rms-out — linear scalars from the
+    //   default frame payload; converted to dB unless `unit="db"`.
+    //   telemetry:<key> — reads `frame.telemetry?.[key]`; defaults to
+    //   `unit="db"` (telemetry channels typically publish dB already,
+    //   per the Rust/Python author surface in the docs).
+    // ------------------------------------------------------------------
+
+    var METER_CSS = [
+        ':host {',
+        '  --cdp-meter-green: oklch(0.65 0.15 145);',
+        '  --cdp-meter-yellow: oklch(0.78 0.15 90);',
+        '  --cdp-meter-red: oklch(0.55 0.20 25);',
+        '  --cdp-meter-track-bg: var(--cdp-track-bg);',
+        '  --cdp-meter-peak-color: var(--cdp-fg);',
+        '  --cdp-meter-thickness: 12px;',
+        '  --cdp-meter-length: 120px;',
+        '  display: inline-flex;',
+        '}',
+        '.container {',
+        '  display: flex;',
+        '  flex-direction: column;',
+        '  align-items: center;',
+        '  gap: 4px;',
+        '  cursor: pointer;',
+        '}',
+        ':host([orientation="horizontal"]) .container {',
+        '  flex-direction: row;',
+        '}',
+        '[part="label"] {',
+        '  font-weight: 500;',
+        '  color: var(--cdp-muted);',
+        '  font-size: calc(var(--cdp-font-size) - 1px);',
+        '  white-space: nowrap;',
+        '}',
+        '.track {',
+        '  position: relative;',
+        '  background: var(--cdp-meter-track-bg);',
+        '  border-radius: var(--cdp-radius);',
+        '  overflow: hidden;',
+        '  width: var(--cdp-meter-thickness);',
+        '  height: var(--cdp-meter-length);',
+        '}',
+        ':host([orientation="horizontal"]) .track {',
+        '  width: var(--cdp-meter-length);',
+        '  height: var(--cdp-meter-thickness);',
+        '}',
+        '.bar {',
+        '  position: absolute;',
+        '  inset: 0;',
+        '  /* `--cdp-meter-gradient` is the public escape hatch — set it',
+        '     externally to supply an arbitrary linear-gradient(...). The',
+        '     internal `--_cdp-meter-bar-bg` is what JS computes from the',
+        '     attribute set (warn/clip/invert/gradient="smooth"). */',
+        '  background: var(--cdp-meter-gradient, var(--_cdp-meter-bar-bg));',
+        '  /* clip-path is set inline by the frame tick. */',
+        '  clip-path: inset(100% 0 0 0);',
+        '}',
+        '.peak-hold {',
+        '  position: absolute;',
+        '  background: var(--cdp-meter-peak-color);',
+        '  pointer-events: none;',
+        '}',
+        ':host(:not([orientation="horizontal"])) .peak-hold {',
+        '  left: 0; right: 0;',
+        '  height: 2px;',
+        '}',
+        ':host([orientation="horizontal"]) .peak-hold {',
+        '  top: 0; bottom: 0;',
+        '  width: 2px;',
+        '}',
+    ].join('\n');
+
+    /// Linear → dB with a noise floor (avoid log10(0) = -Infinity).
+    function linToDb(v) {
+        var a = Math.abs(Number(v) || 0);
+        if (a < 1e-9) a = 1e-9;
+        return 20 * Math.log10(a);
+    }
+
+    class CdpMeter extends HTMLElement {
+        static get observedAttributes() {
+            return ['source', 'unit', 'orientation',
+                    'min', 'max', 'warn', 'clip',
+                    'hold', 'decay', 'integration',
+                    'invert', 'gradient'];
+        }
+
+        constructor() {
+            super();
+            var root = this.attachShadow({ mode: 'open' });
+            root.append(styleEl(THEME_CSS + '\n' + METER_CSS));
+            root.innerHTML += [
+                '<div class="container" part="container">',
+                '  <span part="label"><slot name="label"></slot></span>',
+                '  <div class="track" part="track">',
+                '    <div class="bar" part="bar"></div>',
+                '    <div class="peak-hold" part="peak-hold"></div>',
+                '  </div>',
+                '</div>',
+            ].join('\n');
+            this._container = root.querySelector('.container');
+            this._track = root.querySelector('.track');
+            this._bar = root.querySelector('.bar');
+            this._peak = root.querySelector('.peak-hold');
+
+            // Ballistic state. Initialized from `min` on first connect.
+            this._latestRaw = 0;
+            this._haveFrame = false;
+            this._smoothed = null;
+            this._displayDb = -Infinity;
+            this._peakDb = -Infinity;
+            this._peakAt = 0;
+
+            // Bound callback so add/remove pair use the same reference.
+            this._onFrame = this._onFrame.bind(this);
+        }
+
+        connectedCallback() {
+            adoptTheme(this);
+            this._displayDb = this._readMin();
+            this._peakDb = this._displayDb;
+            this._peakAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+            this._lastTick = this._peakAt;
+            this._applyGradient();
+            this._renderBars();
+
+            this._connectController = new AbortController();
+            var sig = this._connectController.signal;
+            this._container.addEventListener('click', () => this._resetPeak(), { signal: sig });
+
+            // Ticks are driven by audio-frame arrival, not rAF.
+            // Rationale:
+            //  1. Frames arrive at the manifest's `fps` (~30 Hz default)
+            //     which is plenty for visual smoothness.
+            //  2. Ballistics tied to DSP time (frame arrival) are
+            //     semantically correct — when the host pauses the audio
+            //     engine, the meter should freeze in place rather than
+            //     keep decaying against wall-clock time.
+            //  3. rAF doesn't fire when the page is in a hidden tab /
+            //     headless preview, but `onFrame` keeps flowing as long
+            //     as the audio engine is running.
+            if (CDP.audio && typeof CDP.audio.onFrame === 'function') {
+                CDP.audio.onFrame(this._onFrame);
+            }
+        }
+
+        disconnectedCallback() {
+            if (CDP.audio && typeof CDP.audio.offFrame === 'function') {
+                CDP.audio.offFrame(this._onFrame);
+            }
+            if (this._connectController) {
+                this._connectController.abort();
+                this._connectController = null;
+            }
+        }
+
+        attributeChangedCallback(name) {
+            if (!this.isConnected) return;
+            if (name === 'min' || name === 'max' ||
+                name === 'warn' || name === 'clip' ||
+                name === 'orientation' ||
+                name === 'invert' || name === 'gradient') {
+                this._applyGradient();
+                this._renderBars();
+            }
+        }
+
+        // --- attribute readers (with defaults) ---
+        _readMin()    { var n = parseFloat(this.getAttribute('min'));    return isNaN(n) ? -60   : n; }
+        _readMax()    { var n = parseFloat(this.getAttribute('max'));    return isNaN(n) ?   0   : n; }
+        _readWarn()   { var n = parseFloat(this.getAttribute('warn'));   return isNaN(n) ? -18   : n; }
+        _readClip()   { var n = parseFloat(this.getAttribute('clip'));   return isNaN(n) ?  -6   : n; }
+        _readDecay()  { var n = parseFloat(this.getAttribute('decay'));  return isNaN(n) ? 11.76 : n; }
+        _readIntegration() { var n = parseFloat(this.getAttribute('integration')); return isNaN(n) ? 0 : n; }
+        _readHold() {
+            var s = this.getAttribute('hold');
+            if (s === 'infinite') return Infinity;
+            var n = parseFloat(s);
+            if (isNaN(n)) return 2000;
+            return n;
+        }
+        _readUnit() {
+            var u = this.getAttribute('unit');
+            if (u === 'db' || u === 'linear') return u;
+            // Default: telemetry → db (slot values are typically dB
+            // already, e.g. gain reduction); peak/rms → linear.
+            var src = this.getAttribute('source') || 'peak-out';
+            return (src.indexOf('telemetry:') === 0) ? 'db' : 'linear';
+        }
+        _readOrientation() {
+            return this.getAttribute('orientation') === 'horizontal' ? 'horizontal' : 'vertical';
+        }
+        _isInverted() { return this.hasAttribute('invert'); }
+        _readGradientStyle() {
+            return this.getAttribute('gradient') === 'smooth' ? 'smooth' : 'zones';
+        }
+
+        _applyGradient() {
+            var min = this._readMin();
+            var max = this._readMax();
+            var warn = this._readWarn();
+            var clip = this._readClip();
+            var span = max - min;
+            if (span <= 0) span = 1;
+            var inverted = this._isInverted();
+            var horizontal = this._readOrientation() === 'horizontal';
+            // The gradient runs from the "safe" end (0%) toward the
+            // "danger" end (100%). For default meters, safe = min (low
+            // values are safe, e.g. -60 dBFS); for inverted meters,
+            // safe = max (e.g. 0 dB GR = no reduction = safe).
+            var safeVal = inverted ? max : min;
+            var dangerVal = inverted ? min : max;
+            // (warn - safeVal) / (dangerVal - safeVal). The denominator
+            // flips sign when inverted, which cancels out the flipped
+            // numerator, so warnPct lands in [0, 1] for sensible inputs.
+            var safeSpan = dangerVal - safeVal;
+            var warnPct = Math.max(0, Math.min(1, (warn - safeVal) / safeSpan)) * 100;
+            var clipPct = Math.max(0, Math.min(1, (clip - safeVal) / safeSpan)) * 100;
+            // CSS gradient direction always points from safe → danger:
+            //   default vertical: bottom (safe=min) → top (danger=max)
+            //   inverted vertical: top (safe=max) → bottom (danger=min)
+            var dir;
+            if (horizontal) dir = inverted ? 'to left' : 'to right';
+            else dir = inverted ? 'to bottom' : 'to top';
+            var stops;
+            if (this._readGradientStyle() === 'smooth') {
+                // Smooth: blends green → yellow → red continuously, with
+                // anchors at 0%/warn/clip/100%.
+                stops = [
+                    'var(--cdp-meter-green) 0%',
+                    'var(--cdp-meter-yellow) ' + warnPct + '%',
+                    'var(--cdp-meter-red) ' + clipPct + '%',
+                    'var(--cdp-meter-red) 100%',
+                ];
+            } else {
+                // Zones: hard edges at warn/clip — the pro-meter default.
+                stops = [
+                    'var(--cdp-meter-green) 0%',
+                    'var(--cdp-meter-green) ' + warnPct + '%',
+                    'var(--cdp-meter-yellow) ' + warnPct + '%',
+                    'var(--cdp-meter-yellow) ' + clipPct + '%',
+                    'var(--cdp-meter-red) ' + clipPct + '%',
+                    'var(--cdp-meter-red) 100%',
+                ];
+            }
+            // Write to the internal CSS var so external `--cdp-meter-gradient`
+            // can override via the cascade defined in METER_CSS.
+            this._bar.style.setProperty('--_cdp-meter-bar-bg',
+                'linear-gradient(' + dir + ', ' + stops.join(', ') + ')');
+        }
+
+        _onFrame(frame) {
+            if (!frame) return;
+            var src = this.getAttribute('source') || 'peak-out';
+            var raw;
+            if (src.indexOf('telemetry:') === 0) {
+                var key = src.substring('telemetry:'.length);
+                raw = frame.telemetry ? frame.telemetry[key] : undefined;
+            } else {
+                switch (src) {
+                    case 'peak-in':  raw = frame.peakIn;  break;
+                    case 'rms-in':   raw = frame.rmsIn;   break;
+                    case 'rms-out':  raw = frame.rmsOut;  break;
+                    case 'peak-out': /* fallthrough */
+                    default:         raw = frame.peakOut; break;
+                }
+            }
+            if (typeof raw !== 'number' || !isFinite(raw)) raw = 0;
+            this._latestRaw = raw;
+            this._haveFrame = true;
+            // Ballistics + render advance on each frame. See
+            // connectedCallback for why we don't use rAF.
+            this._tick(typeof performance !== 'undefined' ? performance.now() : Date.now());
+        }
+
+        _tick(now) {
+            var dt = (now - this._lastTick) / 1000;
+            if (dt < 0) dt = 0;
+            if (dt > 0.5) dt = 0.5; // tab unfocus / first tick
+            this._lastTick = now;
+
+            var unit = this._readUnit();
+            var raw = this._latestRaw;
+
+            // Optional integration smoothing on the raw scalar (in its
+            // native unit). One-pole IIR keyed off integration ms.
+            var integrationMs = this._readIntegration();
+            if (integrationMs > 0) {
+                var coeff = 1 - Math.exp(-dt * 1000 / integrationMs);
+                if (this._smoothed === null) this._smoothed = raw;
+                this._smoothed += coeff * (raw - this._smoothed);
+                raw = this._smoothed;
+            } else {
+                this._smoothed = null;
+            }
+
+            var dB = (unit === 'db') ? Number(raw) : linToDb(raw);
+            if (!isFinite(dB)) dB = -Infinity;
+
+            var min = this._readMin();
+            var max = this._readMax();
+            var clamped = Math.max(min, Math.min(max, dB));
+
+            // PPM-style fall: rise instantaneously, fall at `decay` dB/s.
+            var decay = this._readDecay();
+            var fallen = this._displayDb - dt * decay;
+            if (fallen < min) fallen = min;
+            this._displayDb = Math.max(clamped, fallen);
+
+            // Peak hold: latch to display peak; release after `hold` ms.
+            var holdMs = this._readHold();
+            if (this._displayDb >= this._peakDb || (now - this._peakAt) >= holdMs) {
+                this._peakDb = this._displayDb;
+                this._peakAt = now;
+            }
+
+            this._renderBars();
+        }
+
+        _renderBars() {
+            var min = this._readMin();
+            var max = this._readMax();
+            var span = max - min;
+            if (span <= 0) span = 1;
+            var inverted = this._isInverted();
+            // pct = "fill amount" along the gradient (0 = safe end empty,
+            // 1 = danger end full). For invert this flips so heavy
+            // reduction (low value) yields a full bar.
+            var pct, peakPct;
+            if (inverted) {
+                pct     = Math.max(0, Math.min(1, (max - this._displayDb) / span));
+                peakPct = Math.max(0, Math.min(1, (max - this._peakDb)    / span));
+            } else {
+                pct     = Math.max(0, Math.min(1, (this._displayDb - min) / span));
+                peakPct = Math.max(0, Math.min(1, (this._peakDb    - min) / span));
+            }
+            var horizontal = this._readOrientation() === 'horizontal';
+            // Reset all four edges so a previous orientation/invert state
+            // doesn't leak across an attribute change.
+            this._peak.style.top = '';
+            this._peak.style.bottom = '';
+            this._peak.style.left = '';
+            this._peak.style.right = '';
+            // clipPath reveals the filled portion; the bar grows from the
+            // "safe" edge toward the "danger" edge:
+            //   default vertical:   grows up   → reveal bottom (clip top)
+            //   inverted vertical:  grows down → reveal top    (clip bottom)
+            //   default horizontal: grows right → reveal left  (clip right)
+            //   inverted horizontal: grows left → reveal right (clip left)
+            // Peak marker sits at the leading edge of the fill.
+            var emptyPct = (1 - pct) * 100;
+            var peakPos = (peakPct * 100) + '%';
+            if (horizontal) {
+                if (inverted) {
+                    this._bar.style.clipPath = 'inset(0 0 0 ' + emptyPct + '%)';
+                    this._peak.style.right = peakPos;
+                } else {
+                    this._bar.style.clipPath = 'inset(0 ' + emptyPct + '% 0 0)';
+                    this._peak.style.left = peakPos;
+                }
+            } else {
+                if (inverted) {
+                    this._bar.style.clipPath = 'inset(0 0 ' + emptyPct + '% 0)';
+                    this._peak.style.top = peakPos;
+                } else {
+                    this._bar.style.clipPath = 'inset(' + emptyPct + '% 0 0 0)';
+                    this._peak.style.bottom = peakPos;
+                }
+            }
+        }
+
+        _resetPeak() {
+            this._peakDb = isFinite(this._displayDb) ? this._displayDb : this._readMin();
+            this._peakAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+            this._renderBars();
+        }
+    }
+
+    // ------------------------------------------------------------------
     // <cdp-panel auto> — renders one appropriate control per parameter.
     // Replaces the previous hand-rolled starterIndexHTML() slider list
     // and matches the Swift ParameterSlidersView component-picking logic.
@@ -1297,6 +1683,7 @@
     define('cdp-choice', CdpChoice);
     define('cdp-xy', CdpXY);
     define('cdp-knob', CdpKnob);
+    define('cdp-meter', CdpMeter);
     define('cdp-panel', CdpPanel);
 
     CDP.ui = {
