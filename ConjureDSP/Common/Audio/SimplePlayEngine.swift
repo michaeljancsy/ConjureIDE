@@ -212,12 +212,28 @@ public class SimplePlayEngine {
             isPlaying = false
             fatalError("Could not start engine. error: \(error).")
         }
-        
+
         if avAudioUnit.wantsAudioInput {
-            // Start the player.
+            // macOS 26 tightened AVFAudio's preconditions on AVAudioPlayerNode.
+            // engine.start() returns as soon as it hands control to the audio
+            // I/O thread, but that thread takes a few ms to render its first
+            // tick. Calling player.play() before that first tick lands throws
+            //
+            //   *** Terminating app due to uncaught exception
+            //   'com.apple.coreaudio.avfaudio',
+            //   reason: 'player did not see an IO cycle.'
+            //
+            // outputNode.lastRenderTime is nil until the I/O thread emits its
+            // first sample, so spin briefly until either it goes non-nil or we
+            // hit a generous safety deadline. In practice this loop exits in
+            // 1–3 iterations (~1–3 ms) on M-series hardware.
+            let deadline = Date().addingTimeInterval(0.5)
+            while engine.outputNode.lastRenderTime == nil && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.001)
+            }
             player.play()
         }
-        
+
         isPlaying = true
     }
     
