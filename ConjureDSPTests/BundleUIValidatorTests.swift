@@ -848,6 +848,22 @@ struct BundleUIValidatorTests {
         #expect(!report.issues.contains { $0.check == "color_scheme_undeclared" })
     }
 
+    @Test func darkBgWithReversedMetaAttributesNotFlagged() throws {
+        // HTML attribute order is insignificant — `<meta content=".."
+        // name="color-scheme">` is just as valid as the canonical order.
+        // Regression: the original regex pinned `name` before `content`
+        // and false-positived on this form (Sentry Seer review on #266).
+        let ui = """
+        <!doctype html><html><head>
+          <meta content="dark" name="color-scheme">
+          <style>body { color: #ddd; background: #111; }</style>
+        </head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "color_scheme_undeclared" })
+    }
+
     @Test func lightDarkColorSchemeAcceptsEither() throws {
         // `color-scheme: light dark` lets the system choose; either
         // direction should pass.

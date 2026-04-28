@@ -824,13 +824,27 @@ enum BundleUIValidator {
             }
         }
 
-        // ...or as <meta name="color-scheme" content="...">.
-        let metaPattern = #"<meta[^>]+name\s*=\s*["']color-scheme["'][^>]+content\s*=\s*["']([^"']+)["'][^>]*>"#
-        if let regex = try? NSRegularExpression(pattern: metaPattern, options: [.caseInsensitive]) {
+        // ...or as <meta name="color-scheme" content="...">. HTML
+        // attribute order is insignificant, so match the whole tag and
+        // pull `name` and `content` out independently — a regex that
+        // pinned `name` before `content` would miss the equally-valid
+        // `<meta content="dark" name="color-scheme">`.
+        let tagPattern = #"<meta\b[^>]*>"#
+        let attrPattern = #"(\w[\w-]*)\s*=\s*["']([^"']*)["']"#
+        if let tagRegex = try? NSRegularExpression(pattern: tagPattern, options: [.caseInsensitive]),
+           let attrRegex = try? NSRegularExpression(pattern: attrPattern, options: []) {
             let ns = html as NSString
-            let metaMatches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length))
-            for m in metaMatches where m.numberOfRanges >= 2 {
-                let content = ns.substring(with: m.range(at: 1)).lowercased()
+            for tagMatch in tagRegex.matches(in: html, range: NSRange(location: 0, length: ns.length)) {
+                let tag = ns.substring(with: tagMatch.range)
+                let tagNS = tag as NSString
+                var attrs: [String: String] = [:]
+                for am in attrRegex.matches(in: tag, range: NSRange(location: 0, length: tagNS.length)) where am.numberOfRanges >= 3 {
+                    let key = tagNS.substring(with: am.range(at: 1)).lowercased()
+                    let val = tagNS.substring(with: am.range(at: 2))
+                    attrs[key] = val
+                }
+                guard attrs["name"]?.lowercased() == "color-scheme",
+                      let content = attrs["content"]?.lowercased() else { continue }
                 if content.contains(needs) || content.contains("light dark") || content.contains("dark light") {
                     return []
                 }
