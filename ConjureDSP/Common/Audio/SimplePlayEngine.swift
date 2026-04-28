@@ -204,7 +204,13 @@ public class SimplePlayEngine {
         
         let hardwareFormat = engine.outputNode.outputFormat(forBus: 0)
         engine.connect(engine.mainMixerNode, to: engine.outputNode, format: hardwareFormat)
-        
+
+        // Preallocate the render graph so the I/O thread can start producing
+        // samples as soon as engine.start() returns, instead of doing first-
+        // render-tick allocations under the gun. Documented by Apple as the
+        // recommended companion call before start() when render-time matters.
+        engine.prepare()
+
         // Start the engine.
         do {
             try engine.start()
@@ -214,24 +220,21 @@ public class SimplePlayEngine {
         }
 
         if avAudioUnit.wantsAudioInput {
-            // macOS 26 tightened AVFAudio's preconditions on AVAudioPlayerNode.
-            // engine.start() returns as soon as it hands control to the audio
-            // I/O thread, but that thread takes a few ms to render its first
-            // tick. Calling player.play() before that first tick lands throws
+            // macOS 26 tightened AVFAudio's preconditions on AVAudioPlayerNode:
+            // play() throws synchronously with reason 'player did not see an
+            // IO cycle' if the I/O thread hasn't pulled the player at least
+            // once. engine.start() returns as soon as it hands off to the I/O
+            // thread, so play() back-to-back loses the race every time.
             //
-            //   *** Terminating app due to uncaught exception
-            //   'com.apple.coreaudio.avfaudio',
-            //   reason: 'player did not see an IO cycle.'
-            //
-            // outputNode.lastRenderTime is nil until the I/O thread emits its
-            // first sample, so spin briefly until either it goes non-nil or we
-            // hit a generous safety deadline. In practice this loop exits in
-            // 1–3 iterations (~1–3 ms) on M-series hardware.
-            let deadline = Date().addingTimeInterval(0.5)
-            while engine.outputNode.lastRenderTime == nil && Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.001)
-            }
-            player.play()
+            // The robust workaround is play(at:) with a future host time.
+            // AVFAudio queues a deferred-start command onto the render thread,
+            // which fires when the render clock crosses `when` — by which
+            // point the I/O thread has rendered at least one tick and the
+            // precondition is satisfied. The user-visible delay is ~50 ms and
+            // imperceptible in a play-button press.
+            let leadHostTicks = AVAudioTime.hostTime(forSeconds: 0.050)
+            let when = AVAudioTime(hostTime: mach_absolute_time() + leadHostTicks)
+            player.play(at: when)
         }
 
         isPlaying = true
