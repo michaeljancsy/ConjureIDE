@@ -293,16 +293,25 @@ final class ExportAudioCaptureManager: ObservableObject {
 
         let telemetry = readTelemetry(kernel: kernel)
 
-        audioFramePublisher.send(AudioFrame(
-            rmsIn: rmsIn,
-            rmsOut: rmsOut,
-            peakIn: peakIn,
-            peakOut: peakOut,
-            fftInDB: producedFFTColumn ? fftInputScratch : nil,
-            fftOutDB: producedFFTColumn ? fftOutputScratch : nil,
-            telemetry: telemetry,
-            timestamp: CACurrentMediaTime()
-        ))
+        // See AudioCaptureManager.tick for the gate rationale. Three
+        // classes of bad-data ticks are filtered: empty drains (both
+        // counts 0), mismatched ticks (audio thread caught mid-render-
+        // block — exactly one count is 0), and all-zero buffers (both
+        // counts > 0 but every sample is silence — typically a host-side
+        // hiccup or auxiliary-render pass). Each one would produce a
+        // visible artifact in the time-anchored UI renderer if published.
+        if inputCount > 0 && outputCount > 0 && (peakIn > 0 || peakOut > 0) {
+            audioFramePublisher.send(AudioFrame(
+                rmsIn: rmsIn,
+                rmsOut: rmsOut,
+                peakIn: peakIn,
+                peakOut: peakOut,
+                fftInDB: producedFFTColumn ? fftInputScratch : nil,
+                fftOutDB: producedFFTColumn ? fftOutputScratch : nil,
+                telemetry: telemetry,
+                timestamp: CACurrentMediaTime()
+            ))
+        }
     }
 
     // MARK: - Telemetry

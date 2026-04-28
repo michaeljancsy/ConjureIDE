@@ -529,18 +529,55 @@ final class AudioCaptureManager: ObservableObject {
         // Emit a frame for custom-UI subscribers. FFT arrays only ride along
         // on ticks that produced a new column; otherwise nil. `send` on a
         // subject with no observers is a cheap no-op, so there's no gate.
-        let fftIn: [Float]? = producedColumns ? fftInputScratch : nil
-        let fftOut: [Float]? = producedColumns ? fftOutputScratch : nil
-        audioFramePublisher.send(AudioFrame(
-            rmsIn: rmsIn,
-            rmsOut: rmsOut,
-            peakIn: peakIn,
-            peakOut: peakOut,
-            fftInDB: fftIn,
-            fftOutDB: fftOut,
-            telemetry: telemetry,
-            timestamp: CACurrentMediaTime()
-        ))
+        //
+        // Three classes of bad-data tick are filtered out here:
+        //
+        // 1. **Empty drains** (`inputCount == 0 && outputCount == 0`).
+        //    The CADisplayLink fires at display rate (60 Hz, or 120 Hz on
+        //    ProMotion); DAW hosts render audio in larger blocks (Ableton:
+        //    2048 frames at 48 kHz = ~23 Hz). On ProMotion ~80% of ticks
+        //    see both rings empty. Without filtering, we'd publish
+        //    `peakIn = peakOut = 0` (var-init defaults), which the time-
+        //    anchored UI would draw as a real -120 dB sample.
+        //
+        // 2. **Mismatched ticks** (exactly one of `inputCount`/`outputCount`
+        //    is 0). The audio thread writes the input ring at the start of
+        //    a render block and the output ring at the end, with the
+        //    script's `process()` in between (~10 ms). If a UI tick fires
+        //    in that window, one ring has data and the other doesn't.
+        //    Publishing those produces consecutive ring entries with one
+        //    fill present and the other missing — visible as lighter or
+        //    medium-grey "phantom" strips. Skipping costs us one render
+        //    block's contribution to the visualization, which the time-
+        //    anchored renderer interpolates over invisibly.
+        //
+        // 3. **All-zero buffers** (`peakIn == 0 && peakOut == 0` even when
+        //    both counts > 0). Sometimes the host hands us a full block of
+        //    pure silence (e.g. brief Ableton transport hiccups, or the AU
+        //    being called from an auxiliary render path). Publishing those
+        //    produces real -120 dB ring entries → visible drops to the
+        //    -60 dB floor in the level fill. Audio output to the DAW is
+        //    unaffected; the silence is purely an artifact of the capture
+        //    ring's view of input.
+        //
+        // Cases 2 and 3 also show up under the diagnostic as `kind=mismatch`
+        // and `kind=zeroBoth` respectively. The kernel-side root cause for
+        // (3) is still being investigated; this gate is a UI-side
+        // suppression so the visualization stays clean while we dig.
+        if inputCount > 0 && outputCount > 0 && (peakIn > 0 || peakOut > 0) {
+            let fftIn: [Float]? = producedColumns ? fftInputScratch : nil
+            let fftOut: [Float]? = producedColumns ? fftOutputScratch : nil
+            audioFramePublisher.send(AudioFrame(
+                rmsIn: rmsIn,
+                rmsOut: rmsOut,
+                peakIn: peakIn,
+                peakOut: peakOut,
+                fftInDB: fftIn,
+                fftOutDB: fftOut,
+                telemetry: telemetry,
+                timestamp: CACurrentMediaTime()
+            ))
+        }
     }
 
     // MARK: - Telemetry

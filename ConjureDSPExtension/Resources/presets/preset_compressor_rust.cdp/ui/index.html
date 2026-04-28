@@ -346,6 +346,7 @@
         if (N === 0) return;
         const baseline = padT + ih;
         const x0 = xAt(ring[0].t);
+        const xLast = xAt(ring[N - 1].t);
         ctx.beginPath();
         ctx.moveTo(x0, baseline);
         ctx.lineTo(x0, yAt(ring[0][field]));
@@ -354,10 +355,15 @@
           ctx.lineTo(xCur, yAt(ring[k - 1][field]));   // horizontal at prev value
           ctx.lineTo(xCur, yAt(ring[k][field]));       // riser to new value
         }
-        // Hold newest value out to the right edge so a late push doesn't
-        // leave a visible gap on the right.
-        ctx.lineTo(xRight, yAt(ring[N - 1][field]));
-        ctx.lineTo(xRight, baseline);
+        // End the path at the newest entry's actual time, NOT at xRight.
+        // Extending to xRight would hold the latest value out as a flat
+        // line whenever the audio thread isn't producing frames (paused
+        // transport, bypassed AU, momentary stall) — visually a "stuck"
+        // bar at whatever the last sample happened to be. Since
+        // AudioCaptureManager now suppresses empty-drain publishes, the
+        // tNow→ring[N-1].t gap honestly reflects "no new data" and should
+        // simply not be drawn.
+        ctx.lineTo(xLast, baseline);
         ctx.closePath();
         ctx.fillStyle = FG;
         ctx.globalAlpha = alpha;
@@ -382,21 +388,23 @@
       // shape doesn't change between frames, only its x-offset does.
       if (N > 0) {
         const grPath = new Path2D();
+        const xLast = xAt(ring[N - 1].t);
         grPath.moveTo(xAt(ring[0].t), yAt(-ring[0].grDb));
         for (let k = 1; k < N; k++) {
           grPath.lineTo(xAt(ring[k].t), yAt(-ring[k].grDb));
         }
-        // Hold newest out to the right edge (avoids a 1-frame gap when the
-        // newest push is slightly older than tNow).
-        grPath.lineTo(xRight, yAt(-ring[N - 1].grDb));
+        // End at the newest entry's actual time, NOT xRight. Same
+        // rationale as fillLevelArea above — extending to xRight would
+        // visibly hold the GR value across pauses/bypasses.
 
         ctx.strokeStyle = GR_COLOR;
         ctx.lineWidth = 2 * devicePixelRatio;
         ctx.lineJoin = 'round';
         ctx.stroke(grPath);
 
-        // Soft fill under the GR line, dropping to the 0 dB baseline.
-        grPath.lineTo(xRight,           yAt(0));
+        // Soft fill under the GR line, dropping to the 0 dB baseline at
+        // the newest entry's time (not xRight).
+        grPath.lineTo(xLast,            yAt(0));
         grPath.lineTo(xAt(ring[0].t),   yAt(0));
         grPath.closePath();
         ctx.fillStyle = GR_COLOR;
