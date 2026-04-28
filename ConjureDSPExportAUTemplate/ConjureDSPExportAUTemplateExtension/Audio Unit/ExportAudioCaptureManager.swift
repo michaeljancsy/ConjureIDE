@@ -139,6 +139,14 @@ final class ExportAudioCaptureManager: ObservableObject {
     private static let maxTelemetryVecLen: Int = 4096
     private var telemetryVecScratch: [Float] = [Float](repeating: 0, count: 4096)
 
+    /// Wall time of the last tick that observed forward progress on the
+    /// audio thread. See AudioCaptureManager for the rationale — when the
+    /// host stops calling render, the kernel ring keeps replaying its
+    /// last published telemetry; we drop telemetry from the frame after
+    /// the deadband elapses so meters don't freeze at the last value.
+    private var lastRenderActivityTimestamp: CFTimeInterval = 0
+    private static let telemetryStaleThreshold: CFTimeInterval = 0.050
+
     // MARK: - Init
 
     init() {
@@ -229,6 +237,10 @@ final class ExportAudioCaptureManager: ObservableObject {
             kernel, &outputReadBuffer, UInt32(Self.maxReadSamples)
         ))
 
+        if inputCount > 0 || outputCount > 0 {
+            lastRenderActivityTimestamp = CACurrentMediaTime()
+        }
+
         // RMS + peak straight off the ring buffer read. Cheap even when no
         // subscriber is live — we still emit a frame so subscribers see a
         // steady cadence (the subject no-ops without observers).
@@ -301,6 +313,11 @@ final class ExportAudioCaptureManager: ObservableObject {
     private func readTelemetry(kernel: DSPKernelRef) -> [String: TelemetryValue]? {
         refreshTelemetryNamesIfChanged(kernel: kernel)
         guard !telemetryNames.isEmpty else { return nil }
+
+        // Staleness gate — see AudioCaptureManager.readTelemetry.
+        if CACurrentMediaTime() - lastRenderActivityTimestamp > Self.telemetryStaleThreshold {
+            return nil
+        }
 
         let n = Int(dsp_kernel_read_telemetry(
             kernel,

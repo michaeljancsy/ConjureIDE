@@ -310,6 +310,15 @@ final class AudioCaptureManager: ObservableObject {
     private var telemetryIsVector: [Bool] = []
     private var lastTelemetryMetaJSON: String?
     private var telemetryReadBuffer: [Float] = []
+
+    /// Wall time of the last tick that observed forward progress on the
+    /// audio thread (i.e. read >0 samples from the kernel ring). Used to
+    /// detect a stalled audio thread (host paused, transport stopped) and
+    /// suppress telemetry instead of replaying the last cached value
+    /// forever. Renders typically deliver a block every 5–21 ms at 48 kHz,
+    /// so a 50 ms deadband is comfortably larger than any normal gap.
+    private var lastRenderActivityTimestamp: CFTimeInterval = 0
+    private static let telemetryStaleThreshold: CFTimeInterval = 0.050
     /// Shared scratch for vector-telemetry reads. Sized to the kernel's
     /// `MAX_FRAMES` (4096) — the kernel truncates anything longer, so
     /// this is sufficient for any host buffer size.
@@ -448,6 +457,13 @@ final class AudioCaptureManager: ObservableObject {
             UInt32(Self.maxReadSamples)
         ))
 
+        // Stamp render activity. The audio thread only writes new samples
+        // into the ring while the host is calling render, so a tick with
+        // zero samples on both rings means the render path is stalled.
+        if inputCount > 0 || outputCount > 0 {
+            lastRenderActivityTimestamp = CACurrentMediaTime()
+        }
+
         // RMS + peak from this tick's samples, for AudioFrame consumers.
         // Zero-cost when no custom UI is subscribed (we skip emit below).
         var rmsIn: Float = 0
@@ -538,6 +554,17 @@ final class AudioCaptureManager: ObservableObject {
     private func readTelemetry(kernel: DSPKernelRef) -> [String: TelemetryValue]? {
         refreshTelemetryNamesIfChanged(kernel: kernel)
         guard !telemetryNames.isEmpty else { return nil }
+
+        // Staleness gate. When the audio thread hasn't ticked recently
+        // (host paused, transport stopped, AU bypassed) the kernel's
+        // telemetry ring keeps returning the last published value, so a
+        // GR meter would freeze at whatever the compressor was doing the
+        // moment audio stopped. Returning nil drops the telemetry field
+        // from this frame; the UI's onFrame handler defaults its locals
+        // (gr=0, grCurve=null) and the line snaps back to neutral.
+        if CACurrentMediaTime() - lastRenderActivityTimestamp > Self.telemetryStaleThreshold {
+            return nil
+        }
 
         let n = Int(dsp_kernel_read_telemetry(
             kernel,
