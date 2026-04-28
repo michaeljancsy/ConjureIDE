@@ -848,6 +848,23 @@ struct BundleUIValidatorTests {
         #expect(!report.issues.contains { $0.check == "color_scheme_undeclared" })
     }
 
+    @Test func darkBgWithSubstringOnlyColorSchemeStillFlagged() throws {
+        // `highlight` contains the substring `light` but isn't a valid
+        // `color-scheme` keyword. The check must tokenize on whitespace
+        // and exact-match keywords — otherwise it false-negatives and
+        // skips the warning. Spotted by Sentry Seer review on #266.
+        let ui = """
+        <!doctype html><html><head><style>
+          :root { color-scheme: highlight; }
+          body { color: #ddd; background: #111; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "color_scheme_undeclared" },
+                "the `highlight` identifier should not satisfy the `dark` requirement")
+    }
+
     @Test func darkBgWithReversedMetaAttributesNotFlagged() throws {
         // HTML attribute order is insignificant — `<meta content=".."
         // name="color-scheme">` is just as valid as the canonical order.

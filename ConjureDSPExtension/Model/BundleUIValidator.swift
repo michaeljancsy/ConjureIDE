@@ -812,15 +812,23 @@ enum BundleUIValidator {
             return []
         }
 
+        // Tokenize a `color-scheme` value into its keyword set so we
+        // accept `light dark`/`only dark` but don't false-negative on
+        // unrelated identifiers that happen to contain `light` or
+        // `dark` as a substring (e.g. a stray `highlight`).
+        func colorSchemeAccepts(_ value: String) -> Bool {
+            let tokens = Set(value.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init))
+            if tokens.contains(needs) { return true }
+            if tokens.contains("light") && tokens.contains("dark") { return true }
+            return false
+        }
+
         // Match against `color-scheme` in any rule (typically on :root,
         // but authors put it on html or body too — accept anywhere).
         for rule in rules {
             let decls = parseDeclarations(rule.declarations)
-            if let cs = decls["color-scheme"] {
-                let lc = cs.lowercased()
-                if lc.contains(needs) || lc.contains("light dark") || lc.contains("dark light") {
-                    return []
-                }
+            if let cs = decls["color-scheme"], colorSchemeAccepts(cs) {
+                return []
             }
         }
 
@@ -844,10 +852,8 @@ enum BundleUIValidator {
                     attrs[key] = val
                 }
                 guard attrs["name"]?.lowercased() == "color-scheme",
-                      let content = attrs["content"]?.lowercased() else { continue }
-                if content.contains(needs) || content.contains("light dark") || content.contains("dark light") {
-                    return []
-                }
+                      let content = attrs["content"] else { continue }
+                if colorSchemeAccepts(content) { return [] }
             }
         }
 
