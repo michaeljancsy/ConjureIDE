@@ -104,7 +104,9 @@
       "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__search_tasks",
       "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__get_tasks",
       "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__update_tasks",
-      "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__add_comment"
+      "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__add_comment",
+      "Bash(mkdir -p /Users/michaeljancsy/Projects/ConjureDSP/conjuredsp-application/.claude/worktrees/reverent-neumann-2d07e0/.claude/preview/cdp-meter)",
+      "Bash(ln -sf ../../../ConjureDSPExtension/Resources/cdp-ui.js /Users/michaeljancsy/Projects/ConjureDSP/conjuredsp-application/.claude/worktrees/reverent-neumann-2d07e0/.claude/preview/cdp-meter/cdp-ui.js)"
     ]
   }
 }

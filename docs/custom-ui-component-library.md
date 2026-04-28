@@ -33,6 +33,7 @@ Source: [`ConjureDSPExtension/Resources/cdp-ui.js`](../ConjureDSPExtension/Resou
 | `<cdp-choice param="mode">` | Dropdown for `style:"choice"` params with the manifest-declared `options`. |
 | `<cdp-xy param-x="cutoff" param-y="resonance" invert-y>` | Two-axis pad with a puck. Writes both params on drag. `invert-y` flips semantics so low Y = bottom (standard graph orientation). |
 | `<cdp-knob param="threshold">` | Circular knob with vertical drag, mouse-wheel, keyboard nav, and double-click-to-default. Stacked layout (face / label / value). Default visual is themable via `--cdp-*` and `::part()`; for fully custom geometry, slot in your own SVG and consume the `--cdp-knob-norm` CSS variable. |
+| `<cdp-meter source="peak-out">` | Read-only level meter with PPM ballistics (IEC 60268-18 default of 11.76 dB/s decay), peak-hold marker (~2 s, click-to-reset), and three-zone color gradient (green / yellow at `warn` / red at `clip`). Sources: `peak-in`, `peak-out`, `rms-in`, `rms-out`, or `telemetry:<key>`. Vertical or horizontal. Add `invert` to flip fill direction + color order for GR / "more is worse" sources. `gradient="smooth"` blends colors instead of hard-stopping at thresholds. Override `--cdp-meter-gradient` with any `linear-gradient(...)` for full custom palettes. No `param=` — meters are passive displays, not parameter controls. |
 | `<cdp-panel>` | Thin layout wrapper — styled container with consistent padding/border. |
 
 ## Author-facing JS API (`window.ConjureDSP.ui`)
@@ -180,6 +181,84 @@ cdp-knob {
   --cdp-knob-rim-bg: #3a3a3e;
   --cdp-knob-indicator-width: 2.5px;
 }
+
+cdp-meter {
+  --cdp-meter-green: oklch(0.65 0.15 145);
+  --cdp-meter-yellow: oklch(0.78 0.15 90);
+  --cdp-meter-red: oklch(0.55 0.20 25);
+  --cdp-meter-track-bg: var(--cdp-track-bg);  /* short-axis bg */
+  --cdp-meter-peak-color: var(--cdp-fg);      /* hold marker */
+  --cdp-meter-thickness: 12px;                /* short axis */
+  --cdp-meter-length: 120px;                  /* long axis */
+  /* --cdp-meter-gradient: <any linear-gradient(...)>
+     Escape hatch: replaces the built-in green/yellow/red gradient
+     entirely. Author handles direction + color stops. Useful for
+     monochrome meters, custom palettes, or pre-computed gradients. */
+}
+```
+
+### Meter: attribute reference
+
+```html
+<cdp-meter
+    source="peak-out"      <!-- peak-in | peak-out | rms-in | rms-out
+                                | telemetry:<key> -->
+    unit="linear"          <!-- linear (default for peak/rms)
+                                | db (default for telemetry:*) -->
+    orientation="vertical" <!-- vertical (default) | horizontal -->
+    min="-60" max="0"      <!-- dBFS range -->
+    warn="-18" clip="-6"   <!-- yellow / red threshold dB -->
+    hold="2000"            <!-- peak-hold ms; "0" disables, "infinite"
+                                latches until clicked -->
+    decay="11.76"          <!-- dB/s fall rate (IEC PPM default) -->
+    integration="0"        <!-- ms one-pole IIR on the source before
+                                dB conversion; 0 = off -->
+    gradient="zones"       <!-- zones (default — hard edges at warn/clip)
+                                | smooth (continuous blend) -->
+    invert>                <!-- flip fill direction + color order: bar
+                                grows from the "max" end toward "min",
+                                green sits at max (safe) and red at min
+                                (danger). For GR meters and any "more
+                                is worse" source. -->
+  <span slot="label">OUT</span>
+</cdp-meter>
+```
+
+Click anywhere on the meter to reset the peak-hold marker to the
+current display value. There is no `param=` attribute: meters are
+read-only audio displays, not parameter controls. (A UI that exposes
+*only* meters with no other interactive surface will be flagged by the
+bundle validator as missing actuators — pair meters with at least one
+slider/toggle/knob/etc.)
+
+**Inverted (GR-style) example.** A compressor's gain-reduction column,
+where 0 dB = "no reduction = good" and a heavier negative value = more
+alarming:
+
+```html
+<cdp-meter source="telemetry:gain_reduction"
+           min="-24" max="0" warn="-6" clip="-12" invert>
+  <span slot="label">GR</span>
+</cdp-meter>
+```
+
+When `invert` is set, the natural ordering of `warn` and `clip` flips
+too: `warn` should be **closer to `max`** (lighter reduction threshold)
+and `clip` **closer to `min`** (heavier reduction threshold).
+
+**Custom palette example.** Use `--cdp-meter-gradient` to bypass the
+green/yellow/red logic entirely — useful for monochrome aesthetics or
+brand colors:
+
+```html
+<style>
+  cdp-meter.brand {
+    --cdp-meter-gradient: linear-gradient(to top,
+      oklch(0.45 0.10 260) 0%,
+      oklch(0.75 0.18 280) 100%);
+  }
+</style>
+<cdp-meter class="brand" source="peak-out"></cdp-meter>
 ```
 
 ### Knob: fully custom geometry
