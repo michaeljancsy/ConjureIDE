@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #1a1a1a; color: #eaeaea;
+    font: 12px -apple-system, sans-serif;
+    overflow: hidden;
+  }
+  #wrap { position: relative; width: 100%; height: 100%; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #hud {
+    position: absolute; top: 6px; left: 8px;
+    background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="cv"></canvas>
+    <div id="hud">fps: --   dt: --</div>
+  </div>
+<script>
+(() => {
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const hud = document.getElementById('hud');
+
+  // Scroll speed: pixels per second.
+  const SCROLL_PX_PER_SEC = 120;
+  // Synthetic signal: pixels per "sample". Drives the wave shape.
+  const SAMPLE_PX = 1;            // 1 px per synthetic sample
+  const TWO_PI = Math.PI * 2;
+
+  let dpr = 1;
+  let cssW = 0, cssH = 0;
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    cssW = cv.clientWidth;
+    cssH = cv.clientHeight;
+    cv.width = Math.round(cssW * dpr);
+    cv.height = Math.round(cssH * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+
+  // y as a function of "world time" t (seconds). Mix of frequencies
+  // so the eye can track motion easily.
+  function waveAt(t) {
+    return 0.55 * Math.sin(TWO_PI * 1.5 * t)
+         + 0.25 * Math.sin(TWO_PI * 4.0 * t + 0.4)
+         + 0.15 * Math.sin(TWO_PI * 9.0 * t + 1.1);
+  }
+
+  // FPS / dt smoothing for the HUD.
+  let lastTs = performance.now();
+  let avgDt = 16.7;
+  let frameCount = 0;
+  let hudCountdown = 0;
+
+  function paint(ts) {
+    const dt = ts - lastTs;
+    lastTs = ts;
+    avgDt = avgDt * 0.9 + dt * 0.1;
+    frameCount++;
+
+    if (cv.clientWidth !== cssW || cv.clientHeight !== cssH) resize();
+
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, cssW, cssH);
+
+    // Center axis line.
+    ctx.strokeStyle = '#2a2a2a';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, cssH / 2);
+    ctx.lineTo(cssW, cssH / 2);
+    ctx.stroke();
+
+    // Vertical reference grid (stationary). 60 px spacing.
+    ctx.strokeStyle = '#222';
+    for (let x = 0; x <= cssW; x += 60) {
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, 0);
+      ctx.lineTo(x + 0.5, cssH);
+      ctx.stroke();
+    }
+
+    // The wave: each pixel of canvas X maps to a "world X" derived
+    // from the current wall clock. The right edge is "now"; the
+    // left edge is some time ago. Scrolling = world X advances with
+    // wall time, so a fixed "feature" in world X moves left across
+    // the canvas at SCROLL_PX_PER_SEC.
+    //
+    // Convert canvas-x (px) → seconds-of-history offset:
+    //   secsAgo = (cssW - x) / SCROLL_PX_PER_SEC
+    //   worldT  = (ts/1000) - secsAgo
+    const tNow = ts / 1000;
+    const amp = (cssH * 0.4);
+    const cy = cssH / 2;
+
+    ctx.strokeStyle = '#5fa8ff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x < cssW; x += SAMPLE_PX) {
+      const secsAgo = (cssW - x) / SCROLL_PX_PER_SEC;
+      const worldT = tNow - secsAgo;
+      const y = cy - amp * waveAt(worldT);
+      if (x === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Update HUD ~5x/sec
+    hudCountdown -= dt;
+    if (hudCountdown <= 0) {
+      hudCountdown = 200;
+      const fps = (1000 / avgDt).toFixed(1);
+      hud.textContent = `fps: ${fps}   dt: ${avgDt.toFixed(2)} ms   frames: ${frameCount}`;
+    }
+
+    requestAnimationFrame(paint);
+  }
+
+  resize();
+  requestAnimationFrame((t) => { lastTs = t; paint(t); });
+})();
+</script>
+</body>
+</html>

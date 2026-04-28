@@ -114,13 +114,14 @@ extension PresetManifest {
         ui?.entryHTML ?? "ui/index.html"
     }
 
-    /// Audio-frame rate to use when the custom UI subscribes. Clamped to
-    /// 15 or 30.
+    /// Audio-frame rate to use when the custom UI subscribes. The manifest
+    /// value passes through with a sane floor and ceiling: minimum 1 Hz
+    /// (avoid div-by-zero in the gate), maximum 120 Hz (caps IPC bandwidth
+    /// at typical display-refresh ceilings; CADisplayLink won't fire faster
+    /// than vsync regardless). Defaults to 30 when omitted.
     var resolvedFPS: Int {
-        switch ui?.fps ?? 30 {
-        case ..<23: return 15
-        default: return 30
-        }
+        let raw = ui?.fps ?? 30
+        return min(120, max(1, raw))
     }
 
     /// Whether the bundle opts into audio frame delivery.

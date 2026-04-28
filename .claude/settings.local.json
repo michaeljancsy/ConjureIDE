@@ -104,7 +104,8 @@
       "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__search_tasks",
       "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__get_tasks",
       "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__update_tasks",
-      "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__add_comment"
+      "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__add_comment",
+      "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__get_task"
     ]
   }
 }

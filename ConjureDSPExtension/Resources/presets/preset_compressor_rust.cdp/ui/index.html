@@ -205,53 +205,20 @@
       .getPropertyValue('--gr-line').trim() || '#B06EFF';
     window.addEventListener('themechange', () => {
       FG = resolveFG();
-      scheduleDraw();
+      // Next paint tick (within 16.67 ms on a 60 Hz display) will use
+      // the new FG; no need to force a redraw here since paintTick is
+      // already running every vsync.
     });
 
     // ------------------------------------------------------------------
-    // History buffers — peak in / peak out, one sample per audio-frame
-    // callback (60 Hz). GR uses two channels: a scalar per slot (drives
-    // the readout pill) and a per-block sample array (drives the line
-    // shape, so attack/release curves render at audio resolution rather
-    // than one stair-step per UI tick).
+    // Time-anchored history. Each push appends one entry stamped with
+    // performance.now(); paint maps every canvas x-pixel back to a
+    // wall-clock time and looks up a value from the ring. Visual scroll
+    // velocity is constant (driven by performance.now()), so IPC jitter
+    // between pushes never shows up as a scroll-rate hiccup.
     // ------------------------------------------------------------------
-    const HIST_LEN = 240;             // 4 s @ 60 fps
-    const peakInHist  = new Float32Array(HIST_LEN);
-    const peakOutHist = new Float32Array(HIST_LEN);
-    const grHist      = new Float32Array(HIST_LEN);
-    const grBlocks    = new Array(HIST_LEN);    // Float32Array per slot, or null
-    for (let i = 0; i < HIST_LEN; i++) grBlocks[i] = null;
-    let histWrite = 0;
-
-    // Pre-fill with "silence + no GR" so the visualization spans the
-    // full canvas width on first paint. -120 dB sits well below the
-    // -60 dB floor, so the level history draws invisibly until real
-    // audio arrives.
-    for (let i = 0; i < HIST_LEN; i++) {
-      peakInHist[i]  = -120;
-      peakOutHist[i] = -120;
-      grHist[i]      = 0;
-    }
-
-    function pushFrame(peakInDb, peakOutDb, grDb, grCurve) {
-      peakInHist[histWrite]  = peakInDb;
-      peakOutHist[histWrite] = peakOutDb;
-      grHist[histWrite]      = grDb;
-      // Copy the per-sample GR curve into the slot. Reuse the slot's
-      // typed array when the block size matches (common case — host
-      // buffer size only changes on resample/SR change).
-      if (grCurve && grCurve.length) {
-        let slot = grBlocks[histWrite];
-        if (!slot || slot.length !== grCurve.length) {
-          slot = new Float32Array(grCurve.length);
-          grBlocks[histWrite] = slot;
-        }
-        slot.set(grCurve);
-      } else {
-        grBlocks[histWrite] = null;
-      }
-      histWrite = (histWrite + 1) % HIST_LEN;
-    }
+    const WINDOW_SEC = 8;             // visible history span
+    const ring = [];                  // [{ t, peakInDb, peakOutDb, grDb, grBlock|null }, ...]
 
     function ampToDb(a) {
       if (a <= 0 || !isFinite(a)) return -120;
@@ -272,10 +239,17 @@
       smoothedGR = smoothedGR * 0.7 + gr * 0.3;
       grReadout.textContent = 'GR \u2212' + smoothedGR.toFixed(1) + ' dB';
 
-      const pIn  = ampToDb(frame.peakIn  || 0);
-      const pOut = ampToDb(frame.peakOut || 0);
-      pushFrame(pIn, pOut, gr, grCurve);
-      scheduleDraw();
+      const t = performance.now();
+      ring.push({
+        t,
+        peakInDb:  ampToDb(frame.peakIn  || 0),
+        peakOutDb: ampToDb(frame.peakOut || 0),
+        grDb: gr,
+        grBlock: grCurve && grCurve.length ? Float32Array.from(grCurve) : null,
+      });
+      // Trim entries older than the visible window + slack.
+      const cutoff = t - (WINDOW_SEC + 0.25) * 1000;
+      while (ring.length > 0 && ring[0].t < cutoff) ring.shift();
     }
 
     // ------------------------------------------------------------------
@@ -284,8 +258,14 @@
     const DB_MIN = -60, DB_MAX = 0;
 
     function drawDisplay() {
-      const w = canvas.width  = canvas.clientWidth  * devicePixelRatio;
-      const h = canvas.height = canvas.clientHeight * devicePixelRatio;
+      // Resize the backing store only when the CSS box actually changed.
+      // Setting canvas.width/height clears the canvas, so doing it every
+      // vsync is wasteful and visually identical to ctx.clearRect.
+      const targetW = Math.max(1, Math.round(canvas.clientWidth  * devicePixelRatio));
+      const targetH = Math.max(1, Math.round(canvas.clientHeight * devicePixelRatio));
+      if (canvas.width  !== targetW) canvas.width  = targetW;
+      if (canvas.height !== targetH) canvas.height = targetH;
+      const w = canvas.width, h = canvas.height;
       if (w === 0 || h === 0) return;
       ctx.clearRect(0, 0, w, h);
 
@@ -334,96 +314,145 @@
         ctx.globalAlpha = 1;
       }
 
-      // Buffer is always treated as full (pre-filled with silence on
-      // init), so history spans the canvas immediately. Newest sample
-      // is to the right of histWrite-1; oldest is at histWrite.
-      const start = histWrite;
-      const xOf = (k) => padL + (k + 0.5) * (iw / HIST_LEN);
+      // Pixel → wall-clock time. Right edge = now; left edge = now - WINDOW_SEC.
+      // Visual scroll velocity is purely a function of performance.now() —
+      // pushes never reset the anchor.
+      const tNow = performance.now();
+      const winMs = WINDOW_SEC * 1000;
+      const xRight = padL + iw;
+      const tAt = (x) => tNow - (xRight - x) * (winMs / iw);
 
-      // Helper: draw a filled "level history" area for one buffer.
-      function fillLevelArea(buf, alpha) {
+      // Walk the ring once with a monotone pointer, sampled per pixel column.
+      // Empty ring → flat floor. One entry → clamp everywhere to that entry.
+      const N = ring.length;
+
+      // Helper: draw a filled level-history area for one channel
+      // (peakInDb or peakOutDb), interpolating between ring entries.
+      function fillLevelArea(field, alpha) {
+        if (N === 0) return;
         ctx.beginPath();
-        ctx.moveTo(xOf(0), padT + ih);
-        for (let k = 0; k < HIST_LEN; k++) {
-          const v = buf[(start + k) % HIST_LEN];
-          ctx.lineTo(xOf(k), yAt(v));
+        ctx.moveTo(padL, padT + ih);
+        let i = 0;
+        const xStep = devicePixelRatio;     // one device pixel per sample
+        for (let x = padL; x <= xRight; x += xStep) {
+          const tx = tAt(x);
+          while (i + 1 < N && ring[i + 1].t <= tx) i++;
+          let v;
+          if (tx <= ring[0].t) {
+            v = ring[0][field];
+          } else if (i + 1 >= N) {
+            v = ring[i][field];               // clamp at right edge
+          } else {
+            const a = ring[i], b = ring[i + 1];
+            const span = b.t - a.t;
+            const frac = span > 0 ? (tx - a.t) / span : 0;
+            v = a[field] + (b[field] - a[field]) * frac;
+          }
+          ctx.lineTo(x, yAt(v));
         }
-        ctx.lineTo(xOf(HIST_LEN - 1), padT + ih);
+        ctx.lineTo(xRight, padT + ih);
         ctx.closePath();
         ctx.fillStyle = FG;
         ctx.globalAlpha = alpha;
         ctx.fill();
       }
 
-      fillLevelArea(peakInHist,  0.10);   // input — softer
-      fillLevelArea(peakOutHist, 0.22);   // output — slightly stronger
+      // Clip the history layers to the inner plot rect so nothing
+      // bleeds into the gutter or off the left edge.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(padL, padT, iw, ih);
+      ctx.clip();
+
+      fillLevelArea('peakInDb',  0.10);   // input — softer
+      fillLevelArea('peakOutDb', 0.22);   // output — slightly stronger
 
       ctx.globalAlpha = 1;
 
       // GR line — pulled DOWN from 0 dB. When GR = 6 dB, the line sits
-      // at -6 dB on the scale. Drawn from per-block GR_CURVE samples so
-      // the attack/release shape inside each ~16 ms tick is visible
-      // rather than a single stair-step. For each slot, samples are
-      // max-pooled down to the slot's pixel width — one lineTo per pixel
-      // column keeps the path bounded by canvas width, not audio rate.
-      const slotW = iw / HIST_LEN;
-      const grPath = new Path2D();
-      let started = false;
-      for (let k = 0; k < HIST_LEN; k++) {
-        const slotIdx = (start + k) % HIST_LEN;
-        const block = grBlocks[slotIdx];
-        const xLeft = padL + k * slotW;
-        if (!block || block.length === 0) {
-          // No per-sample data for this slot (pre-fill or pre-telemetry
-          // preset) — fall back to the scalar so the line stays continuous.
-          const x = xLeft + slotW * 0.5;
-          const y = yAt(-grHist[slotIdx]);
-          if (!started) { grPath.moveTo(x, y); started = true; }
-          else grPath.lineTo(x, y);
-          continue;
-        }
-        const pxCount = Math.max(1, Math.ceil(slotW));
-        const samplesPerPx = block.length / pxCount;
-        for (let p = 0; p < pxCount; p++) {
-          const sStart = Math.floor(p * samplesPerPx);
-          const sEnd = Math.min(block.length, Math.floor((p + 1) * samplesPerPx));
-          let maxGR = block[sStart] || 0;
-          for (let s = sStart + 1; s < sEnd; s++) {
-            if (block[s] > maxGR) maxGR = block[s];
+      // at -6 dB on the scale. For each pixel column, find the entry e
+      // whose interval [prev.t, e.t] brackets tx and look up the audio-
+      // rate sample inside e.grBlock. When the column spans multiple
+      // samples, max-pool to keep the path bounded by canvas width.
+      // When grBlock is null, fall back to the scalar grDb constant
+      // across that interval.
+      if (N > 0) {
+        const grPath = new Path2D();
+        let started = false;
+        let i = 0;
+        const xStep = devicePixelRatio;
+        let prevTx = tAt(padL);
+        for (let x = padL; x <= xRight; x += xStep) {
+          const tx = tAt(x);
+          while (i + 1 < N && ring[i + 1].t <= tx) i++;
+          let gr;
+          if (tx <= ring[0].t) {
+            gr = ring[0].grDb;
+          } else if (i + 1 >= N) {
+            gr = ring[i].grDb;                // clamp at right edge
+          } else {
+            const prev = ring[i];
+            const e = ring[i + 1];
+            const span = e.t - prev.t;
+            if (e.grBlock && e.grBlock.length && span > 0) {
+              const blk = e.grBlock;
+              // Audio-rate slice for this pixel column: cover [prevTx, tx].
+              const tStart = Math.max(prevTx, prev.t);
+              const tEnd = tx;
+              const fStart = Math.max(0, (tStart - prev.t) / span);
+              const fEnd = Math.max(fStart, Math.min(1, (tEnd - prev.t) / span));
+              const sStart = Math.max(0, Math.floor(fStart * blk.length));
+              const sEnd = Math.max(sStart + 1, Math.min(blk.length, Math.ceil(fEnd * blk.length)));
+              let maxGR = blk[sStart];
+              for (let s = sStart + 1; s < sEnd; s++) {
+                if (blk[s] > maxGR) maxGR = blk[s];
+              }
+              gr = maxGR;
+            } else {
+              // No per-sample block — interp scalar.
+              const frac = (tx - prev.t) / span;
+              gr = prev.grDb + (e.grDb - prev.grDb) * frac;
+            }
           }
-          const x = xLeft + (p + 0.5) * (slotW / pxCount);
-          const y = yAt(-maxGR);
+          const y = yAt(-gr);
           if (!started) { grPath.moveTo(x, y); started = true; }
           else grPath.lineTo(x, y);
+          prevTx = tx;
         }
-      }
-      ctx.strokeStyle = GR_COLOR;
-      ctx.lineWidth = 2 * devicePixelRatio;
-      ctx.lineJoin = 'round';
-      ctx.stroke(grPath);
+        ctx.strokeStyle = GR_COLOR;
+        ctx.lineWidth = 2 * devicePixelRatio;
+        ctx.lineJoin = 'round';
+        ctx.stroke(grPath);
 
-      // Soft fill under the GR line — close the path down to the 0 dB
-      // baseline along the bottom edge of the line's range.
-      grPath.lineTo(padL + iw, yAt(0));
-      grPath.lineTo(padL, yAt(0));
-      grPath.closePath();
-      ctx.fillStyle = GR_COLOR;
-      ctx.globalAlpha = 0.18;
-      ctx.fill(grPath);
-      ctx.globalAlpha = 1;
+        // Soft fill under the GR line.
+        grPath.lineTo(xRight, yAt(0));
+        grPath.lineTo(padL,   yAt(0));
+        grPath.closePath();
+        ctx.fillStyle = GR_COLOR;
+        ctx.globalAlpha = 0.18;
+        ctx.fill(grPath);
+        ctx.globalAlpha = 1;
+      }
+
+      ctx.restore();   // close the history-layer clip
     }
 
-    let raf = 0;
-    function scheduleDraw() {
-      if (raf) return;
-      raf = requestAnimationFrame(() => { raf = 0; drawDisplay(); });
+    // Continuous paint loop — runs every WebContent vsync. The visual
+    // scroll position is derived from performance.now() inside
+    // drawDisplay, so this loop alone produces continuous motion at
+    // display rate regardless of audio-push cadence. WKWebView pauses
+    // RAF callbacks when the page is hidden, so we don't need explicit
+    // visibility gating here.
+    function paintTick() {
+      drawDisplay();
+      requestAnimationFrame(paintTick);
     }
 
     function init() {
-      CDP.parameters.onAnyChange(scheduleDraw);
-      window.addEventListener('resize', scheduleDraw);
+      // Param/theme/resize changes are picked up by the next paintTick;
+      // no need to schedule a redraw — the loop is always running.
       CDP.audio.onFrame(onFrame);
-      scheduleDraw();
+      paintTick();
     }
     if (CDP && CDP.ready) CDP.ready(init);
     else window.addEventListener('ConjureDSPReady', init);
