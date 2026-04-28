@@ -1239,7 +1239,21 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	}
 
 	deinit {
-		kernelPollTimer?.invalidate()
+		// `Timer.invalidate()` must be called on the same thread the timer
+		// was scheduled on (RunLoop.main, see `startKernelPollTimer`). This
+		// class is `@unchecked Sendable`, so `deinit` can run on a
+		// background thread — e.g. headless AU instances during `auval`,
+		// or DAW track unloads dispatched off-main. Capture the timer
+		// locally so the dispatched closure doesn't reach back into a
+		// half-destroyed `self`.
+		let timer = kernelPollTimer
+		if let timer {
+			if Thread.isMainThread {
+				timer.invalidate()
+			} else {
+				DispatchQueue.main.async { timer.invalidate() }
+			}
+		}
 		if let kernel = kernel {
 			dsp_kernel_destroy(kernel)
 		}

@@ -36,12 +36,18 @@ final class RustCompiler: ScriptCompiler {
         // custom UI stays blank until compilation finishes.
         let useBundledSysroot = self.useBundledSysroot
         let log = self.log
+        // Resolve the sysroot URL on the caller's thread BEFORE the detached
+        // closure so we don't capture `self`. The static `runCompileProcess`
+        // exists specifically to keep instance state out of the background
+        // task; calling `self.bundledSysroot()` from inside the closure would
+        // defeat that defense even though the method is currently pure.
+        let bundledSysroot = self.bundledSysroot()
         return try await Task.detached {
             try Self.runCompileProcess(
                 rustc: rustc,
                 source: source,
                 useBundledSysroot: useBundledSysroot,
-                bundledSysroot: self.bundledSysroot(),
+                bundledSysroot: bundledSysroot,
                 log: log
             )
         }.value
