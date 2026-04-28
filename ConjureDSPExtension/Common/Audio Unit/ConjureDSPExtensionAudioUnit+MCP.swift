@@ -158,6 +158,21 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // params — the symptom Round 5b's agent worked around
             // by always saving instead of compile_and_run.
             let paramTreeRebuilt = self.rebuildParamTreeFromKernelIfChanged()
+            // When compile_and_run produces a new parameter schema (a
+            // declared `params!()` macro change), the host-side param tree
+            // updates above — but the running custom-UI webview's
+            // `<cdp-knob param="…">` bindings were resolved at element
+            // mount time against the OLD schema, so any newly-added
+            // params render as unbound knobs that look fine but do
+            // nothing. The file watcher only reloads on `ui/` file
+            // changes, which doesn't help here (no UI file changed).
+            // Piggyback on the toolbar's existing manual-reload primitive
+            // — same debounced `scheduleReload(webView:)` path — so
+            // schema-mutating compiles trigger a webview re-bind without
+            // requiring the agent to touch the UI file as a workaround.
+            if paramTreeRebuilt {
+                NotificationCenter.default.post(name: .reloadCustomUI, object: nil)
+            }
             var response: [String: Any] = [
                 "success": true,
                 "param_tree_rebuilt": paramTreeRebuilt,
@@ -618,6 +633,15 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // differs from the copied manifest's params block, the
             // tree needs to follow — same code path as compile_and_run.
             let paramTreeRebuilt = self.rebuildParamTreeFromKernelIfChanged()
+            // Mirror compile_and_run's webview rebind: when the schema
+            // changes mid-flight, force a reload so existing
+            // <cdp-knob param="…"> bindings re-resolve against the new
+            // param tree. Without this, agents iterating with
+            // duplicate_bundle + new_source get unbound knobs for any
+            // newly-added params until the next bundle reload.
+            if paramTreeRebuilt {
+                NotificationCenter.default.post(name: .reloadCustomUI, object: nil)
+            }
 
             // Top-level `success` reflects the WHOLE atomic operation
             // (mirrors save_preset b17506e): bundle copy + switch +
