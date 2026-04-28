@@ -556,6 +556,20 @@ struct CustomUIWebView: NSViewRepresentable {
         /// duplicate dispatch on idle ticks.
         private var audioFrameSeq: UInt64 = 0
 
+        /// Round-trip backpressure counter for `evaluateJavaScript` calls.
+        /// Incremented before submitting; decremented in the completion
+        /// handler. The fps gate alone throttles against the audio
+        /// thread's clock, but doesn't know whether WebKit's WebContent
+        /// process is actually keeping up — under heavy payloads (vector
+        /// telemetry: per-sample GR curves can run ~16 KB / frame at
+        /// 30 Hz) or on slow hardware, the IPC queue between host and
+        /// WebContent can grow unboundedly. Capping in-flight calls at 1
+        /// forces frame drops when WebKit hasn't finished the previous
+        /// evaluation, keeping memory bounded and UI responsive. Reads
+        /// and writes are main-thread only (CADisplayLink + completion
+        /// handler both fire there).
+        private var framesInFlight: Int = 0
+
         private func forwardAudioFrame(_ frame: AudioFrame) {
             guard isReady, let webView, isWindowVisible else { return }
             // fps gate — throttle against the audio tick's timestamp so the
@@ -564,6 +578,12 @@ struct CustomUIWebView: NSViewRepresentable {
             let minInterval = 1.0 / Double(max(audioFPS, 1))
             if lastForwardTime > 0,
                frame.timestamp - lastForwardTime < minInterval - 0.001 {
+                return
+            }
+            // Round-trip backpressure: drop if WebKit hasn't acked the
+            // previous call yet. Allows up to 1 in-flight call (one
+            // evaluating, one queued) before dropping.
+            if framesInFlight > 1 {
                 return
             }
             lastForwardTime = frame.timestamp
@@ -609,7 +629,10 @@ struct CustomUIWebView: NSViewRepresentable {
                   let json = String(data: data, encoding: .utf8) else { return }
 
             let js = "window.ConjureDSP && window.ConjureDSP._audioFrame(\(json))"
-            webView.evaluateJavaScript(js, completionHandler: nil)
+            framesInFlight += 1
+            webView.evaluateJavaScript(js) { [weak self] _, _ in
+                self?.framesInFlight = max(0, (self?.framesInFlight ?? 1) - 1)
+            }
         }
 
         // MARK: Window visibility

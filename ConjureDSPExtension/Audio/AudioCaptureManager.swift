@@ -317,7 +317,15 @@ final class AudioCaptureManager: ObservableObject {
     /// suppress telemetry instead of replaying the last cached value
     /// forever. Renders typically deliver a block every 5–21 ms at 48 kHz,
     /// so a 50 ms deadband is comfortably larger than any normal gap.
-    private var lastRenderActivityTimestamp: CFTimeInterval = 0
+    ///
+    /// Initialized to `CACurrentMediaTime()` (system uptime in seconds) at
+    /// construction so the staleness check has a meaningful baseline before
+    /// the first audio tick. Initializing to 0 made `now - last` evaluate
+    /// to many-seconds on the very first call, theoretically suppressing
+    /// telemetry until audio first ticked. In practice the publish gate
+    /// already drops empty-drain ticks so this couldn't surface, but the
+    /// explicit init makes the invariant clear.
+    private var lastRenderActivityTimestamp: CFTimeInterval = CACurrentMediaTime()
     private static let telemetryStaleThreshold: CFTimeInterval = 0.050
     /// Shared scratch for vector-telemetry reads. Sized to the kernel's
     /// `MAX_FRAMES` (4096) — the kernel truncates anything longer, so
