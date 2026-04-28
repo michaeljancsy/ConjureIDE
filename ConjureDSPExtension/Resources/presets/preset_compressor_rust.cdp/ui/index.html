@@ -314,43 +314,50 @@
         ctx.globalAlpha = 1;
       }
 
-      // Pixel → wall-clock time. Right edge = now; left edge = now - WINDOW_SEC.
+      // Pixel ↔ wall-clock time. Right edge = now; left edge = now - WINDOW_SEC.
       // Visual scroll velocity is purely a function of performance.now() —
       // pushes never reset the anchor.
       const tNow = performance.now();
       const winMs = WINDOW_SEC * 1000;
       const xRight = padL + iw;
-      const tAt = (x) => tNow - (xRight - x) * (winMs / iw);
+      const xPerMs = iw / winMs;
+      const xAt = (t) => xRight - (tNow - t) * xPerMs;
 
-      // Walk the ring once with a monotone pointer, sampled per pixel column.
-      // Empty ring → flat floor. One entry → clamp everywhere to that entry.
+      // Entry-driven rendering. Iterate the ring (the data we actually have,
+      // ~one entry per push) and emit a path vertex at each entry's
+      // floating-point xAt(t). The path's *shape* is invariant from frame to
+      // frame; tNow advancing just slides every vertex left by the same
+      // fractional amount. Canvas 2D AA handles the sub-pixel motion.
+      //
+      // The previous integer-pixel column-sampling loop produced flicker on
+      // thin/pointy peaks: with sub-pixel scroll velocity (~1.45 px/frame)
+      // and ~33 ms entry intervals (~3 columns each at 8 s/700 px), ~half
+      // the columns transitioned to a different owning entry each frame,
+      // and each transition was an instant multi-dB jump. Step rendering
+      // and slice-max envelopes both still sampled at integer pixel
+      // columns, so neither helped.
       const N = ring.length;
 
-      // Helper: draw a filled level-history area for one channel
-      // (peakInDb or peakOutDb), interpolating between ring entries.
+      // Filled level-history area for one channel (peakInDb / peakOutDb).
+      // Step-shape between entries: each entry's value is held flat from
+      // the previous entry's x to its own x, then a vertical riser. With
+      // entry-driven floating-point x this staircase scrolls smoothly.
       function fillLevelArea(field, alpha) {
         if (N === 0) return;
+        const baseline = padT + ih;
+        const x0 = xAt(ring[0].t);
         ctx.beginPath();
-        ctx.moveTo(padL, padT + ih);
-        let i = 0;
-        const xStep = devicePixelRatio;     // one device pixel per sample
-        for (let x = padL; x <= xRight; x += xStep) {
-          const tx = tAt(x);
-          while (i + 1 < N && ring[i + 1].t <= tx) i++;
-          let v;
-          if (tx <= ring[0].t) {
-            v = ring[0][field];
-          } else if (i + 1 >= N) {
-            v = ring[i][field];               // clamp at right edge
-          } else {
-            const a = ring[i], b = ring[i + 1];
-            const span = b.t - a.t;
-            const frac = span > 0 ? (tx - a.t) / span : 0;
-            v = a[field] + (b[field] - a[field]) * frac;
-          }
-          ctx.lineTo(x, yAt(v));
+        ctx.moveTo(x0, baseline);
+        ctx.lineTo(x0, yAt(ring[0][field]));
+        for (let k = 1; k < N; k++) {
+          const xCur = xAt(ring[k].t);
+          ctx.lineTo(xCur, yAt(ring[k - 1][field]));   // horizontal at prev value
+          ctx.lineTo(xCur, yAt(ring[k][field]));       // riser to new value
         }
-        ctx.lineTo(xRight, padT + ih);
+        // Hold newest value out to the right edge so a late push doesn't
+        // leave a visible gap on the right.
+        ctx.lineTo(xRight, yAt(ring[N - 1][field]));
+        ctx.lineTo(xRight, baseline);
         ctx.closePath();
         ctx.fillStyle = FG;
         ctx.globalAlpha = alpha;
@@ -369,64 +376,28 @@
 
       ctx.globalAlpha = 1;
 
-      // GR line — pulled DOWN from 0 dB. When GR = 6 dB, the line sits
-      // at -6 dB on the scale. For each pixel column, find the entry e
-      // whose interval [prev.t, e.t] brackets tx and look up the audio-
-      // rate sample inside e.grBlock. When the column spans multiple
-      // samples, max-pool to keep the path bounded by canvas width.
-      // When grBlock is null, fall back to the scalar grDb constant
-      // across that interval.
+      // GR line — pulled DOWN from 0 dB. When GR = 6 dB, the line sits at
+      // -6 dB on the scale. One linear segment per ring entry: vertices at
+      // (xAt(entry.t), yAt(-entry.grDb)). Same flicker-free invariant: the
+      // shape doesn't change between frames, only its x-offset does.
       if (N > 0) {
         const grPath = new Path2D();
-        let started = false;
-        let i = 0;
-        const xStep = devicePixelRatio;
-        let prevTx = tAt(padL);
-        for (let x = padL; x <= xRight; x += xStep) {
-          const tx = tAt(x);
-          while (i + 1 < N && ring[i + 1].t <= tx) i++;
-          let gr;
-          if (tx <= ring[0].t) {
-            gr = ring[0].grDb;
-          } else if (i + 1 >= N) {
-            gr = ring[i].grDb;                // clamp at right edge
-          } else {
-            const prev = ring[i];
-            const e = ring[i + 1];
-            const span = e.t - prev.t;
-            if (e.grBlock && e.grBlock.length && span > 0) {
-              const blk = e.grBlock;
-              // Audio-rate slice for this pixel column: cover [prevTx, tx].
-              const tStart = Math.max(prevTx, prev.t);
-              const tEnd = tx;
-              const fStart = Math.max(0, (tStart - prev.t) / span);
-              const fEnd = Math.max(fStart, Math.min(1, (tEnd - prev.t) / span));
-              const sStart = Math.max(0, Math.floor(fStart * blk.length));
-              const sEnd = Math.max(sStart + 1, Math.min(blk.length, Math.ceil(fEnd * blk.length)));
-              let maxGR = blk[sStart];
-              for (let s = sStart + 1; s < sEnd; s++) {
-                if (blk[s] > maxGR) maxGR = blk[s];
-              }
-              gr = maxGR;
-            } else {
-              // No per-sample block — interp scalar.
-              const frac = (tx - prev.t) / span;
-              gr = prev.grDb + (e.grDb - prev.grDb) * frac;
-            }
-          }
-          const y = yAt(-gr);
-          if (!started) { grPath.moveTo(x, y); started = true; }
-          else grPath.lineTo(x, y);
-          prevTx = tx;
+        grPath.moveTo(xAt(ring[0].t), yAt(-ring[0].grDb));
+        for (let k = 1; k < N; k++) {
+          grPath.lineTo(xAt(ring[k].t), yAt(-ring[k].grDb));
         }
+        // Hold newest out to the right edge (avoids a 1-frame gap when the
+        // newest push is slightly older than tNow).
+        grPath.lineTo(xRight, yAt(-ring[N - 1].grDb));
+
         ctx.strokeStyle = GR_COLOR;
         ctx.lineWidth = 2 * devicePixelRatio;
         ctx.lineJoin = 'round';
         ctx.stroke(grPath);
 
-        // Soft fill under the GR line.
-        grPath.lineTo(xRight, yAt(0));
-        grPath.lineTo(padL,   yAt(0));
+        // Soft fill under the GR line, dropping to the 0 dB baseline.
+        grPath.lineTo(xRight,           yAt(0));
+        grPath.lineTo(xAt(ring[0].t),   yAt(0));
         grPath.closePath();
         ctx.fillStyle = GR_COLOR;
         ctx.globalAlpha = 0.18;
