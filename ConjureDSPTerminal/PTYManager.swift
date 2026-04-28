@@ -171,35 +171,23 @@ final class PTYManager {
             ptyLog.error("\(errorMsg, privacy: .public)")
             return
         }
-        var cArgs: [UnsafeMutablePointer<CChar>?] = []
-        for s in args {
-            guard let p = strdup(s) else {
-                let errorMsg = "strdup failed for argv entry (out of memory)"
-                state = .error(errorMsg)
-                onStateChange?(.error(errorMsg))
-                ptyLog.error("\(errorMsg, privacy: .public)")
-                free(cPath)
-                cArgs.forEach { if let q = $0 { free(q) } }
-                return
-            }
-            cArgs.append(p)
+        guard let cArgs = Self.buildCStringArray(args) else {
+            let errorMsg = "strdup failed for argv entry (out of memory)"
+            state = .error(errorMsg)
+            onStateChange?(.error(errorMsg))
+            ptyLog.error("\(errorMsg, privacy: .public)")
+            free(cPath)
+            return
         }
-        cArgs.append(nil)
-        var cEnv: [UnsafeMutablePointer<CChar>?] = []
-        for s in env {
-            guard let p = strdup(s) else {
-                let errorMsg = "strdup failed for envp entry (out of memory)"
-                state = .error(errorMsg)
-                onStateChange?(.error(errorMsg))
-                ptyLog.error("\(errorMsg, privacy: .public)")
-                free(cPath)
-                cArgs.forEach { if let q = $0 { free(q) } }
-                cEnv.forEach { if let q = $0 { free(q) } }
-                return
-            }
-            cEnv.append(p)
+        guard let cEnv = Self.buildCStringArray(env) else {
+            let errorMsg = "strdup failed for envp entry (out of memory)"
+            state = .error(errorMsg)
+            onStateChange?(.error(errorMsg))
+            ptyLog.error("\(errorMsg, privacy: .public)")
+            free(cPath)
+            cArgs.forEach { if let q = $0 { free(q) } }
+            return
         }
-        cEnv.append(nil)
 
         // Create pty
         var winSize = winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0)
@@ -1040,6 +1028,31 @@ final class PTYManager {
         }
         lines.append("")
         return lines.joined(separator: "\r\n") + "\r\n"
+    }
+
+    // MARK: - C-string array helpers
+
+    /// Build a null-terminated C-string array from an array of Swift strings, using the
+    /// supplied `dupFn` to duplicate each string. Returns `nil` (and frees any already-
+    /// allocated entries) if any duplication fails.
+    ///
+    /// The returned array includes a trailing `nil` sentinel. Callers own the memory
+    /// and must free each non-nil element.
+    static func buildCStringArray(
+        _ strings: [String],
+        dupFn: (String) -> UnsafeMutablePointer<CChar>? = { strdup($0) }
+    ) -> [UnsafeMutablePointer<CChar>?]? {
+        var result: [UnsafeMutablePointer<CChar>?] = []
+        result.reserveCapacity(strings.count + 1)
+        for s in strings {
+            guard let p = dupFn(s) else {
+                result.forEach { if let q = $0 { free(q) } }
+                return nil
+            }
+            result.append(p)
+        }
+        result.append(nil)
+        return result
     }
 
     // MARK: - Utilities
