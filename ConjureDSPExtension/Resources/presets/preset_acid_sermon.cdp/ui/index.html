@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Acid Sermon</title>
+  <style>
+    /* Acid Sermon — a themed showcase. Heavy CSS custom-property overrides
+       on the injected cdp-ui components, no canvas, no audio frames. Proves
+       the library dresses up creative presets, not just utility tools. */
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      font-family: "Baskerville", "Iowan Old Style", "Palatino", serif;
+      background:
+        radial-gradient(ellipse at top, #3a2416 0%, #1a0d07 70%, #0a0503 100%);
+      color: #e8d2a8;
+    }
+    body {
+      display: flex; flex-direction: column; justify-content: center;
+      padding: 18px 28px; box-sizing: border-box;
+      gap: 14px;
+    }
+    .masthead {
+      text-align: center;
+      letter-spacing: 0.18em;
+      font-variant: small-caps;
+      font-weight: 400;
+    }
+    .masthead h1 {
+      margin: 0;
+      font-size: 1.4em;
+      color: #d6a86b;
+      text-shadow: 0 0 24px rgba(214, 168, 107, 0.3);
+    }
+    .masthead .sub {
+      font-size: 0.75em;
+      letter-spacing: 0.3em;
+      color: #8a6a48;
+      margin-top: 4px;
+    }
+    .rule {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, #6b4a2a 20%, #a87a46 50%, #6b4a2a 80%, transparent);
+      opacity: 0.7;
+    }
+    cdp-panel {
+      /* Heavy theming via the library's public CSS custom properties. */
+      --cdp-accent: #c98a42;
+      --cdp-fg: #e8d2a8;
+      --cdp-muted: #8a6a48;
+      --cdp-track-bg: rgba(255, 220, 180, 0.08);
+      --cdp-border: rgba(201, 138, 66, 0.35);
+      --cdp-thumb-size: 20px;
+      --cdp-radius: 2px;
+      --cdp-font: "Baskerville", "Iowan Old Style", "Palatino", serif;
+      --cdp-font-size: 14px;
+      --cdp-label-width: 110px;
+      --cdp-value-width: 90px;
+    }
+    /* Reach into each row via ::part for the small touches that make the
+       sliders feel scriptural rather than utilitarian. */
+    cdp-slider::part(label) {
+      font-variant: small-caps;
+      letter-spacing: 0.15em;
+      color: #d6a86b;
+      font-weight: normal;
+    }
+    cdp-slider::part(value) {
+      font-style: italic;
+      color: #8a6a48;
+    }
+  </style>
+</head>
+<body>
+  <div class="masthead">
+    <h1>Acid Sermon</h1>
+    <div class="sub">— an exhortation —</div>
+  </div>
+  <div class="rule"></div>
+  <cdp-panel auto></cdp-panel>
+  <div class="rule"></div>
+</body>
+</html>

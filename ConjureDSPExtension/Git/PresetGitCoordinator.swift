@@ -47,6 +47,27 @@ enum PushState: Equatable {
     case failed(String)
 }
 
+/// Error surfaced when a preset git operation fails. Carries both the short
+/// summary (safe to show inline in a status bar) and the worker's stderr
+/// (needed to actually diagnose the failure — authentication issues, missing
+/// git identity, hook failures, etc.). Call sites that only need the short
+/// form keep using `localizedDescription`; UI that wants to show the real
+/// detail reads `stderr` directly or via `failureReason`.
+struct PresetGitError: LocalizedError {
+    let summary: String
+    let stderr: String?
+
+    var errorDescription: String? { summary }
+    var failureReason: String? { stderr }
+
+    /// Combined text suitable for "Copy error" actions — summary first, then
+    /// the full stderr if we have it.
+    var fullText: String {
+        guard let s = stderr, !s.isEmpty else { return summary }
+        return summary + "\n\n" + s
+    }
+}
+
 // MARK: - Coordinator
 
 @Observable
@@ -156,7 +177,7 @@ final class PresetGitCoordinator {
                 log.info("Preset git repo initialized")
             } else {
                 self.isReady = false
-                log.error("initIfNeeded failed: \(result.error ?? "unknown", privacy: .public)")
+                log.error("initIfNeeded failed: \(result.error ?? "unknown", privacy: .public) stderr=\(result.stderr ?? "", privacy: .public)")
             }
         }
     }
@@ -185,12 +206,10 @@ final class PresetGitCoordinator {
 
     private func commit(paths: [URL], message: String) async -> Result<String, Error> {
         guard isReady else {
-            let e = NSError(
-                domain: "PresetGit",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Preset git repo not initialized"]
-            )
-            return .failure(e)
+            return .failure(PresetGitError(
+                summary: "Preset git repo not initialized",
+                stderr: nil
+            ))
         }
 
         let request = client.makeRequest(
@@ -213,13 +232,11 @@ final class PresetGitCoordinator {
                         self.scheduleAutoPushIfNeeded()
                     } else {
                         let msg = result.error ?? "Commit failed"
-                        log.error("Commit failed: \(msg, privacy: .public)")
-                        let e = NSError(
-                            domain: "PresetGit",
-                            code: 2,
-                            userInfo: [NSLocalizedDescriptionKey: msg]
-                        )
-                        continuation.resume(returning: .failure(e))
+                        log.error("Commit failed: \(msg, privacy: .public) stderr=\(result.stderr ?? "", privacy: .public)")
+                        continuation.resume(returning: .failure(PresetGitError(
+                            summary: msg,
+                            stderr: result.stderr
+                        )))
                     }
                 }
             }
@@ -263,9 +280,9 @@ final class PresetGitCoordinator {
     func setRemote(url: String) async -> Result<Void, Error> {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return .failure(NSError(
-                domain: "PresetGit", code: 3,
-                userInfo: [NSLocalizedDescriptionKey: "Remote URL is empty"]
+            return .failure(PresetGitError(
+                summary: "Remote URL is empty",
+                stderr: nil
             ))
         }
 
@@ -284,9 +301,10 @@ final class PresetGitCoordinator {
                         continuation.resume(returning: .success(()))
                     } else {
                         let msg = result.error ?? "setRemote failed"
-                        continuation.resume(returning: .failure(NSError(
-                            domain: "PresetGit", code: 4,
-                            userInfo: [NSLocalizedDescriptionKey: msg]
+                        log.error("setRemote failed: \(msg, privacy: .public) stderr=\(result.stderr ?? "", privacy: .public)")
+                        continuation.resume(returning: .failure(PresetGitError(
+                            summary: msg,
+                            stderr: result.stderr
                         )))
                     }
                 }
@@ -312,9 +330,10 @@ final class PresetGitCoordinator {
                         continuation.resume(returning: .success(()))
                     } else {
                         let msg = result.error ?? "removeRemote failed"
-                        continuation.resume(returning: .failure(NSError(
-                            domain: "PresetGit", code: 5,
-                            userInfo: [NSLocalizedDescriptionKey: msg]
+                        log.error("removeRemote failed: \(msg, privacy: .public) stderr=\(result.stderr ?? "", privacy: .public)")
+                        continuation.resume(returning: .failure(PresetGitError(
+                            summary: msg,
+                            stderr: result.stderr
                         )))
                     }
                 }
@@ -360,10 +379,10 @@ final class PresetGitCoordinator {
                     } else {
                         let msg = result.error ?? "push failed"
                         self.lastPushState = .failed(msg)
-                        log.error("Push failed: \(msg, privacy: .public)")
-                        continuation.resume(returning: .failure(NSError(
-                            domain: "PresetGit", code: 6,
-                            userInfo: [NSLocalizedDescriptionKey: msg]
+                        log.error("Push failed: \(msg, privacy: .public) stderr=\(result.stderr ?? "", privacy: .public)")
+                        continuation.resume(returning: .failure(PresetGitError(
+                            summary: msg,
+                            stderr: result.stderr
                         )))
                     }
                 }

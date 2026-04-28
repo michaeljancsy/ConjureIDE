@@ -110,7 +110,7 @@ enum MCPProtocol {
     static let tools: [ToolDefinition] = [
         ToolDefinition(
             name: "compile_and_run",
-            description: "Compile and load a DSP script into the audio engine. For Python scripts, this loads instantly. For Rust scripts, this compiles to WASM first (takes a few seconds). Returns whether it succeeded, any error message, and benchmark timing.",
+            description: "Compile and load a DSP script into the audio engine WITHOUT touching the bundle on disk. Use for iterative script edits on an already-saved preset, or to try out scratchpad code before committing to a preset. For Python scripts, loads instantly. For Rust scripts, compiles to WASM first (takes a few seconds). Returns `success`, `param_tree_rebuilt` (true when the new source's metadata differs from what the AU already had — the AU parameter tree is rebuilt to match), and benchmark timing. The param-tree rebuild handles the scratchpad-iteration case where you're testing a new params!() / PARAMS shape over an existing preset whose manifest still describes the old params. CAUTION: compile_and_run does NOT write to the current preset's entry script — the bundle on disk stays whatever was last written via save_preset or write_bundle_file. If you want to create a new preset FROM a script, call `save_preset(name, source=…)` directly — that's atomic (writes bundle + loads kernel in one call), so you don't need compile_and_run afterward.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -143,8 +143,14 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "get_parameters",
-            description: "Read all active parameter values with names, ranges, and units.",
-            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+            description: "Read declared parameter values with names, ranges, units, style, options, default, and curve. By default returns ONLY the params the script declared (the ones that actually do something) — not the 16 raw AU slots. Top-level fields: `parameters: [...]`, `count: N` (declared params returned), `total_slots: 16` (always — the AU has 16 fixed slots). Set `include_unused: true` to return all 16 slots including the generic ones beyond the script's declared count (rarely needed; useful only when debugging slot allocation). Values are rounded to sensible precision based on each param's range — no more `150.00001525878906` for a default of 150.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "include_unused": PropertySchema(type: "boolean", description: "Return all 16 AU parameter slots including unused/generic ones beyond the script's declared count. Defaults to false.")
+                ],
+                required: nil
+            )
         ),
         ToolDefinition(
             name: "get_audio_state",
@@ -153,18 +159,62 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "list_presets",
-            description: "List all available presets (factory and user). Returns preset names, whether they're factory or user presets, and their language (Python or Rust).",
+            description: "List all available presets (factory and user). Each entry returns `name`, `is_factory`, `has_custom_ui`, and `language` (\"python\" or \"rust\"). User bundles whose manifest.json fails to parse (or whose entry script is missing) appear with `broken: true`, `error: <parse error string>`, `language: null`, and `has_custom_ui: false`, so the agent can spot and diagnose them instead of having presets silently vanish from the list. Working bundles do not include the `broken` / `error` fields.",
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
         ToolDefinition(
             name: "save_preset",
-            description: "Save the currently loaded script as a user preset.",
+            description: "Create (or re-save) a user preset bundle (.cdp directory). ATOMIC: in a single call, save_preset writes the bundle to disk, switches the plugin's currentPreset to it, AND loads the script into the kernel — you don't need a separate compile_and_run after (response reports `kernel_reloaded: true`). Always produces a FRESH bundle — nothing is auto-copied from whatever preset was previously loaded. **For 'fork an existing preset and extend it' (you want the source's UI, assets, and manifest as a starting point), use `duplicate_bundle` instead — it copies the full tree in one call.** save_preset is for 'save my scratchpad as a new preset.' Response returns `switched_current_preset: true` and `kernel_reloaded: true/false`.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "name": PropertySchema(type: "string", description: "Name for the preset.")
+                    "name": PropertySchema(type: "string", description: "Name for the preset. If a user bundle with this name already exists, save_preset re-saves into it (entry script overwritten, existing ui/ + manifest preserved)."),
+                    "source": PropertySchema(type: "string", description: "The DSP script text for the preset. Required when starting from scratchpad (no current preset) or when you're authoring new content. Optional — if omitted, save_preset uses whatever script the kernel currently has loaded."),
+                    "language": PropertySchema(type: "string", description: "\"python\" or \"rust\". Optional — when omitted, auto-detected from the `source` text (def process = python, fn process / use conjuredsp = rust), or falls back to the kernel's current language."),
+                    "scaffold_ui": PropertySchema(type: "boolean", description: "When true, creates a starter ui/index.html + declares the ui block in manifest.json so the preset renders with the custom-UI WebView from the start. Default: false (stock slider panel)."),
                 ],
                 required: ["name"]
+            )
+        ),
+        ToolDefinition(
+            name: "duplicate_bundle",
+            description: "Fork an existing preset bundle (factory OR user) into a new user bundle by copying the FULL tree — manifest.json, ui/index.html, ui/assets/*, and the entry script. Use this (not save_preset) when the agent's intent is 'take this preset and extend it' — the new bundle inherits the source's custom UI, manifest params block, and any assets, so the agent doesn't have to manually re-author them. Atomic: writes to disk, switches the plugin's currentPreset to the new bundle, AND reloads the kernel. Optional `new_source` replaces the entry script after copy in the same call (use this when you've already iterated on DSP via compile_and_run and want to commit it as a fork). Errors clearly when `dest_name` already exists — pick a different name or delete the existing one first. Response returns `success`, `name`, `switched_current_preset`, `kernel_reloaded`, `param_tree_rebuilt` (true if the entry was replaced and the new code's metadata differs from the source's manifest), `source_was_factory`, and `entry_replaced`.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "source_name": PropertySchema(type: "string", description: "Exact name of the preset to duplicate. Use list_presets to see available names. Both factory and user presets work."),
+                    "dest_name": PropertySchema(type: "string", description: "Name for the new forked bundle. Must not already exist (errors otherwise — pick a different name)."),
+                    "new_source": PropertySchema(type: "string", description: "Optional. When provided, the new bundle's entry script is overwritten with this text after the copy. Use to commit a compile_and_run iteration as a fork in one tool call. The COPIED manifest's params block is NOT auto-updated to match new metadata — call write_bundle_file on manifest.json afterwards if your new_source declares different params."),
+                ],
+                required: ["source_name", "dest_name"]
+            )
+        ),
+        ToolDefinition(
+            name: "get_bundle_info",
+            description: "Introspect the currently-loaded preset bundle. When a bundle is loaded, returns the bundle's name and root path, whether it ships a custom HTML/JS UI, the manifest's UI block (width/height/fps/audioFrames), every editable text file inside (path + kind), AND a `user_visible_state` block describing what the user is actually seeing right now: `is_modified` (host shows '*' on title bar), `kernel_in_sync` (kernel-loaded script matches the on-disk entry script — false means audio is running stale code), `custom_ui_visible` (only when has_custom_ui; false means the user has toggled it off and is looking at the stock slider panel), and `issues[]` — a human-readable list, empty when everything's coherent. Use before reporting 'done' to the user: a green validate_bundle + smoke_test_ui can still ship over a stale kernel or a hidden custom UI. When no preset is loaded, returns `bundle: null` with `state: \"scratchpad\"`. When the active preset's bundle can't be parsed, returns `bundle: null` with one of two states: `state: \"broken_manifest\"` (bundle directory + manifest.json present but the manifest fails to decode or its `entry` points at a missing script — response includes `manifest_path` and the underlying `error` string so you can read the manifest, fix the bug, and write_bundle_file it back), or `state: \"preset_unloadable\"` (everything else — legacy single-file preset, missing bundle root, etc.). All states include a `hint` string explaining what to call next.",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
+        ToolDefinition(
+            name: "read_bundle_file",
+            description: "Read any text file inside the current preset bundle — e.g. 'process.py', 'manifest.json', 'ui/index.html', 'ui/assets/style.css'. Relative paths only; absolute paths are rejected. Factory bundles are readable; user/repo bundles are also readable. Use get_bundle_info first to discover paths.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "path": PropertySchema(type: "string", description: "Path relative to the bundle root (e.g. 'ui/index.html')."),
+                ],
+                required: ["path"]
+            )
+        ),
+        ToolDefinition(
+            name: "write_bundle_file",
+            description: "Write a text file inside the current preset bundle. Use to author the custom HTML/JS UI: set manifest.json's 'ui' block, write ui/index.html, add ui/assets/style.css. The plugin's file watcher picks up the change and hot-reloads the custom UI within ~300ms. Writes are REJECTED for factory presets (read-only resources in the app bundle) — if you're on a factory preset, call save_preset FIRST with a new name to create a writable user bundle, then write_bundle_file into that. Same applies to scratchpad state (no current preset). If you want the new bundle to inherit files from another preset, read_bundle_file them before save_preset and write them into the new bundle afterwards. The DSP script itself (manifest.entry) is writable but the DAW won't pick up the new code until compile_and_run runs it — for DSP edits, prefer compile_and_run which also re-loads the kernel. When the write touches ui/ or manifest.json, the response includes a `validation` block (same shape as validate_bundle) so you see unresolved param= refs, CSP violations, missing ui blocks, low text contrast, etc. on the same turn — inspect it before moving on. For runtime failures that static validation can't see (JS errors, custom elements that fail to upgrade, param bindings that silently don't resolve at runtime), follow up with `smoke_test_ui` before claiming done.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "path": PropertySchema(type: "string", description: "Path relative to the bundle root (e.g. 'ui/index.html')."),
+                    "content": PropertySchema(type: "string", description: "UTF-8 text to write. Overwrites any existing file at that path. Parent directories are created automatically."),
+                ],
+                required: ["path", "content"]
             )
         ),
         ToolDefinition(
@@ -173,12 +223,22 @@ enum MCPProtocol {
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
         ToolDefinition(
+            name: "validate_bundle",
+            description: "Run a static validator over the currently-loaded bundle's manifest.json + ui/index.html. Catches unresolved param= references, CSP-blocked external fetches, missing manifest.ui block, Canvas 2D using CSS system colors it can't parse, and UIs that declare parameters but expose zero controls. Returns {status: \"pass\"|\"warn\"|\"fail\", issues: [{severity, check, file?, message, suggestion?}]}. write_bundle_file runs the same validator automatically on ui/ or manifest.json edits and inlines the report in its response, so you only need this tool for an explicit re-check or to validate without writing.",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
+        ToolDefinition(
+            name: "smoke_test_ui",
+            description: "RUNTIME smoke test for the current bundle's custom UI. Loads ui/index.html in an offscreen WKWebView (sized to manifest.ui.{width,height}) with the same scheme handler + bridge + cdp-ui.js injection the live plugin uses, then reports (1) whether window.ConjureDSP.ready fired within 3s, (2) every JavaScript error / unhandledrejection / console.error captured during load, (3) per-component binding state for every <cdp-slider> / <cdp-toggle> / <cdp-choice> / <cdp-xy> / <cdp-knob> — did it actually resolve its `param=` attribute at runtime, or is it silently inert?, (4) per-declared-parameter coverage (does every AU parameter have at least one working UI control?), and (5) `content_overflow` — the rendered HTML's actual scroll extent vs. manifest.ui.{width,height}; populated only when the content overflows the declared size by more than 8pt on either axis, so the field is absent when the layout fits. Use this AFTER write_bundle_file to confirm the edits produce a working UI — static validation (validate_bundle) can't see JS errors that only manifest at runtime, custom elements that failed to upgrade, parameter bindings broken by subtle name mismatches, or content that lays out larger than the host webview will display. Returns {status: \"pass\"|\"warn\"|\"fail\", ready_fired, ready_time_ms, js_errors[], components[], params[], content_overflow?}.",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
+        ToolDefinition(
             name: "get_docs",
-            description: "Get detailed API reference for the conjuredsp library. Use this when you need exact method signatures, parameter types, default values, or usage details beyond what's in your system prompt.",
+            description: "Get detailed API reference for the conjuredsp library. Use this when you need exact method signatures, parameter types, default values, or usage details beyond what's in your system prompt. The \"ui\" topic documents the cdp-ui component library (cdp-slider, cdp-toggle, cdp-choice, cdp-xy, cdp-knob, cdp-panel) and the window.ConjureDSP bridge — call it before authoring any ui/index.html.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "topic": PropertySchema(type: "string", description: "Documentation topic: \"params\", \"filters\", \"delays\", \"oscillators\", \"utilities\", \"accel\", \"nam\", or \"all\".")
+                    "topic": PropertySchema(type: "string", description: "Documentation topic: \"params\", \"filters\", \"delays\", \"oscillators\", \"utilities\", \"accel\", \"nam\", \"ui\", or \"all\".")
                 ],
                 required: ["topic"]
             )

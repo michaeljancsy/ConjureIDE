@@ -205,7 +205,17 @@ final class WebSocketServer {
     }
 
     /// Promote a client to "verified" on its first received WebSocket frame
-    /// and flush any pending banner/control message to it.
+    /// and send any pending banner/control message to it.
+    ///
+    /// The pending fields represent the PTY's *current* display state
+    /// (e.g. agent picker JSON), so we leave them in place rather than
+    /// clearing after the first verified client — otherwise a second
+    /// client connecting moments later (think: editor + DevTools, or
+    /// rapid reconnect) sees nothing and ends up with a blank UI.
+    /// Supersession happens on two well-defined edges instead:
+    /// `onControlMessage` overwrites the pending field with the new
+    /// state, and PTY `.idle` clears both fields entirely (see
+    /// `ConjureDSPTerminalApp.onStateChange`).
     private func verifyAndFlushIfNeeded(connection: NWConnection, id: ObjectIdentifier) {
         guard !verifiedClients.contains(id) else { return }
         verifiedClients.insert(id)
@@ -215,13 +225,11 @@ final class WebSocketServer {
         let textMeta = NWProtocolWebSocket.Metadata(opcode: .text)
         let textCtx = NWConnection.ContentContext(identifier: "ws", metadata: [textMeta])
         if let ctrl = pendingControlMessage {
-            pendingControlMessage = nil
-            wsLog.warning("Flushing pendingControlMessage to verified client (len=\(ctrl.count))")
+            wsLog.warning("Sending pendingControlMessage to verified client (len=\(ctrl.count))")
             connection.send(content: ctrl, contentContext: textCtx, completion: .idempotent)
         }
         if let banner = pendingBanner {
-            pendingBanner = nil
-            wsLog.warning("Flushing pendingBanner to verified client (len=\(banner.count))")
+            wsLog.warning("Sending pendingBanner to verified client (len=\(banner.count))")
             if let data = banner.data(using: .utf8) {
                 connection.send(content: data, contentContext: textCtx, completion: .idempotent)
             }

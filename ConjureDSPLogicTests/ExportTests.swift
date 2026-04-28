@@ -349,7 +349,7 @@ struct ExportManagerTests {
         let registry = ExportRegistry(registryURL: registryURL)
         let manager = ExportManager(registry: registry)
 
-        let source = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
+        let source = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    pass\n"
         let result = try manager.exportPreset(
             name: "My Reverb",
             source: source,

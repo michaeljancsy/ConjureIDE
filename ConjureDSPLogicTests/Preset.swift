@@ -45,6 +45,8 @@ struct Preset: Identifiable, Hashable {
     var category: PresetCategory?
     var descriptionText: String?
     var author: String?
+    /// Non-nil iff the preset's bundle directory exists but failed to load.
+    var brokenError: String?
 
     var isFactory: Bool {
         if case .factory = source { return true }
@@ -55,6 +57,8 @@ struct Preset: Identifiable, Hashable {
         if case .user = source { return true }
         return false
     }
+
+    var isBroken: Bool { brokenError != nil }
 
     /// On-disk URL for mutable presets (nil for factory).
     var fileURL: URL? {

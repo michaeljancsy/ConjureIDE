@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 2,
+  "entry": "process.rs",
+  "language": "rust",
+  "params": [
+    {
+      "name": "drip",
+      "min": 0.0,
+      "max": 100.0,
+      "default": 70.0,
+      "unit": "%"
+    },
+    {
+      "name": "haze",
+      "min": 0.0,
+      "max": 100.0,
+      "default": 50.0,
+      "unit": "%"
+    },
+    {
+      "name": "drift",
+      "min": 0.0,
+      "max": 100.0,
+      "default": 45.0,
+      "unit": "%"
+    },
+    {
+      "name": "bleed",
+      "min": 0.0,
+      "max": 100.0,
+      "default": 60.0,
+      "unit": "%"
+    },
+    {
+      "name": "mix",
+      "min": 0.0,
+      "max": 1.0,
+      "default": 0.55,
+      "unit": ""
+    }
+  ]
+}

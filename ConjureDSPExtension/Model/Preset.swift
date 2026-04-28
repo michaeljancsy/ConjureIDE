@@ -45,6 +45,12 @@ struct Preset: Identifiable, Hashable {
     var category: PresetCategory?
     var descriptionText: String?
     var author: String?
+    /// Non-nil iff the preset's bundle directory exists but failed to load
+    /// (bad manifest, missing entry script, etc.). The browser surfaces
+    /// these distinctly so the user can spot and diagnose them instead of
+    /// having presets silently disappear from the list. Selection is
+    /// blocked while this is set — there's no usable bundle to load.
+    var brokenError: String?
 
     var isFactory: Bool {
         if case .factory = source { return true }
@@ -55,6 +61,12 @@ struct Preset: Identifiable, Hashable {
         if case .user = source { return true }
         return false
     }
+
+    /// True iff this preset is a user bundle that failed to load. Factory
+    /// bundles never go through the broken path because they ship with the
+    /// extension; if a factory bundle is ever broken, that's a build bug
+    /// and `FactoryPresetValidationTests` would catch it before release.
+    var isBroken: Bool { brokenError != nil }
 
     /// On-disk URL for mutable presets (nil for factory).
     var fileURL: URL? {
@@ -199,5 +211,14 @@ enum FactoryPresetRegistry {
         Entry(name: "Hailstorm Lullaby (Rust)", number: 100, resourceName: "preset_hailstorm_lullaby_rust", language: .rust, category: .other),
         Entry(name: "Methane Sea (Python)", number: 101, resourceName: "preset_methane_sea", language: .python, category: .other),
         Entry(name: "Methane Sea (Rust)", number: 102, resourceName: "preset_methane_sea_rust", language: .rust, category: .other),
+        Entry(name: "Mockingbird at Night (Rust)", number: 103, resourceName: "preset_mockingbird_at_night_rust", language: .rust, category: .other),
+
+        // Diagnostics — manual smoke test for the DSP→UI telemetry channel.
+        // Passes a Drive-scaled signal through and publishes per-block
+        // peak + envelope-follower output via `frame.telemetry`. Both
+        // language variants share the same UI so the keys (`Peak Db`,
+        // `Envelope Db`) are interchangeable.
+        Entry(name: "Telemetry Smoke (Rust)", number: 104, resourceName: "preset_telemetry_smoke", language: .rust, category: .utility),
+        Entry(name: "Telemetry Smoke (Python)", number: 105, resourceName: "preset_telemetry_smoke_python", language: .python, category: .utility),
     ]
 }

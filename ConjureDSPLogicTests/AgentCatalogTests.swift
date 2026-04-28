@@ -224,6 +224,12 @@ struct AgentCatalogTests {
     }
 
     // MARK: - Resolution — manual
+    //
+    // `newlyAvailable` is a diff against a baseline captured the first time
+    // `resolveStartup` runs after the manual sentinel is set. The first call
+    // returns [] (and writes the baseline); only agents installed AFTER that
+    // first call show up as newly available. See the doc comment in
+    // `AgentCatalog.resolveStartup` for the full rationale.
 
     @Test("__manual__ sentinel + 0 agents → manual(newlyAvailable: [])")
     func resolveManualEmpty() async throws {
@@ -231,14 +237,63 @@ struct AgentCatalogTests {
         #expect(catalog.resolveStartup(detected: []) == .manual(newlyAvailable: []))
     }
 
-    @Test("__manual__ sentinel + 1 agent → manual(newlyAvailable: [gemini]) — hint path")
-    func resolveManualWithHint() async throws {
+    @Test("__manual__ sentinel + 1 agent, first call → manual(newlyAvailable: []) and captures baseline")
+    func resolveManualFirstCallCapturesBaseline() async throws {
         let (catalog, _) = try Self.makeCatalog(
             installed: ["gemini": ""],
             existingStartup: "__manual__"
         )
         let detected = catalog.detectAllAgents()
-        #expect(catalog.resolveStartup(detected: detected) == .manual(newlyAvailable: detected))
+        // First call: no baseline file → write one, return empty.
+        #expect(catalog.resolveStartup(detected: detected) == .manual(newlyAvailable: []))
+        // Side effect: baseline file now exists and lists the detected agent.
+        let baseline = try String(contentsOfFile: catalog.manualBaselineFilePath, encoding: .utf8)
+        #expect(baseline.split(separator: "\n").map(String.init) == ["gemini"])
+    }
+
+    @Test("__manual__ sentinel + new agent installed after baseline → newlyAvailable lists the diff")
+    func resolveManualReportsDiffAgainstBaseline() async throws {
+        let (catalog, _) = try Self.makeCatalog(
+            installed: ["claude": "", "gemini": ""],
+            existingStartup: "__manual__"
+        )
+        // Pre-write a baseline as if the user picked manual mode when only claude was installed.
+        try "claude".write(toFile: catalog.manualBaselineFilePath, atomically: true, encoding: .utf8)
+        let detected = catalog.detectAllAgents()
+        // Now both claude and gemini are detected, but only gemini is "newly available."
+        let result = catalog.resolveStartup(detected: detected)
+        guard case .manual(let newlyAvailable) = result else {
+            Issue.record("expected .manual"); return
+        }
+        #expect(newlyAvailable.map { $0.name } == ["gemini"])
+    }
+
+    @Test("__manual__ sentinel + same agents as baseline → newlyAvailable empty")
+    func resolveManualNoDiffWhenUnchanged() async throws {
+        let (catalog, _) = try Self.makeCatalog(
+            installed: ["gemini": ""],
+            existingStartup: "__manual__"
+        )
+        try "gemini".write(toFile: catalog.manualBaselineFilePath, atomically: true, encoding: .utf8)
+        let detected = catalog.detectAllAgents()
+        #expect(catalog.resolveStartup(detected: detected) == .manual(newlyAvailable: []))
+    }
+
+    @Test("Switching out of manual clears the baseline so a future manual session captures fresh state")
+    func writingNonManualClearsBaseline() async throws {
+        let (catalog, _) = try Self.makeCatalog(existingStartup: "__manual__")
+        try "claude".write(toFile: catalog.manualBaselineFilePath, atomically: true, encoding: .utf8)
+        catalog.writeStartupCommand("claude")
+        #expect(!FileManager.default.fileExists(atPath: catalog.manualBaselineFilePath))
+    }
+
+    @Test("Re-writing __manual__ keeps the existing baseline (idempotent)")
+    func writingManualSentinelKeepsBaseline() async throws {
+        let (catalog, _) = try Self.makeCatalog(existingStartup: "__manual__")
+        try "claude".write(toFile: catalog.manualBaselineFilePath, atomically: true, encoding: .utf8)
+        catalog.writeStartupCommand("__manual__")
+        let baseline = try String(contentsOfFile: catalog.manualBaselineFilePath, encoding: .utf8)
+        #expect(baseline == "claude")
     }
 
     // MARK: - Legacy migration

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 2,
+  "entry": "process.rs",
+  "language": "rust",
+  "params": [
+    {
+      "name": "frequency",
+      "min": 20.0,
+      "max": 20000.0,
+      "default": 440.0,
+      "unit": "Hz",
+      "curve": "log"
+    }
+  ]
+}

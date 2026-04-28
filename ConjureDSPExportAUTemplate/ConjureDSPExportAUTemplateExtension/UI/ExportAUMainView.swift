@@ -8,17 +8,36 @@ import SwiftUI
 struct ExportAUMainView: View {
     @ObservedObject var parameterState: ExportParameterState
     let config: RuntimeConfig?
+    /// URL to the custom UI entry HTML when the preset shipped one. Resolved
+    /// by `RuntimeConfig.customUIEntryURL(in:)` and null otherwise.
+    let customUIEntryURL: URL?
+    /// Capture manager forwarded to the custom UI webview. Nil when the
+    /// preset has no custom UI (generic slider path — no capture needed).
+    let captureManager: ExportAudioCaptureManager?
     let pythonRuntimeMissing: Bool
     var loadError: String? = nil
     /// Called when layout-relevant state changes (debug pane, error visibility)
     /// so the view controller can resize the AU window via `preferredContentSize`.
     var onLayoutChange: ((_ showDebug: Bool, _ hasError: Bool) -> Void)? = nil
+    @Environment(\.colorScheme) private var colorScheme
     @State private var errorCopied = false
     @State private var showDebugPane = false
 
     var body: some View {
         if pythonRuntimeMissing {
             PythonRuntimeErrorView(presetName: config?.presetName)
+        } else if showDebugPane {
+            // Full-window debug view. Header keeps the preset name and gear
+            // menu, plus an explicit "Done" button so the return path is
+            // obvious. The pane itself fills all remaining space — 360pt
+            // squeezed under the slider stack was unreadable.
+            debugFullscreenView
+                .onChange(of: showDebugPane) { _, _ in
+                    notifyLayoutChange()
+                }
+                .onChange(of: parameterState.runtimeError) { _, _ in
+                    notifyLayoutChange()
+                }
         } else {
             VStack(spacing: 12) {
                 ZStack {
@@ -26,27 +45,7 @@ struct ExportAUMainView: View {
                         .font(.headline)
                     HStack {
                         Spacer()
-                        Menu {
-                            Button(showDebugPane ? "Hide Debug Log" : "Show Debug Log") {
-                                showDebugPane.toggle()
-                            }
-                            Divider()
-                            Button("Copy Log") {
-                                let text = parameterState.debugLog.formattedForCopy()
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(text, forType: .string)
-                            }
-                            Button("Clear Log") {
-                                parameterState.debugLog.clear()
-                            }
-                        } label: {
-                            Image(systemName: "gearshape")
-                                .font(.body)
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .foregroundStyle(.secondary)
+                        settingsMenu
                     }
                     .padding(.horizontal, 12)
                 }
@@ -54,27 +53,37 @@ struct ExportAUMainView: View {
 
                 Divider()
 
-                VStack(spacing: 4) {
-                    ForEach(0..<parameterState.paramCount, id: \.self) { index in
-                        ExportParamSliderRow(
-                            label: config?.paramLabel(at: index) ?? "Param \(index + 1)",
-                            value: parameterState.binding(for: index),
-                            metadata: parameterState.metadata(for: index)
-                        )
-                    }
-                }
-                .padding(.horizontal)
-
-                // Below the fixed parameter area: show either the debug pane
-                // (which includes errors in its log) or the error banner.
-                if showDebugPane {
-                    Divider()
-                    DebugPaneView(
-                        debugLog: parameterState.debugLog,
-                        stats: parameterState.statsSnapshot,
-                        info: parameterState.pluginInfo
+                // Custom UI if the exporter copied one in — otherwise, the
+                // existing generic slider layout. Parameter state + debug
+                // pane + error banner wrap both paths identically so DAW
+                // automation, stats, and error reporting behave the same
+                // regardless of whether a preset shipped a custom UI.
+                if let entryURL = customUIEntryURL, let captureManager {
+                    ExportCustomUIWebView(
+                        parameterState: parameterState,
+                        uiDirectoryURL: entryURL.deletingLastPathComponent(),
+                        entryHTMLPath: entryURL.lastPathComponent,
+                        theme: colorScheme,
+                        captureManager: captureManager,
+                        audioFramesAllowed: config?.ui?.audioFrames ?? false
                     )
-                } else if let error = loadError ?? parameterState.runtimeError {
+                    .frame(minHeight: CGFloat(config?.ui?.height ?? 220))
+                } else {
+                    VStack(spacing: 4) {
+                        ForEach(0..<parameterState.paramCount, id: \.self) { index in
+                            ExportParamSliderRow(
+                                label: config?.paramLabel(at: index) ?? "Param \(index + 1)",
+                                value: parameterState.binding(for: index),
+                                metadata: parameterState.metadata(for: index)
+                            )
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+
+                // Error banner when debug is closed. (When debug is open, the
+                // log already includes the error — no banner needed.)
+                if let error = loadError ?? parameterState.runtimeError {
                     Divider()
                     errorBanner(error: error, isLoadError: loadError != nil)
                 }
@@ -95,6 +104,62 @@ struct ExportAUMainView: View {
             .onAppear {
                 notifyLayoutChange()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var settingsMenu: some View {
+        Menu {
+            Button(showDebugPane ? "Hide Debug Log" : "Show Debug Log") {
+                showDebugPane.toggle()
+            }
+            Divider()
+            Button("Copy Log") {
+                let text = parameterState.debugLog.formattedForCopy()
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+            Button("Clear Log") {
+                parameterState.debugLog.clear()
+            }
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.body)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private var debugFullscreenView: some View {
+        VStack(spacing: 12) {
+            ZStack {
+                Text(config?.presetName ?? "ConjureDSP Export")
+                    .font(.headline)
+                HStack {
+                    Button("Done") { showDebugPane = false }
+                        .buttonStyle(.borderless)
+                        .keyboardShortcut(.escape, modifiers: [])
+                        .accessibilityIdentifier("debugDoneButton")
+                    Spacer()
+                    settingsMenu
+                }
+                .padding(.horizontal, 12)
+            }
+            .padding(.top, 12)
+
+            Divider()
+
+            DebugPaneView(
+                debugLog: parameterState.debugLog,
+                stats: parameterState.statsSnapshot,
+                info: parameterState.pluginInfo
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal)
+            .padding(.bottom, 12)
         }
     }
 }

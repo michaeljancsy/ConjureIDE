@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "entry": "process.rs",
+  "language": "rust",
+  "params": [
+    {
+      "name": "threshold",
+      "min": -80.0,
+      "max": -20.0,
+      "default": -40.0,
+      "unit": "dB"
+    },
+    {
+      "name": "attack",
+      "min": 0.1,
+      "max": 10.0,
+      "default": 1.0,
+      "unit": "ms",
+      "curve": "log"
+    },
+    {
+      "name": "release",
+      "min": 10.0,
+      "max": 500.0,
+      "default": 100.0,
+      "unit": "ms",
+      "curve": "log"
+    },
+    {
+      "name": "hold",
+      "min": 0.1,
+      "max": 100.0,
+      "default": 10.0,
+      "unit": "ms",
+      "curve": "log"
+    }
+  ]
+}

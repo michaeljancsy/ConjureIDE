@@ -81,7 +81,7 @@ enum BufferMode {
 /// Audio data is copied into/out of WASM linear memory each render callback.
 ///
 /// The WASM `process` function signature:
-///   `(input_ptr: i32, output_ptr: i32, channels: i32, frame_count: i32, sample_rate: f32) -> ()`
+///   `(input_ptr: i32, output_ptr: i32, channel_count: i32, frame_count: i32, sample_rate: f32) -> ()`
 ///
 /// Memory layout at input_ptr / output_ptr:
 ///   Channels laid out sequentially, each `frame_count` floats.
@@ -123,6 +123,16 @@ pub struct WasmBackend {
     latency_samples: u32,
     /// NAM model path embedded in the WASM binary via `get_nam_path_ptr`/`get_nam_path_len`.
     nam_path: Option<String>,
+    /// Script-declared telemetry slot metadata (from `get_telemetry_metadata_ptr/_len`).
+    /// `None` when the script didn't call `telemetry!()` — kernel skips reads.
+    telemetry_metadata: Option<Vec<crate::params::TelemetryMetadata>>,
+    /// Cached offset of the script's TELEMETRY_BUF in WASM linear memory
+    /// (via `get_telemetry_buf_ptr`). Captured once at load time so each
+    /// `read_telemetry` call is just a slice read, no exported-function
+    /// invocation. Always set when `setup!()` was used (the buffer is
+    /// allocated regardless of whether telemetry slots are declared);
+    /// only meaningful when `telemetry_metadata` is also `Some`.
+    telemetry_buf_offset: Option<i32>,
 }
 
 /// Base offset in WASM linear memory to avoid the null page.
@@ -217,6 +227,20 @@ impl WasmBackend {
             &memory,
         );
 
+        // Optional telemetry metadata + buffer offset. Both come from the
+        // conjuredsp-rs author crate's `setup!()` + `telemetry!()` macros.
+        // Missing exports = no telemetry (legacy modules + scripts that
+        // didn't opt in). The buffer offset only matters when metadata
+        // is also present.
+        let telemetry_metadata = Self::extract_telemetry(&instance, &mut store, &memory);
+        let telemetry_buf_offset = instance
+            .get_typed_func::<(), i32>(&mut store, "get_telemetry_buf_ptr")
+            .ok()
+            .and_then(|f| {
+                let _ = store.set_fuel(COMPILED_FUEL);
+                f.call(&mut store, ()).ok()
+            });
+
         // Probe for optional get_latency_samples() export
         let latency_samples = instance
             .get_typed_func::<(), i32>(&mut store, "get_latency_samples")
@@ -299,7 +323,47 @@ impl WasmBackend {
             param_write_count,
             latency_samples,
             nam_path,
+            telemetry_metadata,
+            telemetry_buf_offset,
         })
+    }
+
+    /// Extract telemetry slot metadata from `get_telemetry_metadata_ptr/_len`
+    /// exports. Returns `None` when the script didn't opt in (the macro
+    /// pair from `telemetry!()` wasn't invoked) — kernel skips reads in
+    /// that case. Schema mirrors the params extractor: JSON
+    /// `[{name, unit}, …]` decoded into `Vec<TelemetryMetadata>`.
+    fn extract_telemetry(
+        instance: &Instance,
+        store: &mut Store<HostState>,
+        memory: &Memory,
+    ) -> Option<Vec<crate::params::TelemetryMetadata>> {
+        let get_ptr_fn = instance
+            .get_typed_func::<(), i32>(&mut *store, "get_telemetry_metadata_ptr")
+            .ok()?;
+        let get_len_fn = instance
+            .get_typed_func::<(), i32>(&mut *store, "get_telemetry_metadata_len")
+            .ok()?;
+
+        let _ = store.set_fuel(COMPILED_FUEL);
+        let ptr = get_ptr_fn.call(&mut *store, ()).ok()?;
+        let _ = store.set_fuel(COMPILED_FUEL);
+        let len = get_len_fn.call(&mut *store, ()).ok()?;
+
+        let data = memory.data(&*store);
+        let start = ptr as usize;
+        let end = start.checked_add(len as usize)?;
+        if end > data.len() {
+            return None;
+        }
+        let json_str = std::str::from_utf8(&data[start..end]).ok()?;
+        let metadata: Vec<crate::params::TelemetryMetadata> =
+            serde_json::from_str(json_str).ok()?;
+        if metadata.is_empty() {
+            None
+        } else {
+            Some(metadata)
+        }
     }
 
     /// Extract parameter names and metadata from WASM module exports.
@@ -1091,6 +1155,38 @@ impl Backend for WasmBackend {
     fn memory_bytes(&self) -> u64 {
         self.memory.data_size(&self.store) as u64
     }
+
+    fn telemetry_metadata(&self) -> Option<&[crate::params::TelemetryMetadata]> {
+        self.telemetry_metadata.as_deref()
+    }
+
+    fn read_telemetry(&self, out: &mut [f32; crate::params::TELEMETRY_LEN]) {
+        // Skip the read entirely when the script declared no telemetry —
+        // the buffer offset may exist (setup!() always exports it) but
+        // there's no use exposing zeros to Swift if metadata is None.
+        if self.telemetry_metadata.is_none() {
+            return;
+        }
+        let Some(offset) = self.telemetry_buf_offset else {
+            return;
+        };
+        let start = offset as usize;
+        let byte_len = out.len() * core::mem::size_of::<f32>();
+        let mem_data = self.memory.data(&self.store);
+        let end = match start.checked_add(byte_len) {
+            Some(e) if e <= mem_data.len() => e,
+            _ => return,
+        };
+        let src = &mem_data[start..end];
+        // Pointer cast is safe: src has byte_len = out.len() * 4 bytes.
+        unsafe {
+            let dst_bytes = core::slice::from_raw_parts_mut(
+                out.as_mut_ptr() as *mut u8,
+                byte_len,
+            );
+            dst_bytes.copy_from_slice(src);
+        }
+    }
 }
 
 // MARK: - NAM model injection
@@ -1760,6 +1856,101 @@ mod tests {
     }
 
     #[test]
+    fn test_wasm_telemetry_metadata_extracted() {
+        // Two telemetry slots — backend should expose them via
+        // `telemetry_metadata()`. The buffer-ptr export is also present
+        // (placed elsewhere in memory) so `read_telemetry` works.
+        // JSON uses verbatim macro identifiers (no canonicalization)
+        // to match what the real `write_telemetry_json` emits.
+        let json = r#"[{"name":"ENV_LEVEL","unit":""},{"name":"GR_DB","unit":"dB"}]"#;
+        let hex = json_to_wat_hex(json);
+        let wat = format!(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (data (i32.const 1024) "{hex}")
+              (func (export "process")
+                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              )
+              (func (export "get_telemetry_metadata_ptr") (result i32) (i32.const 1024))
+              (func (export "get_telemetry_metadata_len") (result i32) (i32.const {len}))
+              (func (export "get_telemetry_buf_ptr") (result i32) (i32.const 2048))
+            )
+            "#,
+            hex = hex,
+            len = json.len(),
+        );
+        let wasm = wat_to_wasm(&wat);
+        let backend = WasmBackend::load(&wasm).unwrap();
+        let meta = backend.telemetry_metadata().expect("Should have telemetry metadata");
+        assert_eq!(meta.len(), 2);
+        assert_eq!(meta[0].name, "ENV_LEVEL");
+        assert_eq!(meta[0].unit, "");
+        assert_eq!(meta[1].name, "GR_DB");
+        assert_eq!(meta[1].unit, "dB");
+    }
+
+    #[test]
+    fn test_wasm_telemetry_buf_roundtrip() {
+        // process() writes f32 values into TELEMETRY_BUF at offset 2048.
+        // Slot 0: 0.5 (bits 0x3f000000), slot 1: -3.25 (bits 0xc0500000).
+        let json = r#"[{"name":"A","unit":""},{"name":"B","unit":"dB"}]"#;
+        let hex = json_to_wat_hex(json);
+        let wat = format!(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (data (i32.const 1024) "{hex}")
+              (func (export "process")
+                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                (f32.store (i32.const 2048) (f32.const 0.5))
+                (f32.store (i32.const 2052) (f32.const -3.25))
+              )
+              (func (export "get_telemetry_metadata_ptr") (result i32) (i32.const 1024))
+              (func (export "get_telemetry_metadata_len") (result i32) (i32.const {len}))
+              (func (export "get_telemetry_buf_ptr") (result i32) (i32.const 2048))
+            )
+            "#,
+            hex = hex,
+            len = json.len(),
+        );
+        let wasm = wat_to_wasm(&wat);
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+        backend.initialize(2, 48000.0, 256);
+
+        // Drive one process() call so the f32.store instructions execute.
+        let in_buf = vec![0.0_f32; 256];
+        let mut out_buf = vec![0.0_f32; 256];
+        let inputs: [*const f32; 1] = [in_buf.as_ptr()];
+        let outputs: [*mut f32; 1] = [out_buf.as_mut_ptr()];
+        let params = [0.0_f32; PARAM_COUNT];
+        let transport = crate::kernel::TransportState::default();
+        unsafe {
+            backend.process(&inputs, &outputs, 1, 256, 48000.0, &params, &transport);
+        }
+
+        let mut tele = [0.0_f32; crate::params::TELEMETRY_LEN];
+        backend.read_telemetry(&mut tele);
+        assert_eq!(tele[0], 0.5);
+        assert_eq!(tele[1], -3.25);
+        // Slots not written by the script remain zero.
+        assert_eq!(tele[2], 0.0);
+        assert_eq!(tele[7], 0.0);
+    }
+
+    #[test]
+    fn test_wasm_no_telemetry_exports_returns_none() {
+        // Module without any telemetry exports — backend reports None
+        // and `read_telemetry` is a no-op.
+        let backend = WasmBackend::load(&wat_to_wasm(GAIN_HALF_WAT)).unwrap();
+        assert!(backend.telemetry_metadata().is_none());
+        let mut tele = [42.0_f32; crate::params::TELEMETRY_LEN];
+        backend.read_telemetry(&mut tele);
+        // Untouched — caller's sentinel survives.
+        assert!(tele.iter().all(|&v| v == 42.0));
+    }
+
+    #[test]
     fn test_wasm_compiled_module_gets_higher_fuel() {
         let wasm = wat_to_wasm(BUFFER_GETTERS_WAT);
         let backend = WasmBackend::load(&wasm).unwrap();
@@ -1859,9 +2050,9 @@ params! { GAIN = db().default(0.0), }
 #[no_mangle]
 pub extern "C" fn process(
     input: *const f32, output: *mut f32,
-    channels: i32, frame_count: i32, sample_rate: f32,
+    channel_count: i32, frame_count: i32, sample_rate: f32,
 ) {
-    let ctx = ctx(input, output, channels, frame_count, sample_rate);
+    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
     unsafe {
         for c in 0..ctx.channels() {
             let n = ctx.frames();

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Wavefolder</title>
+  <style>
+    :root { color-scheme: light dark; }
+    html, body { margin: 0; padding: 0; height: 100%; font: 12px -apple-system, system-ui, sans-serif; background: Canvas; color: CanvasText; }
+    body { display: grid; grid-template-rows: auto 1fr auto; padding: 14px 16px; gap: 12px; box-sizing: border-box; min-height: 0; }
+    .head { display: flex; justify-content: space-between; align-items: baseline; }
+    .title { font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; font-size: 0.75em; opacity: 0.55; }
+    .drive-val { font-variant-numeric: tabular-nums; font-size: 1.1em; }
+    /* Canvas sits directly in the 1fr grid row with min-height: 0 so it
+       doesn't fight the grid for extra space (which produced an infinite
+       resize loop before). */
+    .xfer-wrap { position: relative; min-height: 0; }
+    #xfer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; border-radius: 6px; background: color-mix(in srgb, CanvasText 6%, Canvas); }
+    .control { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
+    .control label { font-size: 0.75em; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.05em; }
+    .control cdp-slider { --cdp-label-width: 0; --cdp-value-width: 0; }
+  </style>
+</head>
+<body>
+  <div class="head">
+    <span class="title">Fold function — input (x) → output (y)</span>
+    <span class="drive-val" id="driveVal">Drive 5.0×</span>
+  </div>
+  <div class="xfer-wrap">
+    <canvas id="xfer" width="800" height="500"></canvas>
+  </div>
+  <div class="control">
+    <label>Drive</label>
+    <cdp-slider param="drive"></cdp-slider>
+    <span id="driveNum" style="font-variant-numeric: tabular-nums; opacity: 0.6;">5.0×</span>
+  </div>
+  <script>
+  (function () {
+    const CDP = window.ConjureDSP;
+    const canvas = document.getElementById('xfer');
+    const ctx = canvas.getContext('2d');
+
+    function idx(key) {
+      // Case-insensitive so this UI serves both Python (lowercase)
+      // and Rust (uppercase from params!()) variants.
+      const low = String(key).toLowerCase();
+      for (let i = 0; i < CDP.parameters.count; i++) {
+        const m = CDP.parameters.metadata(i);
+        if (!m) continue;
+        if ((m.name && m.name.toLowerCase() === low) ||
+            (m.key && m.key.toLowerCase() === low)) return i;
+      }
+      return -1;
+    }
+
+    // Mirror of the triangle-wave fold used in process.py.
+    function fold(v) {
+      const t = ((v + 1.0) * 0.25) - Math.floor((v + 1.0) * 0.25);
+      return 1.0 - Math.abs(t * 4.0 - 2.0);
+    }
+
+    // Peak amplitude of the live input signal, smoothed.
+    let smoothedPeak = 0;
+
+    // Canvas 2D can't parse `color-mix()` or the `CanvasText` keyword,
+    // so we resolve the foreground color via getComputedStyle and use
+    // globalAlpha for transparency.
+    // Resolve CanvasText to an actual rgb() string via a hidden probe;
+    // canvas 2D can't parse the `CanvasText` keyword directly, and
+    // CDP.theme isn't always reliable (WebView can be in dark mode even
+    // when CDP reports 'light'). The probe always matches the real
+    // computed color-scheme.
+    function resolveFG() {
+      const probe = document.createElement('span');
+      probe.style.cssText = 'color: CanvasText; position: absolute; visibility: hidden;';
+      document.body.appendChild(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
+    }
+    let FG = resolveFG();
+    window.addEventListener('themechange', () => { FG = resolveFG(); schedule(); });
+
+    function draw() {
+      const w = canvas.width = canvas.clientWidth * devicePixelRatio;
+      const h = canvas.height = canvas.clientHeight * devicePixelRatio;
+      if (w === 0 || h === 0) return;
+      ctx.clearRect(0, 0, w, h);
+      const pad = 12 * devicePixelRatio;
+      const iw = w - pad * 2, ih = h - pad * 2;
+
+      // Input: -1..+1 (x), output: -1..+1 (y).
+      const xAt = (v) => pad + iw * (v + 1) / 2;
+      const yAt = (v) => pad + ih * (1 - (v + 1) / 2);
+
+      // Axes.
+      ctx.strokeStyle = FG;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.12;
+      ctx.beginPath(); ctx.moveTo(pad, yAt(0)); ctx.lineTo(w - pad, yAt(0)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(xAt(0), pad); ctx.lineTo(xAt(0), h - pad); ctx.stroke();
+
+      // 1:1 reference.
+      ctx.globalAlpha = 0.18;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(xAt(-1), yAt(-1)); ctx.lineTo(xAt(1), yAt(1)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+
+      // Fold curve.
+      const drive = CDP.parameters.get(idx('drive'));
+      ctx.strokeStyle = FG;
+      ctx.lineWidth = 2.5 * devicePixelRatio;
+      ctx.beginPath();
+      const N = 400;
+      for (let i = 0; i <= N; i++) {
+        const inp = -1 + 2 * i / N;
+        const y = fold(inp * drive);
+        const px = xAt(inp), py = yAt(y);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+
+      // Live signal indicator: a dot moving along the curve at smoothedPeak.
+      if (smoothedPeak > 0.001) {
+        const y = fold(smoothedPeak * drive);
+        ctx.beginPath();
+        ctx.arc(xAt(smoothedPeak), yAt(y), 6 * devicePixelRatio, 0, Math.PI * 2);
+        ctx.fillStyle = FG;
+        ctx.globalAlpha = 0.8;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function onFrame(frame) {
+      const p = frame.peakIn || 0;
+      smoothedPeak = smoothedPeak * 0.75 + p * 0.25;
+      draw();
+    }
+
+    function updateReadouts() {
+      const d = CDP.parameters.get(idx('drive'));
+      document.getElementById('driveVal').textContent = 'Drive ' + d.toFixed(1) + '×';
+      document.getElementById('driveNum').textContent = d.toFixed(1) + '×';
+    }
+
+    let raf = 0;
+    function schedule() {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; draw(); updateReadouts(); });
+    }
+
+    function init() {
+      FG = resolveFG();
+      window.addEventListener('resize', schedule);
+      CDP.audio.onFrame(onFrame);
+      updateReadouts();
+      // Continuous rAF loop so drive-slider drags update the curve
+      // even when audio is silent (parameters.set doesn't fire
+      // onAnyChange, so we can't rely on change events alone).
+      function tick() { schedule(); requestAnimationFrame(tick); }
+      tick();
+    }
+    if (CDP && CDP.ready) CDP.ready(init);
+    else window.addEventListener('ConjureDSPReady', init);
+  })();
+  </script>
+</body>
+</html>

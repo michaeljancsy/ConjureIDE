@@ -36,6 +36,14 @@ enum AppGroupContainer {
             if let url = FileManager.default.containerURL(
                 forSecurityApplicationGroupIdentifier: id
             ) {
+                // Strip quarantine on the container root only. Walking
+                // deeper is fatal at startup: WasmCache has 2000+ entries
+                // and Presets/.git has hundreds of object dirs — the
+                // enumeration blows the AU instantiation XPC timeout
+                // (~2s) and the host gives up with "Failed to open
+                // AudioUnit extension: Client is gone". Per-write strips
+                // in PresetManager handle subdirectories going forward.
+                stripQuarantine(at: url)
                 return url
             }
         }
@@ -47,4 +55,18 @@ enum AppGroupContainer {
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
+
+    /// Remove the `com.apple.quarantine` xattr from `url` if present. macOS
+    /// 26 sets this xattr on files a sandboxed appex creates in its Group
+    /// Container; when a different-signed version of the appex (e.g. Debug
+    /// → Release, or a fresh dev build with rotated signing) later tries
+    /// to write, macOS compares signatures and denies with "You don't
+    /// have permission to save the file X in the folder Y." Stripping
+    /// removes the comparison point and future writes succeed.
+    ///
+    /// Silent no-op if the xattr isn't present, if we don't own the file,
+    /// or if the sandbox blocks the removal — best effort by design.
+    static func stripQuarantine(at url: URL) {
+        _ = url.path.withCString { removexattr($0, "com.apple.quarantine", 0) }
+    }
 }

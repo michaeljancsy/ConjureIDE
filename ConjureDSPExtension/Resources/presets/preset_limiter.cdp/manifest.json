@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 2,
+  "entry": "process.py",
+  "language": "python",
+  "params": [
+    {
+      "name": "threshold",
+      "min": -20,
+      "max": 0,
+      "default": -6,
+      "unit": "dB"
+    },
+    {
+      "name": "attack",
+      "min": 0.01,
+      "max": 1,
+      "default": 0.1,
+      "unit": "ms",
+      "curve": "log"
+    },
+    {
+      "name": "release",
+      "min": 10,
+      "max": 500,
+      "default": 100,
+      "unit": "ms",
+      "curve": "log"
+    }
+  ]
+}

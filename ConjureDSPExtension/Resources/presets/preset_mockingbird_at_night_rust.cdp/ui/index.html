@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Mockingbird at Night</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; padding: 0;
+    height: 100%; width: 100%;
+    font: 12px -apple-system, system-ui, sans-serif;
+    background: #050812;
+    color: #d8c79a;
+    overflow: hidden;
+  }
+  body {
+    display: flex; flex-direction: column;
+    height: 100vh;
+  }
+  .scene {
+    position: relative;
+    height: 220px;
+    flex: 0 0 220px;
+    overflow: hidden;
+    border-bottom: 1px solid rgba(216, 199, 154, 0.12);
+  }
+  #sky {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    display: block;
+  }
+  .title {
+    position: absolute;
+    top: 12px; left: 16px;
+    font-size: 10px;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    color: rgba(216, 199, 154, 0.75);
+    font-weight: 300;
+    pointer-events: none;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    mix-blend-mode: difference;
+  }
+  .subtitle {
+    position: absolute;
+    top: 28px; left: 16px;
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    color: rgba(216, 199, 154, 0.45);
+    font-style: italic;
+    font-weight: 300;
+    pointer-events: none;
+    mix-blend-mode: difference;
+  }
+  .controls {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1.15fr 1fr 1fr;
+    padding: 14px 14px 14px;
+    background: linear-gradient(#080c1a, #04070f);
+    overflow: hidden;
+    min-height: 0;
+  }
+  .group {
+    padding: 0 12px;
+    display: flex; flex-direction: column;
+    gap: 3px;
+    border-right: 1px solid rgba(216, 199, 154, 0.08);
+  }
+  .group:first-child { padding-left: 4px; }
+  .group:last-child { border-right: none; padding-right: 4px; }
+  .group h3 {
+    font-size: 9px;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    margin: 2px 0 10px 0;
+    font-weight: 500;
+    color: rgba(216, 199, 154, 0.55);
+  }
+  cdp-slider {
+    --cdp-accent: #d8c79a;
+    --cdp-track-bg: rgba(216, 199, 154, 0.09);
+    --cdp-label-width: 60px;
+    --cdp-value-width: 56px;
+    --cdp-font-size: 10.5px;
+    --cdp-thumb-size: 9px;
+    --cdp-radius: 2px;
+    display: block;
+  }
+  cdp-slider::part(label) {
+    color: rgba(216, 199, 154, 0.72);
+    letter-spacing: 0.04em;
+  }
+  cdp-slider::part(value) {
+    color: rgba(216, 199, 154, 0.9);
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+  <div class="scene">
+    <canvas id="sky"></canvas>
+    <div class="title">Mockingbird</div>
+    <div class="subtitle">at night</div>
+  </div>
+  <div class="controls">
+    <div class="group">
+      <h3>voice</h3>
+      <cdp-slider param="Pitch"></cdp-slider>
+      <cdp-slider param="Pitch Var"></cdp-slider>
+      <cdp-slider param="Tone"></cdp-slider>
+      <cdp-slider param="Syll Ms"></cdp-slider>
+    </div>
+    <div class="group">
+      <h3>phrasing</h3>
+      <cdp-slider param="Density"></cdp-slider>
+      <cdp-slider param="Repeats"></cdp-slider>
+    </div>
+    <div class="group">
+      <h3>atmosphere</h3>
+      <cdp-slider param="Reverb"></cdp-slider>
+      <cdp-slider param="Night"></cdp-slider>
+      <cdp-slider param="Wet"></cdp-slider>
+    </div>
+  </div>
+
+<script>
+(function() {
+  const canvas = document.getElementById('sky');
+  const ctx = canvas.getContext('2d');
+  let W = 0, H = 0, DPR = 1;
+  let stars = [];
+  let treePts = [];
+  let distantTreePts = [];
+  let rings = [];
+  let drops = [];
+  let prevPeak = 0;
+  let glow = 0;
+  let lastChirp = -1e9;
+  let startT = performance.now();
+
+  let densityCtl = null, nightCtl = null, wetCtl = null;
+
+  const MAX_STARS = 220;
+  const MAX_DROPS = 260;
+
+  // ── Sky palettes (top → mid → low → horizon) ─────────────────────────
+  const SKY_DAY   = [0x3b7ac0, 0x78b7e3, 0xbcd8eb, 0xe8dcc0];
+  const SKY_DUSK  = [0x1c1845, 0x5a3670, 0xa85e5f, 0xe89168];
+  const SKY_NIGHT = [0x040714, 0x0a1028, 0x121a38, 0x1a2346];
+
+  function rnd(seed) {
+    let s = seed >>> 0;
+    return () => {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+  }
+
+  function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+  function smoothstep(a, b, x) {
+    const t = clamp01((x - a) / (b - a));
+    return t * t * (3 - 2 * t);
+  }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  function lerpRGB(a, b, t) {
+    const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+    const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+    return [
+      (ar + (br - ar) * t) | 0,
+      (ag + (bg - ag) * t) | 0,
+      (ab + (bb - ab) * t) | 0,
+    ];
+  }
+  function rgbStr(c) { return `rgb(${c[0]},${c[1]},${c[2]})`; }
+  function rgbaStr(c, a) { return `rgba(${c[0]},${c[1]},${c[2]},${a})`; }
+
+  function skyStopsAt(n) {
+    // n: 0 = day, 0.5 = dusk, 1 = night
+    if (n < 0.5) {
+      const t = n * 2;
+      return [0,1,2,3].map(i => lerpRGB(SKY_DAY[i], SKY_DUSK[i], t));
+    }
+    const t = (n - 0.5) * 2;
+    return [0,1,2,3].map(i => lerpRGB(SKY_DUSK[i], SKY_NIGHT[i], t));
+  }
+
+  function resize() {
+    DPR = window.devicePixelRatio || 1;
+    W = canvas.clientWidth; H = canvas.clientHeight;
+    if (W <= 0 || H <= 0) return;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    generateStars();
+    generateTreeline();
+    generateDrops();
+  }
+
+  function generateStars() {
+    const r = rnd(0xa17c);
+    stars = [];
+    for (let i = 0; i < MAX_STARS; i++) {
+      stars.push({
+        x: r() * W,
+        y: r() * H * 0.74,
+        r: r() * 1.1 + 0.25,
+        b: r() * 0.55 + 0.30,
+        ph: r() * Math.PI * 2,
+        sp: 0.3 + r() * 1.3,
+      });
+    }
+  }
+
+  function generateDrops() {
+    const r = rnd(0x1ced);
+    drops = [];
+    for (let i = 0; i < MAX_DROPS; i++) {
+      drops.push({
+        x: r() * W,
+        y: r() * H,
+        v: 6 + r() * 5,
+        len: 8 + r() * 6,
+      });
+    }
+  }
+
+  function generateTreeline() {
+    const rand = rnd(0xbeef);
+    const build = (baseY, jitter, seed) => {
+      const pts = [];
+      pts.push({x: -20, y: H + 4});
+      pts.push({x: -20, y: baseY});
+      let x = -20;
+      while (x < W + 20) {
+        x += 5 + rand() * 14;
+        let y = baseY + (rand() - 0.5) * jitter - Math.sin(x * 0.018 + seed) * 8;
+        if (rand() < 0.06) y -= 10 + rand() * 18;
+        pts.push({x, y});
+      }
+      pts.push({x: W + 20, y: H + 4});
+      return pts;
+    };
+    distantTreePts = build(H * 0.78, 10, 1.3);
+    treePts = build(H * 0.88, 18, 0);
+  }
+
+  function drawSky(night) {
+    const stops = skyStopsAt(night);
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0,    rgbStr(stops[0]));
+    g.addColorStop(0.45, rgbStr(stops[1]));
+    g.addColorStop(0.85, rgbStr(stops[2]));
+    g.addColorStop(1,    rgbStr(stops[3]));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // warm horizon haze — strongest at dusk
+    const haze = 1 - Math.abs(night - 0.5) * 2; // 0..1, peaks at dusk
+    if (haze > 0.02) {
+      const hg = ctx.createLinearGradient(0, H * 0.55, 0, H * 0.92);
+      const hazeCol = night < 0.5
+        ? [250, 190, 130]  // golden day→dusk
+        : [180, 110, 150]; // purple dusk→night
+      hg.addColorStop(0, `rgba(${hazeCol.join(',')}, 0)`);
+      hg.addColorStop(1, `rgba(${hazeCol.join(',')}, ${0.18 * haze})`);
+      ctx.fillStyle = hg;
+      ctx.fillRect(0, H * 0.55, W, H * 0.37);
+    }
+
+    return stops;
+  }
+
+  function drawSun(night) {
+    const alpha = 1 - smoothstep(0.0, 0.55, night);
+    if (alpha <= 0.01) return;
+    const cx = W - 72, cy = 52 + smoothstep(0.0, 0.6, night) * 30;
+    const r = 26;
+    const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 6);
+    halo.addColorStop(0, `rgba(255, 240, 180, ${0.35 * alpha})`);
+    halo.addColorStop(0.3, `rgba(255, 200, 130, ${0.15 * alpha})`);
+    halo.addColorStop(1, 'rgba(255, 200, 130, 0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = `rgba(255, 240, 195, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawMoon(night, skyTop) {
+    const alpha = smoothstep(0.35, 0.85, night);
+    if (alpha <= 0.01) return;
+    const cx = W - 72, cy = 50;
+    const r = 20;
+    const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 5);
+    halo.addColorStop(0, `rgba(240, 230, 190, ${0.22 * alpha})`);
+    halo.addColorStop(0.35, `rgba(240, 230, 190, ${0.06 * alpha})`);
+    halo.addColorStop(1, 'rgba(240, 230, 190, 0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = `rgba(239, 228, 192, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // crescent shadow matches mid-sky tone so it reads cleanly
+    ctx.fillStyle = rgbaStr(skyTop, alpha);
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.48, cy - r * 0.06, r * 0.96, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawStars(t, night, density) {
+    // stars fade in with night; count scales with density
+    const visibility = smoothstep(0.35, 0.85, night);
+    if (visibility <= 0.01) return;
+    const count = Math.min(MAX_STARS, Math.max(0, Math.floor(density * MAX_STARS)));
+    for (let i = 0; i < count; i++) {
+      const s = stars[i];
+      const tw = 0.55 + 0.45 * Math.sin(t * 0.0012 * s.sp + s.ph);
+      ctx.fillStyle = `rgba(230, 225, 200, ${s.b * tw * visibility})`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawTreeline(pts, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function treelineColor(night, shade) {
+    // always silhouetted-dark; a little lift during the day so they don't
+    // look like pasted holes.
+    const day = shade === 'near' ? [6, 12, 22]  : [18, 30, 50];
+    const nit = shade === 'near' ? [2, 4, 10]   : [6, 10, 24];
+    const c = lerpRGB(
+      (day[0] << 16) | (day[1] << 8) | day[2],
+      (nit[0] << 16) | (nit[1] << 8) | nit[2],
+      night,
+    );
+    return rgbStr(c);
+  }
+
+  function branchPath() {
+    const perchX = W * 0.58;
+    const perchY = H * 0.48;
+    return { perchX, perchY };
+  }
+
+  function drawBranch(night) {
+    const { perchX, perchY } = branchPath();
+    const col = treelineColor(night, 'near');
+    ctx.strokeStyle = col;
+    ctx.lineCap = 'round';
+
+    ctx.lineWidth = 4.5;
+    ctx.beginPath();
+    ctx.moveTo(-12, H * 0.70);
+    ctx.bezierCurveTo(W * 0.22, H * 0.66, W * 0.40, H * 0.56, perchX, perchY);
+    ctx.stroke();
+
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(W * 0.42, H * 0.58);
+    ctx.lineTo(W * 0.48, H * 0.44);
+    ctx.stroke();
+
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(perchX, perchY);
+    ctx.quadraticCurveTo(perchX + 30, perchY - 4, perchX + 52, perchY - 14);
+    ctx.stroke();
+
+    ctx.fillStyle = col;
+    const leaves = [
+      [W*0.16, H*0.68, 3.2, 1.6, -0.4],
+      [W*0.22, H*0.66, 3.0, 1.5, 0.2],
+      [W*0.36, H*0.60, 2.8, 1.4, -0.3],
+      [W*0.48, H*0.44, 2.6, 1.3, 0.6],
+      [perchX+48, perchY-12, 2.8, 1.4, -0.2],
+      [perchX+36, perchY-6, 2.4, 1.2, 0.1],
+    ];
+    for (const [lx, ly, a, b, rot] of leaves) {
+      ctx.beginPath();
+      ctx.ellipse(lx, ly, a, b, rot, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawBird(t, night) {
+    const { perchX, perchY } = branchPath();
+    const bx = perchX;
+    const by = perchY - 2;
+    const bob = Math.sin(t * 0.0018) * 0.5;
+    const cy = by - 8 + bob;
+
+    if (glow > 0.01) {
+      const rg = ctx.createRadialGradient(bx, cy, 0, bx, cy, 90);
+      rg.addColorStop(0, `rgba(255, 210, 140, ${0.22 * glow})`);
+      rg.addColorStop(0.45, `rgba(255, 180, 110, ${0.06 * glow})`);
+      rg.addColorStop(1, 'rgba(255, 180, 110, 0)');
+      ctx.fillStyle = rg;
+      ctx.beginPath();
+      ctx.arc(bx, cy, 90, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    for (const r of rings) {
+      const a = (1 - r.life) * 0.32;
+      ctx.strokeStyle = `rgba(255, 210, 150, ${a})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(bx, cy, r.life * 110 + 10, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    const birdCol = treelineColor(night, 'near');
+    ctx.save();
+    ctx.translate(bx, by + bob);
+    ctx.fillStyle = birdCol;
+
+    ctx.beginPath();
+    ctx.ellipse(0, -8, 12, 7, -0.14, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.ellipse(-10.5, -14, 5, 4.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(-14, -14.2);
+    ctx.lineTo(-20, -13.4);
+    ctx.lineTo(-14, -12.6);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(8, -11);
+    ctx.quadraticCurveTo(22, -7, 25, -1);
+    ctx.quadraticCurveTo(20, -5, 14, -6);
+    ctx.lineTo(8, -5);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = `rgba(20, 25, 40, ${0.8 * (1 - night * 0.4)})`;
+    ctx.beginPath();
+    ctx.ellipse(2, -8, 7, 3.2, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = birdCol;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-3, -2); ctx.lineTo(-3, 4);
+    ctx.moveTo(2, -2);  ctx.lineTo(2, 4);
+    ctx.stroke();
+
+    const eyeAlpha = 0.35 + glow * 0.65;
+    ctx.fillStyle = `rgba(255, 215, 160, ${eyeAlpha})`;
+    ctx.beginPath();
+    ctx.arc(-11.4, -14.3, 0.85, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawRain(wet, night) {
+    if (wet <= 0.001) return;
+    const count = Math.min(MAX_DROPS, Math.floor(wet * MAX_DROPS));
+    const speedMul = 0.6 + wet * 1.2;
+
+    // dim the scene slightly when it rains
+    if (wet > 0.05) {
+      ctx.fillStyle = `rgba(90, 100, 120, ${wet * 0.10})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // rain streak color — brighter by day, subtler by night
+    const alpha = (0.35 + wet * 0.35) * (1 - night * 0.35);
+    ctx.strokeStyle = `rgba(200, 220, 240, ${alpha})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < count; i++) {
+      const d = drops[i];
+      d.y += d.v * speedMul;
+      d.x -= d.v * 0.35 * speedMul;
+      if (d.y > H + 10 || d.x < -20) {
+        d.y = -10 - Math.random() * 40;
+        d.x = Math.random() * (W + 40);
+      }
+      ctx.moveTo(d.x, d.y);
+      ctx.lineTo(d.x - d.len * 0.35, d.y + d.len);
+    }
+    ctx.stroke();
+  }
+
+  function readParams() {
+    const night   = nightCtl   ? clamp01(nightCtl.value)        : 1.0;
+    const wet     = wetCtl     ? clamp01(wetCtl.value)          : 0.0;
+    const density = densityCtl ? clamp01(densityCtl.value/100)  : 0.4;
+    return { night, wet, density };
+  }
+
+  function tick() {
+    const t = performance.now() - startT;
+
+    for (const r of rings) r.life += 0.016;
+    rings = rings.filter(r => r.life < 1);
+    glow *= 0.93;
+
+    if (W > 0 && H > 0) {
+      const { night, wet, density } = readParams();
+      const stops = drawSky(night);
+      drawStars(t, night, density);
+      drawSun(night);
+      drawMoon(night, stops[0]);
+      drawTreeline(distantTreePts, treelineColor(night, 'far'));
+      drawTreeline(treePts, treelineColor(night, 'near'));
+      drawBranch(night);
+      drawBird(t, night);
+      drawRain(wet, night);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  const ro = new ResizeObserver(resize);
+  ro.observe(canvas);
+  window.addEventListener('resize', resize);
+  resize();
+  requestAnimationFrame(tick);
+
+  function bindParams() {
+    if (!(window.ConjureDSP && ConjureDSP.ui && ConjureDSP.ui.control)) return false;
+    try {
+      densityCtl = ConjureDSP.ui.control(0); // Density
+      nightCtl   = ConjureDSP.ui.control(7); // Night
+      wetCtl     = ConjureDSP.ui.control(8); // Wet
+      return !!(densityCtl && nightCtl && wetCtl);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function bindAudio() {
+    if (!(window.ConjureDSP && ConjureDSP.audio && ConjureDSP.audio.onFrame)) return false;
+    ConjureDSP.audio.onFrame(frame => {
+      const p = frame.peakOut || 0;
+      const now = performance.now();
+      if (p > 0.06 && p > prevPeak * 1.15 && (now - lastChirp) > 90) {
+        rings.push({ life: 0 });
+        if (rings.length > 6) rings.shift();
+        lastChirp = now;
+      }
+      glow = Math.max(glow, Math.min(1, p * 2.5));
+      prevPeak = p;
+    });
+    return true;
+  }
+
+  if (window.ConjureDSP && ConjureDSP.ready) {
+    ConjureDSP.ready(() => { bindParams(); bindAudio(); });
+  } else {
+    bindParams();
+    bindAudio();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 2,
+  "entry": "process.py",
+  "language": "python",
+  "params": [
+    { "name": "drive", "min": 1.0, "max": 20.0, "default": 5.0, "unit": "x" }
+  ],
+  "ui": {
+    "entryHTML": "ui/index.html",
+    "width": 520,
+    "height": 420,
+    "fps": 30,
+    "audioFrames": true
+  }
+}

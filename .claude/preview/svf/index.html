@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>State Variable Filter</title>
+  <style>
+    :root { color-scheme: light dark; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      font: 12px -apple-system, system-ui, sans-serif;
+      background: Canvas; color: CanvasText;
+    }
+    body {
+      display: grid;
+      grid-template-rows: auto auto auto auto;
+      align-content: start;
+      padding: 14px 16px; gap: 6px; box-sizing: border-box;
+    }
+    .title {
+      font-weight: 600; letter-spacing: 0.02em;
+      text-transform: uppercase; font-size: 0.75em; opacity: 0.55;
+    }
+    /* Response chart laid out with a left gutter for the dB Y-axis labels
+       so they sit alongside the canvas the way a conventional plot would. */
+    .response-grid {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 4px;
+      align-items: stretch;
+    }
+    .response-grid .yticks {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      font-size: 0.75em; opacity: 0.55;
+      text-align: right;
+      padding: 2px 0;
+      font-variant-numeric: tabular-nums;
+    }
+    canvas#response {
+      width: 100%; height: 120px; display: block;
+      border-radius: 6px;
+      background: color-mix(in srgb, CanvasText 6%, Canvas);
+    }
+    /* Pad grid mirrors the response grid so X axes line up exactly. */
+    .pad-grid {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 4px;
+      align-items: stretch;
+    }
+    .pad-grid .yticks {
+      display: flex; flex-direction: column;
+      justify-content: space-between;
+      font-size: 0.75em; opacity: 0.6;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .pad-grid .yticks .ylabel {
+      text-transform: uppercase; letter-spacing: 0.08em;
+      opacity: 0.8;
+    }
+    cdp-xy { display: block; width: 100%; }
+    cdp-xy::part(pad) {
+      aspect-ratio: auto;
+      max-width: none;
+      width: 100%;
+      height: 180px;
+    }
+    /* X-axis row: empty gutter column + three-column label row matching
+       the pad width above it. */
+    .xaxis {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 4px;
+    }
+    .xaxis-ticks {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      font-size: 0.75em; opacity: 0.6;
+      font-variant-numeric: tabular-nums;
+    }
+    .xaxis-ticks .mid { text-align: center;
+      text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.8; }
+  </style>
+<script>
+(function () {
+  const META = [
+    { name: 'cutoff', min: 20, max: 20000, default: 1000, unit: 'Hz', curve: 'log' },
+    { name: 'resonance', min: 0.5, max: 10, default: 1, unit: 'Q' },
+  ];
+  const values = META.map(m => m.default);
+  const listeners = { any: [], per: META.map(() => []) };
+  const readyCbs = []; let isReady = false;
+  window.ConjureDSP = {
+    apiVersion: 1,
+    get theme() { return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; },
+    parameters: {
+      get count() { return META.length; },
+      get(i) { return values[i]; },
+      set(i, v) { const m = META[i]; values[i] = Math.max(m.min, Math.min(m.max, v));
+        listeners.per[i].forEach(cb => cb(values[i]));
+        listeners.any.forEach(cb => cb(i, values[i])); },
+      metadata(i) { return META[i] || null; },
+      onChange(i, cb) { listeners.per[i].push(cb); },
+      onAnyChange(cb) { listeners.any.push(cb); },
+    },
+    ready(cb) { if (isReady) cb(); else readyCbs.push(cb); },
+    log(...a) { console.log('[CDP]', ...a); },
+    audio: { onFrame() {}, offFrame() {} },
+  };
+  queueMicrotask(() => { isReady = true;
+    readyCbs.splice(0).forEach(cb => cb());
+    window.dispatchEvent(new Event('ConjureDSPReady')); });
+})();
+</script>
+<script src="/cdp-ui.js"></script>
+</head>
+<body>
+  <div class="title">Frequency response (dB)</div>
+  <div class="response-grid">
+    <div class="yticks"><span>+24</span><span>0</span><span>−24</span></div>
+    <canvas id="response" width="800" height="240"></canvas>
+  </div>
+  <div class="pad-grid">
+    <div class="yticks">
+      <span>10</span>
+      <span class="ylabel">Q</span>
+      <span>0.5</span>
+    </div>
+    <cdp-xy param-x="cutoff" param-y="resonance" invert-y></cdp-xy>
+  </div>
+  <div class="xaxis">
+    <div></div>
+    <div class="xaxis-ticks">
+      <span>20 Hz</span>
+      <span class="mid">Cutoff</span>
+      <span>20 kHz</span>
+    </div>
+  </div>
+  <script>
+  (function () {
+    const CDP = window.ConjureDSP;
+    const canvas = document.getElementById('response');
+    const ctx = canvas.getContext('2d');
+    const SR = 48000;
+
+    function idxOf(key) {
+      // Case-insensitive so this UI serves both Python (lowercase)
+      // and Rust (uppercase from params!()) variants.
+      const low = String(key).toLowerCase();
+      for (let i = 0; i < CDP.parameters.count; i++) {
+        const m = CDP.parameters.metadata(i);
+        if (!m) continue;
+        if ((m.name && m.name.toLowerCase() === low) ||
+            (m.key && m.key.toLowerCase() === low)) return i;
+      }
+      return -1;
+    }
+
+    // TPT SVF magnitude response (LP output). See Zavalishin; lp/bp/hp
+    // are all exact with this topology so magnitude mirrors what the
+    // preset actually produces.
+    function lpMagnitudeDb(f0, Q, f) {
+      const g = Math.tan(Math.PI * f0 / SR);
+      const k = 1 / Q;
+      const wt = Math.tan(Math.PI * f / SR);
+      const gg = g * g;
+      const re = gg - wt * wt;
+      const im = k * g * wt;
+      return 10 * Math.log10(gg * gg / (re * re + im * im));
+    }
+
+    // Canvas 2D can't parse `color-mix()` or the `CanvasText` keyword,
+    // so we pick explicit rgb() colors keyed off `CDP.theme` and use
+    // `globalAlpha` for transparency.
+    function resolveFG() {
+      return (CDP && CDP.theme === 'dark') ? 'rgb(232, 232, 232)' : 'rgb(24, 24, 24)';
+    }
+    let FG = resolveFG();
+    window.addEventListener('themechange', () => { FG = resolveFG(); schedule(); });
+
+    function drawResponse() {
+      const w = canvas.width = canvas.clientWidth * devicePixelRatio;
+      const h = canvas.height = canvas.clientHeight * devicePixelRatio;
+      if (w === 0 || h === 0) return;
+      ctx.clearRect(0, 0, w, h);
+      const pad = 6 * devicePixelRatio;
+      const iw = w - pad * 2, ih = h - pad * 2;
+
+      // Y-axis spans -24..+24 dB so high-Q resonance peaks (up to
+      // ~20 log10(Q) dB of boost at cutoff for Q=10, ~20 dB) fit
+      // without getting clipped off the top of the canvas.
+      const DB_MIN = -24, DB_MAX = 24;
+      const dbRange = DB_MAX - DB_MIN;
+      const yForDb = (db) => pad + ih * (1 - (db - DB_MIN) / dbRange);
+
+      // Horizontal dB grid.
+      ctx.strokeStyle = FG;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.12;
+      [-24, -12, 0, 12, 24].forEach(db => {
+        const y = yForDb(db);
+        ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(w - pad, y); ctx.stroke();
+      });
+      ctx.globalAlpha = 1;
+
+      const fMin = 20, fMax = 20000;
+      const cutoff = CDP.parameters.get(idxOf('cutoff'));
+      const Q = CDP.parameters.get(idxOf('resonance'));
+      const fClamped = Math.max(20, Math.min(SR * 0.49, cutoff));
+
+      // LP magnitude curve.
+      ctx.beginPath();
+      const N = 256;
+      for (let i = 0; i <= N; i++) {
+        const t = i / N;
+        const f = fMin * Math.pow(fMax / fMin, t);
+        const db = Math.max(DB_MIN, Math.min(DB_MAX, lpMagnitudeDb(fClamped, Q, f)));
+        const x = pad + t * iw;
+        const y = yForDb(db);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = FG;
+      ctx.lineWidth = 2 * devicePixelRatio;
+      ctx.stroke();
+
+      // Cutoff marker — log-frequency, so its X position on the canvas
+      // matches the puck's X position on the pad below (which uses the
+      // same log curve via param metadata).
+      const tCut = Math.log(fClamped / fMin) / Math.log(fMax / fMin);
+      const xCut = pad + tCut * iw;
+      ctx.strokeStyle = FG;
+      ctx.globalAlpha = 0.35;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(xCut, pad); ctx.lineTo(xCut, h - pad); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+
+    let raf = 0;
+    function schedule() {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; drawResponse(); });
+    }
+
+    function init() {
+      FG = resolveFG();
+      window.addEventListener('resize', schedule);
+      // Continuous rAF loop: cdp-ui components call parameters.set on
+      // local drags which (deliberately) doesn't fire onAnyChange, so
+      // we can't rely on change events alone to trigger a redraw.
+      //
+      // Manifest `params` (schema v2) means metadata is already
+      // populated by the time `_init` arrives — no loader-gate needed.
+      function tick() { schedule(); requestAnimationFrame(tick); }
+      tick();
+    }
+    if (CDP && CDP.ready) CDP.ready(init);
+    else window.addEventListener('ConjureDSPReady', init);
+  })();
+  </script>
+</body>
+</html>

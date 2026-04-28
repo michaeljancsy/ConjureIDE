@@ -27,6 +27,44 @@ final class RustCompiler: ScriptCompiler {
         }
         log.info("compile: using rustc at \(rustc.path, privacy: .public), bundled=\(self.useBundledSysroot)")
 
+        // Run the whole process-launch + waitUntilExit on a detached task so
+        // the caller's actor (usually @MainActor via `compileAndRun`) is
+        // released for the duration of the compile. Otherwise `waitUntilExit`
+        // blocks whatever thread we're running on — and if that's main,
+        // SwiftUI can't flush the new preset's `currentBundle` update and
+        // the WKWebView's scheme handler can't serve `ui/index.html`, so the
+        // custom UI stays blank until compilation finishes.
+        let useBundledSysroot = self.useBundledSysroot
+        let log = self.log
+        // Resolve the sysroot URL on the caller's thread BEFORE the detached
+        // closure so we don't capture `self`. The static `runCompileProcess`
+        // exists specifically to keep instance state out of the background
+        // task; calling `self.bundledSysroot()` from inside the closure would
+        // defeat that defense even though the method is currently pure.
+        let bundledSysroot = self.bundledSysroot()
+        return try await Task.detached {
+            try Self.runCompileProcess(
+                rustc: rustc,
+                source: source,
+                useBundledSysroot: useBundledSysroot,
+                bundledSysroot: bundledSysroot,
+                log: log
+            )
+        }.value
+    }
+
+    /// Blocking process runner — everything that used to live inline in
+    /// `compile` before the `Task.detached` wrapper was added. Keep this
+    /// private + static so it can't accidentally capture instance state
+    /// from a different thread.
+    private static func runCompileProcess(
+        rustc: URL,
+        source: String,
+        useBundledSysroot: Bool,
+        bundledSysroot: URL?,
+        log: Logger
+    ) throws -> Data {
+
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("conjuredsp-compile-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -49,7 +87,7 @@ final class RustCompiler: ScriptCompiler {
         ]
 
         // When using bundled compiler, set explicit sysroot and link conjuredsp rlib
-        if useBundledSysroot, let sysroot = bundledSysroot() {
+        if useBundledSysroot, let sysroot = bundledSysroot {
             args = ["--sysroot", sysroot.path] + args
 
             // Link conjuredsp rlib if available
@@ -64,7 +102,7 @@ final class RustCompiler: ScriptCompiler {
             process.environment = env
         } else {
             // System rustc: look for rlib in repo's rustc-dist
-            if let rlibPath = findRepoRlib() {
+            if let rlibPath = Self.findRepoRlib() {
                 args = ["--extern", "conjuredsp=\(rlibPath)"] + args
             }
         }
@@ -131,16 +169,18 @@ final class RustCompiler: ScriptCompiler {
     }
 
     /// Real user home directory, bypassing sandbox container redirection.
-    private var realUserHome: String {
+    private static var realUserHome: String {
         if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
             return String(cString: dir)
         }
         return NSHomeDirectory()
     }
 
+    private var realUserHome: String { Self.realUserHome }
+
     /// Find the conjuredsp rlib in the repo's rustc-dist (for system rustc fallback).
     /// Walks up from the extension bundle to find the source repo's rustc-dist.
-    private func findRepoRlib() -> String? {
+    private static func findRepoRlib() -> String? {
         // The bundle is inside DerivedData; the source repo is at SRCROOT.
         // Try common development locations relative to the real home directory.
         let home = realUserHome

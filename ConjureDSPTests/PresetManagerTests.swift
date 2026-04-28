@@ -92,6 +92,38 @@ struct PresetManagerTests {
         }
     }
 
+    /// Factory presets that ship a `ui/index.html` AND declare a manifest.ui
+    /// block must report `hasCustomUI == true`. Regression guard for the
+    /// preset-browser palette badge — when this returns false, the browser's
+    /// `paintpalette` SF Symbol disappears AND the main view's custom-UI
+    /// toggle bar collapses to "Basic UI" with no toggle, both of which
+    /// silently make exported preset UIs untestable from the host app.
+    /// SVF (Python + Rust) are the canonical custom-UI factory presets;
+    /// they were added with the cdp-xy pad and have shipped with a UI
+    /// since they were promoted to factory.
+    @Test @MainActor func factoryBundlesWithCustomUIReportHasCustomUI() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let svfNames = ["State Variable Filter (Python)", "State Variable Filter (Rust)"]
+        for name in svfNames {
+            guard let preset = manager.presets.first(where: { $0.name == name }) else {
+                Issue.record("Missing factory preset '\(name)'")
+                continue
+            }
+            guard let bundle = manager.loadBundle(for: preset) else {
+                Issue.record("loadBundle returned nil for factory '\(name)' — Bundle.url(forResource:withExtension:subdirectory:) likely failed to resolve the .cdp directory")
+                continue
+            }
+            #expect(bundle.manifest.ui != nil,
+                   "\(name) manifest must declare a ui block (it ships ui/index.html)")
+            #expect(bundle.uiIndexURL != nil,
+                   "\(name) ui/index.html must resolve under the bundle root — got rootURL=\(bundle.rootURL.path)")
+            #expect(bundle.hasCustomUI,
+                   "\(name) must report hasCustomUI=true so the preset-browser palette badge + main-view toggle bar render correctly")
+        }
+    }
+
     @Test @MainActor func factoryPresetsHaveCorrectLanguage() throws {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
@@ -111,7 +143,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
+        let script = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    pass\n"
         let preset = try manager.savePreset(name: "My Effect", source: script)
 
         #expect(preset.name == "My Effect")
@@ -141,7 +173,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
+        let script = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    pass\n"
         try manager.savePreset(name: "Test Preset", source: script)
 
         let userPresets = manager.presets.filter { !$0.isFactory }
@@ -186,6 +218,194 @@ struct PresetManagerTests {
 
         let loaded = manager.loadSource(for: userPresets[0])
         #expect(loaded == "# version 2\n")
+    }
+
+    // MARK: - Manifest Persistence on Cmd+S
+    //
+    // The bug has two halves and the tests here cover both:
+    //
+    //   1. **Disk persistence.** User edits manifest.json via the file
+    //      browser, hits Cmd+S → PresetManager.savePreset was deleting the
+    //      bundle and regenerating manifest.json from defaults. Only `ui/`
+    //      survived, so every width/height/fps edit silently vanished.
+    //      `manifestUserEditsSurviveResave` locks this in.
+    //
+    //   2. **Model reactivity.** Even if the edit lives on disk, the
+    //      SwiftUI view must see the new values. The view reads
+    //      `presetManager.currentBundle.manifest.ui.height` for its
+    //      `.frame(height:)` — that only re-renders when `currentBundle`
+    //      republishes after `refreshPresets()`. `currentBundleReflects
+    //      ManifestChangesAfterRefresh` covers that plumbing: manifest
+    //      value on disk → PresetBundle re-parse → currentBundle property
+    //      updated → view would pick up the new height on next body eval.
+    //
+    // We don't exercise the actual SwiftUI re-render in these tests —
+    // that would require an XCUITest against the AU ViewBridge, which is
+    // brittle. Instead we pin both observable halves and rely on SwiftUI's
+    // normal "read property in body → re-render on change" contract for
+    // the glue.
+
+    @Test @MainActor func manifestUserEditsSurviveResave() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        // Create the bundle via the New Preset / Save As code path.
+        let preset = try manager.savePreset(
+            name: "ManifestEdits",
+            source: "# v1\n",
+            language: .python,
+            scaffoldUI: true
+        )
+        guard let bundleURL = preset.fileURL else {
+            Issue.record("Saved preset missing fileURL")
+            return
+        }
+        let manifestURL = bundleURL.appendingPathComponent("manifest.json")
+
+        // Simulate a user editing manifest.json via the file browser —
+        // change height, fps, add a meta block. All things the default
+        // manifest doesn't match.
+        var manifestDict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: manifestURL)
+        ) as! [String: Any]
+        var uiDict = manifestDict["ui"] as! [String: Any]
+        uiDict["height"] = 100
+        uiDict["fps"] = 60
+        manifestDict["ui"] = uiDict
+        manifestDict["meta"] = ["author": "test", "version": "1.2.3"]
+        let editedData = try JSONSerialization.data(
+            withJSONObject: manifestDict,
+            options: [.prettyPrinted]
+        )
+        try editedData.write(to: manifestURL)
+
+        // Simulate Cmd+S on the entry script — same name, new source.
+        // Pre-fix, this would delete the bundle and regenerate the manifest
+        // from defaults, wiping every edit above.
+        try manager.savePreset(
+            name: "ManifestEdits",
+            source: "# v2\n",
+            language: .python
+        )
+
+        // Re-read the manifest and verify every user edit survived.
+        let reloadedData = try Data(contentsOf: manifestURL)
+        let reloaded = try JSONSerialization.jsonObject(with: reloadedData) as! [String: Any]
+        let reloadedUI = reloaded["ui"] as! [String: Any]
+        #expect(reloadedUI["height"] as? Int == 100,
+               "User's ui.height edit must survive Cmd+S")
+        #expect(reloadedUI["fps"] as? Int == 60,
+               "User's ui.fps edit must survive Cmd+S")
+        let reloadedMeta = reloaded["meta"] as? [String: Any]
+        #expect(reloadedMeta?["author"] as? String == "test",
+               "User's meta block must survive Cmd+S")
+
+        // Sanity: the entry script DID update — we're not testing a total
+        // no-op, just that manifest.json wasn't clobbered.
+        let scriptURL = bundleURL.appendingPathComponent("process.py")
+        let scriptContent = try String(contentsOf: scriptURL, encoding: .utf8)
+        #expect(scriptContent == "# v2\n",
+               "Entry script should be updated on save")
+    }
+
+    @Test @MainActor func currentBundleReflectsManifestChangesAfterRefresh() throws {
+        // Half two of the bug: even if manifest.json survives on disk,
+        // the SwiftUI view has to actually observe the new value. This
+        // test confirms `presetManager.currentBundle` republishes with
+        // the updated manifest after a save + refreshPresets cycle —
+        // which is what the view binds its .frame(height:) to.
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(
+            name: "Reactive",
+            source: "# v1\n",
+            language: .python,
+            scaffoldUI: true
+        )
+        manager.setCurrentPreset(preset, source: "# v1\n")
+
+        // Sanity: currentBundle reflects the fresh manifest's default height.
+        let initialHeight = manager.currentBundle?.manifest.ui?.height
+        #expect(initialHeight != nil,
+               "Fresh bundle with scaffoldUI must expose a ui block")
+
+        // Simulate the file-browser write path: edit manifest.json on disk,
+        // then call the same refresh hook `scheduleAltFileSave` uses.
+        guard let bundleURL = preset.fileURL else {
+            Issue.record("Saved preset missing fileURL")
+            return
+        }
+        let manifestURL = bundleURL.appendingPathComponent("manifest.json")
+        var manifestDict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: manifestURL)
+        ) as! [String: Any]
+        var uiDict = manifestDict["ui"] as! [String: Any]
+        uiDict["height"] = 77
+        manifestDict["ui"] = uiDict
+        try JSONSerialization.data(
+            withJSONObject: manifestDict,
+            options: [.prettyPrinted]
+        ).write(to: manifestURL)
+
+        manager.refreshPresets()
+
+        // currentBundle should now expose the new height — this is what
+        // the view reads for its frame. If this assertion ever fails, the
+        // view will keep rendering the old height until the user switches
+        // presets and back, which is exactly the "changing manifest
+        // doesn't trigger any changes" bug the user hit.
+        let refreshedHeight = manager.currentBundle?.manifest.ui?.height
+        #expect(refreshedHeight == 77,
+               "currentBundle must republish with the on-disk manifest height, got \(refreshedHeight ?? -1)")
+    }
+
+    @Test @MainActor func resaveRespectsManifestCustomEntryPath() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(
+            name: "CustomEntry",
+            source: "# v1\n",
+            language: .python
+        )
+        guard let bundleURL = preset.fileURL else {
+            Issue.record("Saved preset missing fileURL")
+            return
+        }
+        let manifestURL = bundleURL.appendingPathComponent("manifest.json")
+
+        // User renames entry from "process.py" → "dsp.py" via a manifest edit
+        // plus a file-browser rename (the rename itself is out of scope; we
+        // just simulate the end state).
+        var manifestDict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: manifestURL)
+        ) as! [String: Any]
+        manifestDict["entry"] = "dsp.py"
+        let editedData = try JSONSerialization.data(
+            withJSONObject: manifestDict,
+            options: [.prettyPrinted]
+        )
+        try editedData.write(to: manifestURL)
+        // Move the entry file to match.
+        let oldScript = bundleURL.appendingPathComponent("process.py")
+        let newScript = bundleURL.appendingPathComponent("dsp.py")
+        try FileManager.default.moveItem(at: oldScript, to: newScript)
+
+        // Cmd+S — should write the new source to `dsp.py` (per manifest),
+        // not to the default `process.py`.
+        try manager.savePreset(
+            name: "CustomEntry",
+            source: "# v2\n",
+            language: .python
+        )
+
+        #expect(FileManager.default.fileExists(atPath: newScript.path),
+               "Entry script at manifest-declared path must still exist")
+        #expect(!FileManager.default.fileExists(atPath: oldScript.path),
+               "Default-named entry script must NOT be recreated")
+        let scriptContent = try String(contentsOf: newScript, encoding: .utf8)
+        #expect(scriptContent == "# v2\n")
     }
 
     // MARK: - Modification Tracking
@@ -389,7 +609,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let script = "def process(inputs, outputs, frame_count, sample_rate):\n    pass\n"
+        let script = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    pass\n"
         try manager.savePreset(name: "Alpha", source: script)
 
         let renamed = try manager.renamePreset(
@@ -398,7 +618,7 @@ struct PresetManagerTests {
         )
 
         #expect(renamed.name == "Beta")
-        #expect(renamed.id == "user:Beta.py")
+        #expect(renamed.id == "user:Beta")
         #expect(!manager.presets.contains(where: { $0.name == "Alpha" && !$0.isFactory }))
         #expect(manager.presets.contains(where: { $0.name == "Beta" && !$0.isFactory }))
         #expect(manager.loadSource(for: renamed) == script)
@@ -414,7 +634,7 @@ struct PresetManagerTests {
         let renamed = try manager.renamePreset(preset, to: "Beta")
 
         #expect(renamed.name == "Beta")
-        #expect(renamed.id == "user:Beta.py")
+        #expect(renamed.id == "user:Beta")
         #expect(!manager.presets.contains(where: { $0.name == "Alpha" && !$0.isFactory }))
         #expect(manager.presets.contains(where: { $0.name == "Beta" && !$0.isFactory }))
     }
@@ -488,7 +708,7 @@ struct PresetManagerTests {
         let renamed = try manager.renamePreset(preset, to: "RenamedRust")
 
         #expect(renamed.language == .rust)
-        #expect(renamed.id == "user:RenamedRust.rs")
+        #expect(renamed.id == "user:RenamedRust")
         #expect(manager.loadSource(for: renamed) == "fn process() {}\n")
     }
 
@@ -504,5 +724,402 @@ struct PresetManagerTests {
 
         #expect(manager.currentPreset?.id == presetA.id)
         #expect(manager.currentPreset?.name == "A")
+    }
+
+    // MARK: - Custom UI scaffolding
+
+    @Test @MainActor func scaffoldCustomUIWritesIndexHTMLAndUpdatesManifest() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "ScaffoldTarget", source: "pass\n")
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle for saved preset")
+            return
+        }
+        #expect(!bundle.hasCustomUI, "Fresh user bundle should not advertise a custom UI")
+
+        let indexURL = try manager.scaffoldCustomUI(for: bundle)
+
+        #expect(FileManager.default.fileExists(atPath: indexURL.path),
+                "Scaffold should produce ui/index.html")
+        let html = try String(contentsOf: indexURL, encoding: .utf8)
+        #expect(html.contains("<html>"), "Starter HTML should contain an <html> tag")
+
+        // The bundle should now load with hasCustomUI == true because the
+        // manifest was rewritten to declare the UI block.
+        guard let reloaded = manager.loadBundle(for: preset) else {
+            Issue.record("Bundle failed to reload after scaffolding")
+            return
+        }
+        #expect(reloaded.hasCustomUI, "Manifest should now advertise the UI")
+        #expect(reloaded.manifest.ui?.entryHTML == "ui/index.html")
+    }
+
+    @Test @MainActor func scaffoldCustomUIPreservesExistingIndexHTML() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "Preserve", source: "pass\n")
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle")
+            return
+        }
+
+        // Drop a custom index.html in place BEFORE scaffolding. The helper
+        // should leave it alone and just fix up the manifest.
+        let uiDir = bundle.rootURL.appendingPathComponent("ui", isDirectory: true)
+        try FileManager.default.createDirectory(at: uiDir, withIntermediateDirectories: true)
+        let preExisting = "<!-- author's work -->"
+        try preExisting.write(
+            to: uiDir.appendingPathComponent("index.html"),
+            atomically: true, encoding: .utf8
+        )
+
+        _ = try manager.scaffoldCustomUI(for: bundle)
+
+        let after = try String(contentsOf: uiDir.appendingPathComponent("index.html"), encoding: .utf8)
+        #expect(after == preExisting, "Scaffold should not clobber a pre-existing index.html")
+    }
+
+    // MARK: - Bundle file helpers: create / rename / delete / duplicate
+
+    @Test @MainActor func createBundleFileWritesTemplate() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "CreateFile", source: "pass\n")
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle")
+            return
+        }
+
+        let url = try manager.createBundleFile(
+            in: bundle, relativePath: "ui/style.css", template: .blankCSS
+        )
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        let contents = try String(contentsOf: url, encoding: .utf8)
+        #expect(contents.contains("/* styles */"), "CSS template should be written")
+    }
+
+    @Test @MainActor func createBundleFileRejectsOutsideBundle() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "Guard", source: "pass\n")
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle")
+            return
+        }
+
+        #expect(throws: PresetManager.BundleFileError.self) {
+            _ = try manager.createBundleFile(
+                in: bundle, relativePath: "../../escape.html", template: .empty
+            )
+        }
+    }
+
+    @Test @MainActor func createBundleFileRejectsExisting() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "Exists", source: "pass\n")
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle")
+            return
+        }
+
+        _ = try manager.createBundleFile(
+            in: bundle, relativePath: "notes.md", template: .empty
+        )
+        #expect(throws: PresetManager.BundleFileError.self) {
+            _ = try manager.createBundleFile(
+                in: bundle, relativePath: "notes.md", template: .empty
+            )
+        }
+    }
+
+    @Test @MainActor func createBundleFolderCreatesDirectory() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "Folder", source: "pass\n")
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle")
+            return
+        }
+
+        let url = try manager.createBundleFolder(in: bundle, relativePath: "ui/assets")
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        #expect(exists && isDir.boolValue, "Folder should exist and be a directory")
+    }
+
+    @Test @MainActor func renameBundleFileMovesFile() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "Rename", source: "pass\n")
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle")
+            return
+        }
+        _ = try manager.createBundleFile(
+            in: bundle, relativePath: "ui/a.css", template: .blankCSS
+        )
+
+        let result = try manager.renameBundleFile(
+            in: bundle, from: "ui/a.css", to: "ui/b.css"
+        )
+        #expect(!FileManager.default.fileExists(atPath: result.oldURL.path))
+        #expect(FileManager.default.fileExists(atPath: result.newURL.path))
+        #expect(result.manifestURL == nil, "Renaming an unrelated file should not touch the manifest")
+    }
+
+    @Test @MainActor func renameEntryScriptUpdatesManifest() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "EntryRename", source: "pass\n")
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle")
+            return
+        }
+
+        let result = try manager.renameBundleFile(
+            in: bundle, from: "process.py", to: "dsp.py"
+        )
+        #expect(result.manifestURL != nil, "Entry-script rename should rewrite the manifest")
+
+        guard let reloaded = manager.loadBundle(for: preset) else {
+            Issue.record("Bundle failed to reload after rename")
+            return
+        }
+        #expect(reloaded.manifest.entry == "dsp.py")
+        #expect(FileManager.default.fileExists(atPath: reloaded.entryScriptURL.path))
+    }
+
+    @Test @MainActor func renameUIIndexHTMLUpdatesManifest() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(
+            name: "UIRename", source: "pass\n", scaffoldUI: true
+        )
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle")
+            return
+        }
+        #expect(bundle.hasCustomUI, "Scaffolded bundle should have a UI")
+
+        let result = try manager.renameBundleFile(
+            in: bundle, from: "ui/index.html", to: "ui/main.html"
+        )
+        #expect(result.manifestURL != nil)
+
+        guard let reloaded = manager.loadBundle(for: preset) else {
+            Issue.record("Bundle failed to reload")
+            return
+        }
+        #expect(reloaded.manifest.ui?.entryHTML == "ui/main.html")
+        #expect(reloaded.hasCustomUI, "UI entry rename should still point at an existing file")
+    }
+
+    @Test @MainActor func deleteBundleFileRemovesFile() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "DeleteTarget", source: "pass\n")
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle")
+            return
+        }
+        let url = try manager.createBundleFile(
+            in: bundle, relativePath: "ui/scratch.js", template: .blankJS
+        )
+        try manager.deleteBundleFile(in: bundle, relativePath: "ui/scratch.js")
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test @MainActor func deleteBundleFileRejectsManifest() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "DeleteManifest", source: "pass\n")
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle")
+            return
+        }
+
+        #expect(throws: PresetManager.BundleFileError.self) {
+            try manager.deleteBundleFile(in: bundle, relativePath: "manifest.json")
+        }
+    }
+
+    @Test @MainActor func deleteBundleFileRejectsEntryScript() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "DeleteEntry", source: "pass\n")
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle")
+            return
+        }
+
+        #expect(throws: PresetManager.BundleFileError.self) {
+            try manager.deleteBundleFile(in: bundle, relativePath: "process.py")
+        }
+    }
+
+    @Test @MainActor func duplicateBundleFileAppendsSuffix() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "Dup", source: "pass\n")
+        guard let bundle = manager.loadBundle(for: preset) else {
+            Issue.record("Expected bundle")
+            return
+        }
+        _ = try manager.createBundleFile(
+            in: bundle, relativePath: "ui/theme.css", template: .blankCSS
+        )
+
+        let copy1 = try manager.duplicateBundleFile(in: bundle, relativePath: "ui/theme.css")
+        #expect(copy1.lastPathComponent == "theme 2.css")
+
+        // A second duplication of the ORIGINAL should produce "theme 3.css"
+        // because "theme 2.css" now exists.
+        let copy2 = try manager.duplicateBundleFile(in: bundle, relativePath: "ui/theme.css")
+        #expect(copy2.lastPathComponent == "theme 3.css")
+    }
+
+    @Test @MainActor func duplicateFactoryBundleCreatesUserBundle() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        // Grab any factory bundle to fork — stereowidth is a known default.
+        guard let factory = manager.presets.first(where: { $0.isFactory && $0.name.contains("Stereo") }),
+              let sourceBundle = manager.loadBundle(for: factory) else {
+            Issue.record("Expected a factory preset to fork")
+            return
+        }
+
+        let forked = try manager.duplicateFactoryBundle(source: sourceBundle)
+        #expect(forked.name.hasPrefix("Copy of "),
+                "Forked bundle should be named 'Copy of <factory>'")
+        #expect(forked.rootURL.path.hasPrefix(tempDir.path),
+                "Forked bundle should live under the user Presets directory")
+        #expect(FileManager.default.fileExists(atPath: forked.entryScriptURL.path))
+
+        // And it should now show up in the preset list.
+        let match = manager.presets.first(where: { $0.id == "user:\(forked.name)" })
+        #expect(match != nil, "Forked bundle should appear in refreshPresets()")
+    }
+
+    // MARK: - Dirty-file tracking (§5 explicit-save model)
+
+    @Test @MainActor func noteDirtyFileTracksURL() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "Dirty", source: "pass\n")
+        manager.setCurrentPreset(preset, source: "pass\n")
+        #expect(manager.dirtyFiles.isEmpty)
+        #expect(!manager.hasPendingChanges, "Fresh preset should have no pending changes")
+
+        let url = tempDir.appendingPathComponent("Dirty.cdp/ui/index.html")
+        manager.noteDirtyFile(url)
+
+        #expect(manager.dirtyFiles.contains(url))
+        #expect(manager.hasPendingChanges,
+                "hasPendingChanges should be true once a ui/* file is dirty")
+    }
+
+    @Test @MainActor func clearDirtyFilesResets() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "Clear", source: "pass\n")
+        manager.setCurrentPreset(preset, source: "pass\n")
+        manager.noteDirtyFile(tempDir.appendingPathComponent("Clear.cdp/ui/a.css"))
+        #expect(manager.hasPendingChanges)
+
+        manager.clearDirtyFiles()
+        #expect(manager.dirtyFiles.isEmpty)
+        #expect(!manager.hasPendingChanges)
+    }
+
+    @Test @MainActor func setCurrentPresetClearsDirtyFiles() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let a = try manager.savePreset(name: "A", source: "# a\n")
+        let b = try manager.savePreset(name: "B", source: "# b\n")
+        manager.setCurrentPreset(a, source: "# a\n")
+        manager.noteDirtyFile(tempDir.appendingPathComponent("A.cdp/ui/x.css"))
+        #expect(manager.hasPendingChanges)
+
+        manager.setCurrentPreset(b, source: "# b\n")
+        #expect(manager.dirtyFiles.isEmpty,
+                "Switching presets should wipe the dirty set")
+        #expect(!manager.hasPendingChanges)
+    }
+
+    @Test @MainActor func hasPendingChangesReactsToIsModified() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "Pending", source: "# v1\n")
+        manager.setCurrentPreset(preset, source: "# v1\n")
+        #expect(!manager.hasPendingChanges)
+
+        manager.scriptDidChange(to: "# v2\n")
+        #expect(manager.hasPendingChanges,
+                "Entry-script modification alone should flip hasPendingChanges")
+
+        manager.scriptDidChange(to: "# v1\n")
+        #expect(!manager.hasPendingChanges)
+    }
+
+    // MARK: - savePreset: fresh bundle, no implicit inheritance
+    //
+    // save_preset always produces a fresh user bundle. When the agent
+    // wants to carry content over from another preset, it reads +
+    // writes those files explicitly — the handler does not clone.
+
+    @Test @MainActor func savePresetFromScratchDoesNotInheritFromCurrent() throws {
+        // Seed an unrelated user bundle with its own UI. save_preset
+        // with a different name must NOT pull anything from it.
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        _ = try manager.savePreset(
+            name: "Existing", source: "# existing\n",
+            language: .python, scaffoldUI: true
+        )
+        let existingUIURL = manager.presetsURL
+            .appendingPathComponent("Existing.cdp/ui/index.html")
+        try "<html>EXISTING_UI</html>".write(
+            to: existingUIURL, atomically: true, encoding: .utf8
+        )
+
+        _ = try manager.savePreset(
+            name: "Fresh", source: "# fresh\n",
+            language: .python, scaffoldUI: false
+        )
+        let freshBundleDir = manager.presetsURL
+            .appendingPathComponent("Fresh.cdp", isDirectory: true)
+        let freshUIURL = freshBundleDir.appendingPathComponent("ui/index.html")
+
+        #expect(!FileManager.default.fileExists(atPath: freshUIURL.path),
+                "scaffoldUI=false with no inheritance must leave ui/ absent")
+
+        let freshManifestURL = freshBundleDir.appendingPathComponent("manifest.json")
+        let manifestData = try Data(contentsOf: freshManifestURL)
+        let manifest = try JSONDecoder().decode(PresetManifest.self, from: manifestData)
+        #expect(manifest.ui == nil,
+                "fresh bundle must not inherit a ui block")
+        #expect((manifest.params?.isEmpty ?? true),
+                "fresh bundle must not inherit params from any other preset")
     }
 }

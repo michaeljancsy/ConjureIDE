@@ -15,7 +15,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "9E37700FA3887CC9872C8236"
+               BlueprintIdentifier = "B238AD3B0F0D25D7E512EDEC"
                BuildableName = "ConjureDSPExportAUTemplate.app"
                BlueprintName = "ConjureDSPExportAUTemplate"
                ReferencedContainer = "container:ConjureDSPExportAUTemplate.xcodeproj">
@@ -29,7 +29,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "C28DFED66D2F2FF7CA8BA6ED"
+               BlueprintIdentifier = "0B841545947976FA0804117B"
                BuildableName = "ConjureDSPExportAUTemplateExtension.appex"
                BlueprintName = "ConjureDSPExportAUTemplateExtension"
                ReferencedContainer = "container:ConjureDSPExportAUTemplate.xcodeproj">
@@ -43,7 +43,7 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "A592A15B14C2DAFC2776331C"
+               BlueprintIdentifier = "2B9AA37048FB45CD0F34F4A1"
                BuildableName = "ConjureDSPExportAUTemplateTests.xctest"
                BlueprintName = "ConjureDSPExportAUTemplateTests"
                ReferencedContainer = "container:ConjureDSPExportAUTemplate.xcodeproj">
@@ -60,7 +60,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "9E37700FA3887CC9872C8236"
+            BlueprintIdentifier = "B238AD3B0F0D25D7E512EDEC"
             BuildableName = "ConjureDSPExportAUTemplate.app"
             BlueprintName = "ConjureDSPExportAUTemplate"
             ReferencedContainer = "container:ConjureDSPExportAUTemplate.xcodeproj">
@@ -72,7 +72,7 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "A592A15B14C2DAFC2776331C"
+               BlueprintIdentifier = "2B9AA37048FB45CD0F34F4A1"
                BuildableName = "ConjureDSPExportAUTemplateTests.xctest"
                BlueprintName = "ConjureDSPExportAUTemplateTests"
                ReferencedContainer = "container:ConjureDSPExportAUTemplate.xcodeproj">
@@ -96,7 +96,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "9E37700FA3887CC9872C8236"
+            BlueprintIdentifier = "B238AD3B0F0D25D7E512EDEC"
             BuildableName = "ConjureDSPExportAUTemplate.app"
             BlueprintName = "ConjureDSPExportAUTemplate"
             ReferencedContainer = "container:ConjureDSPExportAUTemplate.xcodeproj">
@@ -115,7 +115,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "9E37700FA3887CC9872C8236"
+            BlueprintIdentifier = "B238AD3B0F0D25D7E512EDEC"
             BuildableName = "ConjureDSPExportAUTemplate.app"
             BlueprintName = "ConjureDSPExportAUTemplate"
             ReferencedContainer = "container:ConjureDSPExportAUTemplate.xcodeproj">

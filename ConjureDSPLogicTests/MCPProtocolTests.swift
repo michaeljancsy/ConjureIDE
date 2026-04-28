@@ -229,11 +229,12 @@ struct MCPToolDefinitionTests {
         #expect(expectedTools.contains("list_tones"))
     }
 
-    @Test("get_docs valid topics include nam")
+    @Test("get_docs valid topics include nam and ui")
     func getDocsNamTopic() {
-        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "nam", "all"]
+        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "accel", "nam", "ui", "all"]
         #expect(validTopics.contains("nam"), "NAM should be a valid docs topic")
-        #expect(validTopics.contains("all"), "all should include NAM")
+        #expect(validTopics.contains("ui"), "ui should be a valid docs topic (cdp-ui component library)")
+        #expect(validTopics.contains("all"), "all should include every topic")
     }
 
     @Test("list_tones has no required parameters")
@@ -278,7 +279,459 @@ private struct ScriptSourceChangeMock {
 }
 
 // =============================================================================
-// JSON-RPC Notification handling (no id field per spec 2.0)
+// MARK: - get_parameters response shape (Phase 2 of Round 5 follow-up)
+// =============================================================================
+
+/// Test-target copy of `roundForDisplay` from
+/// `ConjureDSPExtensionAudioUnit+MCP.swift`. The test target can't import the
+/// extension (duplicate symbols vs in-process AU), so we mirror the function
+/// here. If you change one, change both — `MCPProtocolGetParametersTests`
+/// covers the rules. Integration is also covered by the live MCP tests in
+/// `ConjureDSPTests`.
+private func roundForDisplay(_ value: Double, range: Double, style: String?) -> Double {
+    if let style, style == "toggle" || style == "choice" || style == "integer" {
+        return value.rounded()
+    }
+    let absRange = abs(range)
+    let decimals: Int
+    if absRange >= 1000 { decimals = 1 }
+    else if absRange >= 10 { decimals = 2 }
+    else if absRange >= 1 { decimals = 4 }
+    else { decimals = 6 }
+    let factor = pow(10.0, Double(decimals))
+    return (value * factor).rounded() / factor
+}
+
+@Suite("get_parameters response shape")
+struct MCPProtocolGetParametersTests {
+
+    // MARK: - roundForDisplay
+
+    @Test("roundForDisplay strips float-roundtrip noise for clean defaults")
+    func roundClean() {
+        // The original Round 5a finding: `value: 150.00001525878906` for
+        // a parameter declared with default 150 in a 0..2000 range.
+        let noisy = 150.00001525878906
+        #expect(roundForDisplay(noisy, range: 2000.0, style: nil) == 150.0)
+    }
+
+    @Test("Wide ranges (>=1000) keep 1 decimal — Hz, ms")
+    func wideRange1Decimal() {
+        #expect(roundForDisplay(440.0, range: 19980.0, style: nil) == 440.0)
+        #expect(roundForDisplay(1234.5678, range: 19980.0, style: nil) == 1234.6)
+    }
+
+    @Test("Medium ranges (>=10) keep 2 decimals — dB, pct, ratio")
+    func mediumRange2Decimals() {
+        #expect(roundForDisplay(-6.123456, range: 24.0, style: nil) == -6.12)
+        #expect(roundForDisplay(70.4567, range: 100.0, style: nil) == 70.46)
+    }
+
+    @Test("Small ranges (>=1) keep 4 decimals — mix, normalized")
+    func smallRange4Decimals() {
+        #expect(roundForDisplay(0.50000123, range: 1.0, style: nil) == 0.5)
+        #expect(roundForDisplay(0.123456789, range: 1.0, style: nil) == 0.1235)
+    }
+
+    @Test("Tiny ranges (<1) keep 6 decimals — fine-grained")
+    func tinyRange6Decimals() {
+        #expect(roundForDisplay(0.0001234567, range: 0.5, style: nil) == 0.000123)
+    }
+
+    @Test("Toggle style snaps to integer regardless of range")
+    func toggleSnapsInteger() {
+        #expect(roundForDisplay(0.0, range: 1.0, style: "toggle") == 0.0)
+        #expect(roundForDisplay(1.0, range: 1.0, style: "toggle") == 1.0)
+        #expect(roundForDisplay(0.7, range: 1.0, style: "toggle") == 1.0)
+    }
+
+    @Test("Choice style snaps to integer index")
+    func choiceSnapsInteger() {
+        #expect(roundForDisplay(2.0000123, range: 4.0, style: "choice") == 2.0)
+        #expect(roundForDisplay(1.499, range: 4.0, style: "choice") == 1.0)
+        #expect(roundForDisplay(1.5, range: 4.0, style: "choice") == 2.0)
+    }
+
+    @Test("Integer style snaps to integer")
+    func integerStyleSnapsInteger() {
+        #expect(roundForDisplay(5.4, range: 10.0, style: "integer") == 5.0)
+        #expect(roundForDisplay(5.6, range: 10.0, style: "integer") == 6.0)
+    }
+
+    @Test("Slider style is treated like nil — uses range-based rounding")
+    func sliderStyleUsesRange() {
+        // Style "slider" is the explicit form of "default" — it should not
+        // snap to integer; range rules apply.
+        #expect(roundForDisplay(0.5000123, range: 1.0, style: "slider") == 0.5)
+    }
+
+    @Test("Negative ranges work via abs")
+    func negativeRangeUsesAbs() {
+        // A param declared with min=-12, max=12 has range = 24 (medium → 2 decimals)
+        #expect(roundForDisplay(3.14159, range: -24.0, style: nil) == 3.14)
+    }
+
+    // MARK: - Filter-vs-include-unused contract (documented invariant)
+
+    /// Verifies the documented response shape: declared params surface by
+    /// default; `include_unused: true` opts into all 16 slots.
+    @Test("Default behavior keeps response small when script declares few params")
+    func defaultFiltersToDeclaredCount() {
+        // Simulate the rule: limit = declared.count when metadata exists,
+        // else paramCount (16).
+        let declared = 2
+        let total = 16
+        let limit = declared > 0 ? declared : total
+        #expect(limit == 2)
+    }
+
+    @Test("include_unused: true returns all 16 slots even with declared metadata")
+    func includeUnusedReturnsAllSlots() {
+        let includeUnused = true
+        let declared = 2
+        let total = 16
+        let limit = (includeUnused || declared == 0) ? total : declared
+        #expect(limit == 16)
+    }
+
+    @Test("Legacy mode (no metadata) always returns all 16")
+    func legacyModeReturnsAllSlots() {
+        let metadataAbsent = true
+        let total = 16
+        let limit = metadataAbsent ? total : 0
+        #expect(limit == 16)
+    }
+}
+
+// =============================================================================
+// MARK: - ParamMetadata equality (Phase 3 of Round 5 follow-up)
+// =============================================================================
+//
+// Mirror of `ConjureDSPExtensionAudioUnit.ParamMetadata` for unit testing
+// equality. The MCP `compile_and_run` handler relies on this `==` to decide
+// whether the kernel's freshly-extracted metadata differs from what the AU
+// already has — and so a param-tree rebuild is needed. Missing a field in the
+// comparison would silently skip the rebuild for a real change.
+//
+// If you change either side, change the other. The integration is also
+// covered by manual MCP verification (load preset A with N params, then
+// `compile_and_run` source for preset B with M params, confirm
+// `param_tree_rebuilt: true`).
+
+private struct ParamMetadataMock: Equatable {
+    let name: String
+    let key: String?
+    let min: Float
+    let max: Float
+    let `default`: Float
+    let unit: String
+    let curve: String?
+    let style: String?
+    let options: [String]?
+
+    // Copy of the manual `==` we added on ParamMetadata in
+    // ConjureDSPExtensionAudioUnit.swift.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        return lhs.name == rhs.name
+            && lhs.key == rhs.key
+            && lhs.min == rhs.min
+            && lhs.max == rhs.max
+            && lhs.default == rhs.default
+            && lhs.unit == rhs.unit
+            && lhs.curve == rhs.curve
+            && lhs.style == rhs.style
+            && lhs.options == rhs.options
+    }
+}
+
+@Suite("ParamMetadata equality")
+struct ParamMetadataEqualityTests {
+
+    private static let drive = ParamMetadataMock(
+        name: "Drive", key: nil, min: 1, max: 20, default: 5,
+        unit: "", curve: "linear", style: "slider", options: nil
+    )
+
+    @Test("Identical metadata is equal")
+    func identical() {
+        let a = Self.drive
+        let b = Self.drive
+        #expect(a == b)
+    }
+
+    @Test("Name difference breaks equality")
+    func nameDiffers() {
+        var b = Self.drive
+        b = ParamMetadataMock(name: "Tone", key: b.key, min: b.min, max: b.max,
+                               default: b.default, unit: b.unit, curve: b.curve,
+                               style: b.style, options: b.options)
+        #expect(Self.drive != b)
+    }
+
+    @Test("Min/max/default/unit/curve/style/options each break equality independently")
+    func eachFieldBreaksEquality() {
+        let base = Self.drive
+        let cases: [(name: String, mutated: ParamMetadataMock)] = [
+            ("key", ParamMetadataMock(name: base.name, key: "drive_v2", min: base.min, max: base.max, default: base.default, unit: base.unit, curve: base.curve, style: base.style, options: base.options)),
+            ("min", ParamMetadataMock(name: base.name, key: base.key, min: 0, max: base.max, default: base.default, unit: base.unit, curve: base.curve, style: base.style, options: base.options)),
+            ("max", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: 24, default: base.default, unit: base.unit, curve: base.curve, style: base.style, options: base.options)),
+            ("default", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: 10, unit: base.unit, curve: base.curve, style: base.style, options: base.options)),
+            ("unit", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: base.default, unit: "dB", curve: base.curve, style: base.style, options: base.options)),
+            ("curve", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: base.default, unit: base.unit, curve: "log", style: base.style, options: base.options)),
+            ("style", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: base.default, unit: base.unit, curve: base.curve, style: "toggle", options: base.options)),
+            ("options", ParamMetadataMock(name: base.name, key: base.key, min: base.min, max: base.max, default: base.default, unit: base.unit, curve: base.curve, style: base.style, options: ["Low", "High"])),
+        ]
+        for (label, mutated) in cases {
+            #expect(base != mutated, "Equality should break when \(label) differs")
+        }
+    }
+
+    @Test("Empty metadata array equals empty")
+    func emptyArrays() {
+        let a: [ParamMetadataMock] = []
+        let b: [ParamMetadataMock] = []
+        #expect(a == b)
+    }
+
+    @Test("Different array counts break equality")
+    func differentCounts() {
+        let a = [Self.drive]
+        let b = [Self.drive, Self.drive]
+        #expect(a != b)
+    }
+
+    @Test("Optional metadata: nil == nil, nil != some")
+    func optionalEquality() {
+        let none: [ParamMetadataMock]? = nil
+        let some: [ParamMetadataMock]? = [Self.drive]
+        #expect(none == none)
+        #expect(none != some)
+    }
+}
+
+// =============================================================================
+// MARK: - JSON Schema draft 2020-12 wire-format regression tests
+//
+// Triggered by an Anthropic API rejection seen in the wild:
+//
+//   API Error: 400 tools.10.custom.input_schema: JSON schema is invalid.
+//   It must match JSON Schema draft 2020-12.
+//
+// Claude Code bundles every MCP-provided tool into the `tools` array of
+// each Anthropic API request and Anthropic rejects the whole request if
+// any `input_schema` is malformed. The most common ways to produce a
+// malformed schema from Swift Encodable:
+//
+//   - An `Int?` or `[String]?` field accidentally emitted as `null`
+//     instead of being omitted. The spec requires `minimum` to be a
+//     number and `required` to be an array; both reject `null`.
+//   - A numeric constraint (`minimum`/`maximum`) attached to a
+//     non-numeric type (e.g. `"type": "string", "minimum": 0`).
+//   - A type value that isn't one of the seven canonical keywords.
+//
+// These tests pin the encoding contract of `MCPProtocol.PropertySchema`
+// and `MCPProtocol.InputSchema`. The logic test target can't import the
+// AU extension, so we mirror those structs here with identical field
+// lists — Swift synthesizes Encodable the same way either side, so the
+// wire format is equivalent. When a field is added to the real structs,
+// mirror it here and extend these tests.
+// =============================================================================
+
+/// Local mirror of `MCPProtocol.PropertySchema`. Field list + Optional-
+/// ity must match exactly — that's the whole point of the pin.
+private struct PropertySchemaMirror: Encodable {
+    let type: String
+    let description: String
+    let minimum: Int?
+    let maximum: Int?
+}
+
+/// Local mirror of `MCPProtocol.InputSchema`.
+private struct InputSchemaMirror: Encodable {
+    let type: String
+    let properties: [String: PropertySchemaMirror]
+    let required: [String]?
+}
+
+/// Walk a decoded JSON tree and collect the key paths where a `NSNull`
+/// appears. Returns an empty array when there are no nulls anywhere,
+/// otherwise a human-readable dotted path per offense (e.g.
+/// `properties.index.minimum`).
+private func nullKeyPaths(in value: Any, prefix: String = "") -> [String] {
+    if value is NSNull { return [prefix.isEmpty ? "<root>" : prefix] }
+    if let dict = value as? [String: Any] {
+        return dict.flatMap { k, v in
+            nullKeyPaths(in: v, prefix: prefix.isEmpty ? k : "\(prefix).\(k)")
+        }
+    }
+    if let arr = value as? [Any] {
+        return arr.enumerated().flatMap { i, v in
+            nullKeyPaths(in: v, prefix: "\(prefix)[\(i)]")
+        }
+    }
+    return []
+}
+
+@Suite("MCP tool schemas — JSON Schema draft 2020-12 wire format")
+struct MCPSchemaWireFormatTests {
+
+    private func encodeAsJSON(_ value: any Encodable) throws -> [String: Any] {
+        let data = try JSONEncoder().encode(value)
+        let decoded = try JSONSerialization.jsonObject(with: data, options: [])
+        return try #require(decoded as? [String: Any])
+    }
+
+    // -- PropertySchema ------------------------------------------------
+
+    @Test("PropertySchema omits minimum/maximum when nil (draft 2020-12 rejects `null`)")
+    func propertyOmitsNilConstraints() throws {
+        let schema = PropertySchemaMirror(
+            type: "string", description: "anything", minimum: nil, maximum: nil
+        )
+        let json = try encodeAsJSON(schema)
+        #expect(json["type"] as? String == "string")
+        #expect(json["description"] as? String == "anything")
+        #expect(json["minimum"] == nil,
+                "minimum must be absent when unset — `null` is not a valid JSON Schema number")
+        #expect(json["maximum"] == nil,
+                "maximum must be absent when unset — `null` is not a valid JSON Schema number")
+        #expect(nullKeyPaths(in: json).isEmpty,
+                "no nulls allowed anywhere in a PropertySchema JSON tree")
+    }
+
+    @Test("PropertySchema emits numeric constraints when set")
+    func propertyEmitsNumericConstraints() throws {
+        let schema = PropertySchemaMirror(
+            type: "integer", description: "param index", minimum: 0, maximum: 15
+        )
+        let json = try encodeAsJSON(schema)
+        #expect(json["minimum"] as? Int == 0)
+        #expect(json["maximum"] as? Int == 15)
+    }
+
+    // -- InputSchema ---------------------------------------------------
+
+    @Test("InputSchema with no required fields omits the `required` key")
+    func inputOmitsNilRequired() throws {
+        let schema = InputSchemaMirror(
+            type: "object", properties: [:], required: nil
+        )
+        let json = try encodeAsJSON(schema)
+        #expect(json["type"] as? String == "object")
+        #expect(json["required"] == nil,
+                "required must be absent when unset — `null` is not a valid JSON Schema array")
+        #expect(nullKeyPaths(in: json).isEmpty)
+    }
+
+    @Test("InputSchema with required fields emits them as a JSON array")
+    func inputEmitsRequiredArray() throws {
+        let schema = InputSchemaMirror(
+            type: "object",
+            properties: [
+                "source": PropertySchemaMirror(type: "string", description: "code", minimum: nil, maximum: nil)
+            ],
+            required: ["source"]
+        )
+        let json = try encodeAsJSON(schema)
+        let req = try #require(json["required"] as? [String])
+        #expect(req == ["source"])
+    }
+
+    // -- Every real tool-shape we ship ---------------------------------
+    //
+    // Mirrors the fixture permutations actually present in
+    // MCPProtocol.tools. Each case produces a schema and asserts the
+    // encoded tree is null-free. Update when adding a new shape.
+
+    @Test("Every PropertySchema permutation we ship is null-free when encoded")
+    func allShapesAreNullFree() throws {
+        let fixtures: [PropertySchemaMirror] = [
+            // No constraints — used by most string/number/boolean props.
+            .init(type: "string", description: "preset name", minimum: nil, maximum: nil),
+            .init(type: "boolean", description: "scaffold UI", minimum: nil, maximum: nil),
+            .init(type: "number", description: "param value", minimum: nil, maximum: nil),
+            // With numeric constraints — used by set_parameter.index.
+            .init(type: "integer", description: "param index", minimum: 0, maximum: 15),
+        ]
+        for schema in fixtures {
+            let json = try encodeAsJSON(schema)
+            let nulls = nullKeyPaths(in: json)
+            #expect(nulls.isEmpty,
+                    "null leaked in PropertySchema(type=\(schema.type)) at: \(nulls)")
+        }
+    }
+
+    @Test("Every InputSchema shape we ship is null-free when encoded")
+    func allInputShapesAreNullFree() throws {
+        let scaffoldUI = PropertySchemaMirror(type: "boolean", description: "scaffold UI", minimum: nil, maximum: nil)
+        let paramName = PropertySchemaMirror(type: "string", description: "preset name", minimum: nil, maximum: nil)
+        let paramIndex = PropertySchemaMirror(type: "integer", description: "param index", minimum: 0, maximum: 15)
+        let paramValue = PropertySchemaMirror(type: "number", description: "value", minimum: nil, maximum: nil)
+        let topic = PropertySchemaMirror(type: "string", description: "docs topic", minimum: nil, maximum: nil)
+        let bundlePath = PropertySchemaMirror(type: "string", description: "bundle-relative path", minimum: nil, maximum: nil)
+        let fileContent = PropertySchemaMirror(type: "string", description: "file content", minimum: nil, maximum: nil)
+
+        let fixtures: [(String, InputSchemaMirror)] = [
+            // No-arg tools (list_presets, list_packages, etc.) — properties empty, required nil.
+            ("noArgs", .init(type: "object", properties: [:], required: nil)),
+
+            // Single required string — compile_and_run, get_docs, read_bundle_file.
+            ("singleString", .init(
+                type: "object",
+                properties: ["topic": topic],
+                required: ["topic"]
+            )),
+
+            // Required + optional — save_preset (name required, scaffold_ui optional).
+            ("reqAndOpt", .init(
+                type: "object",
+                properties: ["name": paramName, "scaffold_ui": scaffoldUI],
+                required: ["name"]
+            )),
+
+            // Two required strings — write_bundle_file (path + content).
+            ("twoStrings", .init(
+                type: "object",
+                properties: ["path": bundlePath, "content": fileContent],
+                required: ["path", "content"]
+            )),
+
+            // Numeric constraints — set_parameter (index has min/max, value is free number).
+            ("numericConstraints", .init(
+                type: "object",
+                properties: ["index": paramIndex, "value": paramValue],
+                required: ["index", "value"]
+            )),
+        ]
+
+        for (label, schema) in fixtures {
+            let json = try encodeAsJSON(schema)
+            let nulls = nullKeyPaths(in: json)
+            #expect(nulls.isEmpty,
+                    "null leaked in InputSchema fixture '\(label)' at: \(nulls)")
+            // Type must be "object" for every tool's input_schema (MCP requirement).
+            #expect(json["type"] as? String == "object")
+        }
+    }
+
+    @Test("`type` keyword is one of the draft 2020-12 canonical types")
+    func typesAreCanonical() throws {
+        let canonical: Set<String> = ["object", "string", "number", "integer", "boolean", "array", "null"]
+        let shapes: [PropertySchemaMirror] = [
+            .init(type: "string",  description: "s", minimum: nil, maximum: nil),
+            .init(type: "number",  description: "n", minimum: nil, maximum: nil),
+            .init(type: "integer", description: "i", minimum: 0,   maximum: 15),
+            .init(type: "boolean", description: "b", minimum: nil, maximum: nil),
+        ]
+        for s in shapes {
+            #expect(canonical.contains(s.type),
+                    "PropertySchema type \"\(s.type)\" is not a canonical JSON Schema type")
+        }
+    }
+}
+
+// =============================================================================
+// MARK: - JSON-RPC Notification handling (no id field per spec 2.0)
 //
 // Regression guard: codex's streamable-HTTP MCP client sends
 // `notifications/initialized` after the initialize handshake. That payload

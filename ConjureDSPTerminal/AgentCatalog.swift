@@ -129,7 +129,35 @@ struct AgentCatalog {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         if savedRaw == manualSentinel {
-            return .manual(newlyAvailable: detected)
+            // Manual mode: `newlyAvailable` is "agents installed since the user
+            // chose manual mode," not "every agent currently installed." We
+            // persist a baseline (snapshot of detected names taken on the
+            // first resolveStartup call after the sentinel is set) and report
+            // the diff against it on every subsequent call.
+            //
+            // The shell function `conjure-use-manual` writes only the
+            // sentinel — there's no Swift-side hook to capture a baseline
+            // at selection time — so we capture lazily on first read. The
+            // first call after manual selection sees no baseline file,
+            // writes one with the current detected set, and returns
+            // newlyAvailable: [] (correct: nothing is "newly available"
+            // relative to "what we just installed"). Adding an agent later
+            // makes it appear in newlyAvailable. Removing an agent shrinks
+            // detected but doesn't shrink the baseline (so re-installing
+            // the same agent later wouldn't trip the banner — niche).
+            //
+            // The baseline file is co-located with the startup-command file
+            // and is cleared in `writeStartupCommand` whenever a non-manual
+            // value is written, so a user who flips to claude and back to
+            // manual gets a fresh baseline the second time around.
+            let baseline = readManualBaseline()
+            if baseline == nil {
+                writeManualBaseline(names: detected.map { $0.name })
+                return .manual(newlyAvailable: [])
+            }
+            let baseSet = Set(baseline!)
+            let diff = detected.filter { !baseSet.contains($0.name) }
+            return .manual(newlyAvailable: diff)
         }
 
         if !savedRaw.isEmpty {
@@ -155,15 +183,55 @@ struct AgentCatalog {
     // MARK: - Persistence
 
     /// Write the startup command (pass nil to delete the file → triggers detection next time).
+    ///
+    /// Side effect: writing anything other than `manualSentinel` clears the manual-mode
+    /// baseline file. This guarantees a fresh baseline gets captured the next time the
+    /// user flips back to manual mode — without the clear, a user who picked manual,
+    /// switched to claude, and later went back to manual would diff against the FIRST
+    /// manual session's baseline (so agents installed during the claude period would
+    /// silently NOT trigger the "newly available" banner).
     func writeStartupCommand(_ value: String?) {
         let fm = FileManager.default
         let dir = (startupCommandFilePath as NSString).deletingLastPathComponent
         try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
         if let value {
             try? value.write(toFile: startupCommandFilePath, atomically: true, encoding: .utf8)
+            if value != manualSentinel {
+                try? fm.removeItem(atPath: manualBaselineFilePath)
+            }
         } else {
             try? fm.removeItem(atPath: startupCommandFilePath)
+            try? fm.removeItem(atPath: manualBaselineFilePath)
         }
+    }
+
+    /// Path to the manual-mode baseline file. Co-located with the startup-command file
+    /// (named `<startup-command>.manual-baseline`). Stores one detected-agent name per
+    /// line. Existence of this file means "manual mode has been resolved at least once
+    /// already; treat the listed names as the baseline for newlyAvailable diffs."
+    var manualBaselineFilePath: String {
+        return startupCommandFilePath + ".manual-baseline"
+    }
+
+    /// Returns the persisted manual-mode baseline (one name per line) or nil if no
+    /// baseline has been captured yet.
+    private func readManualBaseline() -> [String]? {
+        guard let raw = try? String(contentsOfFile: manualBaselineFilePath, encoding: .utf8) else {
+            return nil
+        }
+        return raw
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Persist the baseline. Called lazily from `resolveStartup` on the first call
+    /// after the manual sentinel is set.
+    private func writeManualBaseline(names: [String]) {
+        let dir = (manualBaselineFilePath as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let body = names.joined(separator: "\n")
+        try? body.write(toFile: manualBaselineFilePath, atomically: true, encoding: .utf8)
     }
 
     /// Returns the raw startup-command content, trimmed. Empty string if the file is missing.

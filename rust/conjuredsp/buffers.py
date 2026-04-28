@@ -17,7 +17,7 @@ class DelayLine:
 
         _delays = None
 
-        def process(inputs, outputs, frame_count, sample_rate, params):
+        def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
             global _delays
             if _delays is None:
                 max_samples = int(0.5 * sample_rate)  # 500ms max
