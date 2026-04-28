@@ -228,9 +228,12 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         var audioFramesAllowed: Bool = false
         private var lastForwardTime: CFTimeInterval = 0
 
-        /// Bound the outstanding main-thread work — if the previous
-        /// evaluateJavaScript hasn't returned yet, drop the next frame.
-        private var framesInFlight: Int = 0
+        /// Monotonic sequence counter stamped onto every forwarded frame.
+        /// The JS side keeps a "latest-wins" slot and only dispatches to
+        /// subscribers when `seq` advances — that lets us write on every
+        /// CADisplayLink tick without worrying about backpressure or
+        /// duplicate dispatch on idle ticks.
+        private var audioFrameSeq: UInt64 = 0
 
         var isReady = false
         var lastTheme: String
@@ -324,9 +327,9 @@ struct ExportCustomUIWebView: NSViewRepresentable {
             }
             lastForwardTime = frame.timestamp
 
-            if framesInFlight > 1 { return }
-
+            audioFrameSeq &+= 1
             var payload: [String: Any] = [
+                "seq": audioFrameSeq,
                 "rmsIn": frame.rmsIn,
                 "rmsOut": frame.rmsOut,
                 "peakIn": frame.peakIn,
@@ -355,11 +358,8 @@ struct ExportCustomUIWebView: NSViewRepresentable {
             guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
                   let json = String(data: data, encoding: .utf8) else { return }
 
-            framesInFlight += 1
             let js = "window.ConjureDSP && window.ConjureDSP._audioFrame(\(json))"
-            webView.evaluateJavaScript(js) { [weak self] _, _ in
-                self?.framesInFlight = max(0, (self?.framesInFlight ?? 1) - 1)
-            }
+            webView.evaluateJavaScript(js, completionHandler: nil)
         }
 
         // MARK: Combine subscription

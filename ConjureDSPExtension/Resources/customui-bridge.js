@@ -52,6 +52,19 @@
     var _audioFftOn = false;        // last FFT flag sent to Swift
     var _audioSubscribed = false;   // true after a subscribeAudioFrames post, false after unsubscribe
 
+    // Latest-wins slot for audio frames. Swift writes the freshest payload
+    // here on every CADisplayLink tick; a requestAnimationFrame loop reads
+    // the slot at vsync and dispatches to subscribers. Decoupling the
+    // Swift-side write from the JS-side dispatch eliminates the variable
+    // 0–16 ms phase mismatch that the older "Swift invokes handler ->
+    // schedule RAF -> next vsync paints" path produced. Each frame carries
+    // a `seq` counter; the RAF loop skips dispatch when seq hasn't moved
+    // (avoids replaying the same payload across idle ticks, which would
+    // scroll history at RAF rate even when audio hasn't advanced).
+    var _audioLatestFrame = null;
+    var _audioProcessedSeq = -1;
+    var _audioRafHandle = 0;        // 0 = loop not running
+
     // `parameters.set(...)` fires onChange/onAnyChange handlers
     // synchronously, exactly like an external `_paramUpdate` callback
     // would. That makes the low-level `ConjureDSP.ui.control(i)` API
@@ -90,9 +103,28 @@
         }
     }
 
+    // RAF loop: drains the latest-wins slot and dispatches to subscribers.
+    // Self-rescheduling, paused when there are no subscribers (start/stop
+    // tied to _syncAudioSubscription transitions). The seq dedupe means an
+    // idle plugin (Swift still writing the same scalar) doesn't redeliver
+    // payloads to subscribers — it just sits.
+    function _audioRafTick() {
+        _audioRafHandle = 0;
+        if (_audioHandlers.length === 0) return;
+        var frame = _audioLatestFrame;
+        if (frame && frame.seq !== _audioProcessedSeq) {
+            _audioProcessedSeq = frame.seq;
+            for (var i = 0; i < _audioHandlers.length; i++) {
+                safeInvoke(_audioHandlers[i].cb, [frame], 'onFrame');
+            }
+        }
+        _audioRafHandle = window.requestAnimationFrame(_audioRafTick);
+    }
+
     // Recompute the audio subscription state based on current handlers.
     // Posts subscribe/unsubscribe to Swift only when the effective state
-    // changes (empty→non-empty, non-empty→empty, FFT flag flipped).
+    // changes (empty→non-empty, non-empty→empty, FFT flag flipped). Also
+    // starts/stops the RAF dispatch loop in lockstep with the subscription.
     function _syncAudioSubscription() {
         if (_audioHandlers.length === 0) {
             // Only post `unsubscribe` when we'd previously subscribed —
@@ -104,6 +136,12 @@
                 _audioFftOn = false;
                 _audioSubscribed = false;
             }
+            if (_audioRafHandle) {
+                window.cancelAnimationFrame(_audioRafHandle);
+                _audioRafHandle = 0;
+            }
+            _audioLatestFrame = null;
+            _audioProcessedSeq = -1;
             return;
         }
         var wantsFft = false;
@@ -115,6 +153,9 @@
         postTo('subscribeAudioFrames', { fft: wantsFft });
         _audioFftOn = wantsFft;
         _audioSubscribed = true;
+        if (!_audioRafHandle) {
+            _audioRafHandle = window.requestAnimationFrame(_audioRafTick);
+        }
     }
 
     var ConjureDSP = {
@@ -242,11 +283,12 @@
         } catch (_) {}
     };
 
+    // Swift's CADisplayLink stamps the freshest frame into the slot here.
+    // Dispatch is deferred to the RAF loop above so paints stay phase-
+    // locked with the display refresh rather than with the audio tick.
     ConjureDSP._audioFrame = function(frame) {
         if (!frame) return;
-        for (var i = 0; i < _audioHandlers.length; i++) {
-            safeInvoke(_audioHandlers[i].cb, [frame], 'onFrame');
-        }
+        _audioLatestFrame = frame;
     };
 
     // Forward uncaught JS errors to the plugin log so author-side bugs are

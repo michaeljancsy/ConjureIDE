@@ -549,10 +549,12 @@ struct CustomUIWebView: NSViewRepresentable {
             syncCaptureState()
         }
 
-        /// Track in-flight evaluateJavaScript invocations so audio frames
-        /// don't queue up behind a slow main thread. If a frame can't be
-        /// delivered synchronously (script still running), we just drop it.
-        private var framesInFlight = 0
+        /// Monotonic sequence counter stamped onto every forwarded frame.
+        /// The JS side keeps a "latest-wins" slot and only dispatches to
+        /// subscribers when `seq` advances — that lets us write on every
+        /// CADisplayLink tick without worrying about backpressure or
+        /// duplicate dispatch on idle ticks.
+        private var audioFrameSeq: UInt64 = 0
 
         private func forwardAudioFrame(_ frame: AudioFrame) {
             guard isReady, let webView, isWindowVisible else { return }
@@ -566,11 +568,9 @@ struct CustomUIWebView: NSViewRepresentable {
             }
             lastForwardTime = frame.timestamp
 
-            // Bound the outstanding JS work — dropping frames is fine for
-            // a UI animation pipeline.
-            if framesInFlight > 1 { return }
-
+            audioFrameSeq &+= 1
             var payload: [String: Any] = [
+                "seq": audioFrameSeq,
                 "rmsIn": frame.rmsIn,
                 "rmsOut": frame.rmsOut,
                 "peakIn": frame.peakIn,
@@ -608,11 +608,8 @@ struct CustomUIWebView: NSViewRepresentable {
             guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
                   let json = String(data: data, encoding: .utf8) else { return }
 
-            framesInFlight += 1
             let js = "window.ConjureDSP && window.ConjureDSP._audioFrame(\(json))"
-            webView.evaluateJavaScript(js) { [weak self] _, _ in
-                self?.framesInFlight = max(0, (self?.framesInFlight ?? 1) - 1)
-            }
+            webView.evaluateJavaScript(js, completionHandler: nil)
         }
 
         // MARK: Window visibility
