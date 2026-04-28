@@ -20,6 +20,13 @@ import AppKit
 import Combine
 import QuartzCore
 
+/// Mirrors the main extension's `AudioFrame.telemetry` value type so
+/// vector-shape slots round-trip identically inside an exported AU.
+enum TelemetryValue {
+    case scalar(Float)
+    case vector([Float])
+}
+
 /// Same shape as the main extension's `AudioFrame` so preset UIs that
 /// already subscribe to `window.ConjureDSP.audio.onFrame(...)` work
 /// unchanged inside an exported AU.
@@ -34,7 +41,7 @@ struct AudioFrame {
     /// when the loaded preset declares no telemetry. Mirrors the main
     /// extension's `AudioFrame.telemetry` shape so author UIs that
     /// read `frame.telemetry.gr_db` work unchanged inside an exported AU.
-    let telemetry: [String: Float]?
+    let telemetry: [String: TelemetryValue]?
     let timestamp: CFTimeInterval
 }
 
@@ -126,8 +133,11 @@ final class ExportAudioCaptureManager: ObservableObject {
     // metadata change to be missed and stale slot names paired with new
     // values silently. Same fix as the extension side (commit 9c9fe55).
     private var telemetryNames: [String] = []
+    private var telemetryIsVector: [Bool] = []
     private var lastTelemetryMetaJSON: String?
     private var telemetryReadBuffer: [Float] = []
+    private static let maxTelemetryVecLen: Int = 4096
+    private var telemetryVecScratch: [Float] = [Float](repeating: 0, count: 4096)
 
     // MARK: - Init
 
@@ -288,7 +298,7 @@ final class ExportAudioCaptureManager: ObservableObject {
     /// Snapshot script-published telemetry into a name→value dict.
     /// Returns nil when the loaded preset declares no slots — same
     /// shape + cost profile as the main extension's implementation.
-    private func readTelemetry(kernel: DSPKernelRef) -> [String: Float]? {
+    private func readTelemetry(kernel: DSPKernelRef) -> [String: TelemetryValue]? {
         refreshTelemetryNamesIfChanged(kernel: kernel)
         guard !telemetryNames.isEmpty else { return nil }
 
@@ -300,12 +310,24 @@ final class ExportAudioCaptureManager: ObservableObject {
         let count = min(n, telemetryNames.count)
         guard count > 0 else { return nil }
 
-        var dict: [String: Float] = [:]
+        var dict: [String: TelemetryValue] = [:]
         dict.reserveCapacity(count)
         for i in 0..<count {
-            dict[telemetryNames[i]] = telemetryReadBuffer[i]
+            if i < telemetryIsVector.count && telemetryIsVector[i] {
+                let len = Int(dsp_kernel_read_telemetry_vec(
+                    kernel,
+                    UInt32(i),
+                    &telemetryVecScratch,
+                    UInt32(telemetryVecScratch.count)
+                ))
+                if len > 0 {
+                    dict[telemetryNames[i]] = .vector(Array(telemetryVecScratch[0..<len]))
+                }
+            } else {
+                dict[telemetryNames[i]] = .scalar(telemetryReadBuffer[i])
+            }
         }
-        return dict
+        return dict.isEmpty ? nil : dict
     }
 
     private func refreshTelemetryNamesIfChanged(kernel: DSPKernelRef) {
@@ -315,16 +337,19 @@ final class ExportAudioCaptureManager: ObservableObject {
         lastTelemetryMetaJSON = currentJSON
         guard let json = currentJSON else {
             telemetryNames = []
+            telemetryIsVector = []
             return
         }
         guard let data = json.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data)
                 as? [[String: Any]] else {
             telemetryNames = []
+            telemetryIsVector = []
             return
         }
         telemetryNames = array.compactMap { $0["name"] as? String }
-        let needed = max(telemetryNames.count, 8)
+        telemetryIsVector = array.map { ($0["shape"] as? String) == "vector" }
+        let needed = max(telemetryNames.count, 16)
         if telemetryReadBuffer.count < needed {
             telemetryReadBuffer = [Float](repeating: 0, count: needed)
         }

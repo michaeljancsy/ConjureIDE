@@ -89,4 +89,26 @@ pub trait Backend: Any {
     /// telemetry surface produces an all-zeros snapshot — the right
     /// thing.
     fn read_telemetry(&self, _out: &mut [f32; TELEMETRY_LEN]) {}
+
+    /// Read a single vector telemetry slot's per-frame values from the
+    /// backend's private buffer into `out`. Called by the kernel
+    /// immediately after `process()` for every slot whose
+    /// `TelemetryMetadata.shape == "vector"`. Implementations copy
+    /// up to `frame_count` f32 values starting from the slot's base
+    /// pointer (WASM linear memory offset, or numpy `data_ptr()`).
+    ///
+    /// `slot_index` is the slot's position in
+    /// [`Backend::telemetry_metadata`] — the same index a script's
+    /// const passes to `set_telemetry_vector`.
+    ///
+    /// Default impl: leaves `out` untouched. Backends without vector
+    /// telemetry support inherit the no-op, and the kernel publishes
+    /// zeros to the host.
+    fn read_telemetry_vec(
+        &self,
+        _slot_index: usize,
+        _frame_count: usize,
+        _out: &mut [f32],
+    ) {
+    }
 }

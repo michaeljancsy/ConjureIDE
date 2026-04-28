@@ -13,6 +13,14 @@ import QuartzCore
 
 // MARK: - Custom UI audio frames
 
+/// A single telemetry slot value. Scalar slots produce one float per
+/// block; vector slots produce one float per audio frame in the current
+/// render block (length matches the host's frame_count, ≤ MAX_FRAMES).
+enum TelemetryValue {
+    case scalar(Float)
+    case vector([Float])
+}
+
 /// A tick-synchronous snapshot of audio activity, published to custom HTML/JS
 /// UIs via `window.ConjureDSP.audio.onFrame(...)`. Emitted by
 /// `AudioCaptureManager` once per display-link tick whenever at least one
@@ -29,11 +37,11 @@ struct AudioFrame {
     let fftInDB: [Float]?
     let fftOutDB: [Float]?
     /// Script-published telemetry slots, keyed by declared name (e.g.
-    /// `"Gr Db"` → -3.2). `nil` when the loaded preset declares no
-    /// telemetry — the common case for legacy scripts. `CustomUIWebView`
-    /// only attaches the field to its `audio.onFrame` payload when this
-    /// is non-nil and non-empty, so authors don't see a stub key.
-    let telemetry: [String: Float]?
+    /// `"Gr Db"` → `.scalar(-3.2)`, `"Scope"` → `.vector([...])`).
+    /// `nil` when the loaded preset declares no telemetry — the common
+    /// case for legacy scripts. `CustomUIWebView` only attaches the field
+    /// to its `audio.onFrame` payload when this is non-nil and non-empty.
+    let telemetry: [String: TelemetryValue]?
     let timestamp: CFTimeInterval
 }
 
@@ -297,8 +305,16 @@ final class AudioCaptureManager: ObservableObject {
     // String() construction per tick (cheap; metadata strings are tiny)
     // and is correctness-by-construction.
     private var telemetryNames: [String] = []
+    /// Parallel to `telemetryNames`: true when slot is `"vector"` shape,
+    /// false for scalar (or shape missing — legacy default).
+    private var telemetryIsVector: [Bool] = []
     private var lastTelemetryMetaJSON: String?
     private var telemetryReadBuffer: [Float] = []
+    /// Shared scratch for vector-telemetry reads. Sized to the kernel's
+    /// `MAX_FRAMES` (4096) — the kernel truncates anything longer, so
+    /// this is sufficient for any host buffer size.
+    private static let maxTelemetryVecLen: Int = 4096
+    private var telemetryVecScratch: [Float] = [Float](repeating: 0, count: 4096)
 
     // MARK: - Init
 
@@ -492,7 +508,7 @@ final class AudioCaptureManager: ObservableObject {
         // the kernel's cached metadata via pointer comparison so script
         // reloads (which produce a new CString) automatically refresh
         // the name list.
-        let telemetry: [String: Float]? = readTelemetry(kernel: kernel)
+        let telemetry: [String: TelemetryValue]? = readTelemetry(kernel: kernel)
 
         // Emit a frame for custom-UI subscribers. FFT arrays only ride along
         // on ticks that produced a new column; otherwise nil. `send` on a
@@ -516,10 +532,10 @@ final class AudioCaptureManager: ObservableObject {
     /// Snapshot the kernel's per-block telemetry slots into a name→value
     /// dict. Returns nil when the loaded preset doesn't declare any
     /// telemetry (the common case for legacy scripts), so consumers can
-    /// short-circuit. Cheap: a single CString pointer comparison + FFI
-    /// snapshot read when telemetry is active, no allocations or FFI
-    /// calls when it isn't.
-    private func readTelemetry(kernel: DSPKernelRef) -> [String: Float]? {
+    /// short-circuit. Scalar slots come from a single FFI snapshot;
+    /// vector slots are copied per-slot via `dsp_kernel_read_telemetry_vec`,
+    /// which returns the live frame count for the most recent block.
+    private func readTelemetry(kernel: DSPKernelRef) -> [String: TelemetryValue]? {
         refreshTelemetryNamesIfChanged(kernel: kernel)
         guard !telemetryNames.isEmpty else { return nil }
 
@@ -531,12 +547,24 @@ final class AudioCaptureManager: ObservableObject {
         let count = min(n, telemetryNames.count)
         guard count > 0 else { return nil }
 
-        var dict: [String: Float] = [:]
+        var dict: [String: TelemetryValue] = [:]
         dict.reserveCapacity(count)
         for i in 0..<count {
-            dict[telemetryNames[i]] = telemetryReadBuffer[i]
+            if i < telemetryIsVector.count && telemetryIsVector[i] {
+                let len = Int(dsp_kernel_read_telemetry_vec(
+                    kernel,
+                    UInt32(i),
+                    &telemetryVecScratch,
+                    UInt32(telemetryVecScratch.count)
+                ))
+                if len > 0 {
+                    dict[telemetryNames[i]] = .vector(Array(telemetryVecScratch[0..<len]))
+                }
+            } else {
+                dict[telemetryNames[i]] = .scalar(telemetryReadBuffer[i])
+            }
         }
-        return dict
+        return dict.isEmpty ? nil : dict
     }
 
     /// Re-read the kernel's telemetry metadata when it changes. Detected
@@ -551,19 +579,22 @@ final class AudioCaptureManager: ObservableObject {
         lastTelemetryMetaJSON = currentJSON
         guard let json = currentJSON else {
             telemetryNames = []
+            telemetryIsVector = []
             return
         }
         guard let data = json.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data)
                 as? [[String: Any]] else {
             telemetryNames = []
+            telemetryIsVector = []
             return
         }
         telemetryNames = array.compactMap { $0["name"] as? String }
+        telemetryIsVector = array.map { ($0["shape"] as? String) == "vector" }
         // Buffer must hold at least the full slot count so the FFI
-        // snapshot can fill it; pad to 8 (the kernel TELEMETRY_LEN) so
+        // snapshot can fill it; pad to 16 (the kernel TELEMETRY_LEN) so
         // we always pass a sensible capacity even if names trim short.
-        let needed = max(telemetryNames.count, 8)
+        let needed = max(telemetryNames.count, 16)
         if telemetryReadBuffer.count < needed {
             telemetryReadBuffer = [Float](repeating: 0, count: needed)
         }

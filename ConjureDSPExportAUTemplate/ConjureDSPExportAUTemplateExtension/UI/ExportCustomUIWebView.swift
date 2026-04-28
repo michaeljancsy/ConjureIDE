@@ -341,7 +341,15 @@ struct ExportCustomUIWebView: NSViewRepresentable {
             // a UI that reads `frame.telemetry.<slot>` works identically
             // inside an exported AU.
             if let telemetry = frame.telemetry, !telemetry.isEmpty {
-                payload["telemetry"] = telemetry
+                var telemetryJSON: [String: Any] = [:]
+                telemetryJSON.reserveCapacity(telemetry.count)
+                for (name, value) in telemetry {
+                    switch value {
+                    case .scalar(let f): telemetryJSON[name] = f
+                    case .vector(let arr): telemetryJSON[name] = arr
+                    }
+                }
+                payload["telemetry"] = telemetryJSON
             }
 
             guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),

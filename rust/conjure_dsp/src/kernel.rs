@@ -1,5 +1,5 @@
 use crate::backend::Backend;
-use crate::params::PARAM_COUNT;
+use crate::params::{PARAM_COUNT, TelemetryMetadata};
 use crate::python_backend::PythonBackend;
 use crate::ring_buffer::AudioRingBuffer;
 use crate::wasm_backend::WasmBackend;
@@ -46,6 +46,52 @@ pub struct TransportState {
     pub time_sig_numerator: i32,
     pub time_sig_denominator: i32,
     pub sample_position: f64,
+}
+
+/// Per-vector-telemetry-slot storage indexed by metadata position.
+///
+/// Each declared vector slot gets a ring of length `max_frames` plus a
+/// seqlock counter and a `last_frame_count` so the reader knows how
+/// many samples in the ring are valid for the most recent block.
+/// Scalar slots have `rings[i] == None`.
+///
+/// The audio thread is the single writer (try_lock; skip block on
+/// contention so we never stall the render callback). UI threads
+/// `lock()` briefly on display-link cadence to copy out a snapshot.
+/// Allocation/reallocation always runs on the main thread (script
+/// load, max-frames change) under the same lock.
+struct VecTelemetrySlots {
+    /// One entry per metadata slot. `None` for scalar slots, `Some(ring)`
+    /// for vector slots. Ring length equals `max_frames`.
+    rings: Vec<Option<Vec<AtomicU32>>>,
+    /// Per-metadata-slot seqlock counter. Even = stable, odd = writer
+    /// in progress. Currently only documentary — the surrounding
+    /// `Mutex<VecTelemetrySlots>` already serializes readers vs the
+    /// writer, but we publish the counter so a future lock-free reader
+    /// path (Phase 2) can switch to true seqlock semantics without
+    /// reshaping the storage.
+    seqs: Vec<AtomicU32>,
+    /// Per-metadata-slot frame count of the most recent write. Reader
+    /// uses this to truncate the ring to the live block size.
+    last_frame_counts: Vec<AtomicU32>,
+    /// Reusable scratch buffer of length `max_frames`, used to bridge
+    /// `Backend::read_telemetry_vec` (which writes f32) into the ring's
+    /// AtomicU32 storage without per-block allocation.
+    scratch: Vec<f32>,
+    /// `max_frames` the rings are sized for.
+    max_frames: usize,
+}
+
+impl VecTelemetrySlots {
+    const fn empty() -> Self {
+        Self {
+            rings: Vec::new(),
+            seqs: Vec::new(),
+            last_frame_counts: Vec::new(),
+            scratch: Vec::new(),
+            max_frames: 0,
+        }
+    }
 }
 
 /// Real-time audio DSP kernel with pluggable processing backends.
@@ -116,6 +162,17 @@ pub struct DSPKernel {
     /// block or `TELEMETRY` dict. None means "no telemetry" — Swift skips
     /// the per-tick snapshot read entirely.
     telemetry_metadata_json: Option<std::ffi::CString>,
+    /// Typed copy of the telemetry metadata, kept alongside the JSON
+    /// cache so the audio thread / vector-ring reallocator can inspect
+    /// per-slot `shape` without parsing JSON on every preset swap or
+    /// max-frames change.
+    telemetry_metadata: Option<Vec<TelemetryMetadata>>,
+    /// Per-vector-slot ring buffers + seqlock counters. Sized in
+    /// `reallocate_vec_telemetry` whenever metadata or `max_frames`
+    /// changes; the audio thread `try_lock`s during `process()` to
+    /// publish per-frame values, and UI threads `lock()` briefly on
+    /// display-link cadence to read snapshots.
+    vec_telemetry: Mutex<VecTelemetrySlots>,
     /// Script-declared algorithmic latency in samples. Zero = no latency.
     /// Read by Swift via FFI to report `AUAudioUnit.latency` for DAW compensation.
     latency_samples: u32,
@@ -266,6 +323,8 @@ impl DSPKernel {
             param_metadata_json: None,
             telemetry: [ZERO; crate::params::TELEMETRY_LEN],
             telemetry_metadata_json: None,
+            telemetry_metadata: None,
+            vec_telemetry: Mutex::new(VecTelemetrySlots::empty()),
             latency_samples: 0,
             transport: TransportState::default(),
             profiler_current_us: AtomicU32::new(0),
@@ -584,6 +643,9 @@ impl DSPKernel {
         self.max_frames_to_render = max_frames;
         // Resize scratch buffer to match (no allocation on audio thread)
         self.capture_scratch.resize(max_frames as usize, 0.0);
+        // Vector-telemetry rings are sized to max_frames; resize them too
+        // so subsequent harvests have room for full per-frame writes.
+        self.reallocate_vec_telemetry();
     }
 
     /// Enable or disable audio capture for spectrogram visualization.
@@ -773,9 +835,11 @@ impl DSPKernel {
                 self.telemetry_metadata_json = serde_json::to_string(&meta)
                     .ok()
                     .and_then(|s| std::ffi::CString::new(s).ok());
+                self.telemetry_metadata = Some(meta);
             }
             _ => {
                 self.telemetry_metadata_json = None;
+                self.telemetry_metadata = None;
             }
         }
         // Clear the snapshot too — stale values from the previous
@@ -783,6 +847,60 @@ impl DSPKernel {
         // after a swap.
         for slot in &self.telemetry {
             slot.store(0, Ordering::Relaxed);
+        }
+        // Resize per-vector-slot rings to match the new metadata. Runs
+        // on the main thread under `&mut self`, so allocation is fine.
+        self.reallocate_vec_telemetry();
+    }
+
+    /// (Re)allocate the per-vector-slot rings + scratch to match the
+    /// current `telemetry_metadata` and `max_frames_to_render`.
+    ///
+    /// Called whenever either input changes (new script loaded, host
+    /// max-frames updated). Always runs on the main thread under
+    /// `&mut self`; the audio thread is guaranteed not to be inside
+    /// `process()` at the same instant by Rust's exclusive-borrow
+    /// rules + Swift's FFI sequencing. We still take the inner
+    /// mutex so a UI display-link reader holding it sees a coherent
+    /// pre/post-state rather than a half-resized vector.
+    fn reallocate_vec_telemetry(&mut self) {
+        let max_frames = self.max_frames_to_render as usize;
+        let slot_count = self
+            .telemetry_metadata
+            .as_ref()
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        // Build the new contents off-mutex so the lock is held only
+        // for the swap-in. Allocation cost is paid on the main thread.
+        let mut rings: Vec<Option<Vec<AtomicU32>>> = Vec::with_capacity(slot_count);
+        let mut seqs: Vec<AtomicU32> = Vec::with_capacity(slot_count);
+        let mut last_frame_counts: Vec<AtomicU32> = Vec::with_capacity(slot_count);
+        if let Some(meta) = &self.telemetry_metadata {
+            for spec in meta {
+                if spec.is_vector() && max_frames > 0 {
+                    let mut ring: Vec<AtomicU32> = Vec::with_capacity(max_frames);
+                    for _ in 0..max_frames {
+                        ring.push(AtomicU32::new(0));
+                    }
+                    rings.push(Some(ring));
+                } else {
+                    rings.push(None);
+                }
+                seqs.push(AtomicU32::new(0));
+                last_frame_counts.push(AtomicU32::new(0));
+            }
+        }
+        let scratch = vec![0.0_f32; max_frames];
+
+        if let Ok(mut guard) = self.vec_telemetry.lock() {
+            *guard = VecTelemetrySlots {
+                rings,
+                seqs,
+                last_frame_counts,
+                scratch,
+                max_frames,
+            };
         }
     }
 
@@ -965,6 +1083,37 @@ impl DSPKernel {
         let n = out.len().min(self.telemetry.len());
         for i in 0..n {
             out[i] = f32::from_bits(self.telemetry[i].load(Ordering::Relaxed));
+        }
+        n
+    }
+
+    /// Snapshot the latest per-frame values written by the most recent
+    /// `process()` call for the vector telemetry slot at metadata
+    /// position `slot`. Returns the number of samples actually written
+    /// to `out` (may be less than `out.len()` when the host's last
+    /// block had fewer frames than the buffer, or zero when the slot
+    /// is scalar / not declared / has not been written yet).
+    ///
+    /// Single-reader-friendly: takes `&self` and locks the inner mutex
+    /// briefly. The audio thread always uses `try_lock`, so a contended
+    /// UI read can stall the writer for at most one display-link tick
+    /// in pathological cases — fine in practice at 30–120 Hz read rates.
+    pub fn read_telemetry_vec(&self, slot: usize, out: &mut [f32]) -> usize {
+        let guard = match self.vec_telemetry.lock() {
+            Ok(g) => g,
+            Err(_) => return 0,
+        };
+        if slot >= guard.rings.len() {
+            return 0;
+        }
+        let ring = match &guard.rings[slot] {
+            Some(r) => r,
+            None => return 0,
+        };
+        let live = guard.last_frame_counts[slot].load(Ordering::Acquire) as usize;
+        let n = live.min(out.len()).min(ring.len());
+        for i in 0..n {
+            out[i] = f32::from_bits(ring[i].load(Ordering::Relaxed));
         }
         n
     }
@@ -1240,6 +1389,48 @@ impl DSPKernel {
                 backend.read_telemetry(&mut tele);
                 for (slot, v) in self.telemetry.iter().zip(tele.iter()) {
                     slot.store(v.to_bits(), Ordering::Relaxed);
+                }
+                // Per-vector-slot harvest. try_lock only — if the UI
+                // thread is mid-read, skip this block's vector update
+                // rather than stall the audio thread. Stale-by-one-block
+                // is fine; the next callback will catch up.
+                if let Ok(mut vec_guard) = self.vec_telemetry.try_lock() {
+                    let state = &mut *vec_guard;
+                    let max_frames = state.max_frames;
+                    let len = frame_count.min(max_frames);
+                    if len > 0 && !state.rings.is_empty() {
+                        // Split-borrow `state` so we can mutably write
+                        // `scratch` while holding shared refs to the
+                        // ring + seq + counter Vecs.
+                        let rings = &state.rings;
+                        let seqs = &state.seqs;
+                        let last_frame_counts = &state.last_frame_counts;
+                        let scratch = &mut state.scratch[..len];
+                        for slot in 0..rings.len() {
+                            let ring = match &rings[slot] {
+                                Some(r) => r,
+                                None => continue,
+                            };
+                            // Seqlock writer: mark in-progress (odd),
+                            // copy, mark stable (even). Even though
+                            // the surrounding mutex serializes
+                            // readers vs writer today, publishing the
+                            // counter lets a future lock-free reader
+                            // path detect a torn read.
+                            seqs[slot].fetch_add(1, Ordering::Release);
+                            // Reset scratch in case the backend writes
+                            // fewer than `len` samples (defensive — most
+                            // backends fill the full slice).
+                            for v in scratch.iter_mut() { *v = 0.0; }
+                            backend.read_telemetry_vec(slot, len, scratch);
+                            for i in 0..len {
+                                ring[i].store(scratch[i].to_bits(), Ordering::Relaxed);
+                            }
+                            last_frame_counts[slot]
+                                .store(len as u32, Ordering::Release);
+                            seqs[slot].fetch_add(1, Ordering::Release);
+                        }
+                    }
                 }
             }
 

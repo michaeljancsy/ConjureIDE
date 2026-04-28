@@ -594,7 +594,15 @@ struct CustomUIWebView: NSViewRepresentable {
             // round-trip an opt-in would require. Only emitted when the
             // loaded preset declared at least one slot.
             if let telemetry = frame.telemetry, !telemetry.isEmpty {
-                payload["telemetry"] = telemetry
+                var telemetryJSON: [String: Any] = [:]
+                telemetryJSON.reserveCapacity(telemetry.count)
+                for (name, value) in telemetry {
+                    switch value {
+                    case .scalar(let f): telemetryJSON[name] = f
+                    case .vector(let arr): telemetryJSON[name] = arr
+                    }
+                }
+                payload["telemetry"] = telemetryJSON
             }
 
             guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
