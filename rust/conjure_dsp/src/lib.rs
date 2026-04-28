@@ -41,6 +41,16 @@ pub unsafe extern "C" fn dsp_kernel_initialize(
     output_channel_count: i32,
     sample_rate: f64,
 ) {
+    // Reject pathological sample rates (0, NaN, Inf, or outside any real-world
+    // audio range) before they reach kernel math that divides by sample_rate.
+    // Swift's allocateRenderResources may briefly pass 0 during DAW reconfiguration.
+    if !sample_rate.is_finite() || sample_rate < 8_000.0 || sample_rate > 384_000.0 {
+        eprintln!(
+            "dsp_kernel_initialize: rejected invalid sample_rate={sample_rate}; \
+             must be finite and in [8000, 384000]"
+        );
+        return;
+    }
     (*kernel).initialize(input_channel_count, output_channel_count, sample_rate);
 }
 
@@ -1371,6 +1381,64 @@ mod tests {
             assert!(ptr.is_null(), "WASM without param names should return null");
 
             dsp_kernel_destroy(kernel);
+        }
+    }
+
+    // --- sample_rate validation tests ---
+
+    /// Zero sample rate must be rejected — kernel sample_rate stays at its default 44100.
+    #[test]
+    fn test_ffi_initialize_zero_sample_rate_rejected() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            // Prime with a valid rate first so we have a known baseline.
+            dsp_kernel_initialize(kernel, 2, 2, 44100.0);
+            // Zero is invalid — initialize() must be a no-op.
+            dsp_kernel_initialize(kernel, 2, 2, 0.0);
+            // demo_seconds_remaining should still be finite (not NaN/Inf).
+            let rem = dsp_kernel_demo_seconds_remaining(kernel, 44100.0);
+            assert!(rem.is_finite(), "demo_seconds_remaining should be finite after zero-sr rejection, got {rem}");
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    /// NaN sample rate must be rejected.
+    #[test]
+    fn test_ffi_initialize_nan_sample_rate_rejected() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            dsp_kernel_initialize(kernel, 2, 2, 44100.0);
+            dsp_kernel_initialize(kernel, 2, 2, f64::NAN);
+            let rem = dsp_kernel_demo_seconds_remaining(kernel, 44100.0);
+            assert!(rem.is_finite(), "demo_seconds_remaining should be finite after NaN-sr rejection, got {rem}");
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    /// Negative sample rate must be rejected.
+    #[test]
+    fn test_ffi_initialize_negative_sample_rate_rejected() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            dsp_kernel_initialize(kernel, 2, 2, 44100.0);
+            dsp_kernel_initialize(kernel, 2, 2, -48000.0);
+            let rem = dsp_kernel_demo_seconds_remaining(kernel, 44100.0);
+            assert!(rem.is_finite(), "demo_seconds_remaining should be finite after negative-sr rejection, got {rem}");
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    /// Valid boundary sample rates must be accepted.
+    #[test]
+    fn test_ffi_initialize_valid_boundary_sample_rates() {
+        for &sr in &[8000.0f64, 44100.0, 48000.0, 96000.0, 192000.0, 384000.0] {
+            let kernel = dsp_kernel_create();
+            unsafe {
+                dsp_kernel_initialize(kernel, 2, 2, sr);
+                let rem = dsp_kernel_demo_seconds_remaining(kernel, sr);
+                assert!(rem.is_finite(), "demo_seconds_remaining should be finite for sr={sr}, got {rem}");
+                dsp_kernel_destroy(kernel);
+            }
         }
     }
 }

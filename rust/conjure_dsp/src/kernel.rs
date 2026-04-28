@@ -355,16 +355,24 @@ impl DSPKernel {
     }
 
     pub fn initialize(&mut self, input_channels: i32, _output_channels: i32, sample_rate: f64) {
-        self.sample_rate = sample_rate;
+        // Defensive clamp: the FFI boundary already rejects values outside [8000, 384000],
+        // but guard here too so internal callers (tests, benchmark) can never produce NaN/Inf
+        // from a division by zero.
+        let sr = sample_rate.max(1.0);
+        self.sample_rate = sr;
         self.channel_count = input_channels as usize;
-        self.demo_limit_samples.store((DEMO_LIMIT_SECONDS * sample_rate) as u64, Ordering::Relaxed);
+        self.demo_limit_samples.store((DEMO_LIMIT_SECONDS * sr) as u64, Ordering::Relaxed);
         // Recompute swap-fade length so the declick envelope is the same wall-clock
         // duration regardless of host sample rate.
         self.swap_fade_length
-            .store((SWAP_FADE_MS / 1000.0 * sample_rate) as u32, Ordering::Relaxed);
+            .store((SWAP_FADE_MS / 1000.0 * sr) as u32, Ordering::Relaxed);
         // Recompute demo-gate fade step for the new sample rate so the 5ms ramp
         // is consistent across hosts.
-        self.demo_fade_step = (1000.0 / (DEMO_FADE_MS * sample_rate)) as f32;
+        self.demo_fade_step = (1000.0 / (DEMO_FADE_MS * sr)) as f32;
+        debug_assert!(
+            self.demo_fade_step.is_finite(),
+            "demo_fade_step is NaN/Inf: sr={sr}"
+        );
 
         if let Ok(mut guard) = self.backend.lock() {
             if let Some(backend) = guard.as_mut() {
@@ -636,7 +644,13 @@ impl DSPKernel {
         }
         let processed = self.demo_samples_processed.load(Ordering::Relaxed);
         let remaining = self.demo_limit_samples.load(Ordering::Relaxed).saturating_sub(processed);
-        remaining as f64 / sample_rate
+        // Guard against a zero/NaN sample_rate so we never return NaN/Inf to Swift.
+        let sr = if sample_rate > 0.0 && sample_rate.is_finite() {
+            sample_rate
+        } else {
+            self.sample_rate.max(1.0)
+        };
+        remaining as f64 / sr
     }
 
     /// Reset the demo sample counter to zero, giving another 60 seconds of demo time.
@@ -681,7 +695,9 @@ impl DSPKernel {
         let scratch = self.capture_scratch.as_ptr() as *mut f32;
         let count = frame_count.min(self.capture_scratch.len());
 
-        if channel_count == 1 {
+        if channel_count == 0 {
+            return;
+        } else if channel_count == 1 {
             // Mono: copy directly
             let src = std::slice::from_raw_parts(buffers[0], count);
             std::ptr::copy_nonoverlapping(src.as_ptr(), scratch, count);

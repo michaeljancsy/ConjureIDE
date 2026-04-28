@@ -429,6 +429,14 @@ struct ExportManagerTests {
         #expect(error.errorDescription?.contains("not found") == true)
     }
 
+    @Test("ExportError.serializationFailed has descriptive message")
+    func exportErrorSerializationFailedMessage() {
+        let detail = "The data couldn't be written because it isn't in the correct format."
+        let error = ExportManager.ExportError.serializationFailed(detail)
+        #expect(error.errorDescription?.contains(detail) == true)
+        #expect(error.errorDescription?.contains("serialize") == true)
+    }
+
     @Test("NAM load_model regex detects tone3000 paths in Python source")
     func namLoadModelRegexDetection() {
         let source = "from conjuredsp.nam import load_model\nmodel = load_model(\"tone3000://34/82524\")\ndef process():\n    pass\n"
