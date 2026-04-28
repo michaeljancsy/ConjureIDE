@@ -338,9 +338,9 @@ struct ExportCustomUIWebView: NSViewRepresentable {
                 return
             }
             // Round-trip backpressure: drop if WebKit hasn't acked the
-            // previous call yet. Allows up to 1 in-flight call before
-            // dropping to keep IPC queue bounded.
-            if framesInFlight > 1 {
+            // previous call yet. Caps in-flight calls at 1 — see the
+            // in-plugin CustomUIWebView for the trade-off rationale.
+            if framesInFlight >= 1 {
                 return
             }
             lastForwardTime = frame.timestamp

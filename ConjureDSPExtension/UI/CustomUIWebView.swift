@@ -556,18 +556,18 @@ struct CustomUIWebView: NSViewRepresentable {
         /// duplicate dispatch on idle ticks.
         private var audioFrameSeq: UInt64 = 0
 
-        /// Round-trip backpressure counter for `evaluateJavaScript` calls.
-        /// Incremented before submitting; decremented in the completion
-        /// handler. The fps gate alone throttles against the audio
-        /// thread's clock, but doesn't know whether WebKit's WebContent
-        /// process is actually keeping up — under heavy payloads (vector
-        /// telemetry: per-sample GR curves can run ~16 KB / frame at
-        /// 30 Hz) or on slow hardware, the IPC queue between host and
-        /// WebContent can grow unboundedly. Capping in-flight calls at 1
-        /// forces frame drops when WebKit hasn't finished the previous
-        /// evaluation, keeping memory bounded and UI responsive. Reads
-        /// and writes are main-thread only (CADisplayLink + completion
-        /// handler both fire there).
+        /// Round-trip backpressure counter for `evaluateJavaScript`
+        /// calls. Incremented before submitting; decremented in the
+        /// completion handler. The fps gate above throttles against
+        /// the audio thread's clock but doesn't know whether WebKit's
+        /// WebContent process is keeping up — under heavy payloads
+        /// (vector telemetry can hit ~16 KB / frame at 30 Hz) or slow
+        /// hardware, the IPC queue between host and WebContent could
+        /// otherwise grow unboundedly. The forward path checks
+        /// `framesInFlight >= 1` before submitting, so at most one
+        /// call is outstanding at any time. Reads and writes are
+        /// main-thread only (CADisplayLink + WK completion both fire
+        /// there) so the counter doesn't need synchronization.
         private var framesInFlight: Int = 0
 
         private func forwardAudioFrame(_ frame: AudioFrame) {
@@ -581,9 +581,14 @@ struct CustomUIWebView: NSViewRepresentable {
                 return
             }
             // Round-trip backpressure: drop if WebKit hasn't acked the
-            // previous call yet. Allows up to 1 in-flight call (one
-            // evaluating, one queued) before dropping.
-            if framesInFlight > 1 {
+            // previous call yet. Caps in-flight calls at 1 — strict
+            // enough that the IPC queue can never grow when WebKit
+            // stalls, with the trade-off that one in-flight slow
+            // evaluation drops every subsequent frame until it
+            // completes. The fps gate above already throttles
+            // submission rate to 30 Hz, so this only kicks in under
+            // genuine WebKit slowness, not normal scheduling jitter.
+            if framesInFlight >= 1 {
                 return
             }
             lastForwardTime = frame.timestamp
