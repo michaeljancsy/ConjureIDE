@@ -164,10 +164,41 @@ final class PTYManager {
         let shellName = "-" + (shellPath as NSString).lastPathComponent
         let args = [shellName]
 
-        let cPath = strdup(shellPath)!
-        var cArgs: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) }
+        guard let cPath = strdup(shellPath) else {
+            let errorMsg = "strdup failed for shell path (out of memory)"
+            state = .error(errorMsg)
+            onStateChange?(.error(errorMsg))
+            ptyLog.error("\(errorMsg, privacy: .public)")
+            return
+        }
+        var cArgs: [UnsafeMutablePointer<CChar>?] = []
+        for s in args {
+            guard let p = strdup(s) else {
+                let errorMsg = "strdup failed for argv entry (out of memory)"
+                state = .error(errorMsg)
+                onStateChange?(.error(errorMsg))
+                ptyLog.error("\(errorMsg, privacy: .public)")
+                free(cPath)
+                cArgs.forEach { if let q = $0 { free(q) } }
+                return
+            }
+            cArgs.append(p)
+        }
         cArgs.append(nil)
-        var cEnv: [UnsafeMutablePointer<CChar>?] = env.map { strdup($0) }
+        var cEnv: [UnsafeMutablePointer<CChar>?] = []
+        for s in env {
+            guard let p = strdup(s) else {
+                let errorMsg = "strdup failed for envp entry (out of memory)"
+                state = .error(errorMsg)
+                onStateChange?(.error(errorMsg))
+                ptyLog.error("\(errorMsg, privacy: .public)")
+                free(cPath)
+                cArgs.forEach { if let q = $0 { free(q) } }
+                cEnv.forEach { if let q = $0 { free(q) } }
+                return
+            }
+            cEnv.append(p)
+        }
         cEnv.append(nil)
 
         // Create pty
