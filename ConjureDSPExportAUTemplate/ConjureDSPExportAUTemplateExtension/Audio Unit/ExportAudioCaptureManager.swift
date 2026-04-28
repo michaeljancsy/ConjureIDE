@@ -144,7 +144,11 @@ final class ExportAudioCaptureManager: ObservableObject {
     /// host stops calling render, the kernel ring keeps replaying its
     /// last published telemetry; we drop telemetry from the frame after
     /// the deadband elapses so meters don't freeze at the last value.
-    private var lastRenderActivityTimestamp: CFTimeInterval = 0
+    ///
+    /// Initialized to `CACurrentMediaTime()` rather than 0 so the
+    /// staleness check has a meaningful baseline before the first audio
+    /// tick. Mirrors the in-plugin AudioCaptureManager.
+    private var lastRenderActivityTimestamp: CFTimeInterval = CACurrentMediaTime()
     private static let telemetryStaleThreshold: CFTimeInterval = 0.050
 
     // MARK: - Init
