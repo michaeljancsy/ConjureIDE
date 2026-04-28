@@ -74,8 +74,8 @@ public class SimplePlayEngine {
     public init() {
         engine.attach(player)
         
-        guard let fileURL = Bundle.main.url(forResource: "Synth", withExtension: "aif") else {
-            fatalError("\"Synth.aif\" file not found.")
+        guard let fileURL = Bundle.main.url(forResource: "a440_60s_-1dbfs", withExtension: "wav") else {
+            fatalError("\"a440_60s_-1dbfs.wav\" file not found.")
         }
         setPlayerFile(fileURL)
         
