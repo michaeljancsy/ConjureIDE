@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>cdp-meter preview</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      font: 13px -apple-system, system-ui, sans-serif;
+      color: #ddd;
+      background: #1c1c20;
+      padding: 24px;
+      margin: 0;
+    }
+    h1 { font-size: 16px; font-weight: 600; margin: 0 0 16px; }
+    h2 { font-size: 13px; font-weight: 500; margin: 24px 0 8px; color: #aaa; }
+    .row { display: flex; gap: 24px; align-items: flex-end; }
+    p.hint { color: #888; margin: 4px 0 0; font-size: 12px; }
+    cdp-meter { margin-right: 8px; }
+  </style>
+  <script src="bridge-stub.js"></script>
+  <script src="cdp-ui.js"></script>
+</head>
+<body>
+  <h1>cdp-meter preview</h1>
+  <p class="hint">Click any meter to reset its peak-hold marker.</p>
+
+  <h2>Vertical, default ballistics</h2>
+  <div class="row">
+    <cdp-meter source="peak-out">
+      <span slot="label">PK OUT</span>
+    </cdp-meter>
+    <cdp-meter source="peak-in">
+      <span slot="label">PK IN</span>
+    </cdp-meter>
+    <cdp-meter source="rms-out" integration="300">
+      <span slot="label">RMS</span>
+    </cdp-meter>
+  </div>
+
+  <h2>Telemetry GR meter (inverted: heavy reduction = red, fills from top)</h2>
+  <div class="row">
+    <cdp-meter source="telemetry:GR_DB" min="-24" max="0" warn="-6" clip="-12" invert>
+      <span slot="label">GR</span>
+    </cdp-meter>
+    <cdp-meter source="telemetry:GR_DB" min="-24" max="0"
+               warn="-6" clip="-12" invert gradient="smooth">
+      <span slot="label">GR smooth</span>
+    </cdp-meter>
+  </div>
+
+  <h2>Smooth gradient (no hard stops at warn/clip)</h2>
+  <div class="row">
+    <cdp-meter source="peak-out" gradient="smooth">
+      <span slot="label">PK</span>
+    </cdp-meter>
+    <cdp-meter source="rms-out" integration="300" gradient="smooth">
+      <span slot="label">RMS</span>
+    </cdp-meter>
+  </div>
+
+  <h2>Custom palette via --cdp-meter-gradient (purple → cyan)</h2>
+  <div class="row">
+    <cdp-meter source="peak-out"
+               style="--cdp-meter-gradient: linear-gradient(to top, oklch(0.45 0.18 280) 0%, oklch(0.80 0.18 200) 100%);">
+      <span slot="label">BRAND</span>
+    </cdp-meter>
+    <cdp-meter source="peak-out" orientation="horizontal"
+               style="--cdp-meter-length: 240px;
+                      --cdp-meter-gradient: linear-gradient(to right, #f97316 0%, #ef4444 50%, #b91c1c 100%);">
+      <span slot="label">HEAT</span>
+    </cdp-meter>
+  </div>
+
+  <h2>Horizontal</h2>
+  <div class="row">
+    <cdp-meter source="peak-out" orientation="horizontal" style="--cdp-meter-length: 240px;">
+      <span slot="label">OUT</span>
+    </cdp-meter>
+    <cdp-meter source="peak-out" orientation="horizontal" invert
+               style="--cdp-meter-length: 240px;">
+      <span slot="label">OUT inv</span>
+    </cdp-meter>
+  </div>
+
+  <h2>Tighter range, infinite hold</h2>
+  <div class="row">
+    <cdp-meter source="peak-out" min="-30" max="0" warn="-12" clip="-3" hold="infinite">
+      <span slot="label">∞HOLD</span>
+    </cdp-meter>
+  </div>
+</body>
+</html>

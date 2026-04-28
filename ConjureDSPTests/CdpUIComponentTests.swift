@@ -115,6 +115,29 @@ struct CdpUIComponentTests {
                     this.theme = t;
                     try { window.dispatchEvent(new CustomEvent('themechange', { detail: { theme: t } })); } catch (_) {}
                 },
+                audio: {
+                    _handlers: [],
+                    _subCount: 0,
+                    _unsubCount: 0,
+                    onFrame: function(cb, opts) {
+                        if (typeof cb !== 'function') return;
+                        this._handlers.push(cb);
+                        this._subCount++;
+                    },
+                    offFrame: function(cb) {
+                        var i = this._handlers.indexOf(cb);
+                        if (i >= 0) {
+                            this._handlers.splice(i, 1);
+                            this._unsubCount++;
+                        }
+                    },
+                },
+                _audioFrame: function(frame) {
+                    var hs = this.audio._handlers.slice();
+                    for (var i = 0; i < hs.length; i++) {
+                        try { hs[i](frame); } catch (e) {}
+                    }
+                },
             };
             """
             // Empirically: under the test-host sandbox, `customElements
@@ -229,7 +252,7 @@ struct CdpUIComponentTests {
         try await h.waitForNavigationAndSetup()
 
         // Every component tag must: register, and upgrade on create.
-        let tags = ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-knob", "cdp-panel"]
+        let tags = ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-knob", "cdp-meter", "cdp-panel"]
         for tag in tags {
             let registered = try await h.eval("!!customElements.get('\(tag)')") as? Bool
             #expect(registered == true, "\(tag) not registered")
@@ -639,6 +662,336 @@ struct CdpUIComponentTests {
             #expect(read != nil && abs(read! - v) < 1e-9,
                     "--cdp-knob-norm should track parameter value \(v); got \(read?.description ?? "nil")")
         }
+    }
+
+    // MARK: - <cdp-meter>
+
+    /// Drive a deterministic tick. The meter advances ballistics on
+    /// each `audio.onFrame` call; for tests we set `_latestRaw`
+    /// directly and tick with a synthetic timestamp so dt is exactly
+    /// what we want. Bypasses `_audioFrame` so the production
+    /// frame-arrival auto-tick doesn't race the test clock.
+    private func meterTick(_ h: Harness, id: String, atMs: Double, raw: Double? = nil) async throws {
+        if let raw = raw {
+            try await h.eval("""
+                var _m = document.getElementById('\(id)');
+                _m._latestRaw = \(raw);
+                _m._haveFrame = true;
+                _m._tick(\(atMs));
+            """)
+        } else {
+            try await h.eval("document.getElementById('\(id)')._tick(\(atMs))")
+        }
+    }
+
+    @Test func meterRendersShadowDom() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-meter", id: "m", attrs: ["source": "peak-out"])
+        let hasTrack = try await h.eval("!!document.getElementById('m').shadowRoot.querySelector('[part=\"track\"]')") as? Bool
+        let hasBar = try await h.eval("!!document.getElementById('m').shadowRoot.querySelector('[part=\"bar\"]')") as? Bool
+        let hasPeak = try await h.eval("!!document.getElementById('m').shadowRoot.querySelector('[part=\"peak-hold\"]')") as? Bool
+        #expect(hasTrack == true)
+        #expect(hasBar == true)
+        #expect(hasPeak == true)
+    }
+
+    @Test func meterSubscribesOnConnectAndUnsubscribesOnDisconnect() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+
+        let subBefore = try await h.eval("ConjureDSP.audio._subCount") as? Int
+        #expect(subBefore == 0)
+
+        try await createElement(h, tag: "cdp-meter", id: "m", attrs: ["source": "peak-out"])
+        let subAfter = try await h.eval("ConjureDSP.audio._subCount") as? Int
+        let handlersAfterMount = try await h.eval("ConjureDSP.audio._handlers.length") as? Int
+        #expect(subAfter == 1, "meter should call onFrame once on connect; got \(subAfter ?? -1)")
+        #expect(handlersAfterMount == 1)
+
+        try await h.eval("document.getElementById('m').remove()")
+        let unsub = try await h.eval("ConjureDSP.audio._unsubCount") as? Int
+        let handlersAfterRemove = try await h.eval("ConjureDSP.audio._handlers.length") as? Int
+        #expect(unsub == 1, "meter should call offFrame once on disconnect; got \(unsub ?? -1)")
+        #expect(handlersAfterRemove == 0)
+    }
+
+    @Test func meterBarRespondsToPeakOutFrame() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-meter", id: "m",
+                                attrs: ["source": "peak-out", "min": "-60", "max": "0",
+                                        "warn": "-18", "clip": "-6", "decay": "0", "hold": "0"])
+        // Verify the production frame-arrival path: dispatch a real
+        // _audioFrame and let the meter's onFrame -> _tick chain run.
+        try await h.eval("ConjureDSP._audioFrame({peakIn: 0, peakOut: 1.0, rmsIn: 0, rmsOut: 0, t: 0})")
+        let clip = try await h.eval("document.getElementById('m').shadowRoot.querySelector('[part=\"bar\"]').style.clipPath") as? String
+        #expect(clip != nil && clip!.contains("inset(0%"),
+                "bar should fill to 100% (clip-path inset 0%) at peakOut=1.0; got \(clip ?? "nil")")
+    }
+
+    @Test func meterDecayReducesBarBetweenFrames() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        // 60 dB span; decay 60 dB/s → 30 dB drop in 0.5 s → display
+        // moves from 0 dB (top) to -30 dB (50% of the span).
+        try await createElement(h, tag: "cdp-meter", id: "m",
+                                attrs: ["source": "peak-out", "min": "-60", "max": "0",
+                                        "decay": "60", "hold": "0"])
+        // Hit it hard at t=0.
+        try await meterTick(h, id: "m", atMs: 0.0, raw: 1.0)
+        // Hold raw at 1.0 across one more tick to ensure display = 0 dB.
+        try await meterTick(h, id: "m", atMs: 1.0, raw: 1.0)
+        // Now drop to silence and let it decay for 500 ms.
+        try await meterTick(h, id: "m", atMs: 501.0, raw: 0.0)
+        let clip = try await h.eval("document.getElementById('m').shadowRoot.querySelector('[part=\"bar\"]').style.clipPath") as? String
+        let pct = parseClipPathTopPct(clip)
+        #expect(pct != nil, "could not parse clip-path; got \(clip ?? "nil")")
+        if let p = pct {
+            #expect(abs(p - 50.0) < 5.0, "expected ~50% top inset after 60 dB/s decay over 0.5 s; got \(p)% (clip-path \(clip ?? "nil"))")
+        }
+    }
+
+    @Test func meterPeakHoldStaysThenDecays() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-meter", id: "m",
+                                attrs: ["source": "peak-out", "min": "-60", "max": "0",
+                                        "decay": "60", "hold": "200"])
+        try await meterTick(h, id: "m", atMs: 0.0, raw: 1.0)
+        try await meterTick(h, id: "m", atMs: 1.0, raw: 1.0)
+        let peak1 = try await h.eval("document.getElementById('m').shadowRoot.querySelector('[part=\"peak-hold\"]').style.bottom") as? String
+        let pct1 = parsePercentString(peak1)
+        #expect(pct1 != nil && pct1! > 95.0, "peak should latch near 100% after 0 dB frame; got \(peak1 ?? "nil")")
+
+        // Drop to silence. Within hold window (100 ms < 200 ms hold), peak stays.
+        try await meterTick(h, id: "m", atMs: 100.0, raw: 0.0)
+        let peakHeld = try await h.eval("document.getElementById('m').shadowRoot.querySelector('[part=\"peak-hold\"]').style.bottom") as? String
+        let pctHeld = parsePercentString(peakHeld)
+        #expect(pctHeld != nil && pctHeld! > 95.0,
+                "peak should hold within hold window; got \(peakHeld ?? "nil")")
+
+        // After hold expires, peak releases to the (decayed) display value.
+        try await meterTick(h, id: "m", atMs: 400.0, raw: 0.0)
+        let peakReleased = try await h.eval("document.getElementById('m').shadowRoot.querySelector('[part=\"peak-hold\"]').style.bottom") as? String
+        let pctReleased = parsePercentString(peakReleased)
+        #expect(pctReleased != nil && pctReleased! < 80.0,
+                "peak should drop after hold expires (display has decayed substantially); got \(peakReleased ?? "nil")")
+    }
+
+    @Test func meterClickResetsPeakHold() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-meter", id: "m",
+                                attrs: ["source": "peak-out", "min": "-60", "max": "0",
+                                        "decay": "60", "hold": "infinite"])
+        try await meterTick(h, id: "m", atMs: 0.0, raw: 1.0)
+        try await meterTick(h, id: "m", atMs: 1.0, raw: 1.0)
+        // Drop to silence — display will decay, but peak holds (infinite).
+        try await meterTick(h, id: "m", atMs: 500.0, raw: 0.0)
+        let peakBefore = try await h.eval("document.getElementById('m').shadowRoot.querySelector('[part=\"peak-hold\"]').style.bottom") as? String
+        let pctBefore = parsePercentString(peakBefore)
+        #expect(pctBefore != nil && pctBefore! > 95.0,
+                "peak should still be near top with hold='infinite'; got \(peakBefore ?? "nil")")
+
+        // Click the container (any click on the meter resets).
+        try await h.eval("""
+            var m = document.getElementById('m');
+            var c = m.shadowRoot.querySelector('[part="container"]');
+            c.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+        """)
+        let peakAfter = try await h.eval("document.getElementById('m').shadowRoot.querySelector('[part=\"peak-hold\"]').style.bottom") as? String
+        let pctAfter = parsePercentString(peakAfter)
+        #expect(pctAfter != nil && pctAfter! < pctBefore!,
+                "click should snap peak to current (lower) display value; got before=\(peakBefore ?? "nil") after=\(peakAfter ?? "nil")")
+    }
+
+    @Test func meterTelemetrySourceReadsTelemetryDict() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-meter", id: "m",
+                                attrs: ["source": "telemetry:gain_reduction",
+                                        "min": "-24", "max": "0",
+                                        "decay": "0", "hold": "0"])
+        // unit defaults to db for telemetry sources. GR = -12 dB
+        // (halfway through the 24 dB span) → display ~50%. Round-trip
+        // through the production _audioFrame path so the source-parsing
+        // ("telemetry:gain_reduction") is exercised end-to-end.
+        try await h.eval("""
+            ConjureDSP._audioFrame({
+                peakIn: 0, peakOut: 0, rmsIn: 0, rmsOut: 0, t: 0,
+                telemetry: {gain_reduction: -12}
+            })
+        """)
+        let clip = try await h.eval("document.getElementById('m').shadowRoot.querySelector('[part=\"bar\"]').style.clipPath") as? String
+        let pct = parseClipPathTopPct(clip)
+        #expect(pct != nil && abs(pct! - 50.0) < 2.0,
+                "telemetry source at -12 dB / range [-24, 0] should fill ~50%; got \(clip ?? "nil")")
+    }
+
+    @Test func meterUnitDbSkipsLinearConversion() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-meter", id: "m",
+                                attrs: ["source": "peak-out", "unit": "db",
+                                        "min": "-60", "max": "0",
+                                        "decay": "0", "hold": "0"])
+        // unit=db: peakOut=0 is interpreted as 0 dB (= top), not as
+        // linear silence. Without this, raw=0 → log10(1e-9)*20 = -180 dB.
+        try await h.eval("ConjureDSP._audioFrame({peakIn: 0, peakOut: 0.0, rmsIn: 0, rmsOut: 0, t: 0})")
+        let clip = try await h.eval("document.getElementById('m').shadowRoot.querySelector('[part=\"bar\"]').style.clipPath") as? String
+        #expect(clip != nil && clip!.contains("inset(0%"),
+                "unit='db' should treat raw value as dB; 0.0 → 0 dB → bar at top; got \(clip ?? "nil")")
+    }
+
+    @Test func meterGradientSmoothCollapsesHardStops() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-meter", id: "z",
+                                attrs: ["source": "peak-out", "min": "-60", "max": "0",
+                                        "warn": "-18", "clip": "-6"])
+        try await createElement(h, tag: "cdp-meter", id: "s",
+                                attrs: ["source": "peak-out", "min": "-60", "max": "0",
+                                        "warn": "-18", "clip": "-6", "gradient": "smooth"])
+        let zonesBg = try await h.eval(
+            "document.getElementById('z').shadowRoot.querySelector('[part=\"bar\"]').style.getPropertyValue('--_cdp-meter-bar-bg')") as? String
+        let smoothBg = try await h.eval(
+            "document.getElementById('s').shadowRoot.querySelector('[part=\"bar\"]').style.getPropertyValue('--_cdp-meter-bar-bg')") as? String
+        // zones produces 6 stops (one pair per color, hard edges); smooth
+        // produces 4 (one anchor per color + final red). Counting the
+        // word "var(" — each stop references one CSS custom property —
+        // is the simplest discriminator that doesn't depend on whitespace.
+        let zonesStops = zonesBg.map { $0.components(separatedBy: "var(").count - 1 } ?? 0
+        let smoothStops = smoothBg.map { $0.components(separatedBy: "var(").count - 1 } ?? 0
+        #expect(zonesStops == 6, "zones gradient should have 6 var() stops; got \(zonesStops) in \(zonesBg ?? "nil")")
+        #expect(smoothStops == 4, "smooth gradient should have 4 var() stops; got \(smoothStops) in \(smoothBg ?? "nil")")
+    }
+
+    @Test func meterInvertFlipsBarFillDirection() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        // GR meter: 0 dB = no reduction (safe, top), -24 dB = max
+        // reduction (danger, bottom). At gain_reduction = -12 (half),
+        // bar should fill the top half — clipPath insets the *bottom*
+        // 50%, not the top.
+        try await createElement(h, tag: "cdp-meter", id: "m",
+                                attrs: ["source": "telemetry:gr", "min": "-24", "max": "0",
+                                        "warn": "-6", "clip": "-12", "invert": "",
+                                        "decay": "0", "hold": "0"])
+        try await h.eval("""
+            ConjureDSP._audioFrame({
+                peakIn: 0, peakOut: 0, rmsIn: 0, rmsOut: 0, t: 0,
+                telemetry: {gr: -12}
+            })
+        """)
+        let clip = try await h.eval("document.getElementById('m').shadowRoot.querySelector('[part=\"bar\"]').style.clipPath") as? String
+        // Inverted vertical fill clips from bottom — third inset value
+        // (bottom) should be ~50%, first two (top, right) should be 0.
+        // WebKit normalizes `0` → `0px` and may collapse trailing zero
+        // shorthand, so we parse rather than prefix-match.
+        #expect(clip != nil, "got nil clip-path")
+        if let s = clip {
+            let parts = s.replacingOccurrences(of: "inset(", with: "").replacingOccurrences(of: ")", with: "")
+                .split(separator: " ").map(String.init)
+            let isZero = { (v: String) -> Bool in v == "0" || v == "0px" || v == "0%" }
+            #expect(parts.count >= 3 && isZero(parts[0]) && isZero(parts[1]),
+                    "inverted vertical should clip from bottom — first two insets should be 0; got \(s)")
+            if parts.count >= 3, let p = Double(parts[2].replacingOccurrences(of: "%", with: "")) {
+                #expect(abs(p - 50.0) < 2.0,
+                        "GR=-12 in [-24, 0] should clip ~50% from bottom; got \(p)% (\(s))")
+            } else {
+                Issue.record("could not parse third inset value from \(s)")
+            }
+        }
+    }
+
+    @Test func meterInvertFlipsPeakMarkerToTop() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-meter", id: "m",
+                                attrs: ["source": "telemetry:gr", "min": "-24", "max": "0",
+                                        "invert": "", "decay": "0", "hold": "infinite"])
+        try await h.eval("""
+            ConjureDSP._audioFrame({
+                peakIn: 0, peakOut: 0, rmsIn: 0, rmsOut: 0, t: 0,
+                telemetry: {gr: -24}
+            })
+        """)
+        let top = try await h.eval("document.getElementById('m').shadowRoot.querySelector('[part=\"peak-hold\"]').style.top") as? String
+        let bottom = try await h.eval("document.getElementById('m').shadowRoot.querySelector('[part=\"peak-hold\"]').style.bottom") as? String
+        let topPct = parsePercentString(top)
+        #expect(topPct != nil && topPct! > 95.0,
+                "inverted vertical peak should sit near top:100% at min value; got top=\(top ?? "nil")")
+        #expect((bottom ?? "").isEmpty,
+                "inverted vertical peak should not also set `bottom`; got bottom=\(bottom ?? "nil")")
+    }
+
+    @Test func meterCustomGradientCSSVarOverridesBuiltGradient() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        // Set the override BEFORE the meter mounts so it picks up the
+        // cascaded value on first paint.
+        try await h.eval("""
+            var el = document.createElement('cdp-meter');
+            el.id = 'm';
+            el.setAttribute('source', 'peak-out');
+            el.style.setProperty('--cdp-meter-gradient', 'linear-gradient(to top, magenta 0%, cyan 100%)');
+            document.body.appendChild(el);
+            void 0;
+        """)
+        // The CSS chain is `background: var(--cdp-meter-gradient,
+        // var(--_cdp-meter-bar-bg))`. With the override set, the bar's
+        // computed background should reflect the magenta/cyan gradient,
+        // not the green/yellow/red one JS still writes to the internal var.
+        let computed = try await h.eval("""
+            (() => {
+                var bar = document.getElementById('m').shadowRoot.querySelector('[part="bar"]');
+                return getComputedStyle(bar).backgroundImage;
+            })()
+        """) as? String
+        #expect(computed != nil, "computed background-image was nil")
+        if let s = computed {
+            // WebKit's computed value resolves named colors to rgb(..)
+            // so check for both the literal name and the resolved form.
+            let isMagenta = s.contains("magenta") || s.lowercased().contains("rgb(255, 0, 255)")
+            #expect(isMagenta, "custom gradient should win — expected magenta in computed bg; got \(s)")
+            #expect(!s.contains("oklch"),
+                    "default oklch stops should be absent when override is set; got \(s)")
+        }
+    }
+
+    /// Parse a "X.X%" string to Double. Returns nil on failure.
+    private func parsePercentString(_ s: String?) -> Double? {
+        guard let raw = s else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasSuffix("%") else { return nil }
+        return Double(trimmed.dropLast())
+    }
+
+    /// Extract the top inset percentage from `inset(<top>% <right>% <bot>% <left>%)`
+    /// or `inset(<top>% 0 0 0)`. Returns nil on failure.
+    private func parseClipPathTopPct(_ s: String?) -> Double? {
+        guard let raw = s else { return nil }
+        guard let openParen = raw.firstIndex(of: "("),
+              let closeParen = raw.lastIndex(of: ")") else { return nil }
+        let inner = raw[raw.index(after: openParen)..<closeParen]
+        let parts = inner.split(separator: " ", omittingEmptySubsequences: true)
+        guard let first = parts.first else { return nil }
+        let str = String(first)
+        if str.hasSuffix("%") { return Double(str.dropLast()) }
+        return Double(str)
     }
 
     @Test func libraryApiReachableInWebKit() async throws {

@@ -149,6 +149,30 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
     /// shipped Round 8's Dyn EQ Triad ~75pt cramped.
     private static let overflowToleranceP: Int = 8
 
+    /// One text element whose computed foreground/background contrast
+    /// fell below the WCAG AA large-text threshold (3.0). Captured by
+    /// the runtime probe — the static validator can't see this when
+    /// the offending color comes from a `var(--cdp-...)` chain that
+    /// terminates at `CanvasText` (a system color whose value depends
+    /// on the runtime `color-scheme`). Caps at the first 10 to keep the
+    /// report bounded for badly-themed UIs.
+    struct TextContrastIssue: Encodable, Equatable {
+        let selector: String
+        let text: String          // first ~50 chars of the element's own text
+        let foreground: String    // computed RGB / RGBA string
+        let background: String    // effective background (walked up to the first opaque ancestor)
+        let ratio: Double         // rounded to 2 decimals
+
+        enum CodingKeys: String, CodingKey {
+            case selector, text, foreground, background, ratio
+        }
+    }
+
+    /// Cap on how many low-contrast text issues we serialize. A badly
+    /// themed UI can have hundreds of children inheriting one bad rule;
+    /// the first few are diagnostic, the rest are noise.
+    private static let textContrastIssueCap: Int = 10
+
     struct Report: Encodable {
         let status: ReportStatus
         let readyFired: Bool
@@ -158,6 +182,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         let components: [ComponentReport]
         let params: [ParamCoverage]
         let contentOverflow: ContentOverflow?
+        let lowContrastTexts: [TextContrastIssue]
 
         enum CodingKeys: String, CodingKey {
             case status
@@ -168,6 +193,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             case components
             case params
             case contentOverflow = "content_overflow"
+            case lowContrastTexts = "low_contrast_texts"
         }
     }
 
@@ -383,6 +409,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
 
         var jsErrors: [JSLogEntry] = []
         var componentsRaw: [ComponentReport] = []
+        var lowContrastTexts: [TextContrastIssue] = []
         if let data = probeJSON.data(using: .utf8),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let errs = obj["errors"] as? [[String: Any]] {
@@ -403,6 +430,17 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                         paramY: c["paramY"] as? String,
                         bound: (c["bound"] as? Bool) ?? false,
                         reason: c["reason"] as? String
+                    ))
+                }
+            }
+            if let contrasts = obj["contrasts"] as? [[String: Any]] {
+                for c in contrasts {
+                    lowContrastTexts.append(TextContrastIssue(
+                        selector: (c["selector"] as? String) ?? "",
+                        text: (c["text"] as? String) ?? "",
+                        foreground: (c["foreground"] as? String) ?? "",
+                        background: (c["background"] as? String) ?? "",
+                        ratio: (c["ratio"] as? Double) ?? 0
                     ))
                 }
             }
@@ -482,7 +520,10 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             )
         }
 
-        // Aggregate status.
+        // Aggregate status. Low contrast is a soft issue (warn) — many
+        // authors deliberately ship muted/secondary text that scrapes
+        // the threshold, and we'd rather not block a save on a
+        // judgment call. JS errors and unbound components stay fail.
         let failureKinds: Set<String> = [
             "error", "unhandledrejection", "load", "harness", "callback_exception"
         ]
@@ -492,7 +533,9 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             || componentsRaw.contains(where: { !$0.bound })
         {
             status = .fail
-        } else if paramCoverage.contains(where: { !$0.hasInteractiveBinding }) {
+        } else if paramCoverage.contains(where: { !$0.hasInteractiveBinding })
+                  || !lowContrastTexts.isEmpty
+        {
             status = .warn
         } else {
             status = .pass
@@ -506,7 +549,8 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             jsErrors: combinedErrors,
             components: componentsRaw,
             params: paramCoverage,
-            contentOverflow: contentOverflow
+            contentOverflow: contentOverflow,
+            lowContrastTexts: lowContrastTexts
         )
     }
 
@@ -690,15 +734,18 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
 
     /// Run after ready fires (or on timeout). Enumerates cdp-* custom
     /// elements, reports each one's binding state, collects any captured
-    /// JS errors. Serialized to a JSON string because WKWebView's
-    /// `evaluateJavaScript` can only return primitive/JSON-compatible
-    /// values — strings are the most portable.
+    /// JS errors, and computes WCAG contrast for every text-bearing
+    /// element (descending into open shadow roots so slotted labels
+    /// inside cdp-ui components are checked too). Serialized to a JSON
+    /// string because WKWebView's `evaluateJavaScript` can only return
+    /// primitive/JSON-compatible values — strings are the most portable.
     private static let probeScript = """
     (function () {
         var state = window.__cdpSmokeTest || { errors: [], ready: false };
         var report = {
             errors: state.errors || [],
             components: [],
+            contrasts: [],
         };
         var tags = ['cdp-slider', 'cdp-toggle', 'cdp-choice', 'cdp-xy', 'cdp-knob', 'cdp-panel'];
         tags.forEach(function (tag) {
@@ -739,6 +786,112 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                 });
             }
         });
+
+        // ─── Text contrast pass ──────────────────────────────────────
+        function parseRGB(s) {
+            if (!s) return null;
+            var m = s.match(/^rgba?\\(([^)]+)\\)$/);
+            if (!m) return null;
+            var parts = m[1].split(/[,\\s\\/]+/).filter(function (p) { return p.length > 0; }).map(parseFloat);
+            if (parts.length < 3) return null;
+            var alpha = parts.length >= 4 ? parts[3] : 1;
+            return [parts[0], parts[1], parts[2], alpha];
+        }
+        function srgbLin(v) {
+            v = v / 255;
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        }
+        function lumOf(rgb) {
+            return 0.2126 * srgbLin(rgb[0]) + 0.7152 * srgbLin(rgb[1]) + 0.0722 * srgbLin(rgb[2]);
+        }
+        function contrastRatio(a, b) {
+            var la = lumOf(a), lb = lumOf(b);
+            var hi = Math.max(la, lb), lo = Math.min(la, lb);
+            return (hi + 0.05) / (lo + 0.05);
+        }
+        // Walk up the flattened tree (parent element OR shadow host)
+        // looking for the first non-transparent backgroundColor. Returns
+        // the computed string if found, falls back to white (matches
+        // WebKit's default canvas paint).
+        function effectiveBg(el) {
+            var node = el;
+            for (var hops = 0; node && hops < 30; hops++) {
+                if (node.nodeType === 1) {
+                    var bg = getComputedStyle(node).backgroundColor;
+                    var rgba = parseRGB(bg);
+                    if (rgba && rgba[3] > 0.05) return bg;
+                }
+                if (node.parentElement) { node = node.parentElement; }
+                else if (node.parentNode && node.parentNode.host) { node = node.parentNode.host; }
+                else { node = node.parentNode; }
+            }
+            return 'rgb(255, 255, 255)';
+        }
+        function shortSelector(el) {
+            var tag = el.tagName ? el.tagName.toLowerCase() : '?';
+            var idPart = el.id ? '#' + el.id : '';
+            var clsRaw = (typeof el.className === 'string') ? el.className : '';
+            var clsPart = clsRaw ? '.' + clsRaw.trim().split(/\\s+/).slice(0, 2).join('.') : '';
+            return tag + idPart + clsPart;
+        }
+        function ownText(el) {
+            var s = '';
+            for (var i = 0; i < el.childNodes.length; i++) {
+                var c = el.childNodes[i];
+                if (c.nodeType === 3 && c.nodeValue) s += c.nodeValue;
+            }
+            return s.trim();
+        }
+        function collect(root, out) {
+            if (!root || !root.querySelectorAll) return;
+            var all = root.querySelectorAll('*');
+            for (var i = 0; i < all.length; i++) {
+                var el = all[i];
+                // Skip elements that aren't visible — display:none /
+                // visibility:hidden / zero-area / aria-hidden text isn't
+                // user-facing, so its contrast doesn't matter.
+                var cs = getComputedStyle(el);
+                if (cs.display === 'none' || cs.visibility === 'hidden') {
+                    // Don't descend — children are also invisible.
+                    continue;
+                }
+                if (ownText(el).length > 0) out.push(el);
+                if (el.shadowRoot) collect(el.shadowRoot, out);
+            }
+        }
+        try {
+            var els = [];
+            collect(document, els);
+            var seen = {};
+            for (var i = 0; i < els.length && report.contrasts.length < 10; i++) {
+                var el = els[i];
+                var fg = getComputedStyle(el).color;
+                var bg = effectiveBg(el);
+                var fgRGB = parseRGB(fg);
+                var bgRGB = parseRGB(bg);
+                if (!fgRGB || !bgRGB) continue;
+                var r = contrastRatio(fgRGB, bgRGB);
+                if (r >= 3.0) continue;
+                var sel = shortSelector(el);
+                // Dedupe by selector — many siblings share one rule and
+                // would otherwise burn the issue cap on duplicates.
+                if (seen[sel]) continue;
+                seen[sel] = true;
+                report.contrasts.push({
+                    selector: sel,
+                    text: ownText(el).slice(0, 50),
+                    foreground: fg,
+                    background: bg,
+                    ratio: Math.round(r * 100) / 100
+                });
+            }
+        } catch (e) {
+            report.errors.push({
+                kind: 'error',
+                message: 'contrast probe threw: ' + (e && e.message ? e.message : String(e)),
+                atMs: (performance && performance.now) ? performance.now() : 0
+            });
+        }
         return JSON.stringify(report);
     })();
     """

@@ -341,6 +341,102 @@ struct BundleUISmokeTesterTests {
                 "content_overflow must be nil when the layout fits within the declared dimensions; got \(String(describing: report.contentOverflow))")
     }
 
+    // MARK: - Text contrast pass
+
+    @Test @MainActor func flagsLowContrastTextOnDarkBackground() async throws {
+        // Author wrote dark text on a dark page background — exactly the
+        // class of bug the static validator already catches as
+        // body_text_contrast, but here we confirm the runtime probe sees
+        // it too. Status downgrades to warn (not fail), since muted text
+        // is sometimes intentional.
+        let ui = """
+        <!doctype html><html><body style="background: #1c1c20; color: #2a2a2e;">
+          <p>Threshold</p>
+          <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: twoParamManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff", 1: "resonance"],
+            hostParameterCount: 2,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        #expect(!report.lowContrastTexts.isEmpty,
+                "expected at least one low-contrast text element; got \(report.lowContrastTexts)")
+        let pIssue = report.lowContrastTexts.first { $0.selector.hasPrefix("p") }
+        #expect(pIssue != nil, "the <p>Threshold</p> element should appear; got \(report.lowContrastTexts.map(\.selector))")
+        #expect((pIssue?.ratio ?? 99) < 3.0,
+                "ratio must be below the WCAG large-text threshold; got \(pIssue?.ratio ?? -1)")
+        // Low contrast on its own (no JS errors, all params bound)
+        // produces warn — not fail.
+        #expect(report.status == .warn,
+                "low contrast alone is a warning, not a fail; got \(report.status)")
+    }
+
+    @Test @MainActor func reportsNoContrastIssuesOnReadableBundle() async throws {
+        // Explicit, high-contrast colors all the way down — should leave
+        // lowContrastTexts empty and keep status at .pass. The
+        // `color-scheme: dark` declaration is load-bearing: cdp-* widgets
+        // resolve their text color through CanvasText, which paints
+        // black on a dark background unless color-scheme is declared.
+        let ui = """
+        <!doctype html><html>
+        <head><style>:root { color-scheme: dark; }</style></head>
+        <body style="background: #111; color: #f5f5f5;">
+          <p>Cutoff</p>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <cdp-slider param="resonance"></cdp-slider>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: twoParamManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff", 1: "resonance"],
+            hostParameterCount: 2,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        #expect(report.lowContrastTexts.isEmpty,
+                "no contrast issues expected on a high-contrast bundle; got \(report.lowContrastTexts)")
+        #expect(report.status == .pass)
+    }
+
+    @Test @MainActor func dedupesLowContrastIssuesBySelector() async throws {
+        // Twenty <p> siblings all inherit the same bad color rule. The
+        // probe caps at 10 issues but also dedupes by short selector, so
+        // we expect just one entry for the whole group — not 10 copies.
+        var paragraphs = ""
+        for _ in 0..<20 { paragraphs += "<p>Threshold</p>" }
+        let ui = """
+        <!doctype html><html><body style="background: #1c1c20; color: #2a2a2e;">
+          \(paragraphs)
+          <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: twoParamManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff", 1: "resonance"],
+            hostParameterCount: 2,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        let pIssues = report.lowContrastTexts.filter { $0.selector.hasPrefix("p") }
+        #expect(pIssues.count == 1,
+                "twenty siblings sharing one selector should produce exactly one issue; got \(pIssues.count)")
+    }
+
     @Test @MainActor func cdpXYUnboundWhenAxisMissing() async throws {
         // param-y names a param that doesn't exist → xy pad doesn't
         // bind and drags move nothing.

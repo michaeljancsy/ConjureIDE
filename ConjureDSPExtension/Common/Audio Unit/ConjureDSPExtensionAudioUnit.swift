@@ -706,6 +706,23 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		name.replacingOccurrences(of: "_", with: " ")
 	}
 
+	// Static regex constants — compiled once at first use. fatalError on bad pattern
+	// is intentional: a broken regex is a programmer error caught at dev time, not a
+	// user-facing crash.
+	private static let pythonParamNameRegex: NSRegularExpression = {
+		guard let re = try? NSRegularExpression(pattern: #"^\s*(\w+)\s*=\s*(\d+)\s*$"#) else {
+			fatalError("ConjureDSPExtensionAudioUnit: pythonParamNameRegex pattern is invalid")
+		}
+		return re
+	}()
+
+	private static let rustParamNameRegex: NSRegularExpression = {
+		guard let re = try? NSRegularExpression(pattern: #"^\s*const\s+(\w+)\s*:\s*usize\s*=\s*(\d+)\s*;"#) else {
+			fatalError("ConjureDSPExtensionAudioUnit: rustParamNameRegex pattern is invalid")
+		}
+		return re
+	}()
+
 	/// Parse param names from source text for either Python or Rust.
 	///
 	/// Looks for a `# Parameters:` (Python) or `// Parameters:` (Rust) marker,
@@ -727,8 +744,8 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 
 		// Try both Python (NAME = N) and Rust (const NAME: usize = N;) patterns
-		let pythonPattern = try! NSRegularExpression(pattern: #"^\s*(\w+)\s*=\s*(\d+)\s*$"#)
-		let rustPattern = try! NSRegularExpression(pattern: #"^\s*const\s+(\w+)\s*:\s*usize\s*=\s*(\d+)\s*;"#)
+		let pythonPattern = ConjureDSPExtensionAudioUnit.pythonParamNameRegex
+		let rustPattern = ConjureDSPExtensionAudioUnit.rustParamNameRegex
 		var names: [Int: String] = [:]
 
 		for i in (markerIndex + 1)..<lines.count {

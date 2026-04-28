@@ -728,6 +728,44 @@ enum DSPDocumentation {
         </svg>
       </cdp-knob>
       ```
+    - `<cdp-meter source="peak-out">` — read-only level meter with PPM
+      ballistics, peak-hold marker (~2 s, click-to-reset), and three-zone
+      coloring (green / yellow at `warn` / red at `clip`). Sources:
+      `peak-in`, `peak-out`, `rms-in`, `rms-out`, or `telemetry:<key>`
+      to read a per-block DSP value. `unit="db"` skips the linear→dB
+      conversion (use it when the source already publishes dB, e.g.
+      gain-reduction telemetry). `orientation="vertical"` (default) or
+      `horizontal`. `min`/`max` set the dB range; `decay` (default
+      `11.76` dB/s, IEC PPM) tunes fall rate; `hold="0"` disables hold,
+      `"infinite"` latches until clicked. `gradient="smooth"` blends
+      colors continuously instead of hard-stopping at warn/clip. Add
+      `invert` for "more is worse" sources (gain-reduction, ducking):
+      bar fills from the `max` end and red lives at the `min` end —
+      with `invert`, set `warn` closer to `max` and `clip` closer to
+      `min`. For total color control, override `--cdp-meter-gradient`
+      with any `linear-gradient(...)`. **Meters need `"audioFrames":
+      true` in the manifest** — without it `onFrame` never fires and
+      the meter sits at zero (see "Audio frames" below). Meters do NOT
+      take a `param=` attribute; pair them with at least one slider /
+      knob / toggle so the bundle has actuators.
+
+      ```html
+      <cdp-meter source="peak-out" min="-60" max="0" warn="-18" clip="-6">
+        <span slot="label">OUT</span>
+      </cdp-meter>
+
+      <!-- GR meter: 0 dB = no reduction (safe), -24 dB = max reduction -->
+      <cdp-meter source="telemetry:gain_reduction"
+                 min="-24" max="0" warn="-6" clip="-12" invert>
+        <span slot="label">GR</span>
+      </cdp-meter>
+
+      <!-- Smooth blend instead of hard-edged zones -->
+      <cdp-meter source="rms-out" gradient="smooth">
+        <span slot="label">RMS</span>
+      </cdp-meter>
+      ```
+
     - `<cdp-panel auto>` — fallback layout that mirrors the stock slider
       panel. Useful as a one-liner when you just want themed sliders.
 
