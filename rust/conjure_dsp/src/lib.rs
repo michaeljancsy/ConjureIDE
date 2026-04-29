@@ -245,38 +245,53 @@ pub unsafe extern "C" fn dsp_kernel_load_wasm(
     (*kernel).load_wasm(bytes)
 }
 
-/// Returns the NAM model path embedded in the loaded WASM module, or null if none.
-/// The returned pointer is valid until the next `load_wasm` or `dsp_kernel_destroy`.
+/// Returns the number of NAM model slots declared by the loaded WASM module.
+/// 0 when the module declares no NAM models.
 ///
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 #[no_mangle]
-pub unsafe extern "C" fn dsp_kernel_nam_path(kernel: DSPKernelRef) -> *const c_char {
+pub unsafe extern "C" fn dsp_kernel_nam_path_count(kernel: DSPKernelRef) -> u32 {
+    (*kernel).nam_paths().len() as u32
+}
+
+/// Returns the NAM model path declared at slot `idx`, or null if `idx` is out of range.
+/// The returned pointer is valid until the next `load_wasm`, `dsp_kernel_destroy`, or
+/// next call to this function.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_nam_path_at(
+    kernel: DSPKernelRef,
+    idx: u32,
+) -> *const c_char {
     thread_local! {
         static NAM_PATH_CACHE: std::cell::RefCell<Option<std::ffi::CString>> = const { std::cell::RefCell::new(None) };
     }
-    match (*kernel).nam_path() {
-        Some(path) => {
-            NAM_PATH_CACHE.with(|cache| {
-                let mut cache = cache.borrow_mut();
-                *cache = std::ffi::CString::new(path).ok();
-                cache.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null())
-            })
-        }
-        None => std::ptr::null(),
+    let paths = (*kernel).nam_paths();
+    let i = idx as usize;
+    if i >= paths.len() {
+        return std::ptr::null();
     }
+    NAM_PATH_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        *cache = std::ffi::CString::new(paths[i].as_str()).ok();
+        cache.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null())
+    })
 }
 
-/// Inject NAM model binary data into the loaded WASM backend.
-/// Call after `dsp_kernel_load_wasm` when `dsp_kernel_nam_path` returns non-null.
+/// Inject NAM model binary data into the loaded WASM backend at the given slot.
+/// Call after `dsp_kernel_load_wasm` for each path returned by `dsp_kernel_nam_path_at`.
 /// Returns true on success.
 ///
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `data` must point to `len` valid bytes.
 #[no_mangle]
-pub unsafe extern "C" fn dsp_kernel_inject_nam(
+pub unsafe extern "C" fn dsp_kernel_inject_nam_slot(
     kernel: DSPKernelRef,
+    slot: u32,
     data: *const u8,
     len: usize,
 ) -> bool {
@@ -284,10 +299,10 @@ pub unsafe extern "C" fn dsp_kernel_inject_nam(
         return false;
     }
     let bytes = std::slice::from_raw_parts(data, len);
-    match (*kernel).inject_nam(bytes) {
+    match (*kernel).inject_nam_slot(slot, bytes) {
         Ok(()) => true,
         Err(err) => {
-            eprintln!("NAM injection failed: {}", err);
+            eprintln!("NAM injection failed (slot {}): {}", slot, err);
             (*kernel).set_last_error(Some(err));
             false
         }

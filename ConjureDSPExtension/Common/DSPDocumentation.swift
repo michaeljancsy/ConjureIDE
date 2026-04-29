@@ -560,7 +560,7 @@ enum DSPDocumentation {
               wet = model.process(inputs[ch][:frame_count] * gain, ch)
               outputs[ch][:frame_count] = inputs[ch][:frame_count] * (1 - mix_val) + wet * mix_val
 
-    ## Rust API
+    ## Rust API — single model
 
       use conjuredsp::*;
       setup!();
@@ -568,35 +568,59 @@ enum DSPDocumentation {
 
       // In process():
       unsafe {
-          if let Some(model) = NAM_MODEL.as_mut() {
-              for c in 0..ctx.channels() {
-                  let n = ctx.frames();
-                  for i in 0..n { NAM_IN[i] = ctx.input(c, i); }
-                  model.process_buffer(&NAM_IN[..n], &mut NAM_OUT[..n], c);
-                  for i in 0..n { ctx.set_output(c, i, NAM_OUT[i]); }
-              }
+          for c in 0..ctx.channels() {
+              let n = ctx.frames();
+              for i in 0..n { NAM_IN[i] = ctx.input(c, i); }
+              nam_process(&NAM_IN[..n], &mut NAM_OUT[..n], c);
+              for i in 0..n { ctx.set_output(c, i, NAM_OUT[i]); }
           }
       }
 
     ### nam!("path") macro
 
-    Declares which NAM model to use. Expands to:
-      - static mut NAM_MODEL: Option<NamModel> — the loaded model
+    Declares a single NAM model. Expands to:
       - static mut NAM_IN / NAM_OUT: [f32; MAX_FR] — scratch buffers
-      - WASM exports: get_nam_data_ptr, init_nam, get_nam_active
-      - Path metadata exports: get_nam_path_ptr, get_nam_path_len
+      - nam_process(input, output, channel) -> bool — runs host-side inference
+      - Manifest exports: get_nam_manifest_ptr, get_nam_manifest_len
 
     The host reads the path from the compiled WASM, loads the .nam file,
-    and injects the model data into WASM memory before the first process() call.
+    and injects the native model before the first process() call. Inference
+    runs natively on the host (not inside the WASM sandbox) for speed.
 
-    ### NamModel methods (Rust)
+    ## Rust API — multiple models in one preset
 
-      model.process_buffer(input: &[f32], output: &mut [f32], channel: usize)
-        Process one channel. Input and output slices must be same length.
+    Use `nams!` to declare two or more models. Each NAME becomes a slot
+    constant (`pub const NAME: u32`) you pass to `nam_process_slot`.
+
+      use conjuredsp::*;
+      setup!();
+
+      nams! {
+          DRIVE = "tone3000://19/56",
+          CAB   = "tone3000://42/8",
+      }
+
+      // In process(): cascade DRIVE -> CAB
+      let mut a = [0.0_f32; MAX_FR];
+      let mut b = [0.0_f32; MAX_FR];
+      unsafe {
+          for c in 0..ctx.channels() {
+              let n = ctx.frames();
+              for i in 0..n { a[i] = ctx.input(c, i); }
+              nam_process_slot(DRIVE, &a[..n], &mut b[..n], c);
+              nam_process_slot(CAB,   &b[..n], &mut a[..n], c);
+              for i in 0..n { ctx.set_output(c, i, a[i]); }
+          }
+      }
+
+    Slots are independent — each maintains its own per-channel state.
+    `nam_process_slot` returns `false` if the slot's model failed to inject
+    (e.g. the user hasn't downloaded that tone yet); the output slice is
+    untouched in that case so callers can fall back to dry signal.
 
     ## Notes
 
-    - NAM models are mono — process() runs independently per channel with shared weights
+    - NAM models are mono — inference runs independently per channel with shared weights
     - WaveNet models maintain a sliding history window across callbacks (automatic)
     - If model sample rate != DAW sample rate, a warning is logged on first process() call
     - Use list_tones tool to see downloaded tones and their tone3000:// paths

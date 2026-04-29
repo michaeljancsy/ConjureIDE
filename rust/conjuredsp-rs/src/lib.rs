@@ -390,16 +390,18 @@ macro_rules! latency {
     };
 }
 
-/// Declares a NAM (Neural Amp Modeler) model to be loaded by the host.
+/// Declares a single NAM (Neural Amp Modeler) model to be loaded by the host.
+///
+/// For multiple models in the same preset, use [`nams!`] instead.
 ///
 /// NAM inference runs natively on the host side (not inside WASM) for
 /// both correctness and performance. The WASM module calls a host import
-/// (`__conjuredsp_nam_process`) that routes to a native `NamModel`.
+/// (`__conjuredsp_nam_process_slot`) that routes to a native `NamModel`.
 ///
 /// Expands to:
 /// - `NAM_IN` / `NAM_OUT` static audio buffers
 /// - `nam_process()` helper that calls the host import
-/// - Path metadata exports: `get_nam_path_ptr`, `get_nam_path_len`
+/// - Manifest exports: `get_nam_manifest_ptr`, `get_nam_manifest_len`
 ///
 /// # Example
 ///
@@ -430,10 +432,13 @@ macro_rules! nam {
         static mut NAM_IN: [f32; MAX_FR] = [0.0; MAX_FR];
         static mut NAM_OUT: [f32; MAX_FR] = [0.0; MAX_FR];
 
-        static NAM_PATH: &str = $path;
+        // Single-slot variant of the multi-slot manifest format used by `nams!`:
+        // newline-separated paths, one per slot, in declaration order.
+        static NAM_MANIFEST: &str = concat!($path, "\n");
 
         extern "C" {
-            fn __conjuredsp_nam_process(
+            fn __conjuredsp_nam_process_slot(
+                slot: u32,
                 input_ptr: *const f32,
                 output_ptr: *mut f32,
                 frames: i32,
@@ -441,11 +446,13 @@ macro_rules! nam {
             ) -> i32;
         }
 
-        /// Process audio through the host-side NAM model.
+        /// Process audio through the host-side NAM model (single-slot).
         /// Returns true if the model was active and processed successfully.
         #[inline]
+        #[allow(dead_code)]
         unsafe fn nam_process(input: &[f32], output: &mut [f32], channel: usize) -> bool {
-            __conjuredsp_nam_process(
+            __conjuredsp_nam_process_slot(
+                0,
                 input.as_ptr(),
                 output.as_mut_ptr(),
                 input.len() as i32,
@@ -454,14 +461,119 @@ macro_rules! nam {
         }
 
         #[no_mangle]
-        pub extern "C" fn get_nam_path_ptr() -> i32 {
-            NAM_PATH.as_ptr() as i32
+        pub extern "C" fn get_nam_manifest_ptr() -> i32 {
+            NAM_MANIFEST.as_ptr() as i32
         }
 
         #[no_mangle]
-        pub extern "C" fn get_nam_path_len() -> i32 {
-            NAM_PATH.len() as i32
+        pub extern "C" fn get_nam_manifest_len() -> i32 {
+            NAM_MANIFEST.len() as i32
         }
+    };
+}
+
+/// Declares multiple named NAM model slots.
+///
+/// Each `NAME = "path"` pair becomes a `pub const NAME: u32 = <slot_index>`
+/// and gets routed to its own injected NAM model on the host. Slot indices
+/// are dense and assigned in declaration order.
+///
+/// Expands to:
+/// - `pub const NAME: u32` per slot
+/// - `NAM_MANIFEST: &str` — newline-separated paths, one per slot
+/// - `extern "C" fn __conjuredsp_nam_process_slot` host import
+/// - `nam_process_slot(slot, input, output, channel) -> bool` helper
+/// - `get_nam_manifest_ptr` / `get_nam_manifest_len` exports
+///
+/// # Example
+///
+/// ```ignore
+/// use conjuredsp::*;
+/// setup!();
+///
+/// nams! {
+///     DRIVE = "tone3000://19/56",
+///     CAB   = "tone3000://42/8",
+/// }
+///
+/// #[no_mangle]
+/// pub extern "C" fn process(
+///     input: *const f32, output: *mut f32,
+///     channel_count: i32, frame_count: i32, sample_rate: f32,
+/// ) {
+///     let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+///     let mut a = [0.0_f32; MAX_FR];
+///     let mut b = [0.0_f32; MAX_FR];
+///     unsafe {
+///         for c in 0..ctx.channels() {
+///             let n = ctx.frames();
+///             for i in 0..n { a[i] = ctx.input(c, i); }
+///             nam_process_slot(DRIVE, &a[..n], &mut b[..n], c);
+///             nam_process_slot(CAB,   &b[..n], &mut a[..n], c);
+///             for i in 0..n { ctx.set_output(c, i, a[i]); }
+///         }
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! nams {
+    ( $( $NAME:ident = $path:expr ),+ $(,)? ) => {
+        $crate::_nams_indices!(0u32; $( $NAME ),*);
+
+        // Manifest: newline-separated paths, one per slot, in declaration order.
+        // Host parses by splitting on '\n' and dropping empty trailing entries.
+        static NAM_MANIFEST: &str = concat!( $( $path, "\n", )+ );
+
+        extern "C" {
+            fn __conjuredsp_nam_process_slot(
+                slot: u32,
+                input_ptr: *const f32,
+                output_ptr: *mut f32,
+                frames: i32,
+                channel: i32,
+            ) -> i32;
+        }
+
+        /// Process audio through the host-side NAM model in `slot`.
+        /// Returns true if the slot's model was injected and processed successfully.
+        #[inline]
+        #[allow(dead_code)]
+        unsafe fn nam_process_slot(
+            slot: u32,
+            input: &[f32],
+            output: &mut [f32],
+            channel: usize,
+        ) -> bool {
+            __conjuredsp_nam_process_slot(
+                slot,
+                input.as_ptr(),
+                output.as_mut_ptr(),
+                input.len() as i32,
+                channel as i32,
+            ) == 1
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_nam_manifest_ptr() -> i32 {
+            NAM_MANIFEST.as_ptr() as i32
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_nam_manifest_len() -> i32 {
+            NAM_MANIFEST.len() as i32
+        }
+    };
+}
+
+/// Internal helper: generates sequential `pub const SLOT: u32 = N` declarations.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! _nams_indices {
+    ($idx:expr; ) => {};
+    ($idx:expr; $NAME:ident $(, $REST:ident)*) => {
+        #[allow(dead_code)]
+        pub const $NAME: u32 = $idx;
+        $crate::_nams_indices!($idx + 1u32; $( $REST ),*);
     };
 }
 
