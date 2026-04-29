@@ -548,6 +548,7 @@ struct CustomUIWebView: NSViewRepresentable {
 
             case "unsubscribeAudioFrames":
                 jsRequestedAudioFrames = false
+                includeFFT = false
                 stopAudioFrameForwarding()
 
             default:
@@ -584,7 +585,6 @@ struct CustomUIWebView: NSViewRepresentable {
         fileprivate func stopAudioFrameForwarding() {
             audioFrameCancellable?.cancel()
             audioFrameCancellable = nil
-            includeFFT = false
             syncCaptureState()
         }
 
