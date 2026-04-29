@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>cdp-scope preview</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font: 13px -apple-system, system-ui, sans-serif;
+      margin: 0;
+      padding: 24px;
+      background: Canvas;
+      color: CanvasText;
+    }
+    h1 { font-size: 16px; margin: 0 0 4px 0; }
+    .hint { color: color-mix(in srgb, CanvasText 60%, transparent); margin: 0 0 16px 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 16px;
+    }
+    section {
+      border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+      border-radius: 6px;
+      padding: 12px;
+      background: color-mix(in srgb, Canvas 96%, CanvasText 4%);
+    }
+    h2 { font-size: 13px; margin: 0 0 8px 0; font-weight: 600; }
+    cdp-scope { height: 120px; }
+    .toolbar { margin-bottom: 16px; display: flex; gap: 8px; align-items: center; }
+    button {
+      font: inherit;
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+      background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
+      color: inherit;
+      cursor: pointer;
+    }
+  </style>
+  <!-- Cache-buster: WebKit caches script files aggressively across
+       reloads, masking edits to the symlinked cdp-ui.js. The inline
+       script below stamps a query parameter onto the URL so each
+       reload pulls the latest source. -->
+  <script>
+    document.write('<script src="bridge-stub.js?v=' + Date.now() + '"><\/script>');
+    document.write('<script src="cdp-ui.js?v=' + Date.now() + '"><\/script>');
+  </script>
+</head>
+<body>
+  <h1>cdp-scope preview</h1>
+  <p class="hint">Synthetic vector telemetry. Edit the live <code>cdp-ui.js</code> in the repo and reload this page.</p>
+
+  <div class="toolbar">
+    <button id="theme-light">Light theme</button>
+    <button id="theme-dark">Dark theme</button>
+  </div>
+
+  <div class="grid">
+    <section>
+      <h2>line, auto-range — <code>sine_curve</code> (256)</h2>
+      <cdp-scope telemetry="sine_curve"></cdp-scope>
+    </section>
+
+    <section>
+      <h2>filled, fixed range −1..1 — <code>sine_curve</code></h2>
+      <cdp-scope telemetry="sine_curve" draw="filled" min="-1" max="1"></cdp-scope>
+    </section>
+
+    <section>
+      <h2>dots — <code>ramp_curve</code> (128)</h2>
+      <cdp-scope telemetry="ramp_curve" draw="dots" min="-1" max="1"></cdp-scope>
+    </section>
+
+    <section>
+      <h2>line + grid — <code>impulse_curve</code>, walking</h2>
+      <cdp-scope telemetry="impulse_curve" min="0" max="1" grid></cdp-scope>
+    </section>
+
+    <section>
+      <h2>length=64 prefix — <code>sine_curve</code></h2>
+      <cdp-scope telemetry="sine_curve" length="64" min="-1" max="1"></cdp-scope>
+    </section>
+
+    <section>
+      <h2>auto-range, GR-dB style — <code>impulse_curve</code></h2>
+      <cdp-scope telemetry="impulse_curve" grid></cdp-scope>
+    </section>
+
+    <section>
+      <h2>decimation — <code>long_curve</code> (4096)</h2>
+      <cdp-scope telemetry="long_curve" min="-1.2" max="1.2" grid></cdp-scope>
+    </section>
+
+    <section>
+      <h2>filled decimation — <code>long_curve</code></h2>
+      <cdp-scope telemetry="long_curve" draw="filled" min="-1.2" max="1.2"></cdp-scope>
+    </section>
+
+    <section>
+      <h2>loose-match: <code>telemetry="envcurve"</code> → <code>ENV_CURVE</code></h2>
+      <cdp-scope telemetry="envcurve" min="-1" max="1"></cdp-scope>
+    </section>
+
+    <section>
+      <h2>scalar bail — <code>gr_db</code> (no draw expected)</h2>
+      <cdp-scope telemetry="gr_db" grid></cdp-scope>
+    </section>
+
+    <section>
+      <h2>missing slot — <code>nope</code> (no draw expected)</h2>
+      <cdp-scope telemetry="nope" grid></cdp-scope>
+    </section>
+  </div>
+
+  <script>
+    // Theme flip — production fires a 'themechange' event with detail.theme.
+    function setTheme(t) {
+      document.documentElement.style.colorScheme = t;
+      window.dispatchEvent(new CustomEvent('themechange', { detail: { theme: t } }));
+    }
+    document.getElementById('theme-light').addEventListener('click', () => setTheme('light'));
+    document.getElementById('theme-dark').addEventListener('click', () => setTheme('dark'));
+  </script>
+</body>
+</html>

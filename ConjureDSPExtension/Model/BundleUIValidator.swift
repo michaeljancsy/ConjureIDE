@@ -99,6 +99,7 @@ enum BundleUIValidator {
            let html = try? String(contentsOf: url, encoding: .utf8) {
             issues.append(contentsOf: checkParamReferences(html: html, bundle: bundle))
             issues.append(contentsOf: checkUnboundDeclaredParams(html: html, bundle: bundle))
+            issues.append(contentsOf: checkTelemetryReferences(html: html, bundle: bundle))
             issues.append(contentsOf: checkNoExternalNetwork(html: html))
             issues.append(contentsOf: checkNoSystemColorInCanvas(html: html))
             issues.append(contentsOf: checkHasInteractiveSurface(html: html, bundle: bundle))
@@ -1146,6 +1147,66 @@ enum BundleUIValidator {
             range: NSRange(location: 0, length: ns.length),
             withTemplate: ""
         )
+    }
+
+    /// Every `<cdp-scope telemetry="X">` reference must resolve to a slot
+    /// declared in `manifest.telemetry` — when the manifest has a
+    /// `telemetry` block at all. When the block is absent we skip the
+    /// check entirely: unlike `param=` (which the bridge resolves at
+    /// `_init` against manifest metadata, before the DSP loads), the
+    /// telemetry binding happens at frame-arrival time against whatever
+    /// the loaded script actually publishes — no static guarantee broken.
+    /// Authors who want pre-load lint just declare a `telemetry` array
+    /// in their manifest.
+    private static func checkTelemetryReferences(html: String, bundle: PresetBundle) -> [Issue] {
+        let declared = bundle.manifest.telemetry ?? []
+        guard !declared.isEmpty else { return [] }
+
+        guard let regex = try? NSRegularExpression(
+            pattern: #"<cdp-scope\b[^>]*\btelemetry\s*=\s*["']([^"']+)["']"#,
+            options: [.caseInsensitive]
+        ) else { return [] }
+
+        let scanned = stripHTMLComments(html)
+        let ns = scanned as NSString
+        let matches = regex.matches(in: scanned, range: NSRange(location: 0, length: ns.length))
+
+        let declaredNorms = Set(declared.map { looseNormalize($0.name) })
+        var issues: [Issue] = []
+        var seenUnresolved: Set<String> = []
+        for match in matches where match.numberOfRanges >= 2 {
+            let value = ns.substring(with: match.range(at: 1))
+            if declaredNorms.contains(looseNormalize(value)) { continue }
+            if seenUnresolved.contains(value) { continue }
+            seenUnresolved.insert(value)
+            let nearest = nearestDeclaredTelemetry(to: value, declared: declared)
+            issues.append(
+                Issue(
+                    severity: .fail,
+                    check: "telemetry_referenced_in_ui",
+                    file: "ui/index.html",
+                    message: "telemetry=\"\(value)\" doesn't match any manifest.telemetry[].name.",
+                    suggestion: nearest.map { "Did you mean \"\($0)\"?" } ?? "Add the slot to manifest.telemetry, or bind to an existing name."
+                )
+            )
+        }
+        return issues
+    }
+
+    private static func nearestDeclaredTelemetry(
+        to query: String,
+        declared: [PresetManifest.TelemetryDecl]
+    ) -> String? {
+        let qn = looseNormalize(query)
+        var best: (name: String, dist: Int)?
+        for t in declared {
+            let d = levenshtein(qn, looseNormalize(t.name))
+            if best == nil || d < best!.dist {
+                best = (t.name, d)
+            }
+        }
+        guard let winner = best, winner.dist <= max(2, query.count / 3) else { return nil }
+        return winner.name
     }
 
     /// Case-insensitive, underscore-and-space-insensitive comparison key.
