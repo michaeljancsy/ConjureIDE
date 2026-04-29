@@ -339,8 +339,15 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			paramNamesDidChange.send(nameMap)
 			paramMetadataDidChange.send(meta)
 		} else {
-			// New script declares no metadata — back to legacy generic tree.
-			resetParameterTreeToGeneric()
+			// New script declares no metadata — back to legacy generic
+			// tree. Don't clear currentParamNames here: the caller
+			// (compile_and_run) may have just parsed names from source
+			// comments for a script that lacks rich metadata, and the
+			// UI still needs them.
+			manifestDeclaredMetadata = nil
+			currentParamMetadata = nil
+			buildParameterTree()
+			paramMetadataDidChange.send(nil)
 		}
 		return true
 	}
