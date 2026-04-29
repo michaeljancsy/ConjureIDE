@@ -844,6 +844,160 @@ struct PresetManagerTests {
                "Bundle watcher should have refreshed currentBundle after external UI files appeared")
     }
 
+    // MARK: - Save As: duplicate semantics
+
+    /// Save As must fork the source bundle's `ui/` tree, manifest.params,
+    /// and any author assets — not silently scaffold a generic
+    /// `<cdp-panel auto>` placeholder. Regression guard for the bug where
+    /// `Save As` on a hand-rolled scope_test preset produced a new bundle
+    /// with the starter HTML and lost every author edit.
+    @Test @MainActor func saveAsDuplicatesSourceBundleUITree() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        // Author a source bundle by hand: scaffold UI, then drop a hand-rolled
+        // index.html + an asset file + a populated manifest.params block.
+        let source = try manager.savePreset(
+            name: "SourcePreset",
+            source: "# v1\n",
+            language: .python,
+            scaffoldUI: true
+        )
+        guard let sourceBundle = manager.loadBundle(for: source) else {
+            Issue.record("Expected source bundle to load")
+            return
+        }
+        let sourceRoot = sourceBundle.rootURL
+        let sourceIndexURL = sourceRoot.appendingPathComponent("ui/index.html")
+        let customIndex = "<!-- author's scope drawing --><canvas id=\"scope\"></canvas>"
+        try customIndex.write(to: sourceIndexURL, atomically: true, encoding: .utf8)
+        let sourceAssetURL = sourceRoot.appendingPathComponent("ui/assets/style.css")
+        try FileManager.default.createDirectory(
+            at: sourceAssetURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "body { background: #0a0a0e; }".write(to: sourceAssetURL, atomically: true, encoding: .utf8)
+
+        // Patch manifest.params + manifest.ui height so we can verify both
+        // get carried over by the duplicate.
+        let manifestURL = sourceRoot.appendingPathComponent("manifest.json")
+        var manifestDict = try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as! [String: Any]
+        manifestDict["params"] = [
+            ["name": "Drive", "min": 0.0, "max": 24.0, "default": 6.0, "unit": "dB"],
+            ["name": "Mix", "min": 0.0, "max": 1.0, "default": 0.5, "unit": ""],
+        ]
+        var uiBlock = manifestDict["ui"] as! [String: Any]
+        uiBlock["height"] = 400
+        manifestDict["ui"] = uiBlock
+        try JSONSerialization.data(withJSONObject: manifestDict, options: [.prettyPrinted]).write(to: manifestURL)
+
+        // Re-load so the duplicateFrom argument captures the edited manifest.
+        guard let edited = manager.loadBundle(for: source) else {
+            Issue.record("Expected edited source bundle to reload")
+            return
+        }
+
+        // Save As — the scenario the user hit with scope_test.
+        let dup = try manager.savePreset(
+            name: "ForkedPreset",
+            source: "# v2\n",
+            language: .python,
+            scaffoldUI: false,
+            duplicateFrom: edited
+        )
+
+        guard let dupBundle = manager.loadBundle(for: dup) else {
+            Issue.record("Expected forked bundle to load")
+            return
+        }
+        let dupRoot = dupBundle.rootURL
+
+        // The author's index.html must survive — not be replaced by the
+        // generic `<cdp-panel auto>` starter.
+        let dupIndexURL = dupRoot.appendingPathComponent("ui/index.html")
+        let dupIndex = try String(contentsOf: dupIndexURL, encoding: .utf8)
+        #expect(dupIndex == customIndex,
+                "Save As must preserve author's ui/index.html, not scaffold a generic starter")
+
+        // Asset directory and contents copied verbatim.
+        let dupAssetURL = dupRoot.appendingPathComponent("ui/assets/style.css")
+        let dupAsset = try String(contentsOf: dupAssetURL, encoding: .utf8)
+        #expect(dupAsset == "body { background: #0a0a0e; }",
+                "Save As must copy ui/assets/* from the source bundle")
+
+        // manifest.params and manifest.ui customizations carried over.
+        #expect(dupBundle.manifest.params?.count == 2,
+                "Save As must carry manifest.params from source")
+        #expect(dupBundle.manifest.params?.first?.name == "Drive")
+        #expect(dupBundle.manifest.ui?.height == 400,
+                "Save As must carry manifest.ui customizations from source")
+
+        // Entry script reflects the editor's source, not the source bundle's.
+        let dupScript = try String(
+            contentsOf: dupRoot.appendingPathComponent("process.py"),
+            encoding: .utf8
+        )
+        #expect(dupScript == "# v2\n",
+                "Save As must overwrite the entry script with the editor's source")
+
+        // Source bundle is left untouched.
+        let srcStillThere = try String(contentsOf: sourceIndexURL, encoding: .utf8)
+        #expect(srcStillThere == customIndex,
+                "Save As must not mutate the source bundle")
+    }
+
+    /// When the editor's language differs from the source bundle's language
+    /// (e.g. user opens a Rust preset, retypes it as Python, hits Save As),
+    /// the duplicate's manifest.entry / manifest.language must follow the
+    /// editor — and the stale entry script from the source language must
+    /// not linger in the duplicate, otherwise the bundle has two competing
+    /// entries on disk.
+    @Test @MainActor func saveAsDuplicateAcrossLanguagesPatchesManifest() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let source = try manager.savePreset(
+            name: "RustSource",
+            source: "fn process() {}\n",
+            language: .rust,
+            scaffoldUI: true
+        )
+        guard let sourceBundle = manager.loadBundle(for: source) else {
+            Issue.record("Expected source bundle")
+            return
+        }
+        #expect(sourceBundle.manifest.entry == "process.rs")
+
+        let dup = try manager.savePreset(
+            name: "ForkedAsPython",
+            source: "# python now\n",
+            language: .python,
+            scaffoldUI: false,
+            duplicateFrom: sourceBundle
+        )
+        guard let dupBundle = manager.loadBundle(for: dup) else {
+            Issue.record("Expected forked bundle to load")
+            return
+        }
+
+        #expect(dupBundle.manifest.entry == "process.py",
+                "Manifest.entry must follow the new language")
+        #expect(dupBundle.manifest.language == ScriptLanguage.python.rawValue,
+                "Manifest.language must follow the new language")
+
+        // Old entry script must be gone — otherwise the bundle has two
+        // potential entry scripts and the v1 fallback path could pick the
+        // wrong one.
+        let staleRustURL = dupBundle.rootURL.appendingPathComponent("process.rs")
+        #expect(!FileManager.default.fileExists(atPath: staleRustURL.path),
+                "Old-language entry script must be removed when changing languages")
+
+        // ui/ tree still preserved across the language change.
+        let dupIndexURL = dupBundle.rootURL.appendingPathComponent("ui/index.html")
+        #expect(FileManager.default.fileExists(atPath: dupIndexURL.path),
+                "ui/index.html must still be carried over across language changes")
+    }
+
     // MARK: - Bundle file helpers: create / rename / delete / duplicate
 
     @Test @MainActor func createBundleFileWritesTemplate() throws {

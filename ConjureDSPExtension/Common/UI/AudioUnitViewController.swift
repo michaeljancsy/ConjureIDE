@@ -485,7 +485,18 @@ pub extern "C" fn process(
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
             do {
-                let saved: Preset = try pm.savePreset(name: name, source: source, language: language, scaffoldUI: includeCustomUI)
+                // Save As forks the currently-loaded bundle when there is
+                // one, preserving the source preset's `ui/`, manifest.params,
+                // and any author assets. Falls back to a fresh bundle (with
+                // optional starter UI scaffold) when nothing is loaded — the
+                // scratchpad / post-New case.
+                let saved: Preset = try pm.savePreset(
+                    name: name,
+                    source: source,
+                    language: language,
+                    scaffoldUI: includeCustomUI,
+                    duplicateFrom: pm.currentBundle
+                )
                 Analytics.track(.presetSave, properties: [
                     "preset_name": name,
                     "is_new": true,

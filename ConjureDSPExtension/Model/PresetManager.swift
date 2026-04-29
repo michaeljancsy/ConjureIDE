@@ -404,9 +404,19 @@ class PresetManager: ObservableObject {
     /// restore ui files. The scaffold flag is a no-op in that case (the
     /// user already has a UI to keep).
     ///
-    /// No implicit cloning. If a caller wants the new bundle to inherit
-    /// content from another preset (factory or user), it reads the files
-    /// it cares about and writes them into the new bundle afterwards.
+    /// `duplicateFrom`, when non-nil and the target doesn't already exist,
+    /// makes Save-As behave like "fork this bundle under a new name":
+    /// copy the entire source bundle tree (manifest.json, manifest.params,
+    /// `ui/` and any assets), then overwrite the entry script with `source`.
+    /// `scaffoldUI` is ignored on this path — the source bundle's UI tree
+    /// (or absence of one) is preserved verbatim. When the caller-supplied
+    /// `language` differs from the source bundle's language, the manifest's
+    /// `entry`/`language` are patched and the old entry script is removed
+    /// so the duplicate compiles cleanly in the new language.
+    ///
+    /// Without `duplicateFrom`, a fresh bundle is built from a default
+    /// manifest. Callers that need to clone content from another preset
+    /// should pass `duplicateFrom`; otherwise the new bundle starts blank.
     /// Keeping save_preset minimal avoids the manifest-vs-source
     /// mismatch that auto-cloning a factory bundle used to produce when
     /// the new source declared different params.
@@ -415,7 +425,8 @@ class PresetManager: ObservableObject {
         name: String,
         source: String,
         language: ScriptLanguage = .python,
-        scaffoldUI: Bool = false
+        scaffoldUI: Bool = false,
+        duplicateFrom: PresetBundle? = nil
     ) throws -> Preset {
         let sanitized = sanitizeFilename(name)
         guard !sanitized.isEmpty else {
@@ -428,12 +439,15 @@ class PresetManager: ObservableObject {
 
         let bundleExists = fileManager.fileExists(atPath: bundleURL.path)
 
-        // Two branches:
+        // Three branches:
         //
         //  1. Target bundle already exists → re-save. Preserve manifest
         //     and ui/; overwrite entry script only.
-        //  2. Target doesn't exist → fresh bundle with manifest + script
-        //     + optional starter ui/index.html.
+        //  2. Target doesn't exist + duplicateFrom is set → Save As fork:
+        //     tree-copy the source bundle (manifest, ui/, assets), then
+        //     overwrite the entry script.
+        //  3. Target doesn't exist + no source bundle → fresh bundle
+        //     with default manifest + script + optional starter UI.
         if bundleExists {
             let manifestURL = bundleURL.appendingPathComponent(PresetManifest.filename)
             let existingManifest: PresetManifest? = {
@@ -475,6 +489,36 @@ class PresetManager: ObservableObject {
             }
 
             log.info("Updated user bundle (preserved manifest): \(bundleURL.path, privacy: .public)")
+        } else if let src = duplicateFrom {
+            // Save As → fork the source bundle. Tree-copy preserves
+            // ui/, manifest.params, and any author assets; the entry
+            // script is then overwritten with the editor's source so
+            // the duplicate reflects whatever the user has edited
+            // since loading the source preset.
+            try copyBundleTree(from: src.rootURL, to: bundleURL)
+
+            // If the user is saving in a different language than the
+            // source bundle declares (e.g. Save-As'ing a Rust preset
+            // with a Python source typed in the editor), patch the
+            // manifest and remove the now-stale entry script so the
+            // duplicate compiles cleanly. Same-language Save As leaves
+            // the manifest untouched.
+            let manifestURL = bundleURL.appendingPathComponent(PresetManifest.filename)
+            var manifest = src.manifest
+            if src.language != language {
+                let oldEntryURL = bundleURL.appendingPathComponent(manifest.entry)
+                try? fileManager.removeItem(at: oldEntryURL)
+                manifest.entry = language == .rust ? "process.rs" : "process.py"
+                manifest.language = language.rawValue
+                try manifest.jsonData().write(to: manifestURL)
+                AppGroupContainer.stripQuarantine(at: manifestURL)
+            }
+
+            let scriptURL = bundleURL.appendingPathComponent(manifest.entry)
+            try source.write(to: scriptURL, atomically: true, encoding: .utf8)
+            AppGroupContainer.stripQuarantine(at: scriptURL)
+
+            log.info("Duplicated user bundle from \(src.rootURL.path, privacy: .public) → \(bundleURL.path, privacy: .public)")
         } else {
             try fileManager.createDirectory(at: bundleURL, withIntermediateDirectories: true)
             AppGroupContainer.stripQuarantine(at: bundleURL)
@@ -506,11 +550,10 @@ class PresetManager: ObservableObject {
         return preset
     }
 
-    /// Copy a bundle directory tree in its entirety. Used by
-    /// `duplicateFactoryBundle` (the right-click "Duplicate bundle and
-    /// edit this file" UI path — a deliberate user action that copies
-    /// the whole tree, distinct from `savePreset`'s fresh-bundle path).
-    /// Caller is responsible for ensuring `dest` doesn't already exist.
+    /// Copy a bundle directory tree in its entirety. Used by the
+    /// right-click "Duplicate bundle" UI path and by `savePreset`'s
+    /// `duplicateFrom` branch (Save As). Caller is responsible for
+    /// ensuring `dest` doesn't already exist.
     private func copyBundleTree(from src: URL, to dest: URL) throws {
         try fileManager.copyItem(at: src, to: dest)
         AppGroupContainer.stripQuarantine(at: dest)
