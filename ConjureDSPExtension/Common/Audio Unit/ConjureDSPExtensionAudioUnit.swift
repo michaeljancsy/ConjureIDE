@@ -272,6 +272,29 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
+	/// Clear all parameter metadata and rebuild the legacy generic 16-slot
+	/// parameter tree.
+	///
+	/// Use this when the previous preset's tree must NOT be inherited —
+	/// notably when creating a brand-new preset whose template hasn't
+	/// compiled yet. Unlike `applyManifestParams(nil)`, this actively yanks
+	/// stale state instead of preserving it. The "preserve" semantics of
+	/// `applyManifestParams(nil)` exist so a slow Rust compile during a
+	/// preset switch doesn't flash "no params"; for a freshly-created
+	/// preset there's no prior-tree-worth-keeping, so the flash is correct.
+	@MainActor
+	public func resetParameterTreeToGeneric() {
+		manifestDeclaredMetadata = nil
+		currentParamMetadata = nil
+		currentParamNames = [:]
+		// Rebuild tree BEFORE broadcasting (same critical ordering as
+		// applyManifestParams) so subscribers that re-attach inside the
+		// sink don't snapshot the stale tree.
+		buildParameterTree()
+		paramNamesDidChange.send(nil)
+		paramMetadataDidChange.send(nil)
+	}
+
 	/// Force a parameter-tree rebuild from the kernel's currently-extracted
 	/// metadata, bypassing the manifest-priority guard in `readParamNames`.
 	///
@@ -304,9 +327,8 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		if kernelMeta == currentParamMetadata { return false }
 
 		// Different. Clear manifest priority and rebuild from kernel.
-		manifestDeclaredMetadata = nil
-
 		if let meta = kernelMeta {
+			manifestDeclaredMetadata = nil
 			currentParamMetadata = meta
 			var nameMap: [Int: String] = [:]
 			for (i, m) in meta.enumerated() { nameMap[i] = m.name }
@@ -318,9 +340,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			paramMetadataDidChange.send(meta)
 		} else {
 			// New script declares no metadata — back to legacy generic tree.
-			currentParamMetadata = nil
-			buildParameterTree()
-			paramMetadataDidChange.send(nil)
+			resetParameterTreeToGeneric()
 		}
 		return true
 	}

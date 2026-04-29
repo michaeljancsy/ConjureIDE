@@ -413,8 +413,12 @@ struct CustomUIWebView: NSViewRepresentable {
             // the full 16-slot AU parameter tree. A preset with one `Gain`
             // param would otherwise report count=16 to JS — starter UIs
             // (and many author UIs) iterate `parameters.count` and draw
-            // fifteen unused "Param 2" / "Param 3" sliders. Matches export
-            // behavior, which derives count from paramMetadata.
+            // fifteen unused "Param 2" / "Param 3" sliders. Same goes for
+            // a brand-new preset whose template hasn't compiled yet:
+            // metadata and names are both nil, and the auto-panel
+            // shouldn't paint 16 placeholder sliders against a blank
+            // kernel. count = 0 in that case keeps the panel empty until
+            // the first successful compile populates real metadata.
             let count: Int = {
                 if let md = state.paramMetadata, !md.isEmpty {
                     return md.count
@@ -422,7 +426,7 @@ struct CustomUIWebView: NSViewRepresentable {
                 if let names = state.paramNames, !names.isEmpty {
                     return (names.keys.max() ?? -1) + 1
                 }
-                return state.values.count
+                return 0
             }()
             var metadata: [[String: Any]] = []
             for i in 0..<count {
