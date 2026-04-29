@@ -188,24 +188,37 @@ void dsp_kernel_set_tones_dir(DSPKernelRef _kernel, const char *path);
 bool dsp_kernel_load_wasm(DSPKernelRef kernel, const uint8_t *wasm_bytes, uint32_t len);
 
 /**
- * Returns the NAM model path embedded in the loaded WASM module, or null if none.
- * The returned pointer is valid until the next `load_wasm` or `dsp_kernel_destroy`.
+ * Returns the number of NAM model slots declared by the loaded WASM module.
+ * 0 when the module declares no NAM models.
  *
  * # Safety
  * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
  */
-const char *dsp_kernel_nam_path(DSPKernelRef kernel);
+uint32_t dsp_kernel_nam_path_count(DSPKernelRef kernel);
 
 /**
- * Inject NAM model binary data into the loaded WASM backend.
- * Call after `dsp_kernel_load_wasm` when `dsp_kernel_nam_path` returns non-null.
+ * Returns the NAM model path declared at slot `idx`, or null if `idx` is out of range.
+ * The returned pointer is valid until the next `load_wasm`, `dsp_kernel_destroy`, or
+ * next call to this function.
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+const char *dsp_kernel_nam_path_at(DSPKernelRef kernel, uint32_t idx);
+
+/**
+ * Inject NAM model binary data into the loaded WASM backend at the given slot.
+ * Call after `dsp_kernel_load_wasm` for each path returned by `dsp_kernel_nam_path_at`.
  * Returns true on success.
  *
  * # Safety
  * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
  * - `data` must point to `len` valid bytes.
  */
-bool dsp_kernel_inject_nam(DSPKernelRef kernel, const uint8_t *data, uintptr_t len);
+bool dsp_kernel_inject_nam_slot(DSPKernelRef kernel,
+                                uint32_t slot,
+                                const uint8_t *data,
+                                uintptr_t len);
 
 /**
  * Benchmark the process function.

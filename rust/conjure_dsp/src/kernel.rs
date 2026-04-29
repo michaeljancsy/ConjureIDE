@@ -202,9 +202,10 @@ pub struct DSPKernel {
     /// May be smaller than max_frames_to_render (e.g. DAW buffers < AU framework minimum).
     /// Written by audio thread, read by UI thread — lock-free.
     last_render_frame_count: AtomicU32,
-    /// NAM model path from the loaded WASM module's `get_nam_path_ptr`/`get_nam_path_len` exports.
-    /// Set during `load_wasm()`, read by Swift to resolve and inject the .nam file.
-    nam_path: Option<String>,
+    /// NAM model paths from the loaded WASM module's `get_nam_manifest_ptr`/`get_nam_manifest_len` exports.
+    /// One entry per `nam!()` / `nams!()` slot in declaration order. Set during `load_wasm()`,
+    /// read by Swift to resolve and inject each .nam file. Empty when the module declares no NAM models.
+    nam_paths: Vec<String>,
     /// Newly loaded backend, staged by the main thread, consumed by the audio thread
     /// at the end of the fade-out half of a preset swap. After the swap completes the
     /// audio thread leaves the *old* backend here so the next main-thread `load_*` call
@@ -335,7 +336,7 @@ impl DSPKernel {
             memory_baseline_bytes: AtomicU64::new(0),
             wasm_memory_bytes: AtomicU64::new(0),
             last_render_frame_count: AtomicU32::new(0),
-            nam_path: None,
+            nam_paths: Vec::new(),
             pending_backend: Mutex::new(None),
             pending_param_defaults: Mutex::new(None),
             swap_phase: AtomicU8::new(SWAP_PHASE_IDLE),
@@ -347,13 +348,14 @@ impl DSPKernel {
         }
     }
 
-    /// Returns the NAM model path declared by the loaded WASM module, if any.
-    pub fn nam_path(&self) -> Option<&str> {
-        self.nam_path.as_deref()
+    /// Returns the NAM model paths declared by the loaded WASM module, in slot order.
+    /// Empty when the module declares no NAM models.
+    pub fn nam_paths(&self) -> &[String] {
+        &self.nam_paths
     }
 
-    /// Inject NAM model binary data into the loaded WASM backend.
-    /// Call after `load_wasm()` when `nam_path()` returns Some.
+    /// Inject NAM model binary data into the loaded WASM backend at the given slot.
+    /// Call after `load_wasm()` for each path returned by `nam_paths()`.
     ///
     /// The newly-loaded WASM backend can live in either slot depending on
     /// whether the audio thread has picked up the swap yet:
@@ -363,7 +365,7 @@ impl DSPKernel {
     /// - Otherwise (first-load fast path, or the audio thread already
     ///   completed the swap so the old backend is parked in pending), the
     ///   newest backend lives in the live slot.
-    pub fn inject_nam(&mut self, binary_data: &[u8]) -> Result<(), String> {
+    pub fn inject_nam_slot(&mut self, slot: u32, binary_data: &[u8]) -> Result<(), String> {
         // Lock-first ordering closes a TOCTOU race against the audio thread.
         //
         // The newest backend lives in `pending_backend` if either (a) we have
@@ -393,7 +395,7 @@ impl DSPKernel {
                     .as_any_mut()
                     .downcast_mut::<WasmBackend>()
                     .ok_or("Pending backend is not WasmBackend")?;
-                return wasm.inject_nam_model(binary_data);
+                return wasm.inject_nam_model_slot(slot, binary_data);
             }
         }
         drop(pending);
@@ -401,7 +403,7 @@ impl DSPKernel {
         if let Some(ref mut backend) = *guard {
             let wasm = backend.as_any_mut().downcast_mut::<WasmBackend>()
                 .ok_or("Backend is not WasmBackend")?;
-            wasm.inject_nam_model(binary_data)
+            wasm.inject_nam_model_slot(slot, binary_data)
         } else {
             Err("No backend loaded".to_string())
         }
@@ -515,7 +517,7 @@ impl DSPKernel {
                 let telemetry_meta = wb.telemetry_metadata().map(|m| m.to_vec());
                 let latency = wb.latency_samples();
                 // Store NAM path for Swift to read and inject model data
-                self.nam_path = wb.nam_path().map(String::from);
+                self.nam_paths = wb.nam_paths().to_vec();
                 let initial_mem = wb.memory_bytes();
                 let defaults = Self::defaults_from_metadata(metadata.as_deref());
                 let boxed: Box<dyn Backend> = Box::new(wb);
@@ -1000,7 +1002,7 @@ impl DSPKernel {
     ///
     /// **Ordering invariant**: the phase/remaining updates must happen *before*
     /// clearing `pending_stage_request`, with a Release store on the clear.
-    /// Main-thread readers (`inject_nam`, `benchmark_process`) use this to
+    /// Main-thread readers (`inject_nam_slot`, `benchmark_process`) use this to
     /// decide whether the newest backend lives in `pending_backend` or the
     /// live slot: reading `flag=false` via Acquire guarantees the updated
     /// phase is visible, so a `(flag=false, phase=FADE_OUT)` snapshot reliably
@@ -1368,7 +1370,7 @@ impl DSPKernel {
         let phase = self.swap_phase.load(Ordering::Acquire);
 
         // Try backend processing — use try_lock to never block the render thread.
-        // If the main thread is briefly holding the lock (e.g. inject_nam), we
+        // If the main thread is briefly holding the lock (e.g. inject_nam_slot), we
         // fall through to passthrough below.
         if let Ok(mut guard) = self.backend.try_lock() {
             let mut produced = false;

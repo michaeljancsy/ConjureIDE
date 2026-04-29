@@ -1012,15 +1012,35 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
-	/// Resolve and inject a NAM model after WASM load, if the module declares one via `nam!()`.
-	/// Reads the path from the WASM binary, resolves `tone3000://` paths to the App Group
-	/// tones directory, parses the .nam JSON, serializes to binary protocol, and injects.
-	/// Returns an error string on failure, nil on success or if no NAM model is declared.
+	/// Resolve and inject NAM models after WASM load, one per slot declared via
+	/// `nam!()` or `nams!{}`. Reads each path from the WASM binary, resolves
+	/// `tone3000://` paths to the App Group tones directory, parses the .nam JSON,
+	/// serializes to binary protocol, and injects.
+	///
+	/// Returns the first error encountered (so the user sees at least one actionable
+	/// message) but continues injecting remaining slots so working ones still load.
+	/// Returns nil on full success or if no NAM model is declared.
 	private func injectNamModelIfNeeded() -> String? {
-		guard let namPathPtr = dsp_kernel_nam_path(kernel) else { return nil }
-		let namPath = String(cString: namPathPtr)
-		pluginLog.info("WASM module declares NAM model: \(namPath, privacy: .public)")
+		let count = dsp_kernel_nam_path_count(kernel)
+		guard count > 0 else { return nil }
 
+		var firstError: String?
+		for slot in 0..<count {
+			guard let pathPtr = dsp_kernel_nam_path_at(kernel, slot) else { continue }
+			let namPath = String(cString: pathPtr)
+			pluginLog.info("WASM module declares NAM slot \(slot, privacy: .public): \(namPath, privacy: .public)")
+
+			if let err = injectNamModel(slot: slot, namPath: namPath) {
+				if firstError == nil { firstError = err }
+			}
+		}
+		return firstError
+	}
+
+	/// Resolve a single `tone3000://` (or filesystem) NAM path, parse the .nam JSON,
+	/// serialize to the binary protocol, and inject into the given slot.
+	/// Returns nil on success or an error message on failure.
+	private func injectNamModel(slot: UInt32, namPath: String) -> String? {
 		// Resolve the path to a filesystem URL
 		let namFileURL: URL?
 		if namPath.hasPrefix("tone3000://") {
@@ -1048,7 +1068,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			  let namData = try? Data(contentsOf: fileURL) else {
 			let msg = Self.namNotDownloadedMessage
 			pluginLog.error("\(msg, privacy: .public)")
-			SentryHelper.capture("NAM tone file not found", level: .error, category: "dsp.nam", extra: ["path": namPath])
+			SentryHelper.capture("NAM tone file not found", level: .error, category: "dsp.nam", extra: ["path": namPath, "slot": String(slot)])
 			return msg
 		}
 
@@ -1059,7 +1079,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			  let weightsArray = namJson["weights"] as? [Double] else {
 			let msg = "Failed to parse .nam file at \(namPath)"
 			pluginLog.error("\(msg, privacy: .public)")
-			SentryHelper.capture("Failed to parse .nam file", level: .error, category: "dsp.nam", extra: ["path": namPath])
+			SentryHelper.capture("Failed to parse .nam file", level: .error, category: "dsp.nam", extra: ["path": namPath, "slot": String(slot)])
 			return msg
 		}
 
@@ -1069,7 +1089,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		guard let configData = try? JSONSerialization.data(withJSONObject: configObj) else {
 			let msg = "Failed to serialize NAM config for \(namPath)"
 			pluginLog.error("\(msg, privacy: .public)")
-			SentryHelper.capture("Failed to serialize NAM config", level: .error, category: "dsp.nam", extra: ["path": namPath])
+			SentryHelper.capture("Failed to serialize NAM config", level: .error, category: "dsp.nam", extra: ["path": namPath, "slot": String(slot)])
 			return msg
 		}
 
@@ -1093,16 +1113,16 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
 				return false
 			}
-			return dsp_kernel_inject_nam(kernel, ptr, UInt(binary.count))
+			return dsp_kernel_inject_nam_slot(kernel, slot, ptr, UInt(binary.count))
 		}
 
 		if injected {
-			pluginLog.info("Injected NAM model (\(binary.count) bytes, \(architecture))")
+			pluginLog.info("Injected NAM slot \(slot, privacy: .public) (\(binary.count) bytes, \(architecture))")
 			return nil
 		} else {
 			let msg = "Failed to inject NAM model data for \(namPath)"
 			pluginLog.error("\(msg, privacy: .public)")
-			SentryHelper.capture("Failed to inject NAM model data", level: .error, category: "dsp.nam", extra: ["path": namPath, "architecture": architecture, "binarySize": binary.count])
+			SentryHelper.capture("Failed to inject NAM model data", level: .error, category: "dsp.nam", extra: ["path": namPath, "slot": String(slot), "architecture": architecture, "binarySize": binary.count])
 			return msg
 		}
 	}

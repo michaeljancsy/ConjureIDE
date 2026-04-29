@@ -433,7 +433,7 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
     /// Load and inject an embedded .nam model file from the bundle Resources.
     /// For WASM presets, reads the .nam JSON, serializes to binary protocol,
-    /// and calls dsp_kernel_inject_nam().
+    /// and calls dsp_kernel_inject_nam_slot() at slot 0.
     private func injectEmbeddedNamModel(from bundle: Bundle) {
         guard let namFileName = config?.namModelFile else { return }
 
@@ -488,13 +488,15 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
             guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
                 return false
             }
-            return dsp_kernel_inject_nam(kernel, ptr, UInt(binary.count))
+            // Single-slot export: the export pipeline currently embeds at most
+            // one .nam model, which always lives in slot 0.
+            return dsp_kernel_inject_nam_slot(kernel, 0, ptr, UInt(binary.count))
         }
 
         if success {
             trace(.info, "nam", "injected embedded NAM model (\(binary.count) bytes, arch=\(architecture), sr=\(sampleRate))")
         } else {
-            trace(.error, "nam", "failed to inject embedded NAM model (dsp_kernel_inject_nam returned false)")
+            trace(.error, "nam", "failed to inject embedded NAM model (dsp_kernel_inject_nam_slot returned false)")
         }
     }
 

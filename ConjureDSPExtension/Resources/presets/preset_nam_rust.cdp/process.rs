@@ -8,6 +8,10 @@ setup!();
 // To load this tone, open the Tones panel from the toolbar,
 // search for "Fender Super Reverb 1977", download the
 // "EQ Flat, Volume 3, sm57 and AKG 414" model, then click Run.
+//
+// For multiple NAM models in one preset (e.g. drive → cab cascades),
+// use `nams! { DRIVE = "tone3000://...", CAB = "tone3000://..." }`
+// and call `nam_process_slot(DRIVE, ...)`. See `get_docs("nam")`.
 conjuredsp::nam!("tone3000://19/56");
 
 

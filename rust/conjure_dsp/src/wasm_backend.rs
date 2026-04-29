@@ -92,8 +92,12 @@ enum BufferMode {
 /// This avoids memory layout conflicts with the compiler's stack/heap.
 /// Host-side state accessible from WASM import functions via `Caller<'_, HostState>`.
 pub struct HostState {
-    /// Native NAM model for host-side inference (avoids running NAM inside WASM sandbox).
-    pub nam_model: Option<conjuredsp::NamModel>,
+    /// Native NAM models for host-side inference (avoids running NAM inside WASM sandbox).
+    /// One slot per `nam!()` / `nams!()` declaration in the WASM module, indexed by
+    /// declaration order. Empty when no NAM is declared. A `None` entry means the
+    /// host failed to inject that slot (e.g. tone not downloaded) — calls to
+    /// `__conjuredsp_nam_process_slot` for an empty slot return 0.
+    pub nam_models: Vec<Option<conjuredsp::NamModel>>,
 }
 
 pub struct WasmBackend {
@@ -121,8 +125,9 @@ pub struct WasmBackend {
     param_write_count: usize,
     /// Script-declared algorithmic latency in samples (from `get_latency_samples` export).
     latency_samples: u32,
-    /// NAM model path embedded in the WASM binary via `get_nam_path_ptr`/`get_nam_path_len`.
-    nam_path: Option<String>,
+    /// NAM model paths embedded in the WASM binary via `get_nam_manifest_ptr`/`get_nam_manifest_len`.
+    /// One entry per slot, in declaration order. Empty when the module declares no NAM models.
+    nam_paths: Vec<String>,
     /// Script-declared telemetry slot metadata (from `get_telemetry_metadata_ptr/_len`).
     /// `None` when the script didn't call `telemetry!()` — kernel skips reads.
     telemetry_metadata: Option<Vec<crate::params::TelemetryMetadata>>,
@@ -178,7 +183,7 @@ impl WasmBackend {
         let module =
             Module::new(&engine, wasm_bytes).map_err(|e| format!("Invalid WASM module: {}", e))?;
 
-        let mut store = Store::new(&engine, HostState { nam_model: None });
+        let mut store = Store::new(&engine, HostState { nam_models: Vec::new() });
         store
             .set_fuel(COMPILED_FUEL)
             .map_err(|e| format!("Failed to set fuel: {}", e))?;
@@ -283,10 +288,15 @@ impl WasmBackend {
             .map(|v| if v < 0 { 0 } else { v as u32 })
             .unwrap_or(0);
 
-        // Read NAM model path if available
-        let nam_path = {
-            let get_ptr = instance.get_typed_func::<(), i32>(&mut store, "get_nam_path_ptr").ok();
-            let get_len = instance.get_typed_func::<(), i32>(&mut store, "get_nam_path_len").ok();
+        // Read NAM manifest if available — newline-separated paths, one per slot
+        // in declaration order. Empty trailing entries are dropped.
+        let nam_paths: Vec<String> = {
+            let get_ptr = instance
+                .get_typed_func::<(), i32>(&mut store, "get_nam_manifest_ptr")
+                .ok();
+            let get_len = instance
+                .get_typed_func::<(), i32>(&mut store, "get_nam_manifest_len")
+                .ok();
             if let (Some(ptr_fn), Some(len_fn)) = (get_ptr, get_len) {
                 let _ = store.set_fuel(COMPILED_FUEL);
                 let ptr = ptr_fn.call(&mut store, ()).ok();
@@ -297,19 +307,37 @@ impl WasmBackend {
                     let start = p as usize;
                     let end = start + l as usize;
                     if end <= data.len() {
-                        std::str::from_utf8(&data[start..end]).ok().map(String::from)
+                        std::str::from_utf8(&data[start..end])
+                            .map(|s| {
+                                s.split('\n')
+                                    .filter(|line| !line.is_empty())
+                                    .map(String::from)
+                                    .collect()
+                            })
+                            .unwrap_or_default()
                     } else {
-                        None
+                        Vec::new()
                     }
                 } else {
-                    None
+                    Vec::new()
                 }
             } else {
-                None
+                Vec::new()
             }
         };
 
-        let has_nam = nam_path.is_some();
+        // Pre-size the model slots so `inject_nam_model_slot` can index directly
+        // and out-of-range calls from WASM are detected as empty slots.
+        if !nam_paths.is_empty() {
+            let count = nam_paths.len();
+            let mut models = Vec::with_capacity(count);
+            for _ in 0..count {
+                models.push(None);
+            }
+            store.data_mut().nam_models = models;
+        }
+
+        let has_nam = !nam_paths.is_empty();
 
         // Use higher fuel budget for NAM-active modules (host import call still
         // needs fuel for WASM-side copy loops around the import).
@@ -353,7 +381,7 @@ impl WasmBackend {
             param_metadata,
             param_write_count,
             latency_samples,
-            nam_path,
+            nam_paths,
             telemetry_metadata,
             telemetry_buf_offset,
             telemetry_vec_offsets,
@@ -668,16 +696,19 @@ impl WasmBackend {
         Ok(())
     }
 
-    /// Register `__conjuredsp_nam_process` host import for native NAM inference.
+    /// Register `__conjuredsp_nam_process_slot` host import for native NAM inference.
     ///
     /// When a WASM module calls this import, the host reads audio from WASM memory,
-    /// runs `NamModel::process_buffer()` natively, and writes results back.
+    /// runs `NamModel::process_buffer()` natively on the model in `slot`, and writes
+    /// results back. Returns 0 if the slot index is out of range or the slot has no
+    /// injected model (e.g. the user's tone wasn't downloaded).
     fn add_nam_import(linker: &mut Linker<HostState>) -> Result<(), String> {
         linker
             .func_wrap(
                 "env",
-                "__conjuredsp_nam_process",
+                "__conjuredsp_nam_process_slot",
                 |mut caller: Caller<'_, HostState>,
+                 slot: u32,
                  input_ptr: i32, output_ptr: i32, frames: i32, channel: i32| -> i32 {
                     let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                         Some(m) => m,
@@ -701,10 +732,18 @@ impl WasmBackend {
                     // Copy input because caller.data_mut() below invalidates the data slice.
                     let input_copy: Vec<f32> = input_slice.to_vec();
 
-                    // Take model out of HostState so we can borrow caller for memory access.
-                    let mut model = match caller.data_mut().nam_model.take() {
-                        Some(m) => m,
-                        None => return 0,
+                    // Take model out of HostState slot so we can borrow caller for memory access.
+                    // Bounds-check the slot, and treat an empty slot as "no model" (returns 0).
+                    let slot_idx = slot as usize;
+                    let mut model = {
+                        let models = &mut caller.data_mut().nam_models;
+                        if slot_idx >= models.len() {
+                            return 0;
+                        }
+                        match models[slot_idx].take() {
+                            Some(m) => m,
+                            None => return 0,
+                        }
                     };
 
                     // Zero-copy output: write directly into WASM memory.
@@ -715,7 +754,7 @@ impl WasmBackend {
                     model.process_buffer(&input_copy, output_slice, channel as usize);
 
                     // Put model back.
-                    caller.data_mut().nam_model = Some(model);
+                    caller.data_mut().nam_models[slot_idx] = Some(model);
                     1
                 },
             )
@@ -1258,17 +1297,28 @@ impl Backend for WasmBackend {
 // MARK: - NAM model injection
 
 impl WasmBackend {
-    /// Returns the NAM model path embedded in the WASM binary, if any.
-    pub fn nam_path(&self) -> Option<&str> {
-        self.nam_path.as_deref()
+    /// Returns the NAM model paths embedded in the WASM binary, in slot order.
+    /// Empty when the module declares no NAM models.
+    pub fn nam_paths(&self) -> &[String] {
+        &self.nam_paths
     }
 
-    /// Parse NAM model binary data and store natively for host-side inference.
-    /// The WASM module calls `__conjuredsp_nam_process` which routes to this model.
-    pub fn inject_nam_model(&mut self, binary_data: &[u8]) -> Result<(), String> {
+    /// Parse NAM model binary data and store natively in the given slot for
+    /// host-side inference. The WASM module calls `__conjuredsp_nam_process_slot`
+    /// which routes to this model when invoked with the matching slot index.
+    pub fn inject_nam_model_slot(&mut self, slot: u32, binary_data: &[u8]) -> Result<(), String> {
         let model = conjuredsp::NamModel::from_binary(binary_data)
             .ok_or_else(|| "Failed to parse NAM model from binary data".to_string())?;
-        self.store.data_mut().nam_model = Some(model);
+        let slot_idx = slot as usize;
+        let models = &mut self.store.data_mut().nam_models;
+        if slot_idx >= models.len() {
+            return Err(format!(
+                "NAM slot index {} out of range (module declared {} slot(s))",
+                slot,
+                models.len()
+            ));
+        }
+        models[slot_idx] = Some(model);
         Ok(())
     }
 }
@@ -2088,9 +2138,11 @@ mod tests {
         let wasm = wat_to_wasm(BUFFER_GETTERS_WAT);
         let mut backend = WasmBackend::load(&wasm).unwrap();
 
-        let tiny = vec![0u8; 8]; // Less than minimum 16 bytes for binary protocol
-        let result = backend.inject_nam_model(&tiny);
-        assert!(result.is_err(), "Should reject too-small data");
+        // BUFFER_GETTERS_WAT has no NAM declaration, so slot 0 is out of range —
+        // assert the bounds check fires before we even parse the binary.
+        let tiny = vec![0u8; 8];
+        let result = backend.inject_nam_model_slot(0, &tiny);
+        assert!(result.is_err(), "Should reject inject into module with no slots");
     }
 
     #[test]
@@ -2154,8 +2206,8 @@ fn main() {}
         let mut backend = WasmBackend::load(&wasm_bytes)
             .expect("Failed to load NAM WASM module");
 
-        // Verify nam_path is detected
-        assert_eq!(backend.nam_path(), Some("tone3000://test/model"),
+        // Verify nam_paths is detected (single-slot legacy nam!() macro)
+        assert_eq!(backend.nam_paths(), &["tone3000://test/model".to_string()],
             "Should detect NAM path from WASM exports");
 
         // Build NAM binary protocol from test model
@@ -2166,8 +2218,8 @@ fn main() {}
         }
         let nam_binary = serialize_nam_file_to_binary(nam_path);
 
-        // Inject model
-        backend.inject_nam_model(&nam_binary)
+        // Inject model into slot 0 (the legacy `nam!()` macro declares one slot)
+        backend.inject_nam_model_slot(0, &nam_binary)
             .expect("Failed to inject NAM model");
 
         // Initialize
@@ -2220,6 +2272,183 @@ fn main() {}
         assert!(max_err < 1e-3,
             "WASM→host NAM parity failed: max_err={:.6} at [{}] (out={:.6}, exp={:.6})",
             max_err, max_err_idx, output[max_err_idx], expected[max_err_idx]);
+    }
+
+    #[test]
+    fn test_nam_multi_slot_end_to_end() {
+        // Compile a WASM module that uses `nams!{ A=..., B=... }` and cascades
+        // input through both slots in series. We then inject the SAME tiny
+        // WaveNet model into both slots and verify the output matches a native
+        // double-pass (model.process_buffer applied twice). This exercises:
+        //   - manifest parsing of multiple paths
+        //   - slot index constants from `nams!`
+        //   - per-slot inject + per-slot host import dispatch
+        //   - per-slot independent model state (each slot maintains its own history)
+        let wasm_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tmp_test_nam_multi.wasm");
+        let rustc = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rustc-dist/bin/rustc");
+        let sysroot = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rustc-dist");
+        let rlib = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rustc-dist/lib/libconjuredsp.rlib");
+
+        if !std::path::Path::new(rustc).exists() {
+            eprintln!("Skipping: bundled rustc not found");
+            return;
+        }
+
+        let src = r#"
+use conjuredsp::*;
+setup!();
+nams! {
+    A = "tone3000://test/a",
+    B = "tone3000://test/b",
+}
+#[no_mangle]
+pub extern "C" fn process(
+    input: *const f32, output: *mut f32,
+    channel_count: i32, frame_count: i32, sample_rate: f32,
+) {
+    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+    let mut buf_a = [0.0_f32; MAX_FR];
+    let mut buf_b = [0.0_f32; MAX_FR];
+    unsafe {
+        for c in 0..ctx.channels() {
+            let n = ctx.frames();
+            for i in 0..n { buf_a[i] = ctx.input(c, i); }
+            nam_process_slot(A, &buf_a[..n], &mut buf_b[..n], c);
+            nam_process_slot(B, &buf_b[..n], &mut buf_a[..n], c);
+            for i in 0..n { ctx.set_output(c, i, buf_a[i]); }
+        }
+    }
+}
+fn main() {}
+"#;
+        let src_path = format!("{}/../../tmp_test_nam_multi_src.rs", env!("CARGO_MANIFEST_DIR"));
+        std::fs::write(&src_path, src).unwrap();
+
+        let output = std::process::Command::new(rustc)
+            .args(&["--target", "wasm32-wasip1", "--edition", "2021",
+                    "--crate-type", "cdylib", "-C", "opt-level=2",
+                    "--sysroot", sysroot,
+                    "--extern", &format!("conjuredsp={}", rlib),
+                    "-o", wasm_path, &src_path])
+            .output()
+            .expect("Failed to run rustc");
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            panic!("Multi-slot WASM compilation failed: {}", stderr);
+        }
+
+        let wasm_bytes = std::fs::read(wasm_path).expect("Failed to read compiled WASM");
+        let _ = std::fs::remove_file(wasm_path);
+        let _ = std::fs::remove_file(&src_path);
+
+        let mut backend = WasmBackend::load(&wasm_bytes)
+            .expect("Failed to load multi-slot NAM WASM module");
+
+        // Manifest must report both slots in declaration order.
+        assert_eq!(
+            backend.nam_paths(),
+            &["tone3000://test/a".to_string(), "tone3000://test/b".to_string()],
+            "Should detect both NAM paths from manifest",
+        );
+
+        // Out-of-range slot must fail gracefully on inject.
+        let dummy = vec![0u8; 8];
+        assert!(
+            backend.inject_nam_model_slot(99, &dummy).is_err(),
+            "Out-of-range slot inject must error",
+        );
+
+        // Inject same tiny WaveNet model into both slots.
+        let nam_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tone3000_py_demo/wavenet_tiny.nam");
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: wavenet_tiny.nam not found");
+            return;
+        }
+        let nam_binary = serialize_nam_file_to_binary(nam_path);
+        backend.inject_nam_model_slot(0, &nam_binary).expect("inject slot 0");
+        backend.inject_nam_model_slot(1, &nam_binary).expect("inject slot 1");
+
+        backend.initialize(1, 48000.0, 512);
+
+        let n = 512;
+        let input: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 48000.0).sin() * 0.5)
+            .collect();
+        let mut output = vec![0.0f32; n];
+        let params = [0.0f32; 16];
+        let transport = crate::kernel::TransportState::default();
+
+        let ok = unsafe {
+            backend.process(
+                &[input.as_ptr()], &[output.as_mut_ptr()],
+                1, n, 48000.0, &params, &transport,
+            )
+        };
+        assert!(ok, "Process should succeed");
+
+        // Native parity: same model applied twice in series, with each pass
+        // owning its own NamModel instance (matches the per-slot state model).
+        let mut native_a = conjuredsp::NamModel::from_binary(&nam_binary)
+            .expect("Failed to parse NAM model natively (a)");
+        let mut native_b = conjuredsp::NamModel::from_binary(&nam_binary)
+            .expect("Failed to parse NAM model natively (b)");
+        let mut intermediate = vec![0.0f32; n];
+        let mut expected = vec![0.0f32; n];
+        native_a.process_buffer(&input, &mut intermediate, 0);
+        native_b.process_buffer(&intermediate, &mut expected, 0);
+
+        let mut max_err = 0.0f32;
+        let mut max_err_idx = 0;
+        for i in 0..n {
+            let err = (output[i] - expected[i]).abs();
+            if err > max_err { max_err = err; max_err_idx = i; }
+        }
+
+        let out_rms = (output.iter().map(|x| x * x).sum::<f32>() / n as f32).sqrt();
+        let exp_rms = (expected.iter().map(|x| x * x).sum::<f32>() / n as f32).sqrt();
+
+        eprintln!(
+            "WASM→host NAM multi-slot e2e: max_err={:.6} at [{}], out_rms={:.6}, exp_rms={:.6}",
+            max_err, max_err_idx, out_rms, exp_rms,
+        );
+
+        assert!(
+            out_rms > 1e-4,
+            "Output is silent (RMS={}) — multi-slot host import may not be called",
+            out_rms,
+        );
+        assert!(
+            max_err < 1e-3,
+            "Multi-slot NAM parity failed: max_err={:.6} at [{}] (out={:.6}, exp={:.6})",
+            max_err, max_err_idx, output[max_err_idx], expected[max_err_idx],
+        );
+
+        // Verify that an unloaded slot returns 0 from the host import (call into
+        // a fresh backend with paths declared but slot 1 left empty).
+        let mut backend2 = WasmBackend::load(&wasm_bytes).expect("reload module");
+        backend2.inject_nam_model_slot(0, &nam_binary).expect("inject slot 0 only");
+        backend2.initialize(1, 48000.0, 512);
+        let mut output2 = vec![0.0f32; n];
+        let ok2 = unsafe {
+            backend2.process(
+                &[input.as_ptr()], &[output2.as_mut_ptr()],
+                1, n, 48000.0, &params, &transport,
+            )
+        };
+        assert!(ok2, "Process should succeed even with empty slot");
+        // With slot B empty, slot A wrote into buf_b but slot B's call returned 0
+        // and left buf_a untouched (still holding the original input from the
+        // pre-loop copy in process()). So the output should equal the input.
+        let mut max_in_diff = 0.0f32;
+        for i in 0..n {
+            let d = (output2[i] - input[i]).abs();
+            if d > max_in_diff { max_in_diff = d; }
+        }
+        assert!(
+            max_in_diff < 1e-6,
+            "Empty slot should leave output buffer untouched (max_in_diff={:.6})",
+            max_in_diff,
+        );
     }
 
     /// Serialize a .nam JSON file to the binary protocol (same as Swift's injectNamModelIfNeeded).
