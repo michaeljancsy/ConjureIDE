@@ -35,13 +35,19 @@ params! {
 // gain computer's actual decision per block is the only way to get
 // a meter that tracks what the compressor is actually doing.
 telemetry! {
-    GR_DB  = telemetry().unit("dB"),  // worst-case gain reduction in this block, ≥0
-    ENV_DB = telemetry().unit("dB"),  // envelope follower output at end of block
+    GR_DB    = scalar_telemetry().unit("dB"),  // worst-case gain reduction in this block, ≥0
+    ENV_DB   = scalar_telemetry().unit("dB"),  // envelope follower output at end of block
+    GR_CURVE = vector_telemetry().unit("dB"),  // per-sample GR (≥0) — UI scope draws the envelope shape
 }
 
 // Persistent envelope follower state
 // Use f64 to match Python's float64 precision in the envelope feedback loop.
 static mut ENVELOPE: f64 = 0.0;
+
+// Per-block GR scratch for vector telemetry. One f32 per audio frame in
+// the current block (length = frame_count, capped at MAX_FR by the
+// macro). Static so we don't heap-alloc per render callback.
+static mut GR_SCRATCH: [f32; MAX_FR] = [0.0; MAX_FR];
 
 /// Compressor — dynamic range compression with envelope follower.
 #[no_mangle]
@@ -103,6 +109,8 @@ pub extern "C" fn process(
                 max_gr_db = gr_db;
             }
 
+            GR_SCRATCH[i] = gr_db as f32;
+
             for c in 0..ctx.channels() {
                 ctx.set_output(c, i, (ctx.input(c, i) as f64 * gain * makeup) as f32);
             }
@@ -115,7 +123,8 @@ pub extern "C" fn process(
         // independent of makeup — meter reads true GR even with
         // heavy makeup pulling output back up.
         let env_db = if env > 0.0 { gain_to_db(env) } else { -120.0 };
-        ctx.set_telemetry(GR_DB, max_gr_db as f32);
-        ctx.set_telemetry(ENV_DB, env_db as f32);
+        ctx.set_telemetry_scalar(GR_DB, max_gr_db as f32);
+        ctx.set_telemetry_scalar(ENV_DB, env_db as f32);
+        ctx.set_telemetry_vector(GR_CURVE, &GR_SCRATCH[..ctx.frames()]);
     }
 }

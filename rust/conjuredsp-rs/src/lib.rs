@@ -44,10 +44,18 @@ pub use context::{Context, TELEMETRY_LEN};
 pub use dsp::*;
 pub use filters::{Biquad, BiquadCoeffs};
 pub use osc::{advance_phase, saw, sine, triangle, Lfo, Waveform};
-pub use params::{param, ParamSpec, TelemetrySpec};
+pub use params::{param, ParamSpec, TelemetryShape, TelemetrySpec};
 
 // Re-export param builders (these are functions, not macros)
-pub use params::{choice, db, freq, integer, mix, pct, ratio, telemetry, time_ms, toggle};
+pub use params::{
+    choice, db, freq, integer, mix, pct, ratio, scalar_telemetry, time_ms, toggle,
+    vector_telemetry,
+};
+
+/// Maximum frames per render block. Covers Logic, Ableton, Reaper,
+/// and Pro Tools (incl. HDX). Mirrored as `MAX_FR` in `setup!()` and
+/// drives vector-telemetry slot length.
+pub const MAX_FRAMES: usize = 4096;
 
 // Re-export JSON builders for macro use
 pub use json::{write_param_json, write_telemetry_json, JsonBuf};
@@ -73,9 +81,9 @@ macro_rules! setup {
         static mut OUTPUT_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
         static mut PARAMS_BUF: [f32; 16] = [0.0; 16];
         static mut TRANSPORT_BUF: [f32; 6] = [0.0; 6];
-        // Always allocated even when no telemetry is declared — 32 bytes,
-        // and `Context::set_telemetry` is a no-op if the script never
-        // writes. The host treats a missing `get_telemetry_metadata_*`
+        // Always allocated even when no telemetry is declared — 64 bytes,
+        // and `Context::set_telemetry_scalar` is a no-op if the script
+        // never writes. The host treats a missing `get_telemetry_metadata_*`
         // export as "no telemetry" and never reads from this buffer.
         static mut TELEMETRY_BUF: [f32; conjuredsp::TELEMETRY_LEN] =
             [0.0; conjuredsp::TELEMETRY_LEN];
@@ -212,12 +220,12 @@ macro_rules! params {
 /// Telemetry is the read-back twin of `params!()`: the DSP publishes
 /// internal state (envelope follower output, computed gain reduction,
 /// sidechain RMS, NAM model magnitude…) once per render block via
-/// [`Context::set_telemetry`], and the host UI reads it from the
-/// `audio.onFrame` payload's `telemetry` field.
+/// [`Context::set_telemetry_scalar`], and the host UI reads it from
+/// the `audio.onFrame` payload's `telemetry` field.
 ///
 /// Generates:
 /// - `const NAME: usize = N;` for each slot (sequential indices, 0-based)
-/// - `TELEMETRY_METADATA` static string with JSON `[{name, unit}, …]`
+/// - `TELEMETRY_METADATA` static string with JSON `[{name, unit, shape}, …]`
 /// - `get_telemetry_metadata_ptr()` and `get_telemetry_metadata_len()` WASM exports
 ///
 /// The buffer itself is allocated by [`setup!`] regardless of whether
@@ -232,13 +240,13 @@ macro_rules! params {
 /// setup!();
 /// params! { THRESHOLD = db().min(-60.0).max(0.0).default(-20.0) }
 /// telemetry! {
-///     ENV_LEVEL = telemetry(),                  // unitless 0..1
-///     GR_DB     = telemetry().unit("dB"),       // formatted as "-3.2 dB"
+///     ENV_LEVEL = scalar_telemetry(),               // unitless 0..1
+///     GR_DB     = scalar_telemetry().unit("dB"),    // formatted as "-3.2 dB"
 /// }
 ///
 /// // Inside process():
-/// ctx.set_telemetry(ENV_LEVEL, env);
-/// ctx.set_telemetry(GR_DB, gr_db);
+/// ctx.set_telemetry_scalar(ENV_LEVEL, env);
+/// ctx.set_telemetry_scalar(GR_DB, gr_db);
 /// ```
 #[macro_export]
 macro_rules! telemetry {
@@ -246,21 +254,28 @@ macro_rules! telemetry {
         // Generate sequential index constants (independent of params).
         conjuredsp::_params_indices!(0usize; $( $NAME ),*);
 
+        const TELEMETRY_SLOT_COUNT: usize =
+            [$( stringify!($NAME) ),*].len();
+
+        const TELEMETRY_SPECS: &[(&'static str, conjuredsp::TelemetrySpec)] = &[
+            $( (stringify!($NAME), $spec) ),*
+        ];
+
         // Build metadata JSON at compile time, mirroring `params!()`.
         static TELEMETRY_METADATA: &str = {
-            const SPECS: &[(&'static str, conjuredsp::TelemetrySpec)] = &[
-                $( (stringify!($NAME), $spec) ),*
-            ];
-
             const BUF: conjuredsp::JsonBuf = {
                 let mut buf = conjuredsp::JsonBuf::new();
                 buf = buf.push_byte(b'[');
                 let mut i = 0;
-                while i < SPECS.len() {
+                while i < TELEMETRY_SPECS.len() {
                     if i > 0 {
                         buf = buf.push_byte(b',');
                     }
-                    buf = conjuredsp::write_telemetry_json(buf, SPECS[i].0, &SPECS[i].1);
+                    buf = conjuredsp::write_telemetry_json(
+                        buf,
+                        TELEMETRY_SPECS[i].0,
+                        &TELEMETRY_SPECS[i].1,
+                    );
                     i += 1;
                 }
                 buf = buf.push_byte(b']');
@@ -272,6 +287,18 @@ macro_rules! telemetry {
             unsafe { core::str::from_utf8_unchecked(BYTES) }
         };
 
+        // Per-slot vector telemetry buffers, one f32 per audio frame
+        // up to MAX_FRAMES. Sized once for every declared slot —
+        // scalar slots' rows are dead weight in WASM linear memory but
+        // cost nothing at runtime (host never calls
+        // `get_telemetry_vec_ptr` for slots whose metadata says
+        // `shape: "scalar"`). The host harvests the per-block prefix
+        // (length = current frame_count) into its own AtomicU32 ring
+        // post-process.
+        static mut TELEMETRY_VEC_BUFS:
+            [[f32; conjuredsp::MAX_FRAMES]; TELEMETRY_SLOT_COUNT] =
+            [[0.0_f32; conjuredsp::MAX_FRAMES]; TELEMETRY_SLOT_COUNT];
+
         #[no_mangle]
         pub extern "C" fn get_telemetry_metadata_ptr() -> i32 {
             TELEMETRY_METADATA.as_ptr() as i32
@@ -280,6 +307,60 @@ macro_rules! telemetry {
         #[no_mangle]
         pub extern "C" fn get_telemetry_metadata_len() -> i32 {
             TELEMETRY_METADATA.len() as i32
+        }
+
+        /// Returns a WASM linear-memory pointer to the script-side
+        /// vector telemetry buffer for `slot`. Host calls this once
+        /// per declared vector slot per render block (skipped for
+        /// scalar slots — host knows the shape from metadata).
+        ///
+        /// Returns 0 (null) for out-of-range indices. The buffer is
+        /// `MAX_FRAMES` f32s long; the host reads exactly the current
+        /// `frame_count` from the prefix.
+        #[no_mangle]
+        pub extern "C" fn get_telemetry_vec_ptr(slot: i32) -> i32 {
+            let s = slot as usize;
+            if s >= TELEMETRY_SLOT_COUNT {
+                return 0;
+            }
+            unsafe { TELEMETRY_VEC_BUFS[s].as_mut_ptr() as i32 }
+        }
+
+        /// Local extension trait that adds `set_telemetry_vector` to
+        /// `Context`. Defined inside the macro expansion so it's in
+        /// scope at the script's `process()` site without an extra
+        /// `use`. Couldn't live on `Context` itself: the per-slot
+        /// buffers are emitted by this macro into the script's crate,
+        /// not the conjuredsp crate.
+        #[allow(non_camel_case_types)]
+        trait __CdpTelemetryVectorExt {
+            fn set_telemetry_vector(&self, slot: usize, samples: &[f32]);
+        }
+
+        impl __CdpTelemetryVectorExt for conjuredsp::Context {
+            #[inline]
+            fn set_telemetry_vector(&self, slot: usize, samples: &[f32]) {
+                if slot >= TELEMETRY_SLOT_COUNT {
+                    return;
+                }
+                // Silently no-op for scalar slots — matches the
+                // out-of-range precedent and keeps the call site safe
+                // when authors swap a slot's shape during iteration.
+                if !matches!(
+                    TELEMETRY_SPECS[slot].1.shape,
+                    conjuredsp::TelemetryShape::Vector
+                ) {
+                    return;
+                }
+                let len = samples.len().min(conjuredsp::MAX_FRAMES);
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        samples.as_ptr(),
+                        TELEMETRY_VEC_BUFS[slot].as_mut_ptr(),
+                        len,
+                    );
+                }
+            }
         }
     };
 }

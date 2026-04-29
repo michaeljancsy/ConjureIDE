@@ -549,6 +549,24 @@ final class PTYManager {
     before writing conjuredsp-library code — Python and Rust have different syntax for the same concepts.
     - Call `list_packages` before assuming a Python package is unavailable.
 
+    ## Honesty and feasibility
+
+    - Don't fabricate user pushback. If you change approach mid-task, say so explicitly \
+    ("I'm switching from X to Y because Z"). Never reframe a silent change as if the user \
+    asked for it.
+    - Verify framework support before pitching architecture. Before proposing a design that \
+    depends on a capability (DSP-side param writes, custom panel routing, threading model, an \
+    MCP tool you haven't called this session), confirm it exists — read `get_docs`, inspect a \
+    working preset with `get_script`, or call the tool with a probe input. Specifically: the \
+    `ctx` API in DSP scripts is read-for-params, write-for-output-buffers; there is no \
+    DSP-side `ctx.set_param`. Don't pitch "writeable readout params" without checking.
+    - `smoke_test_ui` `pass` is binding correctness, not behavioral correctness. It verifies \
+    every cdp-* control resolved its `param=` attribute and no JS errors fired during boot. \
+    It does NOT play audio through the kernel and watch a meter rise. For UIs whose value \
+    is "the visual responds when audio plays" (level meters, spectrum scopes, oscilloscopes, \
+    gain-reduction histories), tell the user smoke_test confirms binding only and ask them \
+    to play audio and confirm the visual responds.
+
     ## Python DSP Scripts
 
     ```python

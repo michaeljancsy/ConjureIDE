@@ -74,8 +74,8 @@ public class SimplePlayEngine {
     public init() {
         engine.attach(player)
         
-        guard let fileURL = Bundle.main.url(forResource: "Synth", withExtension: "aif") else {
-            fatalError("\"Synth.aif\" file not found.")
+        guard let fileURL = Bundle.main.url(forResource: "a440_60s_-1dbfs", withExtension: "wav") else {
+            fatalError("\"a440_60s_-1dbfs.wav\" file not found.")
         }
         setPlayerFile(fileURL)
         
@@ -204,7 +204,13 @@ public class SimplePlayEngine {
         
         let hardwareFormat = engine.outputNode.outputFormat(forBus: 0)
         engine.connect(engine.mainMixerNode, to: engine.outputNode, format: hardwareFormat)
-        
+
+        // Preallocate the render graph so the I/O thread can start producing
+        // samples as soon as engine.start() returns, instead of doing first-
+        // render-tick allocations under the gun. Documented by Apple as the
+        // recommended companion call before start() when render-time matters.
+        engine.prepare()
+
         // Start the engine.
         do {
             try engine.start()
@@ -212,12 +218,25 @@ public class SimplePlayEngine {
             isPlaying = false
             fatalError("Could not start engine. error: \(error).")
         }
-        
+
         if avAudioUnit.wantsAudioInput {
-            // Start the player.
-            player.play()
+            // macOS 26 tightened AVFAudio's preconditions on AVAudioPlayerNode:
+            // play() throws synchronously with reason 'player did not see an
+            // IO cycle' if the I/O thread hasn't pulled the player at least
+            // once. engine.start() returns as soon as it hands off to the I/O
+            // thread, so play() back-to-back loses the race every time.
+            //
+            // The robust workaround is play(at:) with a future host time.
+            // AVFAudio queues a deferred-start command onto the render thread,
+            // which fires when the render clock crosses `when` — by which
+            // point the I/O thread has rendered at least one tick and the
+            // precondition is satisfied. The user-visible delay is ~50 ms and
+            // imperceptible in a play-button press.
+            let leadHostTicks = AVAudioTime.hostTime(forSeconds: 0.050)
+            let when = AVAudioTime(hostTime: mach_absolute_time() + leadHostTicks)
+            player.play(at: when)
         }
-        
+
         isPlaying = true
     }
     

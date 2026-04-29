@@ -20,7 +20,7 @@ class AudioUnitHostModel {
     var viewModel = AudioUnitViewModel()
 
     var isPlaying: Bool { playEngine.isPlaying }
-    var currentAudioFileName: String = "Synth.aif"
+    var currentAudioFileName: String = "a440_60s_-1dbfs.wav"
 
     var audioUnitCrashed = false
 

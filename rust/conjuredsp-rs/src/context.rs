@@ -1,7 +1,7 @@
 /// Number of telemetry slots a script can publish per render block.
-/// See [`Context::set_telemetry`]. Mirrored on the host side as the
-/// FFI buffer size for `dsp_kernel_read_telemetry`.
-pub const TELEMETRY_LEN: usize = 8;
+/// See [`Context::set_telemetry_scalar`]. Mirrored on the host side as
+/// the FFI buffer size for `dsp_kernel_read_telemetry`.
+pub const TELEMETRY_LEN: usize = 16;
 
 /// Safe accessor for audio buffers and parameters in a process() callback.
 ///
@@ -25,7 +25,7 @@ impl Context {
     /// Caller must guarantee that `input` and `output` are valid for
     /// `channel_count * frame_count` elements, `params` is valid for 16
     /// elements, and `telemetry` is valid for [`TELEMETRY_LEN`] writes
-    /// (or is null, in which case `set_telemetry` becomes a no-op).
+    /// (or is null, in which case `set_telemetry_scalar` becomes a no-op).
     #[inline]
     pub unsafe fn new(
         input: *const f32,
@@ -85,20 +85,24 @@ impl Context {
         unsafe { *self.params.add(index) }
     }
 
-    /// Publish a telemetry value for the host UI to read this block.
+    /// Publish a single scalar telemetry value for the host UI this block.
     ///
-    /// Telemetry is the read-back twin of [`Context::param`]: write
-    /// internal DSP state (envelope follower output, computed gain
-    /// reduction in dB, sidechain RMS, NAM model magnitude…) and the
-    /// host UI receives it via `audio.onFrame`'s `telemetry` field.
+    /// Scalar telemetry is the read-back twin of [`Context::param`]:
+    /// write internal DSP state (envelope follower output, computed
+    /// gain reduction in dB, sidechain RMS, NAM model magnitude…) and
+    /// the host UI receives it via `audio.onFrame`'s `telemetry` field.
     /// Out-of-bounds indices are silently no-op'd. The last write per
     /// index per block wins; the host samples at display-link cadence
     /// (~30–120 Hz), not per-sample.
     ///
+    /// For per-frame waveforms (oscilloscope, displacement traces),
+    /// declare a `vector_telemetry()` slot in `telemetry!()` and write
+    /// it via `set_telemetry_vector` (see vector telemetry plan).
+    ///
     /// Pair with the `telemetry!()` macro to declare slot names + units
     /// the UI uses for display formatting.
     #[inline]
-    pub fn set_telemetry(&self, index: usize, value: f32) {
+    pub fn set_telemetry_scalar(&self, index: usize, value: f32) {
         if index >= TELEMETRY_LEN {
             return;
         }
@@ -137,13 +141,13 @@ mod tests {
     }
 
     #[test]
-    fn set_telemetry_writes_buf() {
+    fn set_telemetry_scalar_writes_buf() {
         let params = [0.0_f32; 16];
         let mut buf = [0.0_f32; TELEMETRY_LEN];
         unsafe {
             let ctx = ctx_with_telemetry(&params, &mut buf);
-            ctx.set_telemetry(0, 0.5);
-            ctx.set_telemetry(3, -3.2);
+            ctx.set_telemetry_scalar(0, 0.5);
+            ctx.set_telemetry_scalar(3, -3.2);
         }
         assert_eq!(buf[0], 0.5);
         assert_eq!(buf[3], -3.2);
@@ -153,33 +157,33 @@ mod tests {
     }
 
     #[test]
-    fn set_telemetry_last_write_wins() {
+    fn set_telemetry_scalar_last_write_wins() {
         let params = [0.0_f32; 16];
         let mut buf = [0.0_f32; TELEMETRY_LEN];
         unsafe {
             let ctx = ctx_with_telemetry(&params, &mut buf);
-            ctx.set_telemetry(2, 1.0);
-            ctx.set_telemetry(2, 2.0);
-            ctx.set_telemetry(2, -7.5);
+            ctx.set_telemetry_scalar(2, 1.0);
+            ctx.set_telemetry_scalar(2, 2.0);
+            ctx.set_telemetry_scalar(2, -7.5);
         }
         assert_eq!(buf[2], -7.5);
     }
 
     #[test]
-    fn set_telemetry_out_of_bounds_silent() {
+    fn set_telemetry_scalar_out_of_bounds_silent() {
         let params = [0.0_f32; 16];
         let mut buf = [0.0_f32; TELEMETRY_LEN];
         unsafe {
             let ctx = ctx_with_telemetry(&params, &mut buf);
             // No panic, no write past the end.
-            ctx.set_telemetry(TELEMETRY_LEN, 99.0);
-            ctx.set_telemetry(usize::MAX, 99.0);
+            ctx.set_telemetry_scalar(TELEMETRY_LEN, 99.0);
+            ctx.set_telemetry_scalar(usize::MAX, 99.0);
         }
         assert!(buf.iter().all(|&v| v == 0.0));
     }
 
     #[test]
-    fn set_telemetry_null_buf_silent() {
+    fn set_telemetry_scalar_null_buf_silent() {
         let params = [0.0_f32; 16];
         unsafe {
             let ctx = Context::new(
@@ -192,8 +196,8 @@ mod tests {
                 core::ptr::null_mut(),
             );
             // No-op when telemetry buffer is null.
-            ctx.set_telemetry(0, 1.0);
-            ctx.set_telemetry(7, 2.0);
+            ctx.set_telemetry_scalar(0, 1.0);
+            ctx.set_telemetry_scalar(7, 2.0);
         }
     }
 }

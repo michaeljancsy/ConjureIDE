@@ -51,6 +51,11 @@ pub struct PythonBackend {
     /// Filled by `process_with_python` after the script returns; values
     /// are addressed by the metadata index, in declaration order.
     telemetry_buf: [f32; TELEMETRY_LEN],
+    /// Max frames the host may pass to `process()` — used to size the
+    /// per-vector-slot numpy arrays we pre-seed in the telemetry dict so
+    /// scripts can write full per-frame buffers in-place without
+    /// per-block reallocation.
+    py_max_frames: usize,
     /// Script-declared algorithmic latency in samples (from `LATENCY` constant).
     latency_samples: u32,
     /// Cached PyList wrapping py_input_arrays (rebuilt on channel count change).
@@ -198,6 +203,7 @@ impl PythonBackend {
                     telemetry_metadata,
                     py_telemetry_dict: None,
                     telemetry_buf: [0.0; TELEMETRY_LEN],
+                    py_max_frames: 0,
                     latency_samples: latency,
                     py_input_list: None,
                     py_output_list: None,
@@ -357,12 +363,17 @@ impl PythonBackend {
                 Err(_) => continue,
             };
             // Per-slot dict is optional — `{"x": {}}` is fine, no unit.
-            let unit = val
-                .downcast::<PyDict>()
-                .ok()
+            let spec_dict = val.downcast::<PyDict>().ok();
+            let unit = spec_dict
+                .as_ref()
                 .and_then(|spec| spec.get_item("unit").ok().flatten())
                 .and_then(|v| v.extract::<String>().ok())
                 .unwrap_or_default();
+            let shape = spec_dict
+                .as_ref()
+                .and_then(|spec| spec.get_item("shape").ok().flatten())
+                .and_then(|v| v.extract::<String>().ok())
+                .unwrap_or_else(|| "scalar".to_string());
             // Pass-through naming: the JS-facing key is the dict key
             // verbatim. Differs from PARAMS, which title-cases for the
             // DAW display label — telemetry has no DAW surface so the
@@ -375,6 +386,7 @@ impl PythonBackend {
                 name: key_str.clone(),
                 key: key_str,
                 unit,
+                shape,
             });
         }
         if metadata.is_empty() { None } else { Some(metadata) }
@@ -401,6 +413,13 @@ impl PythonBackend {
     /// Allocate numpy arrays for the given channel count, sized to max_frames.
     /// Also pre-builds cached PyList/PyDict objects to avoid per-callback allocations.
     fn allocate_py_arrays(&mut self, channel_count: usize, max_frames: usize) {
+        // Track max_frames for vector-telemetry numpy array sizing. Drop
+        // any cached telemetry dict when the size changes so the next
+        // build re-seeds vector slots with arrays of the correct length.
+        if self.py_max_frames != max_frames {
+            self.py_telemetry_dict = None;
+        }
+        self.py_max_frames = max_frames;
         Python::with_gil(|py| {
             self.py_input_arrays = (0..channel_count)
                 .map(|_| {
@@ -548,7 +567,19 @@ impl PythonBackend {
                 let new_dict = PyDict::new(py);
                 if let Some(ref meta) = self.telemetry_metadata {
                     for slot in meta {
-                        new_dict.set_item(&slot.key, 0.0_f32)?;
+                        if slot.is_vector() {
+                            // Vector slots get a pre-allocated numpy
+                            // array sized to MAX_FRAMES so scripts can
+                            // write per-frame samples in place
+                            // (`telemetry["scope"][:n] = …`) without
+                            // per-block allocation. Length stays fixed
+                            // across blocks; the kernel uses the live
+                            // `frame_count` to truncate on read.
+                            let arr = PyArray1::<f32>::zeros(py, self.py_max_frames, false);
+                            new_dict.set_item(&slot.key, arr)?;
+                        } else {
+                            new_dict.set_item(&slot.key, 0.0_f32)?;
+                        }
                     }
                 }
                 let any = new_dict.into_any();
@@ -583,10 +614,13 @@ impl PythonBackend {
             // is in use, and the slot count is ≤8.
             if let Some(ref meta) = self.telemetry_metadata {
                 let dict = telemetry_obj.downcast::<PyDict>()?;
-                let keys: Vec<&str> = meta.iter().map(|s| s.key.as_str()).collect();
-                for (i, key) in keys.iter().enumerate() {
+                for (i, slot) in meta.iter().enumerate() {
                     if i >= TELEMETRY_LEN { break; }
-                    if let Ok(Some(val)) = dict.get_item(key) {
+                    // Vector slots write directly into the cached numpy
+                    // array — no scalar copy-out. The kernel calls
+                    // `read_telemetry_vec` to drain those.
+                    if slot.is_vector() { continue; }
+                    if let Ok(Some(val)) = dict.get_item(&slot.key) {
                         if let Ok(v) = val.extract::<f32>() {
                             self.telemetry_buf[i] = v;
                         }
@@ -688,5 +722,55 @@ impl Backend for PythonBackend {
             return;
         }
         out.copy_from_slice(&self.telemetry_buf);
+    }
+
+    fn read_telemetry_vec(
+        &self,
+        slot_index: usize,
+        frame_count: usize,
+        out: &mut [f32],
+    ) {
+        // Validate slot is declared and shape=vector before going
+        // through the GIL. Saves a few hundred ns per scalar slot per
+        // block in the kernel's harvest loop.
+        let meta = match &self.telemetry_metadata {
+            Some(m) => m,
+            None => return,
+        };
+        let spec = match meta.get(slot_index) {
+            Some(s) if s.is_vector() => s,
+            _ => return,
+        };
+        let dict_handle = match &self.py_telemetry_dict {
+            Some(d) => d,
+            None => return,
+        };
+        let n = frame_count.min(out.len()).min(self.py_max_frames);
+        if n == 0 {
+            return;
+        }
+        // Acquiring the GIL on the audio thread is a known cost we
+        // already pay every block in `process_with_python`. Doing it
+        // again here adds ~1 µs per declared vector slot — well within
+        // the budget for typical 1–4 vector slots.
+        let _ = Python::with_gil(|py| -> Result<(), pyo3::PyErr> {
+            let dict = dict_handle.bind(py);
+            let val = match dict.downcast::<PyDict>().ok().and_then(|d|
+                d.get_item(&spec.key).ok().flatten())
+            {
+                Some(v) => v,
+                None => return Ok(()),
+            };
+            // The script may have rebound the slot to a non-numpy value;
+            // tolerate that gracefully (silent no-op).
+            let arr: &Bound<'_, PyArray1<f32>> = match val.downcast::<PyArray1<f32>>() {
+                Ok(a) => a,
+                Err(_) => return Ok(()),
+            };
+            let slice = unsafe { arr.as_slice() }?;
+            let copy_len = n.min(slice.len());
+            out[..copy_len].copy_from_slice(&slice[..copy_len]);
+            Ok(())
+        });
     }
 }

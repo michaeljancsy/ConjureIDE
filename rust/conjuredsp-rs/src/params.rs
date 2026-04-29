@@ -177,14 +177,30 @@ pub const fn param(min: f64, max: f64) -> ParamSpec {
     }
 }
 
-/// Specification for a single telemetry slot — a read-only float the
-/// DSP publishes per-block for the host UI to read via `audio.onFrame`'s
+/// Shape of a telemetry slot. Scalar slots publish one f32 per
+/// render block; vector slots publish one f32 per audio frame in
+/// the current block (length = `frame_count`, harvested into a
+/// pre-allocated host-side ring of `max_frames` capacity).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TelemetryShape {
+    Scalar,
+    Vector,
+}
+
+/// Specification for a single telemetry slot — a value the DSP
+/// publishes per-block for the host UI to read via `audio.onFrame`'s
 /// `telemetry` field. Use `.unit("dB")` etc. to attach a unit string
 /// for display formatting (the same `formatValue` helper that handles
 /// param units in cdp-ui.js consumes this).
+///
+/// Pick the constructor by shape: [`scalar_telemetry`] for a single
+/// f32 (meters, GR, RMS), [`vector_telemetry`] for one f32 per audio
+/// frame (gain-trajectory plots, NAM activation curves, pre-clipping
+/// waveforms).
 #[derive(Clone, Copy)]
 pub struct TelemetrySpec {
     pub unit_str: &'static str,
+    pub shape: TelemetryShape,
 }
 
 impl TelemetrySpec {
@@ -195,9 +211,19 @@ impl TelemetrySpec {
     }
 }
 
-/// Default telemetry slot — no unit. Customize with `.unit("dB")`.
-pub const fn telemetry() -> TelemetrySpec {
-    TelemetrySpec { unit_str: "" }
+/// Scalar telemetry slot — one f32 per render block. Use for meters,
+/// gain-reduction values, RMS readouts. Customize with `.unit("dB")`.
+pub const fn scalar_telemetry() -> TelemetrySpec {
+    TelemetrySpec { unit_str: "", shape: TelemetryShape::Scalar }
+}
+
+/// Vector telemetry slot — one f32 per audio frame in the current
+/// render block (length = `frame_count`). Use for per-sample
+/// gain-trajectory plots, NAM activation curves, pre-clipping
+/// waveform debug views, computed filter responses. Customize with
+/// `.unit("dB")`.
+pub const fn vector_telemetry() -> TelemetrySpec {
+    TelemetrySpec { unit_str: "", shape: TelemetryShape::Vector }
 }
 
 /// Integer-valued parameter with explicit min/max.
@@ -345,15 +371,31 @@ mod tests {
     }
 
     #[test]
-    fn test_telemetry_default_unit() {
-        let t = telemetry();
+    fn test_scalar_telemetry_default_unit() {
+        let t = scalar_telemetry();
         assert_eq!(t.unit_str, "");
+        assert_eq!(t.shape, TelemetryShape::Scalar);
     }
 
     #[test]
-    fn test_telemetry_with_unit() {
-        let t = telemetry().unit("dB");
+    fn test_scalar_telemetry_with_unit() {
+        let t = scalar_telemetry().unit("dB");
         assert_eq!(t.unit_str, "dB");
+        assert_eq!(t.shape, TelemetryShape::Scalar);
+    }
+
+    #[test]
+    fn test_vector_telemetry_default_unit() {
+        let t = vector_telemetry();
+        assert_eq!(t.unit_str, "");
+        assert_eq!(t.shape, TelemetryShape::Vector);
+    }
+
+    #[test]
+    fn test_vector_telemetry_with_unit() {
+        let t = vector_telemetry().unit("");
+        assert_eq!(t.unit_str, "");
+        assert_eq!(t.shape, TelemetryShape::Vector);
     }
 
     #[test]

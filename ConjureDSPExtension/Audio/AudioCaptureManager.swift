@@ -13,6 +13,14 @@ import QuartzCore
 
 // MARK: - Custom UI audio frames
 
+/// A single telemetry slot value. Scalar slots produce one float per
+/// block; vector slots produce one float per audio frame in the current
+/// render block (length matches the host's frame_count, ≤ MAX_FRAMES).
+enum TelemetryValue {
+    case scalar(Float)
+    case vector([Float])
+}
+
 /// A tick-synchronous snapshot of audio activity, published to custom HTML/JS
 /// UIs via `window.ConjureDSP.audio.onFrame(...)`. Emitted by
 /// `AudioCaptureManager` once per display-link tick whenever at least one
@@ -29,11 +37,11 @@ struct AudioFrame {
     let fftInDB: [Float]?
     let fftOutDB: [Float]?
     /// Script-published telemetry slots, keyed by declared name (e.g.
-    /// `"Gr Db"` → -3.2). `nil` when the loaded preset declares no
-    /// telemetry — the common case for legacy scripts. `CustomUIWebView`
-    /// only attaches the field to its `audio.onFrame` payload when this
-    /// is non-nil and non-empty, so authors don't see a stub key.
-    let telemetry: [String: Float]?
+    /// `"Gr Db"` → `.scalar(-3.2)`, `"Scope"` → `.vector([...])`).
+    /// `nil` when the loaded preset declares no telemetry — the common
+    /// case for legacy scripts. `CustomUIWebView` only attaches the field
+    /// to its `audio.onFrame` payload when this is non-nil and non-empty.
+    let telemetry: [String: TelemetryValue]?
     let timestamp: CFTimeInterval
 }
 
@@ -297,8 +305,33 @@ final class AudioCaptureManager: ObservableObject {
     // String() construction per tick (cheap; metadata strings are tiny)
     // and is correctness-by-construction.
     private var telemetryNames: [String] = []
+    /// Parallel to `telemetryNames`: true when slot is `"vector"` shape,
+    /// false for scalar (or shape missing — legacy default).
+    private var telemetryIsVector: [Bool] = []
     private var lastTelemetryMetaJSON: String?
     private var telemetryReadBuffer: [Float] = []
+
+    /// Wall time of the last tick that observed forward progress on the
+    /// audio thread (i.e. read >0 samples from the kernel ring). Used to
+    /// detect a stalled audio thread (host paused, transport stopped) and
+    /// suppress telemetry instead of replaying the last cached value
+    /// forever. Renders typically deliver a block every 5–21 ms at 48 kHz,
+    /// so a 50 ms deadband is comfortably larger than any normal gap.
+    ///
+    /// Initialized to `CACurrentMediaTime()` (system uptime in seconds) at
+    /// construction so the staleness check has a meaningful baseline before
+    /// the first audio tick. Initializing to 0 made `now - last` evaluate
+    /// to many-seconds on the very first call, theoretically suppressing
+    /// telemetry until audio first ticked. In practice the publish gate
+    /// already drops empty-drain ticks so this couldn't surface, but the
+    /// explicit init makes the invariant clear.
+    private var lastRenderActivityTimestamp: CFTimeInterval = CACurrentMediaTime()
+    private static let telemetryStaleThreshold: CFTimeInterval = 0.050
+    /// Shared scratch for vector-telemetry reads. Sized to the kernel's
+    /// `MAX_FRAMES` (4096) — the kernel truncates anything longer, so
+    /// this is sufficient for any host buffer size.
+    private static let maxTelemetryVecLen: Int = 4096
+    private var telemetryVecScratch: [Float] = [Float](repeating: 0, count: 4096)
 
     // MARK: - Init
 
@@ -432,6 +465,13 @@ final class AudioCaptureManager: ObservableObject {
             UInt32(Self.maxReadSamples)
         ))
 
+        // Stamp render activity. The audio thread only writes new samples
+        // into the ring while the host is calling render, so a tick with
+        // zero samples on both rings means the render path is stalled.
+        if inputCount > 0 || outputCount > 0 {
+            lastRenderActivityTimestamp = CACurrentMediaTime()
+        }
+
         // RMS + peak from this tick's samples, for AudioFrame consumers.
         // Zero-cost when no custom UI is subscribed (we skip emit below).
         var rmsIn: Float = 0
@@ -492,23 +532,60 @@ final class AudioCaptureManager: ObservableObject {
         // the kernel's cached metadata via pointer comparison so script
         // reloads (which produce a new CString) automatically refresh
         // the name list.
-        let telemetry: [String: Float]? = readTelemetry(kernel: kernel)
+        let telemetry: [String: TelemetryValue]? = readTelemetry(kernel: kernel)
 
         // Emit a frame for custom-UI subscribers. FFT arrays only ride along
         // on ticks that produced a new column; otherwise nil. `send` on a
         // subject with no observers is a cheap no-op, so there's no gate.
-        let fftIn: [Float]? = producedColumns ? fftInputScratch : nil
-        let fftOut: [Float]? = producedColumns ? fftOutputScratch : nil
-        audioFramePublisher.send(AudioFrame(
-            rmsIn: rmsIn,
-            rmsOut: rmsOut,
-            peakIn: peakIn,
-            peakOut: peakOut,
-            fftInDB: fftIn,
-            fftOutDB: fftOut,
-            telemetry: telemetry,
-            timestamp: CACurrentMediaTime()
-        ))
+        //
+        // Three classes of bad-data tick are filtered out here:
+        //
+        // 1. **Empty drains** (`inputCount == 0 && outputCount == 0`).
+        //    The CADisplayLink fires at display rate (60 Hz, or 120 Hz on
+        //    ProMotion); DAW hosts render audio in larger blocks (Ableton:
+        //    2048 frames at 48 kHz = ~23 Hz). On ProMotion ~80% of ticks
+        //    see both rings empty. Without filtering, we'd publish
+        //    `peakIn = peakOut = 0` (var-init defaults), which the time-
+        //    anchored UI would draw as a real -120 dB sample.
+        //
+        // 2. **Mismatched ticks** (exactly one of `inputCount`/`outputCount`
+        //    is 0). The audio thread writes the input ring at the start of
+        //    a render block and the output ring at the end, with the
+        //    script's `process()` in between (~10 ms). If a UI tick fires
+        //    in that window, one ring has data and the other doesn't.
+        //    Publishing those produces consecutive ring entries with one
+        //    fill present and the other missing — visible as lighter or
+        //    medium-grey "phantom" strips. Skipping costs us one render
+        //    block's contribution to the visualization, which the time-
+        //    anchored renderer interpolates over invisibly.
+        //
+        // 3. **All-zero buffers** (`peakIn == 0 && peakOut == 0` even when
+        //    both counts > 0). Sometimes the host hands us a full block of
+        //    pure silence (e.g. brief Ableton transport hiccups, or the AU
+        //    being called from an auxiliary render path). Publishing those
+        //    produces real -120 dB ring entries → visible drops to the
+        //    -60 dB floor in the level fill. Audio output to the DAW is
+        //    unaffected; the silence is purely an artifact of the capture
+        //    ring's view of input.
+        //
+        // Cases 2 and 3 also show up under the diagnostic as `kind=mismatch`
+        // and `kind=zeroBoth` respectively. The kernel-side root cause for
+        // (3) is still being investigated; this gate is a UI-side
+        // suppression so the visualization stays clean while we dig.
+        if inputCount > 0 && outputCount > 0 && (peakIn > 0 || peakOut > 0) {
+            let fftIn: [Float]? = producedColumns ? fftInputScratch : nil
+            let fftOut: [Float]? = producedColumns ? fftOutputScratch : nil
+            audioFramePublisher.send(AudioFrame(
+                rmsIn: rmsIn,
+                rmsOut: rmsOut,
+                peakIn: peakIn,
+                peakOut: peakOut,
+                fftInDB: fftIn,
+                fftOutDB: fftOut,
+                telemetry: telemetry,
+                timestamp: CACurrentMediaTime()
+            ))
+        }
     }
 
     // MARK: - Telemetry
@@ -516,12 +593,23 @@ final class AudioCaptureManager: ObservableObject {
     /// Snapshot the kernel's per-block telemetry slots into a name→value
     /// dict. Returns nil when the loaded preset doesn't declare any
     /// telemetry (the common case for legacy scripts), so consumers can
-    /// short-circuit. Cheap: a single CString pointer comparison + FFI
-    /// snapshot read when telemetry is active, no allocations or FFI
-    /// calls when it isn't.
-    private func readTelemetry(kernel: DSPKernelRef) -> [String: Float]? {
+    /// short-circuit. Scalar slots come from a single FFI snapshot;
+    /// vector slots are copied per-slot via `dsp_kernel_read_telemetry_vec`,
+    /// which returns the live frame count for the most recent block.
+    private func readTelemetry(kernel: DSPKernelRef) -> [String: TelemetryValue]? {
         refreshTelemetryNamesIfChanged(kernel: kernel)
         guard !telemetryNames.isEmpty else { return nil }
+
+        // Staleness gate. When the audio thread hasn't ticked recently
+        // (host paused, transport stopped, AU bypassed) the kernel's
+        // telemetry ring keeps returning the last published value, so a
+        // GR meter would freeze at whatever the compressor was doing the
+        // moment audio stopped. Returning nil drops the telemetry field
+        // from this frame; the UI's onFrame handler defaults its locals
+        // (gr=0, grCurve=null) and the line snaps back to neutral.
+        if CACurrentMediaTime() - lastRenderActivityTimestamp > Self.telemetryStaleThreshold {
+            return nil
+        }
 
         let n = Int(dsp_kernel_read_telemetry(
             kernel,
@@ -531,12 +619,24 @@ final class AudioCaptureManager: ObservableObject {
         let count = min(n, telemetryNames.count)
         guard count > 0 else { return nil }
 
-        var dict: [String: Float] = [:]
+        var dict: [String: TelemetryValue] = [:]
         dict.reserveCapacity(count)
         for i in 0..<count {
-            dict[telemetryNames[i]] = telemetryReadBuffer[i]
+            if i < telemetryIsVector.count && telemetryIsVector[i] {
+                let len = Int(dsp_kernel_read_telemetry_vec(
+                    kernel,
+                    UInt32(i),
+                    &telemetryVecScratch,
+                    UInt32(telemetryVecScratch.count)
+                ))
+                if len > 0 {
+                    dict[telemetryNames[i]] = .vector(Array(telemetryVecScratch[0..<len]))
+                }
+            } else {
+                dict[telemetryNames[i]] = .scalar(telemetryReadBuffer[i])
+            }
         }
-        return dict
+        return dict.isEmpty ? nil : dict
     }
 
     /// Re-read the kernel's telemetry metadata when it changes. Detected
@@ -551,19 +651,22 @@ final class AudioCaptureManager: ObservableObject {
         lastTelemetryMetaJSON = currentJSON
         guard let json = currentJSON else {
             telemetryNames = []
+            telemetryIsVector = []
             return
         }
         guard let data = json.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data)
                 as? [[String: Any]] else {
             telemetryNames = []
+            telemetryIsVector = []
             return
         }
         telemetryNames = array.compactMap { $0["name"] as? String }
+        telemetryIsVector = array.map { ($0["shape"] as? String) == "vector" }
         // Buffer must hold at least the full slot count so the FFI
-        // snapshot can fill it; pad to 8 (the kernel TELEMETRY_LEN) so
+        // snapshot can fill it; pad to 16 (the kernel TELEMETRY_LEN) so
         // we always pass a sensible capacity even if names trim short.
-        let needed = max(telemetryNames.count, 8)
+        let needed = max(telemetryNames.count, 16)
         if telemetryReadBuffer.count < needed {
             telemetryReadBuffer = [Float](repeating: 0, count: needed)
         }

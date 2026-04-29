@@ -97,6 +97,99 @@
     let FG = resolveFG();
     window.addEventListener('themechange', () => { FG = resolveFG(); scheduleRedraw(); });
 
+    // Smoothed input/output spectra. Updated by `audio.onFrame` ticks
+    // (fft bins arrive when the host produced a new column — limited
+    // by the 50% hop, so roughly every fftSize/2 samples). Stored at
+    // bin resolution; resampled onto the canvas log-x axis at draw time.
+    // Exponential decay = max(prev*0.85, new) gives a "peak hold then
+    // fall" feel that's easier to read than raw bin updates.
+    let specIn = null;   // Float32Array, halfN bins of dB (-120..0)
+    let specOut = null;
+    let specBins = 0;
+    let specSampleRate = 48000;  // overwritten on first frame via fftSize inference
+    const SPEC_FLOOR = -90;      // floor dB shown on canvas (clamps below this)
+    const SPEC_CEIL  = 0;        // top dB shown on canvas
+    const SPEC_DECAY = 0.85;
+    let lastSpecTickRedraw = 0;
+
+    function ingestSpectrum(prev, fresh) {
+      const n = fresh.length;
+      if (!prev || prev.length !== n) prev = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const decayed = prev[i] * SPEC_DECAY + SPEC_FLOOR * (1 - SPEC_DECAY);
+        prev[i] = fresh[i] > decayed ? fresh[i] : decayed;
+      }
+      return prev;
+    }
+
+    if (CDP && CDP.audio && CDP.audio.onFrame) {
+      CDP.audio.onFrame((frame) => {
+        if (!frame.fftIn || !frame.fftOut) return;
+        // Infer FFT size from bin count: AudioCaptureManager passes halfN
+        // bins where halfN = fftSize/2. Bin i maps to f = i * SR / fftSize.
+        // The canvas only knows the bin index; SR is implicit and the
+        // spectrogram math doesn't change if SR drifts off 48k.
+        specBins = frame.fftIn.length;
+        specIn  = ingestSpectrum(specIn,  frame.fftIn);
+        specOut = ingestSpectrum(specOut, frame.fftOut);
+        // Throttle spectrum-driven redraws so we don't compete with EQ
+        // curve redraws on parameter drag. 33 ms cap = ~30 Hz.
+        const now = performance.now();
+        if (now - lastSpecTickRedraw < 33) return;
+        lastSpecTickRedraw = now;
+        scheduleRedraw();
+      }, { fft: true });
+    }
+
+    // Map a spectrum bin index → log-frequency canvas x. Returns null
+    // for bins outside [fMin, fMax].
+    function binToX(bin, totalBins, pad, innerW, fMin, fMax) {
+      // halfN bins span 0..Nyquist; assume SR=48000 for axis layout (the
+      // canvas range goes to 20 kHz, well below Nyquist for any SR ≥ 40k).
+      const f = bin * (specSampleRate * 0.5) / totalBins;
+      if (f < fMin || f > fMax) return null;
+      const t = Math.log(f / fMin) / Math.log(fMax / fMin);
+      return pad + t * innerW;
+    }
+
+    function drawSpectrum(spec, pad, innerW, innerH, fMin, fMax, fillAlpha, strokeAlpha) {
+      if (!spec || specBins === 0) return;
+      ctx.beginPath();
+      let started = false;
+      for (let i = 1; i < specBins; i++) {  // skip DC bin
+        const x = binToX(i, specBins, pad, innerW, fMin, fMax);
+        if (x === null) continue;
+        const dbClamped = Math.max(SPEC_FLOOR, Math.min(SPEC_CEIL, spec[i]));
+        const t = (dbClamped - SPEC_FLOOR) / (SPEC_CEIL - SPEC_FLOOR);  // 0..1
+        const y = pad + innerH * (1 - t);
+        if (!started) { ctx.moveTo(x, pad + innerH); ctx.lineTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
+      if (!started) return;
+      // Close down to the baseline for fill.
+      ctx.lineTo(pad + innerW, pad + innerH);
+      ctx.closePath();
+      ctx.fillStyle = FG;
+      ctx.globalAlpha = fillAlpha;
+      ctx.fill();
+      // Stroke only the top edge: re-walk without the close-to-baseline.
+      ctx.beginPath();
+      started = false;
+      for (let i = 1; i < specBins; i++) {
+        const x = binToX(i, specBins, pad, innerW, fMin, fMax);
+        if (x === null) continue;
+        const dbClamped = Math.max(SPEC_FLOOR, Math.min(SPEC_CEIL, spec[i]));
+        const t = (dbClamped - SPEC_FLOOR) / (SPEC_CEIL - SPEC_FLOOR);
+        const y = pad + innerH * (1 - t);
+        if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = FG;
+      ctx.globalAlpha = strokeAlpha;
+      ctx.lineWidth = 1 * devicePixelRatio;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
     function drawResponse() {
       const w = canvas.width = canvas.clientWidth * devicePixelRatio;
       const h = canvas.height = canvas.clientHeight * devicePixelRatio;
@@ -125,6 +218,15 @@
       });
       ctx.globalAlpha = 1;
 
+      // Live FFT spectra (input behind, output in front), drawn under
+      // the EQ curve so the analytical response stays the dominant
+      // visual. fillAlpha is intentionally low — when the bands are
+      // flat, input ≈ output and the two layers would otherwise look
+      // muddy.
+      const fMin = 20, fMax = 20000;
+      drawSpectrum(specIn,  pad, innerW, innerH, fMin, fMax, 0.08, 0.25);
+      drawSpectrum(specOut, pad, innerW, innerH, fMin, fMax, 0.18, 0.55);
+
       // Compute coefficients per band.
       const activeCoeffs = BANDS.map(b => {
         const gain = CDP.parameters.get(getIndex(b.gainParam));
@@ -132,8 +234,7 @@
         return bypassed ? null : coeffs(b.type, b.freq, Q, gain, SR);
       });
 
-      // Sweep log frequency 20 Hz -> 20 kHz.
-      const fMin = 20, fMax = 20000;
+      // Sweep log frequency 20 Hz -> 20 kHz (fMin/fMax declared above).
       const N = 256;
       ctx.beginPath();
       for (let i = 0; i <= N; i++) {

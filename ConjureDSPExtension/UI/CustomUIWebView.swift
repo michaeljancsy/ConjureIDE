@@ -549,10 +549,26 @@ struct CustomUIWebView: NSViewRepresentable {
             syncCaptureState()
         }
 
-        /// Track in-flight evaluateJavaScript invocations so audio frames
-        /// don't queue up behind a slow main thread. If a frame can't be
-        /// delivered synchronously (script still running), we just drop it.
-        private var framesInFlight = 0
+        /// Monotonic sequence counter stamped onto every forwarded frame.
+        /// The JS side keeps a "latest-wins" slot and only dispatches to
+        /// subscribers when `seq` advances — that lets us write on every
+        /// CADisplayLink tick without worrying about backpressure or
+        /// duplicate dispatch on idle ticks.
+        private var audioFrameSeq: UInt64 = 0
+
+        /// Round-trip backpressure counter for `evaluateJavaScript`
+        /// calls. Incremented before submitting; decremented in the
+        /// completion handler. The fps gate above throttles against
+        /// the audio thread's clock but doesn't know whether WebKit's
+        /// WebContent process is keeping up — under heavy payloads
+        /// (vector telemetry can hit ~16 KB / frame at 30 Hz) or slow
+        /// hardware, the IPC queue between host and WebContent could
+        /// otherwise grow unboundedly. The forward path checks
+        /// `framesInFlight >= 1` before submitting, so at most one
+        /// call is outstanding at any time. Reads and writes are
+        /// main-thread only (CADisplayLink + WK completion both fire
+        /// there) so the counter doesn't need synchronization.
+        private var framesInFlight: Int = 0
 
         private func forwardAudioFrame(_ frame: AudioFrame) {
             guard isReady, let webView, isWindowVisible else { return }
@@ -564,13 +580,22 @@ struct CustomUIWebView: NSViewRepresentable {
                frame.timestamp - lastForwardTime < minInterval - 0.001 {
                 return
             }
+            // Round-trip backpressure: drop if WebKit hasn't acked the
+            // previous call yet. Caps in-flight calls at 1 — strict
+            // enough that the IPC queue can never grow when WebKit
+            // stalls, with the trade-off that one in-flight slow
+            // evaluation drops every subsequent frame until it
+            // completes. The fps gate above already throttles
+            // submission rate to 30 Hz, so this only kicks in under
+            // genuine WebKit slowness, not normal scheduling jitter.
+            if framesInFlight >= 1 {
+                return
+            }
             lastForwardTime = frame.timestamp
 
-            // Bound the outstanding JS work — dropping frames is fine for
-            // a UI animation pipeline.
-            if framesInFlight > 1 { return }
-
+            audioFrameSeq &+= 1
             var payload: [String: Any] = [
+                "seq": audioFrameSeq,
                 "rmsIn": frame.rmsIn,
                 "rmsOut": frame.rmsOut,
                 "peakIn": frame.peakIn,
@@ -594,14 +619,22 @@ struct CustomUIWebView: NSViewRepresentable {
             // round-trip an opt-in would require. Only emitted when the
             // loaded preset declared at least one slot.
             if let telemetry = frame.telemetry, !telemetry.isEmpty {
-                payload["telemetry"] = telemetry
+                var telemetryJSON: [String: Any] = [:]
+                telemetryJSON.reserveCapacity(telemetry.count)
+                for (name, value) in telemetry {
+                    switch value {
+                    case .scalar(let f): telemetryJSON[name] = f
+                    case .vector(let arr): telemetryJSON[name] = arr
+                    }
+                }
+                payload["telemetry"] = telemetryJSON
             }
 
             guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
                   let json = String(data: data, encoding: .utf8) else { return }
 
-            framesInFlight += 1
             let js = "window.ConjureDSP && window.ConjureDSP._audioFrame(\(json))"
+            framesInFlight += 1
             webView.evaluateJavaScript(js) { [weak self] _, _ in
                 self?.framesInFlight = max(0, (self?.framesInFlight ?? 1) - 1)
             }

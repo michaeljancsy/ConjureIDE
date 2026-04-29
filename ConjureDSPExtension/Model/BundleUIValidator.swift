@@ -354,9 +354,9 @@ enum BundleUIValidator {
     ///   - bundles whose UI uses `<cdp-panel auto>` (catch-all that
     ///     auto-renders one control per declared param)
     ///
-    /// Severity is `warn`, not `fail`: deliberately hiding a param from
-    /// the UI is a valid authoring choice, but it should be a deliberate
-    /// one and the warning is cheap to dismiss for those cases.
+    /// Severity is `fail`: every declared parameter must be reachable
+    /// from the custom UI. If a param shouldn't be user-editable, drop
+    /// it from `manifest.params` rather than declaring it and hiding it.
     private static func checkUnboundDeclaredParams(html: String, bundle: PresetBundle) -> [Issue] {
         guard let declared = bundle.manifest.params, !declared.isEmpty else { return [] }
 
@@ -407,11 +407,11 @@ enum BundleUIValidator {
         let andMore = unbound.count > 3 ? " and \(unbound.count - 3) more" : ""
         return [
             Issue(
-                severity: .warn,
+                severity: .fail,
                 check: "param_no_ui_binding",
                 file: "ui/index.html",
-                message: "manifest declares \(declared.count) param\(declared.count == 1 ? "" : "s") but the UI binds only \(declared.count - unbound.count) — \(unbound.count) param\(unbound.count == 1 ? " is" : "s are") not reachable from the custom UI: \(preview)\(andMore). Stock slider panel + DAW automation still see them; only the custom UI renders short.",
-                suggestion: "Add a `<cdp-slider param=\"\(unbound[0])\">` (or appropriate widget) for each missing param, OR drop in `<cdp-panel auto></cdp-panel>` as a catch-all. If the omission is deliberate, ignore this warning."
+                message: "manifest declares \(declared.count) param\(declared.count == 1 ? "" : "s") but the UI binds only \(declared.count - unbound.count) — \(unbound.count) param\(unbound.count == 1 ? " is" : "s are") not reachable from the custom UI: \(preview)\(andMore).",
+                suggestion: "Add a `<cdp-slider param=\"\(unbound[0])\">` (or appropriate widget) for each missing param, OR drop in `<cdp-panel auto></cdp-panel>` as a catch-all. If the param shouldn't be user-editable, remove it from manifest.params rather than declaring it and hiding it."
             )
         ]
     }
@@ -513,11 +513,11 @@ enum BundleUIValidator {
 
         return [
             Issue(
-                severity: .warn,
+                severity: .fail,
                 check: "no_interactive_surface",
                 file: "ui/index.html",
                 message: "UI has \(params.count) declared parameter\(params.count == 1 ? "" : "s") but no cdp-slider / cdp-toggle / cdp-choice / cdp-xy / cdp-knob / cdp-panel / <input type=\"range\"> — users will have no way to change them.",
-                suggestion: "Add per-param controls, or drop in <cdp-panel auto></cdp-panel> as a catch-all. Fully decorative UIs are fine for display-only presets, but every parameter should have at least one way to be edited."
+                suggestion: "Add per-param controls, or drop in <cdp-panel auto></cdp-panel> as a catch-all. Every declared parameter must be reachable from the UI."
             )
         ]
     }

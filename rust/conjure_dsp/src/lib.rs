@@ -369,8 +369,8 @@ pub unsafe extern "C" fn dsp_kernel_latency_samples(kernel: DSPKernelRef) -> u32
 ///
 /// Telemetry is the read-back twin of `dsp_kernel_param_metadata_json`:
 /// scripts publish internal DSP state per render block via
-/// `Context::set_telemetry` / `TELEMETRY` dict, host UI reads the
-/// snapshot via `dsp_kernel_read_telemetry`.
+/// `Context::set_telemetry_scalar` / `TELEMETRY` dict, host UI reads
+/// the snapshot via `dsp_kernel_read_telemetry`.
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
@@ -383,7 +383,7 @@ pub unsafe extern "C" fn dsp_kernel_telemetry_metadata_json(
 
 /// Snapshot the latest telemetry values published by the most recent
 /// `process()` call into the caller's buffer. Writes up to `max`
-/// slots (capped at the kernel's TELEMETRY_LEN, currently 8) and
+/// slots (capped at the kernel's TELEMETRY_LEN, currently 16) and
 /// returns the number written. Lock-free Relaxed read of per-slot
 /// atomics; safe to call from any thread, throttled in practice to
 /// display-link cadence (~30–120 Hz).
@@ -399,6 +399,30 @@ pub unsafe extern "C" fn dsp_kernel_read_telemetry(
 ) -> u32 {
     let buf = std::slice::from_raw_parts_mut(out, max as usize);
     (*kernel).read_telemetry(buf) as u32
+}
+
+/// Snapshot the latest per-frame values written by the most recent
+/// `process()` call for the vector telemetry slot at metadata position
+/// `slot_index`. Writes up to `max` f32 values into `out` and returns
+/// the number actually written. Returns 0 when the slot is scalar /
+/// not declared / has not been written yet, or when the script is on
+/// a backend that doesn't support vector telemetry.
+///
+/// Brief lock under the hood (see `DSPKernel::read_telemetry_vec`);
+/// safe to call from the UI / display-link thread at ~30–120 Hz.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+/// - `out` must point to at least `max` writable f32 values.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_read_telemetry_vec(
+    kernel: DSPKernelRef,
+    slot_index: u32,
+    out: *mut f32,
+    max: u32,
+) -> u32 {
+    let buf = std::slice::from_raw_parts_mut(out, max as usize);
+    (*kernel).read_telemetry_vec(slot_index as usize, buf) as u32
 }
 
 /// Enable or disable audio capture for spectrogram visualization.

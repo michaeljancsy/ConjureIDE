@@ -20,8 +20,8 @@ params! {
 }
 
 telemetry! {
-    PEAK_DB     = telemetry().unit("dB"),
-    ENVELOPE_DB = telemetry().unit("dB"),
+    PEAK_DB     = scalar_telemetry().unit("dB"),
+    ENVELOPE_DB = scalar_telemetry().unit("dB"),
 }
 
 // Persistent envelope state. f32 here is fine; the smoke preset doesn't
@@ -75,6 +75,6 @@ pub extern "C" fn process(
     }
 
     let env = unsafe { ENVELOPE };
-    ctx.set_telemetry(PEAK_DB, lin_to_db(block_peak));
-    ctx.set_telemetry(ENVELOPE_DB, lin_to_db(env));
+    ctx.set_telemetry_scalar(PEAK_DB, lin_to_db(block_peak));
+    ctx.set_telemetry_scalar(ENVELOPE_DB, lin_to_db(env));
 }

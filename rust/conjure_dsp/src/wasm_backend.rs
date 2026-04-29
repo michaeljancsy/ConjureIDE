@@ -133,6 +133,13 @@ pub struct WasmBackend {
     /// allocated regardless of whether telemetry slots are declared);
     /// only meaningful when `telemetry_metadata` is also `Some`.
     telemetry_buf_offset: Option<i32>,
+    /// Cached per-slot base offsets of the macro-emitted vector
+    /// telemetry buffers (via `get_telemetry_vec_ptr(slot)`), one entry
+    /// per declared metadata slot. Scalar slots and slots whose export
+    /// returned 0/null get `None`. Captured once at load time so the
+    /// audio-thread `read_telemetry_vec` path is a pure slice read with
+    /// no wasmtime function-call overhead.
+    telemetry_vec_offsets: Vec<Option<i32>>,
 }
 
 /// Base offset in WASM linear memory to avoid the null page.
@@ -240,6 +247,30 @@ impl WasmBackend {
                 let _ = store.set_fuel(COMPILED_FUEL);
                 f.call(&mut store, ()).ok()
             });
+        // Resolve per-slot vector base pointers (one call per declared slot
+        // at load time; runtime reads are pure memory slices). The export
+        // is named `get_telemetry_vec_ptr(slot: i32) -> i32` and returns 0
+        // for non-vector / out-of-range slots.
+        let telemetry_vec_offsets: Vec<Option<i32>> = match (&telemetry_metadata,
+            instance.get_typed_func::<i32, i32>(&mut store, "get_telemetry_vec_ptr").ok())
+        {
+            (Some(meta), Some(f)) => meta
+                .iter()
+                .enumerate()
+                .map(|(i, spec)| {
+                    if !spec.is_vector() {
+                        return None;
+                    }
+                    let _ = store.set_fuel(COMPILED_FUEL);
+                    match f.call(&mut store, i as i32) {
+                        Ok(0) => None,
+                        Ok(p) => Some(p),
+                        Err(_) => None,
+                    }
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
 
         // Probe for optional get_latency_samples() export
         let latency_samples = instance
@@ -325,6 +356,7 @@ impl WasmBackend {
             nam_path,
             telemetry_metadata,
             telemetry_buf_offset,
+            telemetry_vec_offsets,
         })
     }
 
@@ -1179,6 +1211,40 @@ impl Backend for WasmBackend {
         };
         let src = &mem_data[start..end];
         // Pointer cast is safe: src has byte_len = out.len() * 4 bytes.
+        unsafe {
+            let dst_bytes = core::slice::from_raw_parts_mut(
+                out.as_mut_ptr() as *mut u8,
+                byte_len,
+            );
+            dst_bytes.copy_from_slice(src);
+        }
+    }
+
+    fn read_telemetry_vec(
+        &self,
+        slot_index: usize,
+        frame_count: usize,
+        out: &mut [f32],
+    ) {
+        // Same pure-memory-read pattern as `read_telemetry`: wasmtime
+        // function calls require `&mut store`, so we cached the per-slot
+        // base offsets at load time.
+        let offset = match self.telemetry_vec_offsets.get(slot_index).and_then(|o| *o) {
+            Some(o) => o,
+            None => return,
+        };
+        let n = frame_count.min(out.len());
+        if n == 0 {
+            return;
+        }
+        let start = offset as usize;
+        let byte_len = n * core::mem::size_of::<f32>();
+        let mem_data = self.memory.data(&self.store);
+        let end = match start.checked_add(byte_len) {
+            Some(e) if e <= mem_data.len() => e,
+            _ => return,
+        };
+        let src = &mem_data[start..end];
         unsafe {
             let dst_bytes = core::slice::from_raw_parts_mut(
                 out.as_mut_ptr() as *mut u8,

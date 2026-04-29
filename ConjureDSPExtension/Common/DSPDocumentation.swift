@@ -970,8 +970,66 @@ enum DSPDocumentation {
     Don't mirror DSP math in JS to compute these values — parameter
     changes leak between block boundaries, attack/release state is
     hard to track from outside, and the result drifts from the audio
-    whenever you tweak the script. 8 slots max per script. Zero
-    overhead for presets that don't declare any.
+    whenever you tweak the script. 16 slots max per script (scalar +
+    vector combined). Zero overhead for presets that don't declare any.
+
+    ## Vector telemetry (per-frame visualizers)
+
+    Scalar slots emit one value per block — fine for meters that show
+    "how much" but useless for an oscilloscope or waveform display
+    that needs the *shape* of the signal. Declare a `vector_telemetry`
+    slot to publish one float per audio frame in the current block:
+
+    Rust:
+
+    ```rust
+    use conjuredsp::*;
+    setup!();
+    telemetry! {
+        SCOPE = vector_telemetry(),
+    }
+    // inside process(): write your per-frame samples (e.g. the wet
+    // signal post-saturation) into the slot:
+    for i in 0..frame_count {
+        let y = saturator.process(ctx.input(0, i));
+        ctx.set_output(0, i, y);
+        scope_buf[i] = y;
+    }
+    ctx.set_telemetry_vector(SCOPE, &scope_buf[..frame_count]);
+    ```
+
+    Python:
+
+    ```python
+    TELEMETRY = {"scope": {"shape": "vector"}}
+    def process(inputs, outputs, frame_count, sample_rate, params,
+                transport, telemetry):
+        # Run your per-frame DSP into outputs[0]; then publish a slice
+        # of length frame_count into the slot.
+        telemetry["scope"][:frame_count] = outputs[0][:frame_count]
+    ```
+
+    The pre-seeded numpy array lives in the dict — slice-assign into
+    it, don't replace it. Length must equal `frame_count`; longer
+    slices are truncated to `MAX_FRAMES` (4096), shorter slices leave
+    stale data past the live tail (the host caps the read to the
+    actual published length).
+
+    UI consumer — `frame.telemetry["scope"]` is now a JS Array, not a
+    number:
+
+    ```js
+    ConjureDSP.audio.onFrame(frame => {
+        if (!frame.telemetry) return;
+        const scope = frame.telemetry["scope"];   // [-0.3, 0.4, …]
+        if (!Array.isArray(scope)) return;        // legacy/scalar
+        // draw onto a <canvas>: one pixel column per sample, etc.
+    });
+    ```
+
+    Same `audioFrames: true` manifest gate. Same 16-slot budget. Pick
+    vector only when you need waveform shape — for a meter, a scalar
+    slot is one float instead of `frame_count` floats per block.
 
     ## Worked example: telemetry meter + tempo-sync
 

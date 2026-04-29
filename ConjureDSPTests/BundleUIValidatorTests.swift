@@ -472,7 +472,7 @@ struct BundleUIValidatorTests {
 
     // MARK: - no_interactive_surface
 
-    @Test func decorativeOnlyUIWithParamsWarned() throws {
+    @Test func decorativeOnlyUIWithParamsFails() throws {
         // No cdp-* components, no <input type=range>, no cdp-panel — but
         // the manifest declares 1 param. User can't edit it.
         let ui = """
@@ -482,7 +482,10 @@ struct BundleUIValidatorTests {
         """
         let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
         let report = BundleUIValidator.validate(bundle)
-        #expect(report.issues.contains { $0.check == "no_interactive_surface" })
+        let issue = report.issues.first { $0.check == "no_interactive_surface" }
+        #expect(issue != nil)
+        #expect(issue?.severity == .fail)
+        #expect(report.status == .fail)
     }
 
     @Test func cdpPanelAutoSatisfiesSurfaceCheck() throws {
@@ -501,8 +504,8 @@ struct BundleUIValidatorTests {
 
     // MARK: - param_no_ui_binding (inverse coverage check)
 
-    /// Two manifest params; UI binds only one. The unbound one should warn.
-    @Test func declaredParamWithoutUIBindingWarned() throws {
+    /// Two manifest params; UI binds only one. The unbound one should fail.
+    @Test func declaredParamWithoutUIBindingFails() throws {
         let manifest = """
         {
           "schemaVersion": 2, "entry": "process.py", "language": "python",
@@ -517,9 +520,10 @@ struct BundleUIValidatorTests {
         let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
         let report = BundleUIValidator.validate(bundle)
         let issue = report.issues.first { $0.check == "param_no_ui_binding" }
-        #expect(issue != nil, "tone is declared but not bound — should warn")
-        #expect(issue?.severity == .warn, "deliberate hides are valid; warn not fail")
+        #expect(issue != nil, "tone is declared but not bound — should fail")
+        #expect(issue?.severity == .fail, "every declared param must be reachable from the UI")
         #expect(issue?.message.contains("tone") == true)
+        #expect(report.status == .fail)
     }
 
     /// All declared params bound — no warning.

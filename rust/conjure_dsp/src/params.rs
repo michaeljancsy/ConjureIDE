@@ -10,7 +10,7 @@ pub const PARAM_COUNT: usize = 16;
 /// once per block and the host UI reads the snapshot via
 /// `audio.onFrame`'s `telemetry` field. Mirrors `conjuredsp::TELEMETRY_LEN`
 /// in the author crate.
-pub const TELEMETRY_LEN: usize = 8;
+pub const TELEMETRY_LEN: usize = 16;
 
 /// Metadata for a single telemetry slot, declared by the script via
 /// `telemetry!()` (Rust) or `TELEMETRY = {…}` (Python).
@@ -26,6 +26,24 @@ pub struct TelemetryMetadata {
     /// Display unit (e.g. "dB", "Hz", "%"). Empty when the value is
     /// unitless. The cdp-ui.js `formatValue` helper consumes this.
     pub unit: String,
+    /// Slot shape: `"scalar"` (default — single f32 per block) or
+    /// `"vector"` (one f32 per audio frame, length up to MAX_FRAMES).
+    /// Drives kernel-side allocation: vector slots get a per-block
+    /// AtomicU32 ring; scalar slots reuse the existing single-AtomicU32
+    /// path.
+    #[serde(default = "default_shape")]
+    pub shape: String,
+}
+
+fn default_shape() -> String {
+    "scalar".to_string()
+}
+
+impl TelemetryMetadata {
+    /// Whether this slot is the per-frame vector kind.
+    pub fn is_vector(&self) -> bool {
+        self.shape == "vector"
+    }
 }
 
 /// Rich metadata for a single parameter, declared by scripts via `PARAMS` dict.
