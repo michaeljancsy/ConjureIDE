@@ -790,6 +790,33 @@ enum DSPDocumentation {
       </cdp-meter>
       ```
 
+    - `<cdp-scope telemetry="env_curve">` — read-only oscilloscope that
+      draws a vector telemetry slot (one float per audio frame, see
+      "Vector telemetry" below) as a waveform. `draw="line"` (default),
+      `"filled"`, or `"dots"`. `min`/`max` pin the y-range; omit either
+      or both to engage auto-range with ~1 s decay (so a transient peak
+      stays visible briefly before the tracker walks back in). `length`
+      clips the slice to the first N samples; omit to draw the whole
+      vector. Add `grid` for a 5×5 reference grid. Heavy decimation
+      kicks in automatically when the vector is much longer than the
+      canvas (one min+max pair per pixel column — same trick a DAW
+      thumbnail uses). Theme via `--cdp-scope-line-color`,
+      `--cdp-scope-fill-color`, `--cdp-scope-grid-color`. **Needs
+      `"audioFrames": true` in the manifest** — same gate as the meter,
+      same silent failure mode without it. Loose-name resolution: the
+      `telemetry=` attribute matches slot names case/underscore/space-
+      insensitively, so `telemetry="env_curve"` binds to a Rust slot
+      declared `ENV_CURVE` and a Python slot declared `env_curve`.
+
+      ```html
+      <!-- Per-block envelope curve from the saturator preset -->
+      <cdp-scope telemetry="env_curve" min="-1" max="1" grid></cdp-scope>
+
+      <!-- GR trajectory: auto-range so a quiet section doesn't waste
+           half the display, but the impulses stay tall -->
+      <cdp-scope telemetry="gr_db" draw="filled"></cdp-scope>
+      ```
+
     - `<cdp-panel auto>` — fallback layout that mirrors the stock slider
       panel. Useful as a one-liner when you just want themed sliders.
 
@@ -1039,8 +1066,18 @@ enum DSPDocumentation {
     stale data past the live tail (the host caps the read to the
     actual published length).
 
-    UI consumer — `frame.telemetry["scope"]` is now a JS Array, not a
-    number:
+    UI consumer — the ergonomic path is `<cdp-scope>`, which subscribes
+    to `audio.onFrame`, decimates long vectors to one min+max pair per
+    pixel column, and auto-ranges the y-axis for you:
+
+    ```html
+    <cdp-scope telemetry="scope" min="-1" max="1" grid></cdp-scope>
+    ```
+
+    Hand-rolled `<canvas>` is the escape hatch when `<cdp-scope>` doesn't
+    cover your visualization (e.g. dual-trace overlay, frequency-domain
+    plot, custom annotations). `frame.telemetry["scope"]` is a JS Array,
+    not a number:
 
     ```js
     ConjureDSP.audio.onFrame(frame => {
@@ -1054,6 +1091,22 @@ enum DSPDocumentation {
     Same `audioFrames: true` manifest gate. Same 16-slot budget. Pick
     vector only when you need waveform shape — for a meter, a scalar
     slot is one float instead of `frame_count` floats per block.
+
+    **Optional `manifest.telemetry` block for static lint.** If you
+    want `validate_bundle` to catch typos in `<cdp-scope telemetry="…">`
+    references the way it catches `<cdp-slider param="…">` typos, declare
+    the slots in the manifest (mirrors `manifest.params`):
+
+    ```json
+    "telemetry": [
+        { "name": "scope",  "shape": "vector" },
+        { "name": "gr_db",  "shape": "scalar", "unit": "dB" }
+    ]
+    ```
+
+    Without the block, telemetry references resolve at runtime against
+    whatever the loaded script publishes — works fine, just no static
+    "did you mean" hint on a typo.
 
     ## Worked example: telemetry meter + tempo-sync
 

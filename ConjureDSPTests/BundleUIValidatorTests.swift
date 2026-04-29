@@ -291,6 +291,103 @@ struct BundleUIValidatorTests {
                 "no-manifest-params branch must also strip comments")
     }
 
+    // MARK: - telemetry_referenced_in_ui
+
+    /// Manifest baseline that declares one telemetry slot (`env_curve`,
+    /// vector). UI references it correctly.
+    private let telemetryManifest = """
+    {
+      "schemaVersion": 2,
+      "entry": "process.py",
+      "language": "python",
+      "params": [
+        { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }
+      ],
+      "telemetry": [
+        { "name": "env_curve", "shape": "vector" },
+        { "name": "gr_db", "shape": "scalar", "unit": "dB" }
+      ],
+      "ui": {
+        "entryHTML": "ui/index.html",
+        "width": 400,
+        "height": 240,
+        "fps": 30,
+        "audioFrames": true
+      }
+    }
+    """
+
+    @Test func declaredTelemetryReferenceResolves() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <cdp-scope telemetry="env_curve"></cdp-scope>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: telemetryManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "telemetry_referenced_in_ui" },
+                "declared telemetry name should resolve cleanly; issues: \(report.issues)")
+    }
+
+    @Test func unresolvedTelemetryReferenceFlagged() throws {
+        // 'env_curv' is one char short — Levenshtein should snap to env_curve.
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <cdp-scope telemetry="env_curv"></cdp-scope>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: telemetryManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let issue = report.issues.first { $0.check == "telemetry_referenced_in_ui" }
+        #expect(issue != nil, "unresolved telemetry= should fire telemetry_referenced_in_ui")
+        #expect(issue?.severity == .fail)
+        #expect(issue?.message.contains("env_curv") == true)
+        #expect(issue?.suggestion?.contains("env_curve") == true,
+                "should suggest the nearest declared name")
+    }
+
+    @Test func telemetryLooseMatchAcceptsCaseAndUnderscoreVariants() throws {
+        // Manifest declares `env_curve`; UI references should normalize
+        // identically to the param= rule (case + underscore + space).
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-scope telemetry="ENV_CURVE"></cdp-scope>
+          <cdp-scope telemetry="Env Curve"></cdp-scope>
+          <cdp-scope telemetry="envcurve"></cdp-scope>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: telemetryManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "telemetry_referenced_in_ui" },
+                "loose normalize should accept all three variants")
+    }
+
+    @Test func telemetryRefSkippedWhenManifestDeclaresNone() throws {
+        // No manifest.telemetry block — runtime resolution is the spec'd
+        // fallback. Static lint should NOT flag the reference.
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": true}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <cdp-scope telemetry="anything_at_all"></cdp-scope>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "telemetry_referenced_in_ui" },
+                "missing manifest.telemetry → defer to runtime resolution, no static fail")
+    }
+
     // MARK: - external_asset_ref / network_egress_in_ui
 
     @Test func externalScriptFlagged() throws {

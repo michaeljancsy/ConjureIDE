@@ -18,6 +18,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8767", "--directory", ".claude/preview/cdp-meter"],
       "port": 8767
+    },
+    {
+      "name": "scope",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8768", "--directory", ".claude/preview/scope"],
+      "port": 8768
     }
   ]
 }

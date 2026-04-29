@@ -234,7 +234,7 @@ enum MCPProtocol {
         ),
         ToolDefinition(
             name: "get_docs",
-            description: "Get detailed API reference for the conjuredsp library. Use this when you need exact method signatures, parameter types, default values, or usage details beyond what's in your system prompt. The \"ui\" topic documents the cdp-ui component library (cdp-slider, cdp-toggle, cdp-choice, cdp-xy, cdp-knob, cdp-panel) and the window.ConjureDSP bridge — call it before authoring any ui/index.html.",
+            description: "Get detailed API reference for the conjuredsp library. Use this when you need exact method signatures, parameter types, default values, or usage details beyond what's in your system prompt. The \"ui\" topic documents the cdp-ui component library (cdp-slider, cdp-toggle, cdp-choice, cdp-xy, cdp-knob, cdp-meter, cdp-scope, cdp-panel) and the window.ConjureDSP bridge — call it before authoring any ui/index.html.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [

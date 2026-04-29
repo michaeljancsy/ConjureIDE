@@ -359,6 +359,24 @@
         return -1;
     }
 
+    /// Resolve a telemetry slot name (as written in an HTML attribute)
+    /// to whatever key the live frame actually uses, applying the same
+    /// case/underscore/space-insensitive rules `resolveParamAttr` uses
+    /// for params. Returns the key string from `frame.telemetry`, or
+    /// `null` if no slot matches. Lets `<cdp-scope telemetry="env_curve">`
+    /// bind to a Rust preset publishing `ENV_CURVE` and a Python preset
+    /// publishing `env_curve` from the same UI source.
+    function resolveTelemetryKey(frame, attr) {
+        if (!frame || !frame.telemetry || attr == null || attr === '') return null;
+        if (Object.prototype.hasOwnProperty.call(frame.telemetry, attr)) return attr;
+        var target = normalizeParamName(attr);
+        var keys = Object.keys(frame.telemetry);
+        for (var i = 0; i < keys.length; i++) {
+            if (normalizeParamName(keys[i]) === target) return keys[i];
+        }
+        return null;
+    }
+
     // Fire `cb` when CDP has sent `_init`. `ready` is safe to call
     // immediately (synchronously invokes if already ready).
     function whenReady(cb) { CDP.ready(cb); }
@@ -1623,6 +1641,416 @@
     }
 
     // ------------------------------------------------------------------
+    // <cdp-scope telemetry="…"> — draws a vector telemetry slot as a
+    // waveform. Subscribes to audio.onFrame, slices `length` elements
+    // (or the full vector), auto-ranges Y unless `min`/`max` pin it,
+    // decimates to one min+max pair per pixel column when oversampled,
+    // and draws as line / filled / dots per `draw=`.
+    //
+    // Out of scope (v1): scrolling history, dual-channel overlay,
+    // frequency-domain mode, trigger modes. Add when real preset usage
+    // points at the gap.
+    // ------------------------------------------------------------------
+    var SCOPE_CSS = [
+        ':host {',
+        '  display: block;',
+        '  position: relative;',
+        '  width: 100%;',
+        '  min-height: 60px;',
+        '  --cdp-scope-line-color: var(--cdp-accent);',
+        '  --cdp-scope-fill-color: color-mix(in srgb, var(--cdp-accent) 20%, transparent);',
+        '  --cdp-scope-grid-color: color-mix(in srgb, var(--cdp-fg) 12%, transparent);',
+        '  --cdp-scope-bg: transparent;',
+        '}',
+        'canvas {',
+        '  display: block;',
+        '  width: 100%;',
+        '  height: 100%;',
+        '  background: var(--cdp-scope-bg);',
+        '}',
+    ].join('\n');
+
+    class CdpScope extends HTMLElement {
+        static get observedAttributes() {
+            return ['telemetry', 'length', 'min', 'max', 'draw', 'grid'];
+        }
+
+        constructor() {
+            super();
+            var root = this.attachShadow({ mode: 'open' });
+            root.append(styleEl(THEME_CSS + '\n' + SCOPE_CSS));
+            this._canvas = document.createElement('canvas');
+            this._canvas.setAttribute('part', 'canvas');
+            root.append(this._canvas);
+            this._ctx = this._canvas.getContext('2d');
+
+            this._onFrame = this._onFrame.bind(this);
+
+            // Resolved key cache. Cleared on attr change or when a frame
+            // arrives where the cached key no longer exists.
+            this._resolvedKey = null;
+
+            // Latest vector slice received (Array<number> | Float32Array
+            // | null). Stored so a resize redraws the last data without
+            // waiting for the next audio frame.
+            this._lastSlice = null;
+
+            // Auto-range trackers. null until first frame.
+            this._rangeMin = null;
+            this._rangeMax = null;
+            this._lastRangeTick = 0;
+        }
+
+        connectedCallback() {
+            adoptTheme(this);
+            this._resize();
+            this._render();
+
+            this._resizeObserver = new ResizeObserver(() => {
+                this._resize();
+                this._render();
+            });
+            this._resizeObserver.observe(this);
+
+            if (CDP.audio && typeof CDP.audio.onFrame === 'function') {
+                CDP.audio.onFrame(this._onFrame);
+            }
+        }
+
+        disconnectedCallback() {
+            if (CDP.audio && typeof CDP.audio.offFrame === 'function') {
+                CDP.audio.offFrame(this._onFrame);
+            }
+            if (this._resizeObserver) {
+                this._resizeObserver.disconnect();
+                this._resizeObserver = null;
+            }
+        }
+
+        attributeChangedCallback(name) {
+            if (!this.isConnected) return;
+            if (name === 'telemetry') {
+                this._resolvedKey = null;
+                this._lastSlice = null;
+            }
+            // Reset auto-range so a min/max attribute flip doesn't leave
+            // stale tracker state from the prior mode.
+            if (name === 'min' || name === 'max') {
+                this._rangeMin = null;
+                this._rangeMax = null;
+            }
+            this._render();
+        }
+
+        _resize() {
+            var dpr = window.devicePixelRatio || 1;
+            var w = Math.max(1, Math.floor(this.clientWidth));
+            var h = Math.max(1, Math.floor(this.clientHeight));
+            // Avoid the silent-clear that comes from re-assigning width/
+            // height to the same value.
+            var pw = Math.max(1, Math.floor(w * dpr));
+            var ph = Math.max(1, Math.floor(h * dpr));
+            if (this._canvas.width !== pw) this._canvas.width = pw;
+            if (this._canvas.height !== ph) this._canvas.height = ph;
+        }
+
+        _onFrame(frame) {
+            if (!frame) return;
+            var attr = this.getAttribute('telemetry');
+            if (!attr) return;
+            // Re-resolve when cache miss or when the cached key has
+            // disappeared (preset swap mid-session).
+            var key = this._resolvedKey;
+            if (key == null ||
+                !frame.telemetry ||
+                !Object.prototype.hasOwnProperty.call(frame.telemetry, key)) {
+                key = resolveTelemetryKey(frame, attr);
+                this._resolvedKey = key;
+            }
+            if (key == null) return;
+            var v = frame.telemetry[key];
+            // Bail on scalars (slot is declared scalar shape) or anything
+            // else that's not array-like. The component only draws vectors.
+            if (v == null || typeof v === 'number' ||
+                typeof v.length !== 'number' || v.length === 0) {
+                return;
+            }
+            this._lastSlice = v;
+            // Only audio-driven render ticks should advance the
+            // 1-second decay clock. ResizeObserver and attribute
+            // changes also call _render, but advancing the clock
+            // there would shrink the next audio tick's dt and
+            // visibly stall the auto-range decay for a frame.
+            this._advanceRangeDecay = true;
+            this._render();
+            this._advanceRangeDecay = false;
+        }
+
+        // --- attribute readers ---
+        _readLength() {
+            var n = parseInt(this.getAttribute('length'), 10);
+            return (isFinite(n) && n > 0) ? n : null;
+        }
+        _readAttrFloat(name) {
+            var raw = this.getAttribute(name);
+            if (raw == null || raw === '') return null;
+            var n = parseFloat(raw);
+            return isFinite(n) ? n : null;
+        }
+        _readDraw() {
+            var d = this.getAttribute('draw');
+            return (d === 'filled' || d === 'dots') ? d : 'line';
+        }
+        _readGrid() { return this.hasAttribute('grid'); }
+
+        _computeRange(slice, sliceLen) {
+            var attrMin = this._readAttrFloat('min');
+            var attrMax = this._readAttrFloat('max');
+
+            // Both fixed: hard pin, no tracker.
+            if (attrMin != null && attrMax != null) {
+                return { min: attrMin, max: attrMax };
+            }
+
+            // Compute slice min/max once.
+            var sMin = Infinity, sMax = -Infinity;
+            for (var i = 0; i < sliceLen; i++) {
+                var x = slice[i];
+                if (x < sMin) sMin = x;
+                if (x > sMax) sMax = x;
+            }
+            if (!isFinite(sMin) || !isFinite(sMax)) {
+                return { min: attrMin != null ? attrMin : -1,
+                         max: attrMax != null ? attrMax :  1 };
+            }
+
+            var advance = !!this._advanceRangeDecay;
+            var alpha = 0;
+            if (advance) {
+                var now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+                var dt = this._lastRangeTick > 0 ? (now - this._lastRangeTick) / 1000 : 0;
+                this._lastRangeTick = now;
+                // 1-second time constant. Larger = slower decay =
+                // peaks hold longer; chosen so a single transient
+                // stays visible ~1 s before the tracker walks back in.
+                alpha = 1 - Math.exp(-Math.min(0.5, Math.max(0, dt)) / 1.0);
+            }
+
+            // Initialize trackers on first frame in this mode.
+            if (this._rangeMin == null) this._rangeMin = sMin;
+            if (this._rangeMax == null) this._rangeMax = sMax;
+
+            // Snap outward immediately, decay inward over ~1 s on
+            // audio ticks only (alpha=0 on resize/attr renders).
+            var span = Math.max(1e-9, this._rangeMax - this._rangeMin);
+            this._rangeMin = Math.min(sMin, this._rangeMin + span * alpha);
+            this._rangeMax = Math.max(sMax, this._rangeMax - span * alpha);
+
+            // Guarantee a non-zero span so the y-mapper doesn't divide
+            // by zero on a flat-line vector.
+            if (this._rangeMax - this._rangeMin < 1e-9) {
+                var mid = (this._rangeMax + this._rangeMin) * 0.5;
+                this._rangeMin = mid - 0.5;
+                this._rangeMax = mid + 0.5;
+            }
+
+            return {
+                min: attrMin != null ? attrMin : this._rangeMin,
+                max: attrMax != null ? attrMax : this._rangeMax,
+            };
+        }
+
+        _render() {
+            var ctx = this._ctx;
+            if (!ctx) return;
+            var W = this._canvas.width;
+            var H = this._canvas.height;
+            ctx.clearRect(0, 0, W, H);
+
+            // Read computed CSS to pick up theme + author overrides.
+            // Canvas 2D parses `currentColor` (and `color-mix(... currentColor ...)`
+            // expressions containing it) as opaque black, since the canvas
+            // context has no host element to resolve `currentColor` against.
+            // On a dark theme that makes the trace invisible. Substitute
+            // the literal token with the host element's resolved `color`
+            // (a real rgb(...) string) before feeding the value to canvas.
+            var cs = window.getComputedStyle(this);
+            var hostColor = cs.color;
+            function resolveCanvasColor(varName, fallback) {
+                var v = cs.getPropertyValue(varName).trim();
+                if (!v) return fallback;
+                if (v.indexOf('currentColor') >= 0) {
+                    v = v.replace(/currentColor/g, hostColor);
+                }
+                return v;
+            }
+            var lineColor = resolveCanvasColor('--cdp-scope-line-color', hostColor);
+            var fillColor = resolveCanvasColor('--cdp-scope-fill-color', lineColor);
+            var gridColor = resolveCanvasColor('--cdp-scope-grid-color', 'transparent');
+
+            if (this._readGrid()) this._drawGrid(ctx, W, H, gridColor);
+
+            var slice = this._lastSlice;
+            if (!slice || slice.length === 0) return;
+
+            var lenAttr = this._readLength();
+            var sliceLen = lenAttr != null ? Math.min(lenAttr, slice.length) : slice.length;
+
+            var range = this._computeRange(slice, sliceLen);
+            var rmin = range.min, rmax = range.max;
+            var span = rmax - rmin;
+            if (span <= 0) span = 1;
+
+            // y-mapper: data value -> canvas pixel (top is 0, bottom is H).
+            function mapY(v) {
+                var t = (v - rmin) / span;
+                if (t < 0) t = 0;
+                if (t > 1) t = 1;
+                return (1 - t) * H;
+            }
+
+            var draw = this._readDraw();
+            var dpr = window.devicePixelRatio || 1;
+            ctx.lineWidth = Math.max(1, Math.round(1.5 * dpr));
+            ctx.strokeStyle = lineColor;
+            ctx.fillStyle = fillColor;
+
+            if (sliceLen > W * 2) {
+                this._drawDecimated(ctx, slice, sliceLen, W, H, mapY, draw);
+            } else {
+                this._drawDirect(ctx, slice, sliceLen, W, mapY, draw, rmin);
+            }
+        }
+
+        _drawGrid(ctx, W, H, color) {
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            // 4 horizontal + 4 vertical interior lines (5x5 grid cells).
+            for (var i = 1; i < 5; i++) {
+                var y = Math.round((i / 5) * H) + 0.5;
+                ctx.moveTo(0, y); ctx.lineTo(W, y);
+                var x = Math.round((i / 5) * W) + 0.5;
+                ctx.moveTo(x, 0); ctx.lineTo(x, H);
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // Direct polyline path — one vertex per slice element.
+        _drawDirect(ctx, slice, sliceLen, W, mapY, draw, rmin) {
+            if (sliceLen < 1) return;
+            // Single-element vectors get centered (stepX would be 0
+            // and the lone point would otherwise pin to x=0).
+            var single = sliceLen === 1;
+            var stepX = single ? 0 : W / (sliceLen - 1);
+            var x0 = single ? W / 2 : 0;
+
+            if (draw === 'dots') {
+                ctx.beginPath();
+                var r = Math.max(1, ctx.lineWidth);
+                for (var i = 0; i < sliceLen; i++) {
+                    var x = x0 + i * stepX;
+                    var y = mapY(slice[i]);
+                    ctx.moveTo(x + r, y);
+                    ctx.arc(x, y, r, 0, Math.PI * 2);
+                }
+                ctx.fill();
+                return;
+            }
+
+            ctx.beginPath();
+            for (var j = 0; j < sliceLen; j++) {
+                var px = x0 + j * stepX;
+                var py = mapY(slice[j]);
+                if (j === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            if (draw === 'filled') {
+                // Close to the baseline (rmin) at the right then left edge.
+                ctx.lineTo(x0 + (sliceLen - 1) * stepX, mapY(rmin));
+                ctx.lineTo(x0, mapY(rmin));
+                ctx.closePath();
+                ctx.fill();
+                ctx.beginPath();
+                for (var k = 0; k < sliceLen; k++) {
+                    var qx = x0 + k * stepX;
+                    var qy = mapY(slice[k]);
+                    if (k === 0) ctx.moveTo(qx, qy);
+                    else ctx.lineTo(qx, qy);
+                }
+                ctx.stroke();
+            } else {
+                ctx.stroke();
+            }
+        }
+
+        // Decimated min+max-per-column path — for sliceLen >> W.
+        _drawDecimated(ctx, slice, sliceLen, W, H, mapY, draw) {
+            // For each pixel column, find min and max of the slice region
+            // mapped to that column. Draw a vertical segment between them.
+            // This is the standard waveform-thumbnail technique — cheap
+            // and visually correct (no aliasing-induced gaps that simple
+            // stride decimation would produce).
+            var samplesPerPx = sliceLen / W;
+            ctx.beginPath();
+            for (var col = 0; col < W; col++) {
+                var i0 = Math.floor(col * samplesPerPx);
+                var i1 = Math.min(sliceLen, Math.floor((col + 1) * samplesPerPx));
+                if (i1 <= i0) i1 = i0 + 1;
+                var lo = Infinity, hi = -Infinity;
+                for (var i = i0; i < i1; i++) {
+                    var v = slice[i];
+                    if (v < lo) lo = v;
+                    if (v > hi) hi = v;
+                }
+                if (!isFinite(lo) || !isFinite(hi)) continue;
+                var yLo = mapY(lo);
+                var yHi = mapY(hi);
+                // Ensure a 1px tall stroke when min === max in this column.
+                if (Math.abs(yLo - yHi) < 1) yLo = yHi + 1;
+                ctx.moveTo(col + 0.5, yHi);
+                ctx.lineTo(col + 0.5, yLo);
+            }
+            if (draw === 'dots') {
+                // Dots over a heavily decimated buffer aren't meaningful;
+                // fall back to the line rendering.
+                ctx.stroke();
+                return;
+            }
+            ctx.stroke();
+            // 'filled' under decimation: fill from each column's max
+            // down to the baseline. Baseline = bottom of canvas (auto-
+            // ranged) — fill is mostly visual texture here, not a
+            // semantic area.
+            if (draw === 'filled') {
+                ctx.beginPath();
+                ctx.moveTo(0, H);
+                var samplesPerPx2 = sliceLen / W;
+                for (var c2 = 0; c2 < W; c2++) {
+                    var j0 = Math.floor(c2 * samplesPerPx2);
+                    var j1 = Math.min(sliceLen, Math.floor((c2 + 1) * samplesPerPx2));
+                    if (j1 <= j0) j1 = j0 + 1;
+                    var hi2 = -Infinity;
+                    for (var jj = j0; jj < j1; jj++) {
+                        var vv = slice[jj];
+                        if (vv > hi2) hi2 = vv;
+                    }
+                    // Drop to baseline for non-finite columns so the
+                    // fill doesn't bridge across the gap from the
+                    // previous valid column to the next.
+                    var py2 = isFinite(hi2) ? mapY(hi2) : H;
+                    ctx.lineTo(c2 + 0.5, py2);
+                }
+                ctx.lineTo(W, H);
+                ctx.closePath();
+                ctx.fill();
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // <cdp-panel auto> — renders one appropriate control per parameter.
     // Replaces the previous hand-rolled starterIndexHTML() slider list
     // and matches the Swift ParameterSlidersView component-picking logic.
@@ -1684,6 +2112,7 @@
     define('cdp-xy', CdpXY);
     define('cdp-knob', CdpKnob);
     define('cdp-meter', CdpMeter);
+    define('cdp-scope', CdpScope);
     define('cdp-panel', CdpPanel);
 
     CDP.ui = {

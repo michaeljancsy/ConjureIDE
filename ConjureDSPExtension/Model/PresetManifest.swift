@@ -66,6 +66,32 @@ struct PresetManifest: Codable, Equatable {
         var options: [String]?
     }
 
+    /// Telemetry slot declarations. Optional — when present, lets the
+    /// static `BundleUIValidator` lint `<cdp-scope telemetry="…">` /
+    /// `<cdp-meter source="telemetry:…">` references against the names a
+    /// preset is documented to publish, with "did you mean" suggestions
+    /// on near-miss typos. When absent, telemetry-binding components
+    /// fall back to runtime resolution: they bind whichever slot the
+    /// loaded DSP script actually publishes under that name.
+    var telemetry: [TelemetryDecl]?
+
+    /// Telemetry slot declaration — mirrors the documented slot name a
+    /// DSP script publishes via `ctx.set_telemetry_*` (Rust) or the
+    /// `TELEMETRY` dict (Python). The duplication with the script is
+    /// deliberate (same rationale as `ParamDecl`): manifest is
+    /// authoritative for static validation, the script is authoritative
+    /// for runtime values, and a post-load validator can warn on drift.
+    struct TelemetryDecl: Codable, Equatable {
+        var name: String
+        var key: String?
+        /// `"scalar"` (default — one float per render block) or
+        /// `"vector"` (one float per audio frame in the block).
+        var shape: String?
+        /// Display unit (e.g. `"dB"`). Advisory; consumers like
+        /// `<cdp-meter unit="db">` may pick a default when omitted.
+        var unit: String?
+    }
+
     /// Optional free-form author metadata.
     var meta: Meta?
 

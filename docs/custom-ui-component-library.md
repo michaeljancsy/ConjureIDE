@@ -34,6 +34,7 @@ Source: [`ConjureDSPExtension/Resources/cdp-ui.js`](../ConjureDSPExtension/Resou
 | `<cdp-xy param-x="cutoff" param-y="resonance" invert-y>` | Two-axis pad with a puck. Writes both params on drag. `invert-y` flips semantics so low Y = bottom (standard graph orientation). |
 | `<cdp-knob param="threshold">` | Circular knob with vertical drag, mouse-wheel, keyboard nav, and double-click-to-default. Stacked layout (face / label / value). Default visual is themable via `--cdp-*` and `::part()`; for fully custom geometry, slot in your own SVG and consume the `--cdp-knob-norm` CSS variable. |
 | `<cdp-meter source="peak-out">` | Read-only level meter with PPM ballistics (IEC 60268-18 default of 11.76 dB/s decay), peak-hold marker (~2 s, click-to-reset), and three-zone color gradient (green / yellow at `warn` / red at `clip`). Sources: `peak-in`, `peak-out`, `rms-in`, `rms-out`, or `telemetry:<key>`. Vertical or horizontal. Add `invert` to flip fill direction + color order for GR / "more is worse" sources. `gradient="smooth"` blends colors instead of hard-stopping at thresholds. Override `--cdp-meter-gradient` with any `linear-gradient(...)` for full custom palettes. No `param=` — meters are passive displays, not parameter controls. |
+| `<cdp-scope telemetry="env_curve">` | Read-only oscilloscope that draws a vector telemetry slot as a waveform. `draw="line" \| "filled" \| "dots"`. `min`/`max` pin the y-range; omit either or both for auto-range with ~1 s decay. `length` clips the slice to the first N samples. Add `grid` for a reference grid. Long vectors decimate to one min+max pair per pixel column automatically. Theme via `--cdp-scope-line-color`, `--cdp-scope-fill-color`, `--cdp-scope-grid-color`. Same `audioFrames: true` gate as the meter. |
 | `<cdp-panel>` | Thin layout wrapper — styled container with consistent padding/border. |
 
 ## Author-facing JS API (`window.ConjureDSP.ui`)
@@ -151,12 +152,36 @@ The `Telemetry Smoke (Rust)` / `Telemetry Smoke (Python)` factory
 presets share a single UI that demonstrates this pattern — the
 shared file uses the `??` chain because both flavors load it.
 
+**Vector telemetry slots** (`vector_telemetry()` in Rust,
+`{"shape": "vector"}` in Python's `TELEMETRY` dict) publish one float
+per audio frame in the current render block instead of a single
+scalar. The `frame.telemetry["scope"]` value is a JS Array of length
+`frame_count`. `<cdp-scope telemetry="scope">` is the canonical
+consumer — it handles decimation, auto-range, and HiDPI canvas sizing
+for you. Hand-rolled `<canvas>` is fine when `<cdp-scope>` doesn't
+fit (custom annotations, dual-trace, frequency-domain).
+
+**Optional `manifest.telemetry`** declares the slots so
+`validate_bundle` can lint `<cdp-scope telemetry="…">` references and
+suggest typo-corrections, mirroring how `manifest.params` powers the
+`<cdp-slider param="…">` lint:
+
+```jsonc
+"telemetry": [
+    { "name": "scope", "shape": "vector" },
+    { "name": "gr_db", "shape": "scalar", "unit": "dB" }
+]
+```
+
+Without the block, references resolve at runtime against whatever
+the loaded script publishes — works fine, just no static lint.
+
 **Cadence + cost:** snapshot is read on the same display-link tick
 that fires `audio.onFrame` (typically 30 Hz, throttled to
-`manifest.fps`). 8 slots max per script. Zero overhead for presets
-that don't declare any — the field is absent from the payload, the
-kernel skips the FFI snapshot, and `frame.telemetry` is undefined
-on the JS side.
+`manifest.fps`). 16 slots max per script (scalar + vector combined).
+Zero overhead for presets that don't declare any — the field is
+absent from the payload, the kernel skips the FFI snapshot, and
+`frame.telemetry` is undefined on the JS side.
 
 ## Theme hooks
 
