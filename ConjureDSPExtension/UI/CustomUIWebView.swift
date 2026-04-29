@@ -155,6 +155,25 @@ struct CustomUIWebView: NSViewRepresentable {
         coordinator.parameterState = parameterState
         coordinator.subscribe(to: parameterState)
 
+        // Sync manifest-driven audio-frame flags. Set once in makeNSView but
+        // can drift when the manifest is updated after the view was created
+        // (e.g. the agent writes `audioFrames: true` after the scaffold
+        // defaulted it to `false`). Re-checking here keeps them live without
+        // requiring a full view teardown.
+        coordinator.audioFPS = bundle.manifest.resolvedFPS
+        let newAudioFramesAllowed = bundle.manifest.audioFramesEnabled
+        if coordinator.audioFramesAllowed != newAudioFramesAllowed {
+            coordinator.audioFramesAllowed = newAudioFramesAllowed
+            if newAudioFramesAllowed {
+                // JS may have already posted subscribeAudioFrames while
+                // audioFramesAllowed was false (it was rejected). Start
+                // forwarding now so the next audioFramePublisher tick reaches JS.
+                coordinator.startAudioFrameForwarding()
+            } else {
+                coordinator.stopAudioFrameForwarding()
+            }
+        }
+
         // Theme sync (cheap; skip if unchanged)
         let themeString = theme == .dark ? "dark" : "light"
         if coordinator.lastTheme != themeString {
@@ -534,7 +553,7 @@ struct CustomUIWebView: NSViewRepresentable {
             captureManager?.setConsumer(id: audioConsumerID, active: shouldCaptureAudio)
         }
 
-        private func startAudioFrameForwarding() {
+        fileprivate func startAudioFrameForwarding() {
             if audioFrameCancellable == nil, let captureManager {
                 audioFrameCancellable = captureManager.audioFramePublisher
                     .receive(on: DispatchQueue.main)
@@ -546,7 +565,7 @@ struct CustomUIWebView: NSViewRepresentable {
             syncCaptureState()
         }
 
-        private func stopAudioFrameForwarding() {
+        fileprivate func stopAudioFrameForwarding() {
             audioFrameCancellable?.cancel()
             audioFrameCancellable = nil
             includeFFT = false

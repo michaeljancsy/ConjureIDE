@@ -253,7 +253,7 @@ extension PresetBundle {
                 width: 520,
                 height: 260,
                 fps: 30,
-                audioFrames: false
+                audioFrames: true
             ) : nil,
             meta: nil
         )
