@@ -205,4 +205,79 @@ struct PresetBundleLoadResultTests {
         #expect(broken?.isBroken == true)
         #expect(broken?.brokenError != nil)
     }
+
+    // MARK: - Inspect (broken-bundle repair view)
+    //
+    // `PresetBundle.inspect(from:)` is the entry point the preset browser
+    // uses when the user clicks a broken row to repair it: it succeeds
+    // even when `loadResult` would return `.broken`, so the file picker
+    // can surface manifest.json without going through the DSP load
+    // pipeline.
+
+    @Test func inspectReturnsBundleForBrokenManifest() throws {
+        let root = Self.makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bundleDir = root.appendingPathComponent("Hand Edited.cdp", isDirectory: true)
+        // Same shape as `brokenManifestJSONReturnsBroken` — invalid JSON.
+        try Self.writeRawManifest(at: bundleDir, contents: """
+        {
+          "schemaVersion": 2,
+          "entry": "process.py",
+          "ui": { "entryHTML": "ui/index.html", "width": 520, "height": 00 }
+        }
+        """)
+        try "def process(*args): pass\n".write(
+            to: bundleDir.appendingPathComponent("process.py"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        // loadResult sees this as broken; inspect must not.
+        guard case .broken = PresetBundle.loadResult(from: bundleDir) else {
+            Issue.record("Expected loadResult to mark this fixture broken — test setup is wrong")
+            return
+        }
+        let bundle = PresetBundle.inspect(from: bundleDir)
+        #expect(bundle != nil)
+        #expect(bundle?.name == "Hand Edited")
+        #expect(bundle?.rootURL == bundleDir)
+        // Falls back to the default Python manifest when the real one
+        // doesn't decode, so the file picker still has a stable view.
+        #expect(bundle?.manifest.entry == "process.py")
+    }
+
+    @Test func inspectUsesParsedManifestWhenAvailable() throws {
+        let root = Self.makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bundleDir = root.appendingPathComponent("MissingScript.cdp", isDirectory: true)
+        // Manifest parses fine, but the entry script is absent — `loadResult`
+        // would still return `.broken` for that. inspect uses the parsed
+        // manifest so the file picker points at `dsp.rs` (not the default
+        // `process.py`).
+        let manifest = PresetManifest(
+            schemaVersion: PresetManifest.currentSchemaVersion,
+            entry: "dsp.rs",
+            language: ScriptLanguage.rust.rawValue,
+            ui: nil,
+            meta: nil
+        )
+        try FileManager.default.createDirectory(at: bundleDir, withIntermediateDirectories: true)
+        try manifest.jsonData().write(to: bundleDir.appendingPathComponent(PresetManifest.filename))
+
+        guard case .broken = PresetBundle.loadResult(from: bundleDir) else {
+            Issue.record("Expected loadResult to mark this fixture broken — test setup is wrong")
+            return
+        }
+        let bundle = PresetBundle.inspect(from: bundleDir)
+        #expect(bundle != nil)
+        #expect(bundle?.manifest.entry == "dsp.rs")
+        // entryScriptURL points at the missing file so the editor can
+        // create it on save; existence is the editor's problem, not ours.
+        #expect(bundle?.entryScriptURL.lastPathComponent == "dsp.rs")
+    }
+
+    @Test func inspectReturnsNilForNonDirectory() throws {
+        let bogus = URL(fileURLWithPath: "/tmp/PresetBundleLoadResultTests-inspect-nope-\(UUID().uuidString)")
+        #expect(PresetBundle.inspect(from: bogus) == nil)
+    }
 }

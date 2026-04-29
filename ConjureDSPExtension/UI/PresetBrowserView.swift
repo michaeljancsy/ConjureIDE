@@ -12,6 +12,10 @@ struct PresetBrowserView: View {
     /// implementation (from callers that don't care) returns false.
     var hasCustomUI: (Preset) -> Bool = { _ in false }
     let onSelectPreset: (Preset) -> Void
+    /// Right-click delete action. Available for any user preset (broken or
+    /// healthy); the caller is responsible for the git commit + clearing
+    /// `currentPreset` if it was the deleted one.
+    var onDeleteUserPreset: (Preset) -> Void = { _ in }
     let onImportURL: () -> Void
     let onDismiss: () -> Void
 
@@ -20,6 +24,9 @@ struct PresetBrowserView: View {
     @State private var selectedLanguages: Set<ScriptLanguage> = Set(ScriptLanguage.allCases)
     @State private var selectedSources: Set<SourceFilter> = Set(SourceFilter.allCases)
     @State private var hoveredPresetID: String?
+    /// Preset queued for deletion confirmation. Non-nil means the
+    /// confirmation dialog is showing; the dialog button clears it.
+    @State private var deletingPreset: Preset?
 
     enum SourceFilter: String, CaseIterable, Hashable {
         case factory = "Factory"
@@ -154,6 +161,25 @@ struct PresetBrowserView: View {
             .padding(.vertical, 8)
         }
         .frame(width: 480, height: 460)
+        .confirmationDialog(
+            deletingPreset.map { "Delete \u{201C}\($0.name)\u{201D}?" } ?? "Delete?",
+            isPresented: Binding(
+                get: { deletingPreset != nil },
+                set: { if !$0 { deletingPreset = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: deletingPreset
+        ) { preset in
+            Button("Delete", role: .destructive) {
+                onDeleteUserPreset(preset)
+                deletingPreset = nil
+            }
+            Button("Cancel", role: .cancel) {
+                deletingPreset = nil
+            }
+        } message: { _ in
+            Text("This can\u{2019}t be undone (but the bundle remains in the preset git history).")
+        }
     }
 
     // MARK: - Column Header Row
@@ -267,10 +293,9 @@ struct PresetBrowserView: View {
         let isBroken = preset.isBroken
 
         Button(action: {
-            // Broken bundles can't be loaded — clicking is a no-op. The
-            // row's tooltip (`help`) explains the parse error so the user
-            // has a starting point for diagnosis.
-            guard !isBroken else { return }
+            // Broken bundles route through the same callback — the caller
+            // detects `preset.isBroken` and skips the DSP load pipeline,
+            // surfacing manifest.json in the editor for repair instead.
             onSelectPreset(preset)
         }) {
             HStack(spacing: 0) {
@@ -358,9 +383,19 @@ struct PresetBrowserView: View {
             .help(preset.brokenError ?? "")
         }
         .buttonStyle(.plain)
-        .disabled(isBroken)
         .onHover { hovering in
             hoveredPresetID = hovering ? preset.id : nil
+        }
+        .contextMenu {
+            // Delete is exposed only for user bundles. Factory presets
+            // ship with the extension and can't be removed at runtime.
+            if case .user = preset.source {
+                Button(role: .destructive) {
+                    deletingPreset = preset
+                } label: {
+                    Text("Delete Bundle\u{2026}")
+                }
+            }
         }
     }
 

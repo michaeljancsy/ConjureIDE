@@ -518,12 +518,16 @@ pub extern "C" fn process(
         }
 
         // Delete: remove current user preset, then commit the removal.
-        let onDeletePreset: () -> Void = { [weak pm, weak gc] in
-            guard let pm, let current = pm.currentPreset, !current.isFactory else { return }
-            guard let fileURL = current.fileURL else { return }
-            let name = current.name
+        // Per-preset delete used by the preset browser's right-click. Mirrors
+        // `onDeletePreset` but takes the target as an argument so it works
+        // for any user bundle, not just the current one (e.g. deleting a
+        // broken bundle without first selecting it).
+        let onDeleteUserPreset: (Preset) -> Void = { [weak pm, weak gc] preset in
+            guard let pm, !preset.isFactory else { return }
+            guard let fileURL = preset.fileURL else { return }
+            let name = preset.name
             do {
-                try pm.deleteUserPreset(current)
+                try pm.deleteUserPreset(preset)
                 if let gc {
                     let message = gc.defaultMessage(for: .delete(name: name))
                     Task { _ = await gc.recordDelete(path: fileURL, message: message) }
@@ -531,6 +535,19 @@ pub extern "C" fn process(
             } catch {
                 log.error("Delete failed: \(error.localizedDescription, privacy: .public)")
             }
+        }
+
+        let onDeletePreset: () -> Void = { [weak pm] in
+            guard let pm, let current = pm.currentPreset, !current.isFactory else { return }
+            onDeleteUserPreset(current)
+        }
+
+        // Open a broken bundle for repair — `setBrokenPresetForRepair`
+        // populates `currentBundle` via `PresetBundle.inspect` and leaves
+        // `loadedSource` nil. Audio stays passthrough until the user fixes
+        // the manifest and re-saves.
+        let onSelectBrokenBundle: (Preset) -> Void = { [weak pm] preset in
+            pm?.setBrokenPresetForRepair(preset)
         }
 
         // Rename: rename current user preset, then commit the move.
@@ -756,6 +773,8 @@ pub extern "C" fn process(
             onSavePreset: onSavePreset,
             onSaveAsPreset: onSaveAsPreset,
             onDeletePreset: onDeletePreset,
+            onDeleteUserPreset: onDeleteUserPreset,
+            onSelectBrokenBundle: onSelectBrokenBundle,
             onRenamePreset: onRenamePreset,
             onNew: onNew,
             onExport: onExport,

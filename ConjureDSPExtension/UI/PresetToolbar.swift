@@ -61,6 +61,9 @@ struct PresetToolbar: View {
     @Binding var showNewScriptDialog: Bool
     @Binding var showFileBrowser: Bool
     var onSelectPreset: (Preset) -> Void
+    /// Right-click delete in the preset browser, scoped to the clicked
+    /// preset (vs `onDelete`, which targets the current preset).
+    var onDeleteUserPreset: (Preset) -> Void = { _ in }
     var onRun: () -> Void
     /// Overwrite-save with an optional user-supplied commit message. nil means use default.
     var onSave: (_ commitMessage: String?) -> Void
@@ -176,6 +179,9 @@ struct PresetToolbar: View {
                     onSelectPreset: { preset in
                         showingPresetBrowser = false
                         onSelectPreset(preset)
+                    },
+                    onDeleteUserPreset: { preset in
+                        onDeleteUserPreset(preset)
                     },
                     onImportURL: { showingImportURL = true },
                     onDismiss: { showingPresetBrowser = false }

@@ -283,6 +283,25 @@ class PresetManager: ObservableObject {
 
     private var factoryBundleCache: [String: PresetBundle] = [:]
 
+    /// Set a broken preset as the current one for repair (manifest editing).
+    /// Skips the DSP load pipeline — `currentBundle` is populated via
+    /// `PresetBundle.inspect` so the file picker can list `manifest.json`
+    /// and other bundle files, but `loadedSource` stays nil and the kernel
+    /// is not touched. Audio remains passthrough until the user fixes the
+    /// manifest and the bundle re-parses cleanly via `refreshPresets`.
+    func setBrokenPresetForRepair(_ preset: Preset) {
+        guard preset.isBroken, case .user(let url) = preset.source else {
+            log.warning("setBrokenPresetForRepair called with non-broken preset: \(preset.name, privacy: .public)")
+            return
+        }
+        currentPreset = preset
+        loadedSource = nil
+        isModified = false
+        dirtyFiles.removeAll()
+        currentBundle = PresetBundle.inspect(from: url)
+        log.info("Loaded broken bundle for repair: \(preset.name, privacy: .public)")
+    }
+
     /// Mark a preset as the currently active one and record its source for
     /// modification detection.
     func setCurrentPreset(_ preset: Preset?, source: String?) {
