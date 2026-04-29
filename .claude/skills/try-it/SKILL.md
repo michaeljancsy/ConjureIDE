@@ -10,11 +10,12 @@ Replicates the live-experiment flow used to validate embedded-agent guidance + M
 
 1. Build + launch the ConjureDSP host app.
 2. Wait for the AU's MCP server to come up.
-3. Spawn a **fresh `claude -p` subprocess** from `agent-workspace/` with the MCP server pre-wired (subagent uses ConjureDSP MCP tools natively).
+3. Spawn a **fresh subagent subprocess** from `agent-workspace/` with the MCP server pre-wired (subagent uses ConjureDSP MCP tools natively).
 4. Feed the user's prompt to that subprocess and capture its tool-call timeline + final report.
-5. Show the report and offer to file findings as Asana tickets.
+5. Show the report.
+6. Write a structured per-run summary to `test-run-summaries/` and offer to file findings as Asana tickets.
 
-Use this whenever you want to validate that a fresh agent (no shared context with this conversation) can productively author a preset using the documented tools and guidance. Friction is the signal — most outcomes turn into backlog tickets.
+Use this whenever you want to validate that a fresh agent (no shared context with this conversation) can productively author a preset using the documented tools and guidance. Friction is the signal — most outcomes turn into backlog tickets, and the per-run summary builds an aggregable record across many invocations.
 
 ## Step 1: Get the prompt
 
@@ -158,9 +159,9 @@ Flag rationale:
 
 Don't set a timeout on the Bash call shorter than ~10 min — the subagent does real work (Rust compile takes a few seconds, smoke_test_ui can take a few seconds, multi-step iterations add up). 600000 ms is fine.
 
-## Step 6: Surface the report + offer to file findings
+## Step 6: Surface the report
 
-Read the JSONL log. Extract:
+Read the JSONL log. Extract and show to the user:
 
 - **The final assistant message** — the last `type:"assistant"` event's content. Show this verbatim to the user as the subagent's report.
 - **Tool-call timeline** — count of each `mcp__conjuredsp__*` tool call (and any tool errors: events with `is_error: true`). Show as a one-line summary, e.g.:
@@ -168,7 +169,41 @@ Read the JSONL log. Extract:
   > Subagent finished in N turns ($X.XX). Tool calls: get_docs×1, save_preset×1, get_audio_state×1, get_parameters×1, smoke_test_ui×2 (1 fail → 1 pass after fix).
 - **Total cost / turns** — from the final `type:"result"` event.
 
-Then ask: "File any findings from the 'gaps' section as Asana tickets in the ConjureDSP Backlog?"
+## Step 7: Write a structured summary to `test-run-summaries/`
+
+After surfacing the report, **always** write a per-run summary file. The in-conversation surfacing is ephemeral; this file is the persistent, aggregable record across runs.
+
+Path: `test-run-summaries/` at the project root. Filename: `YYYY-MM-DD-HHMM_<slug>.md`, where `<slug>` is a 1–3 word kebab-case keyword derived from the prompt (e.g. `oscilloscope`, `tape-saturation`, `xy-delay`). Use current local date/time.
+
+Format: follow `test-run-summaries/_TEMPLATE.md` exactly. Fields and where they come from:
+
+**Frontmatter** (extracted programmatically):
+- `date`: ISO 8601 with timezone offset, current local time.
+- `prompt`: the user's args, verbatim, quoted.
+- `outcome`: `success` if `type:"result"` event has `is_error: false` AND a fresh `.cdp` bundle landed in the App Group `Presets/`; `partial` if the subagent gave up but reported usefully; `failed` if the harness errored or no preset was produced.
+- `agent_harness`: hardcode `claude-code` for the default `claude -p` dispatch. If a future variant of this skill dispatches Gemini CLI, Codex, or another harness, that variant fills accordingly.
+- `agent_model`: from the first `type:"system",subtype:"init"` event's `model` field in the JSONL log.
+- `build_commit`: `git rev-parse --short HEAD` at run time.
+- `preset_name`, `preset_path`: from the subagent's digest (it names what it built); confirm by listing `~/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/Presets/` for the freshest `.cdp` bundle.
+- `language`: `rust` or `python` — read from the bundle's `manifest.json`.
+- `params`: list of param names, from `manifest.json`'s `params` array (or the DSP source if v1 schema).
+- `turns`, `duration_seconds`, `cost_usd`: from the `type:"result"` event (`num_turns`, `duration_ms / 1000`, `total_cost_usd`).
+- `tool_errors`: count of `is_error: true` tool_result events.
+- `tool_calls`: object — count each `mcp__conjuredsp__*` tool by stripping the prefix. **Exclude harness built-ins** (`TodoWrite`, `ToolSearch`, `Bash`, `Read`, etc.) — they're noise, not signal about the ConjureDSP MCP surface.
+- `log_file`: absolute path to the JSONL log.
+
+**Body** (synthesized from the subagent's digest):
+- `## Design` — one paragraph: DSP idea + how the UI / telemetry / scope ties in. Keep it tight enough that a future reader skimming many summaries can spot patterns ("5 of 7 'oscilloscope' runs landed on a saturator").
+- `## What worked` — concrete bullets (tool flows, validator catches, naming resolutions). No vague praise.
+- `## Errors + recoveries` — one line per error: what failed, what fixed it. Leave empty for clean runs.
+- `## Friction findings` — bullets with category tags in brackets, then a one-liner. Categories: `[docs]` (wording / examples / coverage), `[ux]` (tool descriptions, response messages, validator feedback shape), `[scaffold]` (what `save_preset(scaffold_ui=true)` emits or omits), `[bug]` (broken behavior), `[skill]` (friction in `/try-it` itself — port poll, build, dispatch), `[meta]` (observation about agent behavior, e.g. recurring design choices). Tags make cross-run aggregation cheap (`grep '\[scaffold\]' test-run-summaries/*.md`).
+- `## Filed?` — leave empty initially; populated in Step 8 as Asana tickets land.
+
+Write the file with the Write tool. Tell the user where it landed using a markdown link.
+
+## Step 8: Offer to file findings as Asana tickets
+
+Ask: "File any findings as Asana tickets in the ConjureDSP Backlog?"
 
 For each finding the user wants filed, create an Asana task in project gid `1214126484601018`:
 
@@ -177,6 +212,8 @@ For each finding the user wants filed, create an Asana task in project gid `1214
 - Use `UX` (gid `1214126485654834`) if it's a UX/copy issue
 
 Title in imperative form, body summarizing the friction. Include a pointer to the log file path so future sessions can reference what the subagent saw.
+
+After each ticket lands, **edit the summary file's `## Filed?` section** to add a line: `- [tag] one-liner → [Asana task title](url)`. This keeps the persistent record in sync with what's in flight.
 
 ## Cleanup
 
