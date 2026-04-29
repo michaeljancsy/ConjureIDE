@@ -165,10 +165,13 @@ struct CustomUIWebView: NSViewRepresentable {
         if coordinator.audioFramesAllowed != newAudioFramesAllowed {
             coordinator.audioFramesAllowed = newAudioFramesAllowed
             if newAudioFramesAllowed {
-                // JS may have already posted subscribeAudioFrames while
-                // audioFramesAllowed was false (it was rejected). Start
-                // forwarding now so the next audioFramePublisher tick reaches JS.
-                coordinator.startAudioFrameForwarding()
+                // Replay a deferred subscribe: if JS already posted
+                // `subscribeAudioFrames` while the gate was closed, we
+                // dropped it. Now that the gate is open, honor it.
+                // If JS never asked, leave capture idle.
+                if coordinator.jsRequestedAudioFrames {
+                    coordinator.startAudioFrameForwarding()
+                }
             } else {
                 coordinator.stopAudioFrameForwarding()
             }
@@ -265,6 +268,14 @@ struct CustomUIWebView: NSViewRepresentable {
         /// `subscribeAudioFrames` request from the webview on the floor.
         /// Matches the contract documented in PresetManifest.swift.
         var audioFramesAllowed: Bool = false
+
+        /// True once JS has posted `subscribeAudioFrames` (regardless of
+        /// whether the manifest gate accepted it), false once it posts
+        /// `unsubscribeAudioFrames`. Lets the manifest-flip branch in
+        /// `updateNSView` distinguish "JS asked but was rejected, now
+        /// allowed → start forwarding" from "JS never asked, don't run
+        /// capture for nobody."
+        var jsRequestedAudioFrames: Bool = false
         private var lastForwardTime: CFTimeInterval = 0
 
         /// True when any subscriber asked for FFT bins in the frame payload.
@@ -511,15 +522,10 @@ struct CustomUIWebView: NSViewRepresentable {
                 log.notice("[preset-ui] \(text, privacy: .public)")
 
             case "subscribeAudioFrames":
-                // Manifest gate: ignore the subscription when the bundle
-                // hasn't opted in via `ui.audioFrames: true`. This matches
-                // the PresetManifest contract and keeps the audio capture
-                // pipeline silent for presets that don't declare they
-                // want frames.
-                guard audioFramesAllowed else {
-                    log.info("[customui] subscribeAudioFrames ignored — manifest.ui.audioFrames is not true")
-                    break
-                }
+                // Track the request regardless of the manifest gate so
+                // updateNSView can replay a deferred subscribe if the
+                // manifest later flips `ui.audioFrames` to true.
+                jsRequestedAudioFrames = true
                 // JS may (re-)post with `{ fft: true }` to request FFT bins.
                 // Absence means RMS/peak only. This is idempotent — re-
                 // subscribing with a different flag just updates state.
@@ -529,9 +535,19 @@ struct CustomUIWebView: NSViewRepresentable {
                 } else {
                     includeFFT = false
                 }
+                // Manifest gate: ignore the subscription when the bundle
+                // hasn't opted in via `ui.audioFrames: true`. This matches
+                // the PresetManifest contract and keeps the audio capture
+                // pipeline silent for presets that don't declare they
+                // want frames.
+                guard audioFramesAllowed else {
+                    log.info("[customui] subscribeAudioFrames deferred — manifest.ui.audioFrames is not true")
+                    break
+                }
                 startAudioFrameForwarding()
 
             case "unsubscribeAudioFrames":
+                jsRequestedAudioFrames = false
                 stopAudioFrameForwarding()
 
             default:
