@@ -152,30 +152,35 @@ extension PresetManifest {
         return try encoder.encode(self)
     }
 
+    /// Audience the validator's error messages target. The MCP path is
+    /// driven by an agent that benefits from explicit guidance about
+    /// which fields to preserve; the in-app Monaco editor is driven by
+    /// a human who's already looking at the file and just needs the
+    /// concrete failure.
+    enum ValidationAudience {
+        case agent
+        case human
+    }
+
     /// Preflight a proposed `manifest.json` write for the given bundle
-    /// root. Returns nil when the write is safe to land, or a
-    /// human-readable error message when it would leave the bundle in
-    /// an unloadable state.
+    /// root. Returns nil when the write is safe to land, or an error
+    /// message when it would leave the bundle in an unloadable state.
     ///
     /// Two rejection conditions:
     ///
     /// 1. **Content doesn't decode as a valid manifest.** Missing or
     ///    wrong-typed fields, trailing commas, etc. `PresetBundle.load`
     ///    would return nil after the refresh, silently invalidating
-    ///    `currentBundle` — the agent would see `get_bundle_info`
-    ///    return `bundle: null` and perceive a "preset dropped" state.
+    ///    `currentBundle`.
     /// 2. **`entry` points at a missing file.** Decode succeeds but
-    ///    the referenced entry script doesn't exist in the bundle
-    ///    (e.g. agent swapped `process.rs` for `process.py` without
-    ///    creating the Python file). Same silent-unload outcome.
+    ///    the referenced entry script doesn't exist in the bundle.
     ///
     /// Pure function: doesn't touch disk except to check that
-    /// `entry`'s file exists under `bundleRoot`. Exposed on
-    /// PresetManifest so tests can exercise it without spinning up an
-    /// AU or MCP handler.
+    /// `entry`'s file exists under `bundleRoot`.
     static func validateProposedWrite(
         content: String,
         bundleRoot: URL,
+        audience: ValidationAudience = .agent,
         fileManager: FileManager = .default
     ) -> String? {
         guard let data = content.data(using: .utf8) else {
@@ -185,12 +190,56 @@ extension PresetManifest {
         do {
             parsed = try decode(from: data)
         } catch {
-            return "Manifest write rejected: content does not parse as a valid manifest. Keep the existing fields (schemaVersion, entry, language, ui) and only add/modify the params block. Underlying error: \(error.localizedDescription)"
+            let detail = describeDecodingError(error)
+            switch audience {
+            case .agent:
+                return "Manifest write rejected: content does not parse as a valid manifest. Keep the existing fields (schemaVersion, entry, language, ui) and only add/modify the params block. \(detail)"
+            case .human:
+                return "manifest.json doesn\u{2019}t parse: \(detail)"
+            }
         }
         let entryURL = bundleRoot.appendingPathComponent(parsed.entry)
         if !fileManager.fileExists(atPath: entryURL.path) {
-            return "Manifest write rejected: `entry` points at \"\(parsed.entry)\" but that file doesn't exist in the bundle. Either restore the original `entry` value or write the entry file first."
+            switch audience {
+            case .agent:
+                return "Manifest write rejected: `entry` points at \"\(parsed.entry)\" but that file doesn't exist in the bundle. Either restore the original `entry` value or write the entry file first."
+            case .human:
+                return "manifest.json: `entry` points at \"\(parsed.entry)\" but that file doesn\u{2019}t exist in the bundle yet."
+            }
         }
         return nil
+    }
+
+    /// Pull a useful one-liner out of a `DecodingError`. The default
+    /// `localizedDescription` is famously vague ("The data couldn\u{2019}t
+    /// be read because it isn\u{2019}t in the correct format") — the
+    /// associated values have the actual signal (which key was missing,
+    /// what type was expected, where the corruption is). Falls back to
+    /// the localized description for non-DecodingError cases (shouldn't
+    /// happen for JSON, but belt-and-suspenders).
+    private static func describeDecodingError(_ error: Error) -> String {
+        guard let decodingError = error as? DecodingError else {
+            return error.localizedDescription
+        }
+        func pathString(_ path: [CodingKey]) -> String {
+            let parts = path.map { $0.stringValue }
+            return parts.isEmpty ? "<root>" : parts.joined(separator: ".")
+        }
+        switch decodingError {
+        case .keyNotFound(let key, let ctx):
+            let location = pathString(ctx.codingPath)
+            return "missing required field `\(key.stringValue)` at \(location)."
+        case .typeMismatch(_, let ctx):
+            let location = pathString(ctx.codingPath)
+            return "wrong type at \(location): \(ctx.debugDescription)"
+        case .valueNotFound(_, let ctx):
+            let location = pathString(ctx.codingPath)
+            return "expected a value at \(location): \(ctx.debugDescription)"
+        case .dataCorrupted(let ctx):
+            let location = pathString(ctx.codingPath)
+            return "invalid JSON at \(location): \(ctx.debugDescription)"
+        @unknown default:
+            return error.localizedDescription
+        }
     }
 }

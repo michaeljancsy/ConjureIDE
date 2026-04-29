@@ -1016,7 +1016,7 @@ struct ConjureDSPExtensionMainView: View {
             // and skips the write so the on-disk manifest stays loadable.
             if kind == .manifest {
                 if let problem = PresetManifest.validateProposedWrite(
-                    content: content, bundleRoot: bundleRoot
+                    content: content, bundleRoot: bundleRoot, audience: .human
                 ) {
                     errorMessage = problem
                     return

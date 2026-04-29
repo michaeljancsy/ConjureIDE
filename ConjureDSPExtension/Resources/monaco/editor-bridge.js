@@ -14,6 +14,7 @@ const bridge = {
                 language: options.language || 'python',
                 theme: options.theme || 'vs-dark',
                 readOnly: options.readOnly || false,
+                readOnlyMessage: { value: 'Save As to make edits to this factory preset.' },
                 minimap: { enabled: true },
                 automaticLayout: true,
                 scrollBeyondLastLine: false,
