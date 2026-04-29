@@ -1776,7 +1776,14 @@
                 return;
             }
             this._lastSlice = v;
+            // Only audio-driven render ticks should advance the
+            // 1-second decay clock. ResizeObserver and attribute
+            // changes also call _render, but advancing the clock
+            // there would shrink the next audio tick's dt and
+            // visibly stall the auto-range decay for a frame.
+            this._advanceRangeDecay = true;
             this._render();
+            this._advanceRangeDecay = false;
         }
 
         // --- attribute readers ---
@@ -1817,19 +1824,24 @@
                          max: attrMax != null ? attrMax :  1 };
             }
 
-            var now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-            var dt = this._lastRangeTick > 0 ? (now - this._lastRangeTick) / 1000 : 0;
-            this._lastRangeTick = now;
-            // 1-second time constant. Larger = slower decay = peaks
-            // hold longer; chosen so a single transient stays visible
-            // ~1 s before the tracker walks back in.
-            var alpha = 1 - Math.exp(-Math.min(0.5, Math.max(0, dt)) / 1.0);
+            var advance = !!this._advanceRangeDecay;
+            var alpha = 0;
+            if (advance) {
+                var now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+                var dt = this._lastRangeTick > 0 ? (now - this._lastRangeTick) / 1000 : 0;
+                this._lastRangeTick = now;
+                // 1-second time constant. Larger = slower decay =
+                // peaks hold longer; chosen so a single transient
+                // stays visible ~1 s before the tracker walks back in.
+                alpha = 1 - Math.exp(-Math.min(0.5, Math.max(0, dt)) / 1.0);
+            }
 
             // Initialize trackers on first frame in this mode.
             if (this._rangeMin == null) this._rangeMin = sMin;
             if (this._rangeMax == null) this._rangeMax = sMax;
 
-            // Snap outward immediately, decay inward over ~1 s.
+            // Snap outward immediately, decay inward over ~1 s on
+            // audio ticks only (alpha=0 on resize/attr renders).
             var span = Math.max(1e-9, this._rangeMax - this._rangeMin);
             this._rangeMin = Math.min(sMin, this._rangeMin + span * alpha);
             this._rangeMax = Math.max(sMax, this._rangeMax - span * alpha);
@@ -1929,13 +1941,17 @@
         // Direct polyline path — one vertex per slice element.
         _drawDirect(ctx, slice, sliceLen, W, mapY, draw, rmin) {
             if (sliceLen < 1) return;
-            var stepX = sliceLen > 1 ? W / (sliceLen - 1) : 0;
+            // Single-element vectors get centered (stepX would be 0
+            // and the lone point would otherwise pin to x=0).
+            var single = sliceLen === 1;
+            var stepX = single ? 0 : W / (sliceLen - 1);
+            var x0 = single ? W / 2 : 0;
 
             if (draw === 'dots') {
                 ctx.beginPath();
                 var r = Math.max(1, ctx.lineWidth);
                 for (var i = 0; i < sliceLen; i++) {
-                    var x = i * stepX;
+                    var x = x0 + i * stepX;
                     var y = mapY(slice[i]);
                     ctx.moveTo(x + r, y);
                     ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -1946,20 +1962,20 @@
 
             ctx.beginPath();
             for (var j = 0; j < sliceLen; j++) {
-                var px = j * stepX;
+                var px = x0 + j * stepX;
                 var py = mapY(slice[j]);
                 if (j === 0) ctx.moveTo(px, py);
                 else ctx.lineTo(px, py);
             }
             if (draw === 'filled') {
                 // Close to the baseline (rmin) at the right then left edge.
-                ctx.lineTo((sliceLen - 1) * stepX, mapY(rmin));
-                ctx.lineTo(0, mapY(rmin));
+                ctx.lineTo(x0 + (sliceLen - 1) * stepX, mapY(rmin));
+                ctx.lineTo(x0, mapY(rmin));
                 ctx.closePath();
                 ctx.fill();
                 ctx.beginPath();
                 for (var k = 0; k < sliceLen; k++) {
-                    var qx = k * stepX;
+                    var qx = x0 + k * stepX;
                     var qy = mapY(slice[k]);
                     if (k === 0) ctx.moveTo(qx, qy);
                     else ctx.lineTo(qx, qy);
@@ -2021,8 +2037,11 @@
                         var vv = slice[jj];
                         if (vv > hi2) hi2 = vv;
                     }
-                    if (!isFinite(hi2)) continue;
-                    ctx.lineTo(c2 + 0.5, mapY(hi2));
+                    // Drop to baseline for non-finite columns so the
+                    // fill doesn't bridge across the gap from the
+                    // previous valid column to the next.
+                    var py2 = isFinite(hi2) ? mapY(hi2) : H;
+                    ctx.lineTo(c2 + 0.5, py2);
                 }
                 ctx.lineTo(W, H);
                 ctx.closePath();
