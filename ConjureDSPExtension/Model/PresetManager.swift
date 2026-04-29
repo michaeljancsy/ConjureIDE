@@ -50,6 +50,17 @@ class PresetManager: ObservableObject {
     let presetsURL: URL
     private let fileManager = FileManager.default
 
+    /// Watches the active *user* bundle's root directory for filesystem
+    /// changes made outside the in-plugin flows (VS Code, Finder, `git
+    /// checkout`, terminal `mv`, etc.) so `currentBundle` reflects the
+    /// on-disk truth without waiting for the next preset switch / save /
+    /// MCP write. Nil when the active preset is factory (read-only) or
+    /// nil. Owned here rather than at the view layer because the view
+    /// (`CustomUIWebView`) only exists once the bundle already has a UI;
+    /// this watcher is what lets a UI *appear* in the toolbar at all when
+    /// it's added externally.
+    private var bundleWatcher: BundleFileWatcher?
+
     init(extensionBundle: Bundle) {
         self.extensionBundle = extensionBundle
 
@@ -295,6 +306,31 @@ class PresetManager: ObservableObject {
         // bundle's pending work."
         dirtyFiles.removeAll()
         currentBundle = preset.flatMap { loadBundle(for: $0) }
+        startBundleWatcher(for: preset)
+    }
+
+    /// Stop any existing bundle watcher and, if `preset` is a user bundle,
+    /// start a new one keyed on its root URL. Factory bundles are skipped
+    /// because the appex Resources directory isn't writable at runtime.
+    private func startBundleWatcher(for preset: Preset?) {
+        bundleWatcher?.stop()
+        bundleWatcher = nil
+
+        guard let preset, !preset.isFactory, let rootURL = preset.fileURL else {
+            return
+        }
+
+        let watcher = BundleFileWatcher(path: rootURL.path)
+        watcher.onChange = { [weak self] in
+            // FSEventStream callback is dispatched on `.main`; PresetManager
+            // is @MainActor, so hop with assumeIsolated to satisfy the
+            // isolation checker without an extra async hop.
+            MainActor.assumeIsolated {
+                self?.refreshPresets()
+            }
+        }
+        watcher.start(on: .main, latency: 0.2)
+        bundleWatcher = watcher
     }
 
     /// Call when the user edits the script to update the modified flag.
@@ -888,6 +924,7 @@ class PresetManager: ObservableObject {
             currentBundle = nil
             loadedSource = nil
             isModified = false
+            startBundleWatcher(for: nil)
         }
     }
 
@@ -949,6 +986,9 @@ class PresetManager: ObservableObject {
         if currentPreset?.id == preset.id {
             currentPreset = renamedPreset
             currentBundle = loadBundle(for: renamedPreset)
+            // Re-key the watcher onto the new bundle root — the old path
+            // no longer exists post-move.
+            startBundleWatcher(for: renamedPreset)
         }
 
         return renamedPreset

@@ -782,6 +782,68 @@ struct PresetManagerTests {
         #expect(after == preExisting, "Scaffold should not clobber a pre-existing index.html")
     }
 
+    // MARK: - External file watcher
+
+    /// Regression guard for the "Reload UI" toolbar button never appearing
+    /// when a custom UI is added to the active bundle from outside the
+    /// in-plugin flows (VS Code, Finder, `git checkout`, terminal `mv`).
+    /// `currentBundle.hasCustomUI` drives that button's visibility, so the
+    /// PresetManager must own a watcher on the active user bundle's root
+    /// that calls `refreshPresets()` on any filesystem change.
+    @Test @MainActor func currentBundleRefreshesWhenCustomUIAppearsExternally() async throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "WatcherTarget", source: "pass\n")
+        manager.setCurrentPreset(preset, source: "pass\n")
+
+        #expect(manager.currentBundle?.hasCustomUI == false,
+               "Fresh user bundle should not advertise a custom UI yet")
+
+        guard let bundleURL = preset.fileURL else {
+            Issue.record("Saved preset missing fileURL")
+            return
+        }
+
+        // Simulate an external editor: drop ui/index.html and patch
+        // manifest.json to declare the ui block. No in-plugin path
+        // (no save / scaffold / MCP write) — just raw FileManager writes.
+        let uiDir = bundleURL.appendingPathComponent("ui", isDirectory: true)
+        try FileManager.default.createDirectory(at: uiDir, withIntermediateDirectories: true)
+        try "<!doctype html><html><body>hi</body></html>".write(
+            to: uiDir.appendingPathComponent("index.html"),
+            atomically: true, encoding: .utf8
+        )
+
+        let manifestURL = bundleURL.appendingPathComponent("manifest.json")
+        var manifestDict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: manifestURL)
+        ) as! [String: Any]
+        manifestDict["ui"] = [
+            "entryHTML": "ui/index.html",
+            "width": 400,
+            "height": 200,
+        ]
+        try JSONSerialization.data(
+            withJSONObject: manifestDict,
+            options: [.prettyPrinted]
+        ).write(to: manifestURL)
+
+        // Poll the main runloop until the watcher fires. FSEventStream
+        // *should* deliver within ~0.2s (its coalescing latency), but in
+        // practice the kernel sometimes throttles to 1–2s under load,
+        // so give it a generous deadline. Each `Task.sleep` yields the
+        // main actor so the watcher's queued callback can drain.
+        let deadline = Date().addingTimeInterval(5.0)
+        while Date() < deadline {
+            if manager.currentBundle?.hasCustomUI == true { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(manager.currentBundle?.hasCustomUI == true,
+               "Bundle watcher should have refreshed currentBundle after external UI files appeared")
+    }
+
     // MARK: - Bundle file helpers: create / rename / delete / duplicate
 
     @Test @MainActor func createBundleFileWritesTemplate() throws {
