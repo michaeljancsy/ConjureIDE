@@ -591,6 +591,20 @@ pub extern "C" fn process(
                     Task { _ = await gc.recordSave(paths: [fileURL], message: message) }
                 }
 
+                // CRITICAL ORDERING (mirrors selectPreset): apply
+                // manifest params or reset to a generic tree BEFORE
+                // setCurrentPreset triggers the SwiftUI update that
+                // recreates CustomUIWebView. Otherwise the new webview's
+                // first _initSliders carries the previous preset's
+                // metadata (e.g. compressor threshold/ratio/attack on a
+                // brand-new template) until the next compile lands.
+                if let bundle = pm.loadBundle(for: saved),
+                   let meta = bundle.manifest.resolvedParamMetadata() {
+                    au.applyManifestParams(meta)
+                } else {
+                    au.resetParameterTreeToGeneric()
+                }
+
                 switch language {
                 case .python:
                     let result = au.reloadScript(source: source)
