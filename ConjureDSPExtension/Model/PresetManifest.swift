@@ -54,7 +54,10 @@ struct PresetManifest: Codable, Equatable {
         var min: Float
         var max: Float
         var `default`: Float
-        var unit: String
+        /// Display unit (e.g. `"Hz"`, `"dB"`). Optional — toggles, choices,
+        /// and percentage-style controls often have no meaningful unit. A
+        /// missing or empty value reads as `""` downstream.
+        var unit: String?
         /// "linear" (default) or "log" (geometric).
         var curve: String?
         /// "slider" (default), "toggle", "choice", "integer".

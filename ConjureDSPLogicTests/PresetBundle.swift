@@ -150,6 +150,58 @@ struct PresetBundle: Equatable {
         return nil
     }
 
+    /// Synthesize a bundle view of `rootURL` for repair purposes — succeeds
+    /// even when `loadResult` would return `.broken`. Used by the preset
+    /// browser when a user clicks a broken row to open `manifest.json` in
+    /// the editor without going through the DSP load pipeline.
+    ///
+    /// When the manifest parses, the returned bundle uses the real one;
+    /// otherwise it falls back to a minimal Python default manifest so
+    /// `BundleFilePicker` still has a stable view of the bundle's editable
+    /// files. The entry-script URL is computed from `manifest.entry`
+    /// whether or not the file exists on disk — the editor reads its
+    /// bytes lazily and tolerates a missing file.
+    ///
+    /// Returns nil only when `rootURL` isn't a directory.
+    static func inspect(from rootURL: URL) -> PresetBundle? {
+        let fileManager = FileManager.default
+        var isDir: ObjCBool = false
+        guard fileManager.fileExists(atPath: rootURL.path, isDirectory: &isDir), isDir.boolValue else {
+            return nil
+        }
+
+        let manifestURL = rootURL.appendingPathComponent(PresetManifest.filename)
+        let manifest: PresetManifest = {
+            if let data = try? Data(contentsOf: manifestURL),
+               let parsed = try? PresetManifest.decode(from: data) {
+                return parsed
+            }
+            return PresetBundle.defaultManifest(language: .python, includeUI: false)
+        }()
+
+        let entryScriptURL = rootURL.appendingPathComponent(manifest.entry)
+
+        let uiDirURL = rootURL.appendingPathComponent("ui", isDirectory: true)
+        let uiDirExists: Bool = {
+            var isD: ObjCBool = false
+            return fileManager.fileExists(atPath: uiDirURL.path, isDirectory: &isD) && isD.boolValue
+        }()
+
+        let uiIndexURL: URL? = {
+            guard manifest.ui != nil else { return nil }
+            let url = rootURL.appendingPathComponent(manifest.uiEntryHTMLPath)
+            return fileManager.fileExists(atPath: url.path) ? url : nil
+        }()
+
+        return PresetBundle(
+            rootURL: rootURL,
+            manifest: manifest,
+            entryScriptURL: entryScriptURL,
+            uiIndexURL: uiIndexURL,
+            uiDirectoryURL: uiDirExists ? uiDirURL : nil
+        )
+    }
+
     /// Strip the `.cdp` extension from a bundle directory's last path
     /// component, for display in a list. Mirrors the `name` getter on a
     /// loaded bundle so broken bundles show up under the same display

@@ -18,7 +18,7 @@ extension PresetManifest {
                 min: d.min,
                 max: d.max,
                 default: d.default,
-                unit: d.unit,
+                unit: d.unit ?? "",
                 curve: d.curve,
                 style: d.style,
                 options: d.options

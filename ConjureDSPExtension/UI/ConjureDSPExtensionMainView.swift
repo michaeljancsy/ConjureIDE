@@ -58,6 +58,15 @@ struct ConjureDSPExtensionMainView: View {
     var onSavePreset: (_ source: String, _ language: ScriptLanguage, _ commitMessage: String?) -> ScriptSaveResult
     var onSaveAsPreset: (_ name: String, _ source: String, _ language: ScriptLanguage, _ commitMessage: String?, _ includeCustomUI: Bool) -> ScriptSaveResult
     var onDeletePreset: () -> Void
+    /// Per-preset delete (used by the preset browser's right-click). The
+    /// current `onDeletePreset` always targets `currentPreset`; this one
+    /// is scoped to whichever bundle the user right-clicked, broken or
+    /// healthy.
+    var onDeleteUserPreset: (Preset) -> Void = { _ in }
+    /// Open a broken bundle for repair — populates `currentBundle` via
+    /// `PresetBundle.inspect` so manifest.json is editable, but skips the
+    /// DSP load pipeline.
+    var onSelectBrokenBundle: (Preset) -> Void = { _ in }
     var onRenamePreset: (String) -> String?
     /// Create a new preset bundle on disk. Returns nil on success, an error
     /// message otherwise. Caller closes the dialog on success.
@@ -199,6 +208,14 @@ struct ConjureDSPExtensionMainView: View {
                 showNewScriptDialog: $showNewScriptDialog,
                 showFileBrowser: $showFileBrowser,
                 onSelectPreset: { preset in
+                    // Broken bundles take a different path: skip the DSP
+                    // compile and surface manifest.json in the editor for
+                    // repair. The healthy path still goes through
+                    // au.selectPreset → compile pipeline.
+                    if preset.isBroken {
+                        onSelectBrokenBundle(preset)
+                        return
+                    }
                     Task {
                         isCompiling = true
                         selectedLanguage = preset.language
@@ -207,6 +224,9 @@ struct ConjureDSPExtensionMainView: View {
                         if result.success { lastRunSource = scriptSource }
                         handleResult(result)
                     }
+                },
+                onDeleteUserPreset: { preset in
+                    onDeleteUserPreset(preset)
                 },
                 onRun: {
                     Task {
@@ -733,6 +753,20 @@ struct ConjureDSPExtensionMainView: View {
             altFileSaveTask?.cancel()
             altFileSaveTask = nil
             editingBundleFile = nil
+
+            // Broken bundles open straight to manifest.json — that's
+            // almost always where the parse error lives, and we'd
+            // otherwise pop the user into an entry script that may not
+            // even exist on disk.
+            if let bundle = presetManager.currentBundle,
+               presetManager.currentPreset?.isBroken == true {
+                let manifestEntry = BundleFilePickerEntries
+                    .entries(for: bundle)
+                    .first(where: { $0.kind == .manifest })
+                if let manifestEntry {
+                    switchEditingFile(to: manifestEntry, in: bundle)
+                }
+            }
         }
         .onAppear {
             customUIPreference.bundleKey = presetManager.currentBundle?.name
@@ -970,9 +1004,24 @@ struct ConjureDSPExtensionMainView: View {
         let url = file.url
         let content = altFileSource
         let kind = file.kind
+        let bundleRoot = url.deletingLastPathComponent()
         altFileSaveTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 400_000_000)
             if Task.isCancelled { return }
+            // Pre-flight manifest writes through the same validator that
+            // gates MCP `write_bundle_file`. Without this, a malformed
+            // manifest typed in Monaco lands on disk and the bundle goes
+            // "Broken" on the next refreshPresets — a slow, indirect
+            // failure mode. Catching it here surfaces the error inline
+            // and skips the write so the on-disk manifest stays loadable.
+            if kind == .manifest {
+                if let problem = PresetManifest.validateProposedWrite(
+                    content: content, bundleRoot: bundleRoot
+                ) {
+                    errorMessage = problem
+                    return
+                }
+            }
             do {
                 try content.write(to: url, atomically: true, encoding: .utf8)
             } catch {
