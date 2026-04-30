@@ -35,13 +35,24 @@ if [ -d "${PYTHON_DIST}" ]; then
         mkdir -p "${CONJ_DST}"
         # rsync the package, excluding test files and __pycache__. Filter rules
         # are evaluated in order, first match wins, so excludes go before the
-        # implicit "include everything else."
-        if rsync -a --delete --exclude='__pycache__/' --exclude='test_*.py' \
-                  --itemize-changes "${CONJ_SRC}/" "${CONJ_DST}/" 2>/dev/null \
-                  | grep -q '^[<>cd]'; then
-            CONJUREDSP_CHANGED=1
+        # implicit "include everything else." Capture --itemize-changes output
+        # to a variable rather than piping into grep -q: under pipefail, a
+        # match that closes the pipe before rsync finishes writing would
+        # SIGPIPE rsync and the pipeline would report failure even on a
+        # legitimate change. Buffering separates the two concerns.
+        if RSYNC_OUT=$(rsync -a --delete --exclude='__pycache__/' --exclude='test_*.py' \
+                              --itemize-changes "${CONJ_SRC}/" "${CONJ_DST}/" 2>/dev/null); then
+            if printf '%s\n' "${RSYNC_OUT}" | grep -q '^[<>cd]'; then
+                CONJUREDSP_CHANGED=1
+            else
+                CONJUREDSP_CHANGED=0
+            fi
         else
-            CONJUREDSP_CHANGED=0
+            # rsync failed entirely (missing binary, permission, etc.). Fall
+            # back to cp -R and assume changed so the downstream stamp gets
+            # invalidated.
+            cp -R "${CONJ_SRC}/." "${CONJ_DST}/"
+            CONJUREDSP_CHANGED=1
         fi
         # Bump libpython's mtime when conjuredsp source actually changed.
         # The downstream "Copy Python Runtime" / "Copy Python Stdlib for
