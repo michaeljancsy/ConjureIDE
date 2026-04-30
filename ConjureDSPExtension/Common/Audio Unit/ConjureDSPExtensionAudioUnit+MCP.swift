@@ -492,6 +492,55 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 scriptSourceDidChange.send(change)
             }
 
+            // Mirror the kernel-extracted parameter metadata back into
+            // `manifest.json`'s `params` block. Before this, the
+            // `scaffold_ui=true` path emitted a manifest with a `ui`
+            // block but no `params` array, so the very next
+            // `write_bundle_file` for `ui/index.html` failed static
+            // validation on every named `param=` reference — authors
+            // had to hand-write a v2 manifest that duplicated metadata
+            // the kernel already knew. The 30-run /try-it battery
+            // flagged this as the dominant friction across all three
+            // harnesses (claude, gemini, codex) and both languages.
+            //
+            // Conditions we mirror under:
+            //  - kernel reload succeeded (no point mirroring an empty
+            //    or stale `currentParamMetadata`)
+            //  - the saved bundle's manifest doesn't already declare
+            //    params (don't clobber someone's explicit metadata)
+            //
+            // We re-load the bundle from disk first because
+            // `pm.savePreset` returned a `Preset` (a thin descriptor),
+            // not a `PresetBundle` with a parsed manifest. The
+            // round-trip is cheap and avoids stale-cache risk.
+            var manifestSyncedFromKernel = false
+            if kernelReloaded,
+               let kernelMeta = currentParamMetadata,
+               !kernelMeta.isEmpty,
+               let savedBundle = pm.loadBundle(for: preset) {
+                let decls = kernelMeta.map { PresetManifest.ParamDecl(from: $0) }
+                do {
+                    manifestSyncedFromKernel = try pm.updateManifestParams(
+                        for: savedBundle,
+                        params: decls
+                    )
+                    if manifestSyncedFromKernel {
+                        // Re-load the bundle so subsequent UI smoke
+                        // tests / write_bundle_file calls see the
+                        // freshly written manifest.params.
+                        if let refreshed = pm.loadBundle(for: preset) {
+                            applyManifestParams(refreshed.manifest.resolvedParamMetadata())
+                        }
+                    }
+                } catch {
+                    // Manifest-mirror failure shouldn't poison the
+                    // whole save_preset call (the bundle and kernel
+                    // are already correct). Surface as a warning in
+                    // the response and keep going.
+                    mcpLog.warning("[save_preset] manifest params mirror failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+
             // Top-level `success` reflects the WHOLE atomic operation:
             // disk save AND kernel reload. The bundle was committed to
             // disk and the current preset switched (those are tracked
@@ -522,6 +571,9 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             if scaffoldUI {
                 response["scaffolded_ui"] = true
                 response["note"] = "Starter ui/index.html written. Edit it via write_bundle_file to customize the custom HTML/JS UI."
+            }
+            if manifestSyncedFromKernel {
+                response["manifest_params_populated"] = true
             }
             return (jsonStr(response), !kernelReloaded)
         } catch {

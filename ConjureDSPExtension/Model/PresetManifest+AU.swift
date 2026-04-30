@@ -26,3 +26,28 @@ extension PresetManifest {
         }
     }
 }
+
+extension PresetManifest.ParamDecl {
+    /// Reverse of `resolvedParamMetadata()`: convert kernel-extracted
+    /// runtime metadata back into the on-disk manifest declaration form.
+    /// Used by `save_preset` to mirror a freshly compiled script's
+    /// `PARAMS` / `params!{}` block into `manifest.json`'s `params` array
+    /// — closing the gap that previously forced authors of custom UIs to
+    /// hand-write a v2 manifest after every scaffold.
+    ///
+    /// Empty `unit` strings round-trip to nil so the JSON stays compact
+    /// (the manifest schema treats nil and "" as equivalent downstream).
+    init(from m: ConjureDSPExtensionAudioUnit.ParamMetadata) {
+        self.init(
+            name: m.name,
+            key: m.key,
+            min: m.min,
+            max: m.max,
+            default: m.default,
+            unit: m.unit.isEmpty ? nil : m.unit,
+            curve: m.curve,
+            style: m.style,
+            options: m.options
+        )
+    }
+}
