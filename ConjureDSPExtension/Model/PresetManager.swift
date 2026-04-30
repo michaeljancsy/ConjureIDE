@@ -559,6 +559,48 @@ class PresetManager: ObservableObject {
         AppGroupContainer.stripQuarantine(at: dest)
     }
 
+    /// Write a `params` array into a user bundle's `manifest.json`,
+    /// preserving every other field. Used by the MCP `save_preset` path
+    /// to mirror a freshly compiled script's parameter metadata into the
+    /// on-disk manifest, so a custom UI written immediately afterwards
+    /// can statically resolve `param=` references without authors having
+    /// to hand-write the same metadata a second time.
+    ///
+    /// No-op when the existing manifest already declares params (we
+    /// trust an explicitly authored manifest over a kernel-extracted
+    /// reflection — e.g. someone who wrote `style: "choice"` + `options:
+    /// [...]` in their manifest doesn't want us to overwrite that with a
+    /// kernel reflection that only knows the param is a numeric range).
+    /// Returns true when the manifest was rewritten, false when it was
+    /// left alone.
+    @discardableResult
+    func updateManifestParams(
+        for bundle: PresetBundle,
+        params: [PresetManifest.ParamDecl]
+    ) throws -> Bool {
+        // Factory bundles live in the read-only extension Resources;
+        // skip silently rather than throwing — the MCP save_preset path
+        // can never land here in practice (it always creates a user
+        // bundle), but defending the invariant matches scaffoldCustomUI.
+        if !fileManager.isWritableFile(atPath: bundle.rootURL.path) {
+            return false
+        }
+        // Don't overwrite an explicitly authored params block. The
+        // `nil` and `[]` cases both mean "the bundle hasn't declared
+        // anything" — that's the only case where we mirror.
+        if let existing = bundle.manifest.params, !existing.isEmpty {
+            return false
+        }
+        if params.isEmpty { return false }
+
+        let manifestURL = bundle.rootURL.appendingPathComponent(PresetManifest.filename)
+        var manifest = bundle.manifest
+        manifest.params = params
+        try manifest.jsonData().write(to: manifestURL)
+        AppGroupContainer.stripQuarantine(at: manifestURL)
+        return true
+    }
+
     /// Drop a starter `ui/index.html` into an existing user bundle and return
     /// the URL of the newly-written file.
     ///

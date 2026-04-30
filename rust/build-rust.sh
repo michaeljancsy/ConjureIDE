@@ -21,6 +21,53 @@ if [ ! -d "${PYTHON_DIST}" ]; then
 fi
 if [ -d "${PYTHON_DIST}" ]; then
     export PYO3_PYTHON="${PYTHON_DIST}/bin/python3"
+
+    # Resync the conjuredsp Python package into bundled site-packages.
+    # setup-python.sh only runs once at initial setup, so source changes (new
+    # submodules, edits to existing .py files) wouldn't otherwise reach the
+    # running plugin until a developer manually re-ran the setup script. This
+    # mirrors what cargo does for the Rust side: keep the install in lockstep
+    # with HEAD on every build.
+    CONJ_SRC="${RUST_DIR}/conjuredsp"
+    SITE_PACKAGES=$("${PYO3_PYTHON}" -c 'import site; print(site.getsitepackages()[0])' 2>/dev/null || true)
+    if [ -d "${CONJ_SRC}" ] && [ -n "${SITE_PACKAGES}" ] && [ -d "${SITE_PACKAGES}" ]; then
+        CONJ_DST="${SITE_PACKAGES}/conjuredsp"
+        mkdir -p "${CONJ_DST}"
+        # rsync the package, excluding test files and __pycache__. Filter rules
+        # are evaluated in order, first match wins, so excludes go before the
+        # implicit "include everything else." Capture --itemize-changes output
+        # to a variable rather than piping into grep -q: under pipefail, a
+        # match that closes the pipe before rsync finishes writing would
+        # SIGPIPE rsync and the pipeline would report failure even on a
+        # legitimate change. Buffering separates the two concerns.
+        if RSYNC_OUT=$(rsync -a --delete --exclude='__pycache__/' --exclude='test_*.py' \
+                              --itemize-changes "${CONJ_SRC}/" "${CONJ_DST}/" 2>/dev/null); then
+            if printf '%s\n' "${RSYNC_OUT}" | grep -q '^[<>cd]'; then
+                CONJUREDSP_CHANGED=1
+            else
+                CONJUREDSP_CHANGED=0
+            fi
+        else
+            # rsync failed entirely (missing binary, permission, etc.). Fall
+            # back to cp -R and assume changed so the downstream stamp gets
+            # invalidated.
+            cp -R "${CONJ_SRC}/." "${CONJ_DST}/"
+            CONJUREDSP_CHANGED=1
+        fi
+        # Bump libpython's mtime when conjuredsp source actually changed.
+        # The downstream "Copy Python Runtime" / "Copy Python Stdlib for
+        # Tests" Xcode build phases gate on libpython3.14t.dylib's mtime
+        # vs. their .copy-stamp; otherwise they skip the (re)copy of
+        # site-packages/conjuredsp into the Terminal.app bundle and the
+        # extension's test resources, leaving the App Group PythonRuntime
+        # serving a stale conjuredsp tree (this is what hid `accel.py`
+        # from the running plugin even after it was added to the source
+        # tree). Bumping mtime on actual change — rather than every
+        # build — keeps incremental builds fast.
+        if [ "${CONJUREDSP_CHANGED}" = "1" ]; then
+            touch "${PYTHON_DIST}/lib/libpython3.14t.dylib"
+        fi
+    fi
 else
     echo "warning: Bundled Python not found at ${PYTHON_DIST}. Run rust/setup-python.sh first." >&2
     echo "warning: Falling back to system python3." >&2

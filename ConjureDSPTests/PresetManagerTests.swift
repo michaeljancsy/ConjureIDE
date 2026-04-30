@@ -1338,4 +1338,140 @@ struct PresetManagerTests {
         #expect((manifest.params?.isEmpty ?? true),
                 "fresh bundle must not inherit params from any other preset")
     }
+
+    // MARK: - updateManifestParams: kernel-extracted metadata mirror
+    //
+    // The MCP `save_preset` path calls this after `compileAndRun` so a
+    // freshly-saved bundle's `manifest.json` carries a `params` block
+    // matching what the kernel extracted from the script's `PARAMS` /
+    // `params!{}` declarations. Before this helper existed, the
+    // scaffold path emitted a manifest without `params`, and the very
+    // next `write_bundle_file` for `ui/index.html` failed UI validation
+    // on every named `param=` reference. The 30-run /try-it battery
+    // (claude × gemini × codex × python × rust × 5 prompts) flagged
+    // this as the dominant friction across all 30 runs.
+
+    @Test @MainActor func updateManifestParamsWritesParamsBlock() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        // Save a fresh bundle the way the MCP path does — scaffold
+        // the UI, leave the manifest's params block nil.
+        _ = try manager.savePreset(
+            name: "MirrorTarget", source: "# v1\n",
+            language: .python, scaffoldUI: true
+        )
+        let preset = try #require(
+            manager.presets.first(where: { $0.name == "MirrorTarget" })
+        )
+        let bundle = try #require(manager.loadBundle(for: preset))
+        #expect((bundle.manifest.params?.isEmpty ?? true),
+                "Precondition: fresh bundle has no params block")
+
+        // Mirror two simulated kernel-extracted params into the manifest.
+        let cutoff = PresetManifest.ParamDecl(
+            name: "Cutoff", key: nil, min: 20, max: 20000, default: 1000,
+            unit: "Hz", curve: "log", style: nil, options: nil
+        )
+        let resonance = PresetManifest.ParamDecl(
+            name: "Resonance", key: nil, min: 0.5, max: 10, default: 0.707,
+            unit: nil, curve: nil, style: nil, options: nil
+        )
+        let didWrite = try manager.updateManifestParams(
+            for: bundle, params: [cutoff, resonance]
+        )
+        #expect(didWrite, "First mirror should write")
+
+        // Re-load the bundle from disk and verify the params landed.
+        let reloaded = try #require(manager.loadBundle(for: preset))
+        let params = try #require(reloaded.manifest.params)
+        #expect(params.count == 2)
+        #expect(params[0].name == "Cutoff")
+        #expect(params[0].curve == "log")
+        #expect(params[0].unit == "Hz")
+        #expect(params[1].name == "Resonance")
+        #expect(params[1].default == 0.707)
+        // Empty unit must round-trip as nil for compact JSON.
+        #expect(params[1].unit == nil)
+    }
+
+    @Test @MainActor func updateManifestParamsSkipsExistingParamsBlock() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        // Build a bundle that already has an explicitly-authored params
+        // block — e.g. someone wrote `style: "choice"` + options that
+        // the kernel reflection wouldn't know about.
+        _ = try manager.savePreset(
+            name: "ExplicitParams", source: "# v1\n",
+            language: .python, scaffoldUI: true
+        )
+        let preset = try #require(
+            manager.presets.first(where: { $0.name == "ExplicitParams" })
+        )
+        var bundle = try #require(manager.loadBundle(for: preset))
+
+        // Author writes their own params block (simulating a v2 manifest
+        // that includes choice options the kernel doesn't surface).
+        let authored = PresetManifest.ParamDecl(
+            name: "Mode", key: nil, min: 0, max: 2, default: 0,
+            unit: nil, curve: nil, style: "choice",
+            options: ["Low", "Mid", "High"]
+        )
+        let firstWrite = try manager.updateManifestParams(
+            for: bundle, params: [authored]
+        )
+        #expect(firstWrite)
+
+        // Now reload and try to mirror a kernel-extracted version that
+        // LACKS the choice metadata — this must NOT clobber the author.
+        bundle = try #require(manager.loadBundle(for: preset))
+        let kernelReflection = PresetManifest.ParamDecl(
+            name: "Mode", key: nil, min: 0, max: 2, default: 0,
+            unit: nil, curve: nil, style: nil, options: nil
+        )
+        let secondWrite = try manager.updateManifestParams(
+            for: bundle, params: [kernelReflection]
+        )
+        #expect(!secondWrite, "Existing params block must not be overwritten")
+
+        // Confirm the explicit choice metadata survived.
+        let reloaded = try #require(manager.loadBundle(for: preset))
+        let params = try #require(reloaded.manifest.params)
+        #expect(params.count == 1)
+        #expect(params[0].style == "choice")
+        #expect(params[0].options == ["Low", "Mid", "High"])
+    }
+
+    @Test @MainActor func updateManifestParamsSkipsEmptyInput() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        _ = try manager.savePreset(
+            name: "NoParams", source: "# no params\n",
+            language: .python, scaffoldUI: true
+        )
+        let preset = try #require(
+            manager.presets.first(where: { $0.name == "NoParams" })
+        )
+        let bundle = try #require(manager.loadBundle(for: preset))
+
+        // Scripts with no PARAMS dict produce empty kernel metadata.
+        // We must not synthesize an empty params: [] block — that's
+        // visually noisy in the manifest and conveys no information.
+        let didWrite = try manager.updateManifestParams(
+            for: bundle, params: []
+        )
+        #expect(!didWrite)
+
+        let reloaded = try #require(manager.loadBundle(for: preset))
+        #expect((reloaded.manifest.params?.isEmpty ?? true),
+                "Empty input must not synthesize an empty params block")
+    }
+
+    // The ParamDecl(from: ParamMetadata) round-trip lives in
+    // PresetManifest+AU.swift, which is intentionally not in this
+    // test target (the AU type ConjureDSPExtensionAudioUnit.ParamMetadata
+    // would create a circular link). The conversion is exercised
+    // end-to-end via the MCP save_preset integration test instead.
 }
