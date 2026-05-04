@@ -45,7 +45,7 @@ class SubscriptionManager: ObservableObject {
     @Published private(set) var email: String?
 
     /// Whether this build is currently running in Beta mode (BETA_BUILD flag set
-    /// and the 7-day window from the build date has not elapsed). Beta mode
+    /// and the 30-day window from the build date has not elapsed). Beta mode
     /// grants full access without a license but reverts to Demo after the window.
     @Published private(set) var isBetaActive: Bool = false {
         didSet { refreshAnalyticsMode() }
@@ -58,7 +58,7 @@ class SubscriptionManager: ObservableObject {
     }
 
     /// Unix timestamp of the build (from Info.plist BuildID). Used by Beta mode
-    /// to compute how much of the 7-day Beta window remains. Set by the host
+    /// to compute how much of the 30-day Beta window remains. Set by the host
     /// (AudioUnitViewController) before `loadAndVerify()`.
     var buildID: Int = 0
 
@@ -101,7 +101,7 @@ class SubscriptionManager: ObservableObject {
     private var refreshTimer: Timer?
 
     /// Beta window recheck timer. Fires hourly while Beta is active, so the
-    /// plugin transitions smoothly from Beta → Demo when the 7-day window
+    /// plugin transitions smoothly from Beta → Demo when the 30-day window
     /// elapses without requiring a restart.
     private var betaRecheckTimer: Timer?
 
@@ -237,7 +237,7 @@ class SubscriptionManager: ObservableObject {
         email = nil
 
         // Reset published status to no-subscription. If this is a Beta build
-        // still inside the 7-day window, hand off to Beta mode (which keeps the
+        // still inside the 30-day window, hand off to Beta mode (which keeps the
         // kernel licensed and skips the demo timer) — otherwise drop into Demo.
         // Stop any existing demo timer first so startDemoTimer's
         // `guard demoTimer == nil` early-return doesn't drop the new one — this
@@ -337,7 +337,7 @@ class SubscriptionManager: ObservableObject {
             isBetaActive = false
             return false
         }
-        log.info("Beta mode active, granting licensed access until build+7d")
+        log.info("Beta mode active, granting licensed access until build+30d")
         isBetaActive = true
         // Treat as licensed on the audio thread so output is not silenced.
         setSubscriptionStatusInKernel?(SubscriptionStatus.active.rawValue)

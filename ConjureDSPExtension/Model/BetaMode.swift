@@ -3,7 +3,7 @@
 //  ConjureDSPExtension
 //
 //  Time-limited "Beta" build mode. When the BETA_BUILD compilation condition
-//  is set, the plugin runs without a license for 7 days from the build date,
+//  is set, the plugin runs without a license for 30 days from the build date,
 //  then reverts to the normal Demo behavior. Driven entirely by the BuildID
 //  Info.plist value (a Unix timestamp stamped at build time).
 //
@@ -11,8 +11,8 @@
 import Foundation
 
 enum BetaMode {
-    /// Seven days from build date.
-    static let durationSeconds: TimeInterval = 7 * 24 * 60 * 60
+    /// Thirty days from build date.
+    static let durationSeconds: TimeInterval = 30 * 24 * 60 * 60
 
     /// Whether this binary was compiled with the BETA_BUILD flag set
     /// (regardless of whether the 7-day window has elapsed).
@@ -24,7 +24,7 @@ enum BetaMode {
         #endif
     }
 
-    /// True iff this is a `BETA_BUILD` and the 7-day window has not elapsed.
+    /// True iff this is a `BETA_BUILD` and the 30-day window has not elapsed.
     static func isActive(buildID: Int, now: Date = Date()) -> Bool {
         isActive(isBetaBuild: isBetaBuild, buildID: buildID, now: now)
     }

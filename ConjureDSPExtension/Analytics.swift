@@ -41,7 +41,7 @@ enum Analytics {
     /// event as a `build_mode` super property so dev / beta / production traffic
     /// can be distinguished. `debug` wins over everything (only relevant if the
     /// DEBUG token is ever populated); `beta` means BETA_BUILD is active and
-    /// within its 7-day window; `licensed` and `demo` reflect subscription state
+    /// within its 30-day window; `licensed` and `demo` reflect subscription state
     /// for a regular Release build.
     enum BuildMode: String {
         case debug
