@@ -260,6 +260,20 @@ if [ -d "$TERMINAL_PATH" ]; then
     echo "Re-signed ConjureDSPTerminal"
 fi
 
+# Re-sign the extension's libpython before re-signing the appex itself.
+# python-build-standalone ships libpython3.14t.dylib with an ad-hoc linker
+# signature; the Xcode "Copy Python Dylib" build phase only re-signs when
+# `codesign --verify` fails, but ad-hoc signatures verify locally — so the
+# build phase's conditional never fires and the dylib reaches notary still
+# ad-hoc-signed. Notary rejects it ("not signed with valid Developer ID
+# certificate" + "missing secure timestamp"). Force-sign here, before the
+# appex re-seal below, so CodeResources matches the new dylib signature.
+APPEX_LIBPY="$APPEX_PATH/Contents/Frameworks/libpython3.14t.dylib"
+if [ -f "$APPEX_LIBPY" ]; then
+    codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$APPEX_LIBPY"
+    echo "Re-signed extension libpython"
+fi
+
 # Re-sign the extension and app after modifying their contents.
 # Use --preserve-metadata=entitlements to keep the entitlements that xcodebuild
 # injected during archiving (com.apple.application-identifier, team-identifier,
