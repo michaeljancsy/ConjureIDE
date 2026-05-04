@@ -12,7 +12,7 @@
 import Foundation
 
 enum BetaMode {
-    static let durationSeconds: TimeInterval = 7 * 24 * 60 * 60
+    static let durationSeconds: TimeInterval = 30 * 24 * 60 * 60
 
     static var isBetaBuild: Bool {
         #if BETA_BUILD
