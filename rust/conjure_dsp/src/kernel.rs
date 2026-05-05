@@ -4,7 +4,7 @@ use crate::python_backend::PythonBackend;
 use crate::ring_buffer::AudioRingBuffer;
 use crate::wasm_backend::WasmBackend;
 use crate::license::SubscriptionStatus;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 
 /// Demo limit in seconds. The actual sample count is computed from the host sample rate
@@ -246,19 +246,24 @@ pub struct DSPKernel {
     /// transition preserves gain continuity (rem_out = len − rem_in) so rapid
     /// preset switches mid-fade don't click.
     pending_stage_request: AtomicBool,
-    /// When set, the audio thread holds output muted (FADE_OUT with
-    /// `swap_fade_remaining == 0`) and refuses to advance to FADE_IN even after
-    /// a backend swap completes. Cleared when Swift calls
-    /// `end_preset_transition`, at which point the audio thread ramps back up
-    /// via FADE_IN. Set by `begin_preset_transition` from the main thread before
-    /// it mutates parameters / triggers a backend reload, so the click protection
-    /// covers the entire preset-load window — not just the backend swap moment.
-    transition_active: AtomicBool,
-    /// Sample-counter of how long `transition_active` has been set. Incremented
-    /// per callback by `frame_count` while active, reset on `begin_preset_transition`.
-    /// If it crosses `TRANSITION_WATCHDOG_SECONDS * sample_rate` the audio thread
-    /// force-clears `transition_active` to recover from a buggy Swift caller that
-    /// forgot the matching `end`.
+    /// Reference count of in-flight preset-load transitions. While > 0 the
+    /// audio thread holds output muted (FADE_OUT with `swap_fade_remaining == 0`)
+    /// and refuses to advance to FADE_IN even after a backend swap completes.
+    /// `begin_preset_transition` increments; `end_preset_transition` decrements
+    /// (saturating at 0). Audio ramps back up via FADE_IN only when the count
+    /// returns to 0 — so two concurrent loads (e.g. user clicks a Rust factory
+    /// preset twice in a row, each spawning an async compile Task) only unmute
+    /// after BOTH compiles have called their matching `end`. A simple boolean
+    /// would race here: the first Task's `end` would clear the flag while the
+    /// second Task is still compiling.
+    transition_depth: AtomicI32,
+    /// Sample-counter of how long `transition_depth` has been > 0. Incremented
+    /// per callback by `frame_count` while a transition is active. Reset to 0
+    /// on every `begin_preset_transition` so a chain of legitimate overlapping
+    /// transitions doesn't trip the watchdog mid-chain. If it crosses
+    /// `TRANSITION_WATCHDOG_SECONDS * sample_rate` between `begin` calls (i.e.
+    /// no progress for >2 s), the audio thread force-resets `transition_depth`
+    /// to 0 to recover from a buggy Swift caller that forgot a matching `end`.
     transition_watchdog_samples: AtomicU32,
 }
 
@@ -368,7 +373,7 @@ impl DSPKernel {
             // requested before `initialize()` still gets a sensible fade length.
             swap_fade_length: AtomicU32::new((SWAP_FADE_MS / 1000.0 * 44100.0) as u32),
             pending_stage_request: AtomicBool::new(false),
-            transition_active: AtomicBool::new(false),
+            transition_depth: AtomicI32::new(0),
             transition_watchdog_samples: AtomicU32::new(0),
         }
     }
@@ -442,8 +447,11 @@ impl DSPKernel {
 
     /// Mark the start of a preset-load window. The audio thread ramps the output
     /// to silence (5 ms fade-out via the existing swap envelope) and *holds*
-    /// silence — even after a backend swap completes — until
-    /// `end_preset_transition` is called. Idempotent.
+    /// silence — even after a backend swap completes — until every matching
+    /// `end_preset_transition` has been called. Reference-counted, so two
+    /// overlapping loads (e.g. user clicks a Rust factory preset twice in
+    /// a row, each spawning an async compile) only unmute after BOTH compiles
+    /// finish.
     ///
     /// Wrap every code path that mutates kernel parameters or stages a new
     /// backend (e.g. `selectPreset`, `currentPreset` setter, MCP `save_preset`,
@@ -451,15 +459,21 @@ impl DSPKernel {
     /// with the NEW preset's parameter values during the load window.
     pub fn begin_preset_transition(&self) {
         self.transition_watchdog_samples.store(0, Ordering::Relaxed);
-        self.transition_active.store(true, Ordering::Release);
+        self.transition_depth.fetch_add(1, Ordering::Release);
     }
 
-    /// Release the mute hold set by `begin_preset_transition`. The audio
-    /// thread observes the cleared flag on its next callback and, if it's
-    /// parked in FADE_OUT with the fade fully complete, advances to FADE_IN
-    /// to ramp the output back to full level. Idempotent.
+    /// Release one nesting level of the mute hold set by
+    /// `begin_preset_transition`. The audio thread ramps the output back up
+    /// via FADE_IN only when the depth returns to 0 — so the *outer* end
+    /// in a chain of overlapping transitions controls when audio resumes.
+    /// Saturating at 0 so a stray unpaired call can't drive the depth
+    /// negative.
     pub fn end_preset_transition(&self) {
-        self.transition_active.store(false, Ordering::Release);
+        let _ = self.transition_depth.fetch_update(
+            Ordering::Release,
+            Ordering::Acquire,
+            |d| if d > 0 { Some(d - 1) } else { None },
+        );
     }
 
     /// Returns the current swap-state-machine phase
@@ -469,11 +483,11 @@ impl DSPKernel {
         self.swap_phase.load(Ordering::Acquire)
     }
 
-    /// Returns whether a preset transition is currently active. Diagnostic
-    /// only — used by tests to verify the watchdog has cleared the flag
-    /// after a buggy caller forgot to call `end_preset_transition`.
+    /// Returns whether a preset transition is currently active (depth > 0).
+    /// Diagnostic only — used by tests to verify the watchdog has reset
+    /// the depth after a buggy caller forgot to call `end_preset_transition`.
     pub fn transition_active(&self) -> bool {
-        self.transition_active.load(Ordering::Acquire)
+        self.transition_depth.load(Ordering::Acquire) > 0
     }
 
     pub fn initialize(&mut self, input_channels: i32, _output_channels: i32, sample_rate: f64) {
@@ -1114,7 +1128,7 @@ impl DSPKernel {
     /// Swift caller (forgot the matching `end`, crashed mid-transition)
     /// can never leave the plugin permanently silent.
     fn apply_transition_state(&self, frames_processed: u32) {
-        if !self.transition_active.load(Ordering::Acquire) {
+        if self.transition_depth.load(Ordering::Acquire) <= 0 {
             return;
         }
         // Watchdog. fetch_add returns the PRE-update value; add `frames_processed`
@@ -1124,7 +1138,7 @@ impl DSPKernel {
         let elapsed = prev.saturating_add(frames_processed);
         let limit = (TRANSITION_WATCHDOG_SECONDS * self.sample_rate) as u32;
         if elapsed >= limit {
-            self.transition_active.store(false, Ordering::Release);
+            self.transition_depth.store(0, Ordering::Release);
             // Best-effort error report for Swift / logs. try_lock so we never
             // stall the audio thread on a contended mutex.
             if let Ok(mut last) = self.last_error.try_lock() {
@@ -1602,7 +1616,7 @@ impl DSPKernel {
                             // envelope keeps muting output until Swift clears
                             // the flag via end_preset_transition.
                             self.perform_swap_locked(&mut *guard);
-                            if self.transition_active.load(Ordering::Acquire) {
+                            if self.transition_depth.load(Ordering::Acquire) > 0 {
                                 self.swap_fade_remaining.store(0, Ordering::Relaxed);
                                 self.swap_phase
                                     .store(SWAP_PHASE_FADE_OUT, Ordering::Release);
@@ -3167,6 +3181,97 @@ mod tests {
         assert!(mute_peak < 0.01,
                 "expected sustained silence during hold window, got peak {}",
                 mute_peak);
+    }
+
+    /// Regression test for Sentry Seer review on PR #283: rapid Rust factory
+    /// preset switches each spawn a `Task` that calls `end_preset_transition`
+    /// when its compile finishes. With a boolean flag, Task #1's `end` would
+    /// clear the mute while Task #2 is still compiling — clicking the audio.
+    /// With the refcount, each `begin` increments and each `end` decrements;
+    /// audio only unmutes when the depth returns to zero.
+    #[test]
+    fn test_preset_transition_overlapping_begins_only_unmute_after_all_ends() {
+        let wasm = gain_half_wasm();
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm));
+        kernel.initialize(1, 1, 44100.0);
+
+        // Warm up.
+        let input = vec![1.0f32; 64];
+        let mut warm = vec![0.0f32; 64];
+        unsafe {
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = warm.as_mut_ptr();
+            kernel.process(&ip, &op, 1, 64);
+        }
+
+        // Two overlapping transitions. begin/begin then end/end.
+        kernel.begin_preset_transition();
+        kernel.begin_preset_transition();
+        assert!(kernel.transition_active(), "depth should be 2 after two begins");
+
+        // First end (Task #1 finishing) — depth drops to 1, NOT 0. Audio
+        // must stay muted because Task #2 is still nominally in flight.
+        kernel.end_preset_transition();
+        assert!(kernel.transition_active(),
+                "depth should still be 1 after first end — second transition still in flight");
+
+        // Run several callbacks. Output must remain silent (envelope clamps
+        // gain to 0 because the audio thread is still parked in FADE_OUT).
+        const CHUNK: u32 = 64;
+        let mut captured: Vec<f32> = Vec::new();
+        for _ in 0..32 {
+            let mut out = vec![0.0f32; CHUNK as usize];
+            unsafe {
+                let ip: *const f32 = input.as_ptr();
+                let op: *mut f32 = out.as_mut_ptr();
+                kernel.process(&ip, &op, 1, CHUNK);
+            }
+            captured.extend_from_slice(&out);
+        }
+        // Skip the 661-sample fade-out region — those samples are legitimately
+        // ramping. After the fade, output must be silent.
+        let post_fade = &captured[700..];
+        let post_fade_peak = post_fade.iter().fold(0.0f32, |a, &v| a.max(v.abs()));
+        assert!(post_fade_peak < 0.01,
+                "audio must remain silent between first and second end (got peak {})",
+                post_fade_peak);
+
+        // Second end (Task #2 finishing) — depth drops to 0, audio ramps up.
+        kernel.end_preset_transition();
+        assert!(!kernel.transition_active(),
+                "depth should be 0 after both ends");
+
+        // Pump enough callbacks to complete FADE_IN.
+        for _ in 0..32 {
+            let mut out = vec![0.0f32; CHUNK as usize];
+            unsafe {
+                let ip: *const f32 = input.as_ptr();
+                let op: *mut f32 = out.as_mut_ptr();
+                kernel.process(&ip, &op, 1, CHUNK);
+            }
+        }
+        assert_eq!(kernel.swap_phase(), SWAP_PHASE_IDLE,
+                   "kernel should return to IDLE once depth is 0 + fade-in completes");
+    }
+
+    /// Saturating end: a stray `end_preset_transition` with no matching
+    /// `begin` must not drive the depth negative.
+    #[test]
+    fn test_preset_transition_unpaired_end_saturates_at_zero() {
+        let kernel = DSPKernel::new();
+        assert!(!kernel.transition_active());
+
+        kernel.end_preset_transition();
+        kernel.end_preset_transition();
+        assert!(!kernel.transition_active(),
+                "unpaired ends must not make transition_active true on the next begin");
+
+        // After the saturation, a single begin/end pair should still work.
+        kernel.begin_preset_transition();
+        assert!(kernel.transition_active());
+        kernel.end_preset_transition();
+        assert!(!kernel.transition_active());
     }
 
     /// Watchdog regression: if Swift sets transition_active but never clears
