@@ -909,6 +909,26 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		paramNamesDidChange.send(currentParamNames)
 	}
 
+	/// Mark the start of a preset-load window. The audio thread ramps the
+	/// output to silence and *holds* silence — even after a backend swap —
+	/// until `endPresetTransition` is called. Idempotent.
+	///
+	/// Wrap any code path that mutates kernel parameters or stages a new
+	/// backend so the OLD backend can't be heard rendering audio with the
+	/// NEW preset's parameter values during the load window. The kernel's
+	/// existing 15 ms swap envelope only covers the backend-swap moment,
+	/// not the parameter-mutation window that opens earlier.
+	public func beginPresetTransition() {
+		dsp_kernel_begin_preset_transition(kernel)
+	}
+
+	/// Release the mute hold set by `beginPresetTransition`. The audio
+	/// thread observes the cleared flag on its next callback and ramps the
+	/// output back to full level via FADE_IN. Idempotent.
+	public func endPresetTransition() {
+		dsp_kernel_end_preset_transition(kernel)
+	}
+
 	/// Hot-reload a Python DSP script from source code.
 	/// Writes the source to a temp file and calls dsp_kernel_load_script.
 	/// On success, benchmarks the process function and returns timing info.
@@ -1390,6 +1410,12 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			let languageRaw = state[Self.scriptLanguageKey] as? String ?? "python"
 			let language = ScriptLanguage(rawValue: languageRaw) ?? .python
 
+			// Hold the audio output muted across the kernel reload — same
+			// reason as `selectPreset`. fullState restore happens at session
+			// reopen and DAW preset recall, both of which can otherwise click.
+			dsp_kernel_begin_preset_transition(kernel)
+			defer { dsp_kernel_end_preset_transition(kernel) }
+
 			switch language {
 			case .python:
 				let result = reloadScript(source: source)
@@ -1448,6 +1474,15 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			pluginLog.error("Failed to load preset source: \(preset.name, privacy: .public)")
 			return ScriptSaveResult(success: false, error: "Failed to load preset source", processTimeMs: nil, budgetMs: nil)
 		}
+
+		// Hold the audio output muted across the entire load window. The OLD
+		// backend keeps rendering while we mutate parameters and stage the new
+		// backend; without the mute it would be heard rendering audio with the
+		// new preset's parameter values (huge discontinuities → loud click).
+		// The kernel's existing 5 ms swap envelope only covers the backend
+		// swap moment, not the parameter-mutation window we open below.
+		dsp_kernel_begin_preset_transition(kernel)
+		defer { dsp_kernel_end_preset_transition(kernel) }
 
 		// CRITICAL ORDERING: apply manifest params BEFORE
 		// `pm.setCurrentPreset`. setCurrentPreset triggers the SwiftUI
@@ -1543,6 +1578,12 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				return
 			}
 
+			// Hold the audio output muted across the entire load window — same
+			// reason as `selectPreset`. The Rust path defers `end` into the
+			// async Task continuation since `compileAndRun` may take seconds
+			// for a wasm compile.
+			dsp_kernel_begin_preset_transition(kernel)
+
 			// Apply manifest params BEFORE load — lets the custom UI
 			// render immediately without waiting for rustc / kernel.
 			applyManifestParams(presetBundle.manifest.resolvedParamMetadata())
@@ -1556,17 +1597,20 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					scriptSourceDidChange.send(ScriptSourceChange(source: source))
 					pluginLog.info("Loaded factory preset: \(entry.name, privacy: .public)")
 				}
+				dsp_kernel_end_preset_transition(kernel)
 			case .rust:
 				// Show source immediately, then compile async
 				currentScriptSource = source
 				currentScriptLanguage = .rust
 				scriptSourceDidChange.send(ScriptSourceChange(source: source))
 				pluginLog.info("Loaded Rust factory preset: \(entry.name, privacy: .public)")
+				let kernelRef = kernel
 				Task {
 					let result = await self.compileAndRun(source: source)
 					if !result.success {
 						pluginLog.error("Failed to compile Rust factory preset: \(result.error ?? "unknown", privacy: .public)")
 					}
+					dsp_kernel_end_preset_transition(kernelRef)
 				}
 			}
 

@@ -140,6 +140,11 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         guard let source = input["source"] as? String else {
             return MCPCompileResult(json: jsonStr(["error": "Missing required parameter: source"]), isError: true)
         }
+        // Mute output across the kernel reload so the OLD backend doesn't
+        // click against new parameter defaults emitted by `compileAndRun`'s
+        // post-load tree rebuild.
+        beginPresetTransition()
+        defer { endPresetTransition() }
         let result = await compileAndRun(source: source)
         if result.success {
             mcpLastError = nil
@@ -432,6 +437,14 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 scaffoldUI: scaffoldUI
             )
 
+            // Hold the audio output muted across param-tree mutation +
+            // kernel reload. Same reason as `selectPreset`: the OLD
+            // backend keeps rendering with the NEW preset's parameter
+            // values until the new backend is staged and the swap
+            // envelope completes.
+            beginPresetTransition()
+            defer { endPresetTransition() }
+
             // CRITICAL: apply the new bundle's manifest params BEFORE
             // setCurrentPreset + compileAndRun. Fresh user bundles have
             // no `params` block in manifest.json, so
@@ -650,6 +663,11 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                     "kernel_reloaded": false,
                 ]), true)
             }
+
+            // Hold the audio output muted across param-tree mutation +
+            // kernel reload (same reason as `save_preset` / `selectPreset`).
+            beginPresetTransition()
+            defer { endPresetTransition() }
 
             // Now safe to mutate AU state. Same param-tree handoff
             // as save_preset: apply the new bundle's manifest params

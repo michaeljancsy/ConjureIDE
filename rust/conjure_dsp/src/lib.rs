@@ -68,6 +68,44 @@ pub unsafe extern "C" fn dsp_kernel_set_bypassed(kernel: DSPKernelRef, bypass: b
     (*kernel).set_bypassed(bypass);
 }
 
+/// Mark the start of a preset-load window. The audio thread ramps the output
+/// to silence (5 ms fade-out) and holds silence — even after a backend swap —
+/// until `dsp_kernel_end_preset_transition` is called. Idempotent.
+///
+/// Wrap every code path that mutates kernel parameters or stages a new backend
+/// (`selectPreset`, `currentPreset` setter, MCP `save_preset`, `fullState`
+/// restore, etc.) so the OLD backend can't be heard rendering audio with the
+/// NEW preset's parameter values during the load window.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_begin_preset_transition(kernel: DSPKernelRef) {
+    (*kernel).begin_preset_transition();
+}
+
+/// Release the mute hold set by `dsp_kernel_begin_preset_transition`. The
+/// audio thread observes the cleared flag on its next callback and ramps the
+/// output back to full level via FADE_IN. Idempotent.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_end_preset_transition(kernel: DSPKernelRef) {
+    (*kernel).end_preset_transition();
+}
+
+/// Returns the current swap-state-machine phase
+/// (0 = IDLE, 1 = FADE_OUT, 2 = FADE_IN). Diagnostic only — used by tests
+/// to verify the kernel returned to IDLE after a preset transition.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_swap_phase(kernel: DSPKernelRef) -> u8 {
+    (*kernel).swap_phase()
+}
+
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 #[no_mangle]
