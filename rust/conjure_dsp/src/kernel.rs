@@ -25,10 +25,12 @@ const DEMO_FADE_MS: f64 = 5.0;
 
 /// Length of each fade ramp (out and in) applied around a backend swap, in milliseconds.
 /// Total silenced window across a swap is ~2 * SWAP_FADE_MS.
-/// 5 ms is well below human click-perception threshold and short enough to feel
-/// instantaneous, while long enough to fully absorb a step discontinuity between
-/// two arbitrary DSP backends with different state.
-const SWAP_FADE_MS: f64 = 5.0;
+/// 15 ms (industry-standard for plugin preset declick) is short enough to feel
+/// instantaneous yet long enough to fully absorb step discontinuities between
+/// two arbitrary DSP backends with different state, including DC offsets and
+/// the difference between large reverb tails and dry signal. Earlier value of
+/// 5 ms produced audible clicks on some backend transitions in Logic Pro.
+const SWAP_FADE_MS: f64 = 15.0;
 
 /// Swap state machine values stored in `DSPKernel::swap_phase` (AtomicU8).
 const SWAP_PHASE_IDLE: u8 = 0;
@@ -2735,7 +2737,8 @@ mod tests {
         // Capture the audio across the entire swap window. Process in 64-frame
         // chunks (mirroring a small DAW callback) and concatenate.
         const CHUNK: u32 = 64;
-        const NUM_CHUNKS: usize = 16; // 16 * 64 = 1024 samples ≫ 440-sample fade
+        // 32 * 64 = 2048 samples ≫ 1320-sample fade window (15 ms × 2 @ 44.1 kHz).
+        const NUM_CHUNKS: usize = 32;
         let mut captured: Vec<f32> = Vec::with_capacity(CHUNK as usize * NUM_CHUNKS);
         for _ in 0..NUM_CHUNKS {
             let mut out = vec![0.0f32; CHUNK as usize];
@@ -2840,15 +2843,15 @@ mod tests {
         }
         assert!(warm.iter().all(|&v| (v - 0.5).abs() < 1e-6));
 
-        // Stage B. Fade length at 44.1 kHz is ~220 samples (5 ms). Run a
+        // Stage B. Fade length at 44.1 kHz is ~661 samples (15 ms). Run a
         // fade-out + just part of fade-in so we catch it mid-fade-in.
         assert!(kernel.load_wasm(&wasm_b));
         const CHUNK: u32 = 64;
         let mut captured: Vec<f32> = Vec::new();
-        // 8 * 64 = 512 samples — 220 fade-out + 220 fade-in would complete at
-        // ~440 samples, so after 8 chunks we're well into the FADE_IN half
-        // but not necessarily done.
-        for _ in 0..4 {
+        // 12 * 64 = 768 samples — 661 fade-out completes around chunk 11,
+        // so by chunk 12 we're a few samples into FADE_IN but nowhere near
+        // its 661-sample completion.
+        for _ in 0..12 {
             let mut out = vec![0.0f32; CHUNK as usize];
             unsafe {
                 let ip: *const f32 = input.as_ptr();
@@ -2863,8 +2866,8 @@ mod tests {
         let phase_before_interrupt = kernel.swap_phase.load(Ordering::Acquire);
         assert_eq!(
             phase_before_interrupt, SWAP_PHASE_FADE_IN,
-            "precondition: should be mid fade-in after 4 chunks (256 samples, \
-             fade-out was 220) but phase = {}",
+            "precondition: should be mid fade-in after 12 chunks (768 samples, \
+             fade-out was 661) but phase = {}",
             phase_before_interrupt
         );
         assert!(kernel.load_wasm(&wasm_c));
@@ -2946,9 +2949,10 @@ mod tests {
         // Stage B and pump enough audio to complete fade-out + fade-in so the
         // swap has fully landed and `swap_phase` is back to IDLE. At that
         // point pending holds the *old* A and live holds the new B.
+        // Need ≥ 1322 samples (15 ms × 2 fade @ 44.1 kHz); 32 × 64 = 2048.
         assert!(kernel.load_wasm(&wasm_b));
         let input = vec![1.0f32; 64];
-        for _ in 0..16 {
+        for _ in 0..32 {
             let mut out = vec![0.0f32; 64];
             unsafe {
                 let ip: *const f32 = input.as_ptr();
