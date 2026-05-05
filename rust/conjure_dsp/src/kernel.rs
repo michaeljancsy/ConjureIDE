@@ -1399,18 +1399,24 @@ impl DSPKernel {
             max_time
         };
 
-        // Wait for any in-flight swap to complete before benchmarking. While
-        // a swap is pending or mid-fade, the newest backend lives in
-        // `pending_backend` and benchmarking it there would require holding
-        // `pending_backend.lock()` for ~50-100 ms — long enough to block the
-        // audio thread's `perform_swap_locked` from ever progressing, which
-        // strands the envelope at zero gain and produces an audible silence
-        // dropout. Instead, poll `swap_phase` (Acquire) until the audio thread
-        // has completed the swap and reached `IDLE`, at which point the
-        // newest backend is in the live slot.
+        // Wait for the staged swap to actually land in the live slot before
+        // benchmarking. While a swap is pending or in flight, the newest
+        // backend lives in `pending_backend`; benchmarking it there would
+        // require holding `pending_backend.lock()` for ~50-100 ms — long
+        // enough to block the audio thread's `perform_swap_locked` from ever
+        // progressing, which strands the envelope at zero gain.
+        //
+        // Poll `pending_backend_fresh` (cleared by the audio thread after
+        // `perform_swap_locked` succeeds) rather than `swap_phase == IDLE`.
+        // During a held preset transition (Swift wrapped this load in
+        // `begin_preset_transition` / `end_preset_transition`) the audio
+        // thread parks in `FADE_OUT` indefinitely after the swap, so polling
+        // for IDLE would always time out — but `pending_backend_fresh` clears
+        // as soon as the swap actually completes, regardless of whether the
+        // envelope advances to FADE_IN or stays parked.
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
-        while self.swap_phase.load(Ordering::Acquire) != SWAP_PHASE_IDLE
-            || self.pending_stage_request.load(Ordering::Acquire)
+        while self.pending_stage_request.load(Ordering::Acquire)
+            || self.pending_backend_fresh.load(Ordering::Acquire)
         {
             if std::time::Instant::now() >= deadline {
                 // Swap is wedged or taking longer than expected — bail out
@@ -3466,6 +3472,73 @@ mod tests {
         assert!(!kernel.pending_backend_fresh.load(Ordering::Acquire),
                 "fresh flag should be cleared after the contended swap retries and succeeds");
         assert_eq!(kernel.swap_phase(), SWAP_PHASE_IDLE);
+    }
+
+    /// Regression test for Sentry Seer review on PR #283: `benchmark_process`
+    /// must not time out when called inside a held preset transition. Pre-fix,
+    /// the poll waited for `swap_phase == IDLE`, which stays in FADE_OUT for
+    /// the entire transition window — so every preset load incurred a 100 ms
+    /// stall on the main thread and lost the benchmark result. Post-fix, the
+    /// poll waits for `pending_backend_fresh` to clear (which happens as soon
+    /// as the swap lands, regardless of whether the envelope advances to
+    /// FADE_IN or stays parked).
+    #[test]
+    fn test_benchmark_process_during_held_transition_does_not_time_out() {
+        let wasm = gain_half_wasm();
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm));
+        kernel.initialize(1, 1, 44100.0);
+
+        // Warm up so a first-load fast path didn't apply (we need the
+        // staging path for the next load to actually exercise the swap).
+        let input = vec![1.0f32; 64];
+        let mut warm = vec![0.0f32; 64];
+        unsafe {
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = warm.as_mut_ptr();
+            kernel.process(&ip, &op, 1, 64);
+        }
+
+        // Begin a transition (depth=1) — audio thread will park in FADE_OUT
+        // and never reach IDLE until end is called.
+        kernel.begin_preset_transition();
+
+        // Stage a new backend (mirrors what `compileAndRun` does before
+        // benchmarking).
+        let wasm_b = gain_half_wasm();
+        assert!(kernel.load_wasm(&wasm_b));
+
+        // Drive enough callbacks to let the audio thread complete the swap.
+        // FADE_OUT is 661 samples at 44.1 kHz; 16 × 64 = 1024 samples.
+        const CHUNK: u32 = 64;
+        for _ in 0..16 {
+            let mut out = vec![0.0f32; CHUNK as usize];
+            unsafe {
+                let ip: *const f32 = input.as_ptr();
+                let op: *mut f32 = out.as_mut_ptr();
+                kernel.process(&ip, &op, 1, CHUNK);
+            }
+        }
+        // Sanity: phase is held in FADE_OUT, but the swap landed
+        // (pending_backend_fresh was cleared by perform_swap_locked).
+        assert_eq!(kernel.swap_phase(), SWAP_PHASE_FADE_OUT,
+                   "transition should hold us in FADE_OUT");
+        assert!(!kernel.pending_backend_fresh.load(Ordering::Acquire),
+                "swap should have completed during the held transition");
+
+        // Benchmark should run quickly (no 100 ms timeout) and return Some.
+        let start = std::time::Instant::now();
+        let result = kernel.benchmark_process();
+        let elapsed = start.elapsed();
+
+        assert!(result.is_some(),
+                "benchmark must succeed during a held transition (got None)");
+        assert!(elapsed < std::time::Duration::from_millis(50),
+                "benchmark should not have polled near the 100 ms timeout (took {:?})",
+                elapsed);
+
+        // Cleanup.
+        kernel.end_preset_transition();
     }
 
     /// Saturating end: a stray `end_preset_transition` with no matching
