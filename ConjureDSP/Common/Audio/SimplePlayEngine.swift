@@ -138,14 +138,14 @@ public class SimplePlayEngine {
         let newFile = try AVAudioFile(forReading: fileURL)
         self.file = newFile
 
-        if let avAudioUnit = self.avAudioUnit, avAudioUnit.wantsAudioInput {
-            // Rewire: player → AU → mixer with new format
-            engine.disconnectNodeInput(avAudioUnit)
-            engine.disconnectNodeInput(engine.mainMixerNode)
-            engine.connect(player, to: avAudioUnit, format: newFile.processingFormat)
-            engine.connect(avAudioUnit, to: engine.mainMixerNode, format: newFile.processingFormat)
+        if let avAudioUnit = self.avAudioUnit {
+            // Full detach + reattach so the AU re-allocates render resources
+            // for the new format. The cheaper disconnectNodeInput + connect
+            // path leaves stale allocated state across channel-count changes
+            // (e.g. stereo → mono), and the next engine.start() then fails to
+            // produce a first I/O tick.
+            connect(avAudioUnit: avAudioUnit)
         } else {
-            // No AU or AU doesn't want audio input: player → mixer
             engine.connect(player, to: engine.mainMixerNode, format: newFile.processingFormat)
         }
 
@@ -220,21 +220,7 @@ public class SimplePlayEngine {
         }
 
         if avAudioUnit.wantsAudioInput {
-            // macOS 26 tightened AVFAudio's preconditions on AVAudioPlayerNode:
-            // play() throws synchronously with reason 'player did not see an
-            // IO cycle' if the I/O thread hasn't pulled the player at least
-            // once. engine.start() returns as soon as it hands off to the I/O
-            // thread, so play() back-to-back loses the race every time.
-            //
-            // The robust workaround is play(at:) with a future host time.
-            // AVFAudio queues a deferred-start command onto the render thread,
-            // which fires when the render clock crosses `when` — by which
-            // point the I/O thread has rendered at least one tick and the
-            // precondition is satisfied. The user-visible delay is ~50 ms and
-            // imperceptible in a play-button press.
-            let leadHostTicks = AVAudioTime.hostTime(forSeconds: 0.050)
-            let when = AVAudioTime(hostTime: mach_absolute_time() + leadHostTicks)
-            player.play(at: when)
+            player.play()
         }
 
         isPlaying = true
