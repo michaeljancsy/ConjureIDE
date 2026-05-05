@@ -1641,8 +1641,16 @@ impl DSPKernel {
                                 .swap(false, Ordering::AcqRel);
                             let depth = self.transition_depth.load(Ordering::Acquire);
                             if do_swap {
-                                self.perform_swap_locked(&mut *guard);
-                                if depth > 0 {
+                                let installed = self.perform_swap_locked(&mut *guard);
+                                if !installed {
+                                    // `pending_backend` was contended (e.g.
+                                    // main thread mid-inject_nam_slot). Restore
+                                    // the fresh-stage signal so the next
+                                    // callback retries — otherwise the staged
+                                    // backend would be stranded forever.
+                                    self.pending_backend_fresh
+                                        .store(true, Ordering::Release);
+                                } else if depth > 0 {
                                     // Held transition — park back in FADE_OUT
                                     // at silence. perform_swap_locked just
                                     // advanced us to FADE_IN; override.
@@ -1816,18 +1824,19 @@ impl DSPKernel {
     /// has reached zero. Caller must hold a `MutexGuard` for `self.backend` so we
     /// can mutate the live slot in place.
     ///
-    /// Tries (non-blocking) to take the staged backend out of `pending_backend`
-    /// and install it. The previously live backend is parked back into
+    /// Returns `true` if the swap completed (or there was nothing pending to
+    /// install — the no-op case still counts as "done"). Returns `false` when
+    /// `pending_backend` is contended (e.g. main thread mid-`inject_nam_slot`)
+    /// — the caller must keep the staged-fresh signal high so a later
+    /// callback retries instead of dropping the new backend on the floor.
+    ///
+    /// On success, the previously live backend is parked back into
     /// `pending_backend` so the *next* main-thread `load_*` call drops it on a
     /// non-real-time thread (avoiding allocator/GIL work on the audio thread).
-    ///
-    /// If `pending_backend` is contended (main thread mid-stage) we silently
-    /// skip the swap; the next callback will retry, with `swap_phase` still
-    /// `FADE_OUT` and `swap_fade_remaining` still `0` (so the envelope keeps
-    /// outputting silence in the meantime).
-    fn perform_swap_locked(&self, live: &mut Option<Box<dyn Backend>>) {
+    fn perform_swap_locked(&self, live: &mut Option<Box<dyn Backend>>) -> bool {
         let Ok(mut pending) = self.pending_backend.try_lock() else {
-            return;
+            // Contended — caller must restore the fresh-stage signal.
+            return false;
         };
         if pending.is_none() {
             // No backend staged — nothing to install. Transition straight to
@@ -1836,7 +1845,7 @@ impl DSPKernel {
             self.swap_fade_remaining.store(len, Ordering::Relaxed);
             self.swap_phase
                 .store(SWAP_PHASE_FADE_IN, Ordering::Release);
-            return;
+            return true;
         }
         // Move new → live, old → pending (where main thread will drop it).
         std::mem::swap(live, &mut *pending);
@@ -1856,6 +1865,7 @@ impl DSPKernel {
         self.swap_fade_remaining.store(len, Ordering::Relaxed);
         self.swap_phase
             .store(SWAP_PHASE_FADE_IN, Ordering::Release);
+        true
     }
 
     /// Clamp all output samples to [-1.0, 1.0] to prevent dangerously loud output.
@@ -3382,6 +3392,80 @@ mod tests {
         assert!(final_peak < 1e-3,
                 "live backend after transition must be B (silence), got peak {} \
                  (looks like A oscillated back into live)", final_peak);
+    }
+
+    /// Regression test for Sentry Seer review on PR #283: if `perform_swap_locked`
+    /// fails to acquire the `pending_backend` lock (e.g. main thread is mid
+    /// `inject_nam_slot`), the fresh-stage flag must NOT stay cleared — otherwise
+    /// the staged backend is stranded forever. The retry path restores the flag
+    /// so the next callback re-attempts the swap.
+    #[test]
+    fn test_preset_transition_swap_retries_under_contention() {
+        let wasm_a = gain_half_wasm();
+        let wasm_b = gain_half_wasm();
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm_a));
+        kernel.initialize(1, 1, 44100.0);
+
+        // Warm up.
+        let input = vec![1.0f32; 64];
+        let mut warm = vec![0.0f32; 64];
+        unsafe {
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = warm.as_mut_ptr();
+            kernel.process(&ip, &op, 1, 64);
+        }
+
+        // Stage B. This sets pending_backend_fresh = true.
+        assert!(kernel.load_wasm(&wasm_b));
+        // Sanity: fresh flag is set.
+        assert!(kernel.pending_backend_fresh.load(Ordering::Acquire));
+
+        // Simulate `inject_nam_slot` holding `pending_backend.lock()` across
+        // the next several render callbacks — this is exactly the contention
+        // case that previously stranded the staged backend. Raw-pointer
+        // escape so the same test thread can both hold the lock AND drive
+        // `process` (which takes `&mut self` but only touches disjoint
+        // fields). In production these run on different threads.
+        let kernel_ptr: *mut DSPKernel = &mut kernel;
+        const CHUNK: u32 = 64;
+        {
+            let _pending_guard = unsafe { (*kernel_ptr).pending_backend.lock().unwrap() };
+
+            // Run enough callbacks to complete FADE_OUT and reach the swap point.
+            // Pre-fix: the FADE_OUT-completion site would consume the fresh flag,
+            // call perform_swap_locked, which bails on contention, leaving the
+            // flag false — staged backend stranded.
+            for _ in 0..16 {
+                let mut out = vec![0.0f32; CHUNK as usize];
+                unsafe {
+                    let ip: *const f32 = input.as_ptr();
+                    let op: *mut f32 = out.as_mut_ptr();
+                    (*kernel_ptr).process(&ip, &op, 1, CHUNK);
+                }
+            }
+
+            // The fresh flag must STILL be set — every contended attempt should
+            // restore it so the swap can retry once the lock frees.
+            assert!(unsafe { (*kernel_ptr).pending_backend_fresh.load(Ordering::Acquire) },
+                    "fresh flag must be restored when perform_swap_locked is contended");
+        }
+
+        // Run more callbacks (lock now released); the swap goes through.
+        for _ in 0..32 {
+            let mut out = vec![0.0f32; CHUNK as usize];
+            unsafe {
+                let ip: *const f32 = input.as_ptr();
+                let op: *mut f32 = out.as_mut_ptr();
+                kernel.process(&ip, &op, 1, CHUNK);
+            }
+        }
+
+        // Fresh flag is now consumed (swap actually happened) and we returned
+        // to IDLE.
+        assert!(!kernel.pending_backend_fresh.load(Ordering::Acquire),
+                "fresh flag should be cleared after the contended swap retries and succeeds");
+        assert_eq!(kernel.swap_phase(), SWAP_PHASE_IDLE);
     }
 
     /// Saturating end: a stray `end_preset_transition` with no matching
