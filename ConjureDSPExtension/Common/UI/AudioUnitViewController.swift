@@ -405,6 +405,11 @@ pub extern "C" fn process(
             guard let au else {
                 return ScriptSaveResult(success: false, error: "Audio unit not available", processTimeMs: nil, budgetMs: nil)
             }
+            // Mute output across the load window so a new backend with
+            // different default parameter values doesn't click against the
+            // old backend's continuous DSP state.
+            au.beginPresetTransition()
+            defer { au.endPresetTransition() }
             let result = await au.compileAndRun(source: source)
             Analytics.track(.scriptRun, properties: [
                 "language": ScriptLanguage.detect(from: source).rawValue,
@@ -464,6 +469,8 @@ pub extern "C" fn process(
 
                 switch language {
                 case .python:
+                    au.beginPresetTransition()
+                    defer { au.endPresetTransition() }
                     let result = au.reloadScript(source: source)
                     pm.setCurrentPreset(saved, source: source)
                     doCommit(result.success)
@@ -513,6 +520,8 @@ pub extern "C" fn process(
 
                 switch language {
                 case .python:
+                    au.beginPresetTransition()
+                    defer { au.endPresetTransition() }
                     let result = au.reloadScript(source: source)
                     pm.setCurrentPreset(saved, source: source)
                     doCommit(result.success)
@@ -618,6 +627,14 @@ pub extern "C" fn process(
                     guard success, let gc, let fileURL = commitURL, let message = commitMessage else { return }
                     Task { _ = await gc.recordSave(paths: [fileURL], message: message) }
                 }
+
+                // Hold the audio output muted across param-tree mutation +
+                // kernel reload. Same reason as `selectPreset`: the OLD
+                // backend keeps rendering with the NEW preset's parameter
+                // values until the new backend is staged and the swap
+                // envelope completes.
+                au.beginPresetTransition()
+                defer { au.endPresetTransition() }
 
                 // CRITICAL ORDERING (mirrors selectPreset): apply
                 // manifest params or reset to a generic tree BEFORE
