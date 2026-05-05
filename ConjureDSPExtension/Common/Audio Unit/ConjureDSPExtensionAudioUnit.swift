@@ -608,8 +608,18 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		buildParameterTree()
 
-		// Load the bundled Python DSP script
-		loadPythonScript()
+		// Don't auto-load any script here. The host (Logic, Ableton, etc.)
+		// drives script selection via `currentPreset` or `fullState`. Until
+		// the host asserts something, the kernel renders passthrough — its
+		// built-in silence-safe fallback. For non-DAW hosts that never set
+		// `currentPreset` (auval, standalone AU testers), the view
+		// controller's `startRuntimePolling` calls `retryLoadDefaultPreset`
+		// once Python is ready, which falls back to the bundled default.
+		//
+		// Removing the auto-load here closes the init race where the AU
+		// would load `defaultPresetResource`, then the host would
+		// immediately assert `currentPreset = factoryPresets[0]` over XPC
+		// and clobber the just-loaded state.
 
 		startKernelPollTimer()
 	}
@@ -713,11 +723,32 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
-	/// Attempt to load the default preset. Used by the UI to retry after the
-	/// Python runtime is provisioned on first launch. Returns true if the
-	/// script loaded successfully (and fires scriptSourceDidChange).
+	/// Attempt to load a script after the Python runtime becomes available.
+	/// Called by the UI's runtime-polling fallback once the Terminal companion
+	/// finishes provisioning Python.
+	///
+	/// Order of preference:
+	///   1. If the host asserted `currentPreset` already (Logic does this on
+	///      AU init via XPC), replay that selection — re-fires the
+	///      `currentPreset` setter, which loads the right factory preset.
+	///   2. Otherwise (auval, standalone AU testers), fall back to the AU's
+	///      bundled default (`defaultPresetResource`).
+	///
+	/// Returns true if a script ended up loaded (and `scriptSourceDidChange`
+	/// was fired).
 	func retryLoadDefaultPreset() -> Bool {
 		guard currentScriptSource == nil else { return true }
+
+		// (1) Host already chose — replay that. The setter loads the
+		// factory bundle, calls `applyManifestParams`, kicks off
+		// `reloadScript` (or async wasm compile), and fires
+		// `scriptSourceDidChange` itself — no manual re-fire needed.
+		if let pinned = _currentPreset, pinned.number >= 0 {
+			currentPreset = pinned
+			return currentScriptSource != nil
+		}
+
+		// (2) No host assertion — load the bundled default.
 		loadPythonScript()
 		if let source = currentScriptSource {
 			scriptSourceDidChange.send(ScriptSourceChange(source: source))
@@ -1614,13 +1645,19 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				}
 			}
 
-			// Update preset manager if it exists (dispatch to main actor)
-			if let pm = _presetManager {
-				let presetNumber = preset.number
-				Task { @MainActor in
-					let factoryPreset = pm.presets.first { $0.factoryPresetNumber == presetNumber }
-					pm.setCurrentPreset(factoryPreset, source: source)
-				}
+			// Update preset manager so the picker stays in sync with what
+			// Logic set. Use the lazy `presetManager` accessor (not the
+			// `_presetManager` private var): when Logic calls this setter
+			// over XPC during AU init, _presetManager is still nil because
+			// nothing on @MainActor has accessed it yet. Reading the public
+			// computed property inside the Task creates it lazily on main.
+			let presetNumber = preset.number
+			let presetSource = source
+			Task { @MainActor [weak self] in
+				guard let self else { return }
+				let pm = self.presetManager
+				let factoryPreset = pm.presets.first { $0.factoryPresetNumber == presetNumber }
+				pm.setCurrentPreset(factoryPreset, source: presetSource)
 			}
 		}
 	}
