@@ -246,6 +246,15 @@ pub struct DSPKernel {
     /// transition preserves gain continuity (rem_out = len − rem_in) so rapid
     /// preset switches mid-fade don't click.
     pending_stage_request: AtomicBool,
+    /// `true` while `pending_backend` holds a freshly-staged backend that
+    /// hasn't yet been swapped into `live`. Set by `stage_backend_for_swap`
+    /// after writing to `pending_backend`; cleared by `perform_swap_locked`
+    /// once the swap completes. The audio thread checks this before calling
+    /// `perform_swap_locked` so a held preset transition (parked in FADE_OUT
+    /// with rem=0 across many callbacks) doesn't oscillate the live ↔ pending
+    /// slots — after the first swap, pending holds the *old* backend parked
+    /// for deferred drop, and re-swapping would clobber it.
+    pending_backend_fresh: AtomicBool,
     /// Reference count of in-flight preset-load transitions. While > 0 the
     /// audio thread holds output muted (FADE_OUT with `swap_fade_remaining == 0`)
     /// and refuses to advance to FADE_IN even after a backend swap completes.
@@ -373,6 +382,7 @@ impl DSPKernel {
             // requested before `initialize()` still gets a sensible fade length.
             swap_fade_length: AtomicU32::new((SWAP_FADE_MS / 1000.0 * 44100.0) as u32),
             pending_stage_request: AtomicBool::new(false),
+            pending_backend_fresh: AtomicBool::new(false),
             transition_depth: AtomicI32::new(0),
             transition_watchdog_samples: AtomicU32::new(0),
         }
@@ -1055,6 +1065,14 @@ impl DSPKernel {
                 *staged_defaults = defaults;
             }
         }
+        // Mark pending as fresh BEFORE raising pending_stage_request. The audio
+        // thread's Acquire load on pending_stage_request synchronizes with both
+        // writes; combined with the perform_swap_locked code path, this means
+        // the audio thread will only swap when there's actually a new backend
+        // to install — never re-swap the parked old backend during a held
+        // transition.
+        self.pending_backend_fresh
+            .store(true, Ordering::Release);
         // Raise the request flag after the backend + defaults are published so
         // the Acquire load on the audio side synchronizes with those writes.
         self.pending_stage_request
@@ -1195,6 +1213,8 @@ impl DSPKernel {
         // Make sure we're not stuck in a fade phase from a previous swap.
         self.swap_phase.store(SWAP_PHASE_IDLE, Ordering::Release);
         self.swap_fade_remaining.store(0, Ordering::Relaxed);
+        // Cold path didn't go through stage; nothing fresh in pending.
+        self.pending_backend_fresh.store(false, Ordering::Release);
     }
 
     /// True if the live backend slot is empty (no backend has been installed yet).
@@ -1606,21 +1626,44 @@ impl DSPKernel {
                 if self.swap_fade_remaining.load(Ordering::Relaxed) == 0 {
                     match phase {
                         SWAP_PHASE_FADE_OUT => {
-                            // We hold the live backend lock — perform the swap
-                            // here so the very next callback starts processing
-                            // the new backend. `perform_swap_locked` advances
-                            // the phase to FADE_IN (or leaves it in FADE_OUT
-                            // if no backend is staged). When `transition_active`
-                            // is set, override that advancement and park the
-                            // machine back in FADE_OUT with rem=0 so the
-                            // envelope keeps muting output until Swift clears
-                            // the flag via end_preset_transition.
-                            self.perform_swap_locked(&mut *guard);
-                            if self.transition_depth.load(Ordering::Acquire) > 0 {
-                                self.swap_fade_remaining.store(0, Ordering::Relaxed);
+                            // Only swap when pending actually holds a freshly-
+                            // staged backend. Without this gate, a held
+                            // transition (parked in FADE_OUT/rem=0 across
+                            // many callbacks) would call perform_swap_locked
+                            // every callback — and after the first swap,
+                            // pending holds the parked OLD, so subsequent
+                            // calls would oscillate live ↔ pending and leave
+                            // a non-deterministic backend in `live` when the
+                            // transition ends. Reading the fresh flag with
+                            // AcqRel swap atomically claims the swap right.
+                            let do_swap = self
+                                .pending_backend_fresh
+                                .swap(false, Ordering::AcqRel);
+                            let depth = self.transition_depth.load(Ordering::Acquire);
+                            if do_swap {
+                                self.perform_swap_locked(&mut *guard);
+                                if depth > 0 {
+                                    // Held transition — park back in FADE_OUT
+                                    // at silence. perform_swap_locked just
+                                    // advanced us to FADE_IN; override.
+                                    self.swap_fade_remaining.store(0, Ordering::Relaxed);
+                                    self.swap_phase
+                                        .store(SWAP_PHASE_FADE_OUT, Ordering::Release);
+                                }
+                            } else if depth == 0 {
+                                // No fresh backend AND transition has ended:
+                                // advance to FADE_IN with whatever is in
+                                // `live` (mirrors the pending-is-none branch
+                                // of perform_swap_locked) so we ramp audio
+                                // back up. Don't touch pending — it holds
+                                // the parked OLD for deferred drop.
+                                let len = self.swap_fade_length.load(Ordering::Relaxed);
+                                self.swap_fade_remaining.store(len, Ordering::Relaxed);
                                 self.swap_phase
-                                    .store(SWAP_PHASE_FADE_OUT, Ordering::Release);
+                                    .store(SWAP_PHASE_FADE_IN, Ordering::Release);
                             }
+                            // else: held transition with no fresh stage —
+                            // stay parked in FADE_OUT/rem=0.
                         }
                         SWAP_PHASE_FADE_IN => {
                             self.swap_phase.store(SWAP_PHASE_IDLE, Ordering::Release);
@@ -3253,6 +3296,92 @@ mod tests {
         }
         assert_eq!(kernel.swap_phase(), SWAP_PHASE_IDLE,
                    "kernel should return to IDLE once depth is 0 + fade-in completes");
+    }
+
+    /// Regression test for Sentry Seer review on PR #283: during a held
+    /// preset transition (parked in FADE_OUT / rem=0 across many callbacks),
+    /// the FADE_OUT-completion site was calling `perform_swap_locked` every
+    /// callback. After the first swap installs NEW into live and parks OLD
+    /// in pending, each subsequent call would re-swap them, leaving a
+    /// non-deterministic backend live when the transition ended. Verify the
+    /// `pending_backend_fresh` gate now installs the new backend exactly
+    /// once and leaves it there.
+    #[test]
+    fn test_preset_transition_swap_runs_at_most_once_during_hold() {
+        // Backend A produces 0.5; backend B produces 0.0. After the swap
+        // completes, the LIVE slot must be B regardless of how many
+        // callbacks elapse during the hold.
+        let wasm_a = gain_half_wasm();
+        let wasm_b = wat::parse_str(r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                (local $i i32)
+                (local $total i32)
+                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (block $break
+                  (loop $loop
+                    (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
+                    (f32.store
+                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (f32.const 0.0)
+                    )
+                    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                    (br $loop)
+                  )
+                )
+              )
+            )
+        "#).expect("Failed to parse silence WAT");
+
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_wasm(&wasm_a));
+        kernel.initialize(1, 1, 44100.0);
+
+        // Warm up so A is producing 0.5 steady state.
+        let input = vec![1.0f32; 64];
+        let mut warm = vec![0.0f32; 64];
+        unsafe {
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = warm.as_mut_ptr();
+            kernel.process(&ip, &op, 1, 64);
+        }
+
+        kernel.begin_preset_transition();
+        // Stage B during the hold.
+        assert!(kernel.load_wasm(&wasm_b));
+
+        // Process a LARGE number of callbacks while the transition is held.
+        // Pre-fix this would oscillate live ↔ pending on every callback past
+        // the first FADE_OUT-completion (≥ chunk 11 at 44.1 kHz / 64 frames).
+        const CHUNK: u32 = 64;
+        for _ in 0..100 {
+            let mut out = vec![0.0f32; CHUNK as usize];
+            unsafe {
+                let ip: *const f32 = input.as_ptr();
+                let op: *mut f32 = out.as_mut_ptr();
+                kernel.process(&ip, &op, 1, CHUNK);
+            }
+        }
+
+        // End the transition and process enough callbacks to drain FADE_IN.
+        kernel.end_preset_transition();
+        let mut final_out = vec![0.0f32; CHUNK as usize];
+        for _ in 0..32 {
+            unsafe {
+                let ip: *const f32 = input.as_ptr();
+                let op: *mut f32 = final_out.as_mut_ptr();
+                kernel.process(&ip, &op, 1, CHUNK);
+            }
+        }
+        assert_eq!(kernel.swap_phase(), SWAP_PHASE_IDLE);
+
+        // The live backend must be B (silence), not A (0.5). Pre-fix, an
+        // odd number of callbacks during the hold would leave A live again.
+        let final_peak = final_out.iter().fold(0.0f32, |a, &v| a.max(v.abs()));
+        assert!(final_peak < 1e-3,
+                "live backend after transition must be B (silence), got peak {} \
+                 (looks like A oscillated back into live)", final_peak);
     }
 
     /// Saturating end: a stray `end_preset_transition` with no matching
