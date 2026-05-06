@@ -14,17 +14,16 @@
     .band-label { font-weight: 600; letter-spacing: 0.02em; }
     .band-freq { font-size: 0.85em; opacity: 0.6; font-variant-numeric: tabular-nums; }
     .band-gain { font-size: 1.1em; font-variant-numeric: tabular-nums; }
-    .band-bypass { opacity: 0.55; font-size: 0.8em; cursor: pointer; user-select: none; }
-    .band-bypass[aria-pressed="true"] { color: CanvasText; opacity: 1; font-weight: 600; }
+    cdp-toggle.band-bypass { --cdp-label-width: 0; --cdp-value-width: 0; flex: 0 0 auto; }
     .band.inactive .band-gain { opacity: 0.35; }
   </style>
 </head>
 <body>
   <canvas id="response" width="800" height="400"></canvas>
   <div class="legend">
-    <div class="band" data-band="low"><div class="band-head"><span class="band-label">Low</span><span class="band-bypass" role="button" aria-pressed="false">bypass</span></div><div class="band-freq">200 Hz shelf</div><div class="band-gain">0.00 dB</div></div>
-    <div class="band" data-band="mid"><div class="band-head"><span class="band-label">Mid</span><span class="band-bypass" role="button" aria-pressed="false">bypass</span></div><div class="band-freq">1.0 kHz peak</div><div class="band-gain">0.00 dB</div></div>
-    <div class="band" data-band="high"><div class="band-head"><span class="band-label">High</span><span class="band-bypass" role="button" aria-pressed="false">bypass</span></div><div class="band-freq">5.0 kHz shelf</div><div class="band-gain">0.00 dB</div></div>
+    <div class="band" data-band="low" param="low_gain"><div class="band-head"><span class="band-label">Low</span><cdp-toggle class="band-bypass" param="low_bypass"></cdp-toggle></div><div class="band-freq">200 Hz shelf</div><div class="band-gain">0.00 dB</div></div>
+    <div class="band" data-band="mid" param="mid_gain"><div class="band-head"><span class="band-label">Mid</span><cdp-toggle class="band-bypass" param="mid_bypass"></cdp-toggle></div><div class="band-freq">1.0 kHz peak</div><div class="band-gain">0.00 dB</div></div>
+    <div class="band" data-band="high" param="high_gain"><div class="band-head"><span class="band-label">High</span><cdp-toggle class="band-bypass" param="high_bypass"></cdp-toggle></div><div class="band-freq">5.0 kHz shelf</div><div class="band-gain">0.00 dB</div></div>
   </div>
   <script>
   (function () {
@@ -97,6 +96,99 @@
     let FG = resolveFG();
     window.addEventListener('themechange', () => { FG = resolveFG(); scheduleRedraw(); });
 
+    // Smoothed input/output spectra. Updated by `audio.onFrame` ticks
+    // (fft bins arrive when the host produced a new column — limited
+    // by the 50% hop, so roughly every fftSize/2 samples). Stored at
+    // bin resolution; resampled onto the canvas log-x axis at draw time.
+    // Exponential decay = max(prev*0.85, new) gives a "peak hold then
+    // fall" feel that's easier to read than raw bin updates.
+    let specIn = null;   // Float32Array, halfN bins of dB (-120..0)
+    let specOut = null;
+    let specBins = 0;
+    let specSampleRate = 48000;  // overwritten on first frame via fftSize inference
+    const SPEC_FLOOR = -90;      // floor dB shown on canvas (clamps below this)
+    const SPEC_CEIL  = 0;        // top dB shown on canvas
+    const SPEC_DECAY = 0.85;
+    let lastSpecTickRedraw = 0;
+
+    function ingestSpectrum(prev, fresh) {
+      const n = fresh.length;
+      if (!prev || prev.length !== n) prev = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const decayed = prev[i] * SPEC_DECAY + SPEC_FLOOR * (1 - SPEC_DECAY);
+        prev[i] = fresh[i] > decayed ? fresh[i] : decayed;
+      }
+      return prev;
+    }
+
+    if (CDP && CDP.audio && CDP.audio.onFrame) {
+      CDP.audio.onFrame((frame) => {
+        if (!frame.fftIn || !frame.fftOut) return;
+        // Infer FFT size from bin count: AudioCaptureManager passes halfN
+        // bins where halfN = fftSize/2. Bin i maps to f = i * SR / fftSize.
+        // The canvas only knows the bin index; SR is implicit and the
+        // spectrogram math doesn't change if SR drifts off 48k.
+        specBins = frame.fftIn.length;
+        specIn  = ingestSpectrum(specIn,  frame.fftIn);
+        specOut = ingestSpectrum(specOut, frame.fftOut);
+        // Throttle spectrum-driven redraws so we don't compete with EQ
+        // curve redraws on parameter drag. 33 ms cap = ~30 Hz.
+        const now = performance.now();
+        if (now - lastSpecTickRedraw < 33) return;
+        lastSpecTickRedraw = now;
+        scheduleRedraw();
+      }, { fft: true });
+    }
+
+    // Map a spectrum bin index → log-frequency canvas x. Returns null
+    // for bins outside [fMin, fMax].
+    function binToX(bin, totalBins, pad, innerW, fMin, fMax) {
+      // halfN bins span 0..Nyquist; assume SR=48000 for axis layout (the
+      // canvas range goes to 20 kHz, well below Nyquist for any SR ≥ 40k).
+      const f = bin * (specSampleRate * 0.5) / totalBins;
+      if (f < fMin || f > fMax) return null;
+      const t = Math.log(f / fMin) / Math.log(fMax / fMin);
+      return pad + t * innerW;
+    }
+
+    function drawSpectrum(spec, pad, innerW, innerH, fMin, fMax, fillAlpha, strokeAlpha) {
+      if (!spec || specBins === 0) return;
+      ctx.beginPath();
+      let started = false;
+      for (let i = 1; i < specBins; i++) {  // skip DC bin
+        const x = binToX(i, specBins, pad, innerW, fMin, fMax);
+        if (x === null) continue;
+        const dbClamped = Math.max(SPEC_FLOOR, Math.min(SPEC_CEIL, spec[i]));
+        const t = (dbClamped - SPEC_FLOOR) / (SPEC_CEIL - SPEC_FLOOR);  // 0..1
+        const y = pad + innerH * (1 - t);
+        if (!started) { ctx.moveTo(x, pad + innerH); ctx.lineTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
+      if (!started) return;
+      // Close down to the baseline for fill.
+      ctx.lineTo(pad + innerW, pad + innerH);
+      ctx.closePath();
+      ctx.fillStyle = FG;
+      ctx.globalAlpha = fillAlpha;
+      ctx.fill();
+      // Stroke only the top edge: re-walk without the close-to-baseline.
+      ctx.beginPath();
+      started = false;
+      for (let i = 1; i < specBins; i++) {
+        const x = binToX(i, specBins, pad, innerW, fMin, fMax);
+        if (x === null) continue;
+        const dbClamped = Math.max(SPEC_FLOOR, Math.min(SPEC_CEIL, spec[i]));
+        const t = (dbClamped - SPEC_FLOOR) / (SPEC_CEIL - SPEC_FLOOR);
+        const y = pad + innerH * (1 - t);
+        if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = FG;
+      ctx.globalAlpha = strokeAlpha;
+      ctx.lineWidth = 1 * devicePixelRatio;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
     function drawResponse() {
       const w = canvas.width = canvas.clientWidth * devicePixelRatio;
       const h = canvas.height = canvas.clientHeight * devicePixelRatio;
@@ -125,6 +217,15 @@
       });
       ctx.globalAlpha = 1;
 
+      // Live FFT spectra (input behind, output in front), drawn under
+      // the EQ curve so the analytical response stays the dominant
+      // visual. fillAlpha is intentionally low — when the bands are
+      // flat, input ≈ output and the two layers would otherwise look
+      // muddy.
+      const fMin = 20, fMax = 20000;
+      drawSpectrum(specIn,  pad, innerW, innerH, fMin, fMax, 0.08, 0.25);
+      drawSpectrum(specOut, pad, innerW, innerH, fMin, fMax, 0.18, 0.55);
+
       // Compute coefficients per band.
       const activeCoeffs = BANDS.map(b => {
         const gain = CDP.parameters.get(getIndex(b.gainParam));
@@ -132,8 +233,7 @@
         return bypassed ? null : coeffs(b.type, b.freq, Q, gain, SR);
       });
 
-      // Sweep log frequency 20 Hz -> 20 kHz.
-      const fMin = 20, fMax = 20000;
+      // Sweep log frequency 20 Hz -> 20 kHz (fMin/fMax declared above).
       const N = 256;
       ctx.beginPath();
       for (let i = 0; i <= N; i++) {
@@ -162,6 +262,20 @@
         ctx.fillStyle = FG;
         ctx.globalAlpha = bypassed ? 0.25 : 1;
         ctx.fill();
+      });
+      ctx.globalAlpha = 1;
+
+      // Frequency tick labels (log 20 Hz – 20 kHz). Drawn last so they
+      // sit on top of the curve / FFT fills, with low alpha so they
+      // don't dominate.
+      ctx.fillStyle = FG;
+      ctx.globalAlpha = 0.5;
+      ctx.font = `${10 * devicePixelRatio}px -apple-system, sans-serif`;
+      [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000].forEach(f => {
+        const t = Math.log(f / fMin) / Math.log(fMax / fMin);
+        const x = pad + t * innerW;
+        const label = f >= 1000 ? `${f / 1000}k` : `${f}`;
+        ctx.fillText(label, x + 2, h - pad - 2);
       });
       ctx.globalAlpha = 1;
     }
@@ -229,18 +343,6 @@
       scheduleRedraw();
     }
 
-    // Legend click-to-bypass.
-    document.querySelectorAll('.band').forEach(row => {
-      const key = row.dataset.band;
-      const band = BANDS.find(b => b.key === key);
-      const btn = row.querySelector('.band-bypass');
-      btn.addEventListener('click', () => {
-        const cur = CDP.parameters.get(getIndex(band.bypassParam)) >= 0.5 ? 0 : 1;
-        CDP.parameters.set(getIndex(band.bypassParam), cur);
-        scheduleRedraw();
-      });
-    });
-
     function updateLegend() {
       document.querySelectorAll('.band').forEach(row => {
         const band = BANDS.find(b => b.key === row.dataset.band);
@@ -248,7 +350,6 @@
         const bypassed = CDP.parameters.get(getIndex(band.bypassParam)) >= 0.5;
         row.classList.toggle('inactive', bypassed);
         row.querySelector('.band-gain').textContent = (gain >= 0 ? '+' : '') + gain.toFixed(2) + ' dB';
-        row.querySelector('.band-bypass').setAttribute('aria-pressed', bypassed ? 'true' : 'false');
       });
     }
 
