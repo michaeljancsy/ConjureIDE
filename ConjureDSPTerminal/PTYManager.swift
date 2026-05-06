@@ -829,6 +829,11 @@ final class PTYManager {
 
     Tools are exposed under the `conjuredsp__` namespace. The core set:
 
+    - **Bundle files live outside your cwd.** Anything inside a `.cdp` bundle \
+    (`manifest.json`, `process.{py,rs}`, `ui/**`, `state.json`) is in the App Group \
+    container, not your working directory. Always use the `read_bundle_file` and \
+    `write_bundle_file` MCP tools for these paths — never the harness `Edit` or \
+    `Write` tools, which will fail with "File does not exist".
     - No file I/O or network calls in process() — runs on the real-time audio thread
     - Up to 16 parameters per script
     - Use `compile_and_run` to load scripts, `get_parameters` to check state, `toggle_bypass` for A/B
