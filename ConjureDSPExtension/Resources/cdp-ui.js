@@ -312,6 +312,30 @@
         'input[type=range]:focus::-webkit-slider-thumb {',
         '  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cdp-accent) 30%, transparent);',
         '}',
+        // Vertical-orientation overrides for <cdp-slider orientation="vertical">.
+        // The native <input type=range> handles drag direction itself once
+        // writing-mode is flipped — no JS pointer-event swap needed.
+        // direction: rtl is here so up = max (it flips the start/end edges
+        // along the writing-mode axis); it has nothing to do with text direction.
+        ':host([orientation="vertical"]) .row {',
+        '  grid-template-columns: 1fr;',
+        '  grid-template-rows: auto 1fr auto;',
+        '  justify-items: center;',
+        '  min-height: 0;',
+        '  height: 100%;',
+        '}',
+        ':host([orientation="vertical"]) .row > [part="value"] {',
+        '  text-align: center;',
+        '}',
+        ':host([orientation="vertical"]) input[type=range] {',
+        '  writing-mode: vertical-lr;',
+        '  direction: rtl;',
+        '  appearance: slider-vertical;',
+        '  -webkit-appearance: slider-vertical;',
+        '  width: var(--cdp-thumb-size, 14px);',
+        '  height: 100%;',
+        '  min-height: 80px;',
+        '}',
     ].join('\n');
 
     function styleEl(css) {
@@ -525,7 +549,7 @@
     // ------------------------------------------------------------------
 
     class CdpSlider extends HTMLElement {
-        static get observedAttributes() { return ['param']; }
+        static get observedAttributes() { return ['param', 'orientation']; }
 
         constructor() {
             super();
