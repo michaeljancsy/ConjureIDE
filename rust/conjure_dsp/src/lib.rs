@@ -163,6 +163,48 @@ pub unsafe extern "C" fn dsp_kernel_process(
     (*kernel).process(input_buffers, output_buffers, channel_count, frame_count);
 }
 
+/// Process audio with an optional sidechain input bus. Mirrors
+/// `dsp_kernel_process` and adds three trailing arguments describing the
+/// sidechain pull for this render block.
+///
+/// When `sidechain_connected` is false (or `sidechain_buffers` is null,
+/// or `sidechain_channel_count` is zero), backends that consume sidechain
+/// audio see silence. Old presets that don't read sidechain are
+/// unaffected.
+///
+/// Both sides of the FFI ship together, so this is purely additive — the
+/// legacy `dsp_kernel_process` entry point delegates to this one with no
+/// sidechain so callers that haven't been updated still work.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+/// - `input_buffers` / `output_buffers` constraints from `dsp_kernel_process`
+///   apply.
+/// - When `sidechain_connected` is true and `sidechain_buffers` is non-null,
+///   it must point to `sidechain_channel_count` valid `*const f32` pointers,
+///   each with at least `frame_count` samples.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_process_with_sidechain(
+    kernel: DSPKernelRef,
+    input_buffers: *const *const f32,
+    output_buffers: *const *mut f32,
+    channel_count: u32,
+    frame_count: u32,
+    sidechain_buffers: *const *const f32,
+    sidechain_channel_count: u32,
+    sidechain_connected: bool,
+) {
+    (*kernel).process_with_sidechain(
+        input_buffers,
+        output_buffers,
+        channel_count,
+        frame_count,
+        sidechain_buffers,
+        sidechain_channel_count,
+        sidechain_connected,
+    );
+}
+
 /// Update host DAW transport state. Called from the real-time audio thread
 /// once per render callback, before the process loop.
 ///
@@ -1501,6 +1543,66 @@ mod tests {
             dsp_kernel_initialize(kernel, 2, 2, -48000.0);
             let rem = dsp_kernel_demo_seconds_remaining(kernel, 44100.0);
             assert!(rem.is_finite(), "demo_seconds_remaining should be finite after negative-sr rejection, got {rem}");
+            dsp_kernel_destroy(kernel);
+        }
+    }
+
+    /// `dsp_kernel_process_with_sidechain` with `connected=false` and a
+    /// null sidechain pointer must produce identical output to the
+    /// legacy `dsp_kernel_process` entry point. Pins backwards
+    /// compatibility: every existing preset goes through this path
+    /// after the AU starts always advertising a second bus.
+    #[test]
+    fn test_ffi_process_with_sidechain_disconnected_matches_legacy() {
+        let kernel_legacy = dsp_kernel_create();
+        let kernel_sc = dsp_kernel_create();
+        unsafe {
+            dsp_kernel_initialize(kernel_legacy, 1, 1, 44100.0);
+            dsp_kernel_initialize(kernel_sc, 1, 1, 44100.0);
+
+            let input: [f32; 8] = [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.7, -0.8];
+            let mut out_legacy: [f32; 8] = [0.0; 8];
+            let mut out_sc: [f32; 8] = [0.0; 8];
+            let ip: *const f32 = input.as_ptr();
+            let op_legacy: *mut f32 = out_legacy.as_mut_ptr();
+            let op_sc: *mut f32 = out_sc.as_mut_ptr();
+
+            dsp_kernel_process(kernel_legacy, &ip, &op_legacy, 1, 8);
+            dsp_kernel_process_with_sidechain(
+                kernel_sc, &ip, &op_sc, 1, 8,
+                std::ptr::null(), 0, false,
+            );
+
+            assert_eq!(out_legacy, out_sc, "disconnected sidechain path must match legacy");
+            dsp_kernel_destroy(kernel_legacy);
+            dsp_kernel_destroy(kernel_sc);
+        }
+    }
+
+    /// `dsp_kernel_process_with_sidechain` with `connected=true` and a
+    /// valid sidechain buffer must still produce passthrough on the
+    /// main bus when no backend is loaded — sidechain is detection-
+    /// only by convention; the kernel doesn't mix it into the output.
+    #[test]
+    fn test_ffi_process_with_sidechain_connected_passthrough() {
+        let kernel = dsp_kernel_create();
+        unsafe {
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+
+            let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+            let sidechain: [f32; 4] = [0.9, -0.9, 0.9, -0.9];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let scp: *const f32 = sidechain.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+
+            dsp_kernel_process_with_sidechain(
+                kernel, &ip, &op, 1, 4,
+                &scp, 1, true,
+            );
+            // Output should mirror input; sidechain audio must not leak
+            // into the main bus on the no-backend passthrough path.
+            assert_eq!(output, [0.1, 0.2, 0.3, 0.4]);
             dsp_kernel_destroy(kernel);
         }
     }

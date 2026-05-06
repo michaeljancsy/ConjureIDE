@@ -1,4 +1,4 @@
-use crate::backend::Backend;
+use crate::backend::{Backend, SidechainInput};
 use crate::kernel::TransportState;
 use crate::params::{ParamMetadata, TelemetryMetadata, PARAM_COUNT, TELEMETRY_LEN};
 use numpy::{PyArray1, PyArrayMethods};
@@ -22,16 +22,33 @@ static PYTHON_ENV_INIT: OnceLock<()> = OnceLock::new();
 /// Python DSP backend using pyo3 and numpy.
 ///
 /// Loads a Python script containing a
-/// `process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry)`
-/// function (canonical 7-arg form) and calls it each render callback
-/// with pre-allocated numpy arrays. Scripts with anything other than
-/// exactly 7 args are rejected at load time — use `_transport` /
-/// `_telemetry` (Python's underscore-prefix convention for unused
-/// args) when you don't read them.
+/// `process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry[, sidechain])`
+/// function and calls it each render callback with pre-allocated numpy
+/// arrays. Two arities are accepted:
+/// - 7 args: canonical, no sidechain. The script never sees the second
+///   input bus even if the host has audio routed to it.
+/// - 8 args: opt in to the sidechain bus. The 8th positional arg is a
+///   list of per-channel `numpy.ndarray[float32]` buffers (zero-filled
+///   when the host hasn't routed anything).
+///
+/// Use `_transport` / `_telemetry` / `_sidechain` (Python's
+/// underscore-prefix convention for unused args) when you don't read
+/// them. Scripts with any other arity are rejected at load time.
 pub struct PythonBackend {
     py_process_fn: Py<PyAny>,
+    /// Whether the script's `process()` declares the optional 8th
+    /// `sidechain` arg. Captured at load time from `co_argcount`.
+    py_wants_sidechain: bool,
     py_input_arrays: Vec<Py<PyAny>>,
     py_output_arrays: Vec<Py<PyAny>>,
+    /// Pre-allocated numpy arrays for the sidechain input bus. Sized to
+    /// the same `max_frames` as the main inputs and to `MAX_SIDECHAIN_CH`
+    /// channels (whichever is smaller per block). Always allocated when
+    /// `py_wants_sidechain` is true so the call list never reshapes.
+    py_sidechain_arrays: Vec<Py<PyAny>>,
+    /// Cached PyList wrapping `py_sidechain_arrays` (rebuilt when
+    /// channel count changes).
+    py_sidechain_list: Option<Py<PyAny>>,
     py_channel_count: usize,
     last_error: Option<String>,
     param_names: HashMap<u8, String>,
@@ -123,7 +140,7 @@ impl PythonBackend {
             std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
         });
 
-        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, Option<Vec<TelemetryMetadata>>, u32, String), PyErr> =
+        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, Option<Vec<TelemetryMetadata>>, u32, String, bool), PyErr> =
             Python::with_gil(|py| {
                 let code = std::fs::read_to_string(script_path)
                     .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
@@ -150,24 +167,28 @@ impl PythonBackend {
                 let module = PyModule::from_code(py, &code_c, &path_c, &module_name)?;
                 let process_fn = module.getattr("process")?;
 
-                // Require the canonical 7-arg signature. We pass all seven
-                // args every render block; a function declaring fewer would
-                // raise TypeError at call time, which is much more confusing
-                // than a clear load-time error pointing at the convention.
+                // Accept the canonical 7-arg signature, plus the
+                // sidechain-opt-in 8-arg form. The 8th positional arg is
+                // a list of per-channel numpy arrays for the sidechain
+                // input bus (zero-filled when the host has nothing
+                // routed). Anything else is a typo or stale convention;
+                // reject at load time so the user sees a clear error
+                // instead of a TypeError every render block.
                 let arity: usize = process_fn
                     .getattr("__code__")?
                     .getattr("co_argcount")?
                     .extract()?;
-                if arity != 7 {
+                if arity != 7 && arity != 8 {
                     return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                        "process() must take exactly 7 arguments \
+                        "process() must take 7 or 8 arguments \
                         (inputs, outputs, frame_count, sample_rate, params, \
-                        transport, telemetry); got {} args. Use _transport \
-                        and _telemetry as parameter names if you don't \
-                        read them.",
+                        transport, telemetry[, sidechain]); got {} args. \
+                        Use _transport / _telemetry / _sidechain as \
+                        parameter names if you don't read them.",
                         arity
                     )));
                 }
+                let wants_sidechain = arity == 8;
 
                 // Try PARAMS dict first (rich metadata):
                 //   PARAMS = {"threshold": {"min": -40, "max": -3, "unit": "dB", "default": -20}, ...}
@@ -186,16 +207,19 @@ impl PythonBackend {
                     .and_then(|v| v.extract::<u32>().ok())
                     .unwrap_or(0);
 
-                Ok((process_fn.unbind(), param_names, param_metadata, telemetry_metadata, latency, mod_name_str))
+                Ok((process_fn.unbind(), param_names, param_metadata, telemetry_metadata, latency, mod_name_str, wants_sidechain))
             });
 
         match result {
-            Ok((process_fn, param_names, param_metadata, telemetry_metadata, latency, module_name)) => {
-                eprintln!("ConjureDSP-Rust: Python script loaded successfully (latency={})", latency);
+            Ok((process_fn, param_names, param_metadata, telemetry_metadata, latency, module_name, wants_sidechain)) => {
+                eprintln!("ConjureDSP-Rust: Python script loaded successfully (latency={}, sidechain={})", latency, wants_sidechain);
                 Ok(Self {
                     py_process_fn: process_fn,
+                    py_wants_sidechain: wants_sidechain,
                     py_input_arrays: Vec::new(),
                     py_output_arrays: Vec::new(),
+                    py_sidechain_arrays: Vec::new(),
+                    py_sidechain_list: None,
                     py_channel_count: 0,
                     last_error: None,
                     param_names,
@@ -437,6 +461,22 @@ impl PythonBackend {
                 })
                 .collect();
 
+            // Sidechain mirrors the main input bus (same channel_count,
+            // same max_frames). Allocated only when the script declared
+            // an 8th `sidechain` arg — keeps existing 7-arg presets at
+            // zero numpy overhead.
+            self.py_sidechain_arrays = if self.py_wants_sidechain {
+                (0..channel_count)
+                    .map(|_| {
+                        PyArray1::<f32>::zeros(py, max_frames, false)
+                            .into_any()
+                            .unbind()
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
             // Cache PyLists wrapping the numpy arrays (stable across callbacks)
             if let Ok(list) =
                 PyList::new(py, self.py_input_arrays.iter().map(|a| a.bind(py)))
@@ -447,6 +487,15 @@ impl PythonBackend {
                 PyList::new(py, self.py_output_arrays.iter().map(|a| a.bind(py)))
             {
                 self.py_output_list = Some(list.into_any().unbind());
+            }
+            if self.py_wants_sidechain {
+                if let Ok(list) =
+                    PyList::new(py, self.py_sidechain_arrays.iter().map(|a| a.bind(py)))
+                {
+                    self.py_sidechain_list = Some(list.into_any().unbind());
+                }
+            } else {
+                self.py_sidechain_list = None;
             }
 
             // Cache transport dict (keys are stable, values updated in-place each callback)
@@ -487,6 +536,7 @@ impl PythonBackend {
         sample_rate: f64,
         params: &[f32; PARAM_COUNT],
         transport: &TransportState,
+        sidechain: SidechainInput<'_>,
     ) -> bool {
         let result: Result<(), PyErr> = Python::with_gil(|py| {
             // Copy input audio data into pre-allocated numpy arrays
@@ -496,6 +546,30 @@ impl PythonBackend {
                     self.py_input_arrays[ch].bind(py).downcast()?;
                 let py_slice = py_arr.as_slice_mut()?;
                 py_slice[..frame_count].copy_from_slice(src);
+            }
+
+            // Refresh sidechain numpy arrays. Always overwrite the full
+            // window: when sidechain.connected is false (or a channel is
+            // missing) we fill zeros so scripts always observe a defined
+            // signal rather than stale audio from the previous block.
+            if self.py_wants_sidechain {
+                for ch in 0..self.py_sidechain_arrays.len() {
+                    let py_arr: &Bound<'_, PyArray1<f32>> =
+                        self.py_sidechain_arrays[ch].bind(py).downcast()?;
+                    let py_slice = py_arr.as_slice_mut()?;
+                    let dst = &mut py_slice[..frame_count];
+                    if sidechain.connected && ch < sidechain.channel_count {
+                        let src = std::slice::from_raw_parts(
+                            sidechain.inputs[ch],
+                            frame_count,
+                        );
+                        dst.copy_from_slice(src);
+                    } else {
+                        for v in dst.iter_mut() {
+                            *v = 0.0;
+                        }
+                    }
+                }
             }
 
             // Use cached Python lists (rebuilt only on channel count change)
@@ -587,17 +661,40 @@ impl PythonBackend {
                 any
             };
 
-            // Canonical 7-arg call. Anything else was rejected at load
-            // time (see PythonBackend::load).
-            self.py_process_fn.call1(
-                py,
-                (
-                    input_list, output_list, frame_count as u32, sample_rate,
-                    params_obj,
-                    &transport_obj,
-                    &telemetry_obj,
-                ),
-            )?;
+            // Canonical 7- or 8-arg call. Anything else was rejected at
+            // load time (see PythonBackend::load). The 8-arg form opts
+            // in to the sidechain bus; old presets stay on the 7-arg
+            // path with no behavior change.
+            if self.py_wants_sidechain {
+                let sidechain_list: Bound<'_, PyAny> = match self.py_sidechain_list {
+                    Some(ref cached) => cached.bind(py).clone(),
+                    None => PyList::new(
+                        py,
+                        self.py_sidechain_arrays.iter().map(|a| a.bind(py)),
+                    )?
+                    .into_any(),
+                };
+                self.py_process_fn.call1(
+                    py,
+                    (
+                        input_list, output_list, frame_count as u32, sample_rate,
+                        params_obj,
+                        &transport_obj,
+                        &telemetry_obj,
+                        sidechain_list,
+                    ),
+                )?;
+            } else {
+                self.py_process_fn.call1(
+                    py,
+                    (
+                        input_list, output_list, frame_count as u32, sample_rate,
+                        params_obj,
+                        &transport_obj,
+                        &telemetry_obj,
+                    ),
+                )?;
+            }
 
             // Snapshot the telemetry dict back into the f32 buffer the
             // kernel reads via `read_telemetry`. Slots without a numeric
@@ -670,8 +767,10 @@ impl Backend for PythonBackend {
             Python::with_gil(|_py| {
                 self.py_input_arrays.clear();
                 self.py_output_arrays.clear();
+                self.py_sidechain_arrays.clear();
                 self.py_input_list = None;
                 self.py_output_list = None;
+                self.py_sidechain_list = None;
                 self.py_transport_dict = None;
                 self.py_params_dict = None;
                 self.py_params_list = None;
@@ -689,12 +788,13 @@ impl Backend for PythonBackend {
         sample_rate: f64,
         params: &[f32; PARAM_COUNT],
         transport: &TransportState,
+        sidechain: SidechainInput<'_>,
     ) -> bool {
         if self.py_input_arrays.is_empty() {
             self.last_error = Some("Python arrays not allocated — initialize() not called or failed".to_string());
             return false;
         }
-        self.process_with_python(inputs, outputs, channel_count, frame_count, sample_rate, params, transport)
+        self.process_with_python(inputs, outputs, channel_count, frame_count, sample_rate, params, transport, sidechain)
     }
 
     fn last_error(&self) -> Option<&str> {

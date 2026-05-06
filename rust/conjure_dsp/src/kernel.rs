@@ -1,4 +1,4 @@
-use crate::backend::Backend;
+use crate::backend::{Backend, SidechainInput};
 use crate::params::{PARAM_COUNT, TelemetryMetadata};
 use crate::python_backend::PythonBackend;
 use crate::ring_buffer::AudioRingBuffer;
@@ -1372,6 +1372,7 @@ impl DSPKernel {
                     sample_rate,
                     &params,
                     &transport,
+                    SidechainInput::NONE,
                 );
             }
             let mut max_time = 0.0f64;
@@ -1386,6 +1387,7 @@ impl DSPKernel {
                         sample_rate,
                         &params,
                         &transport,
+                        SidechainInput::NONE,
                     );
                 }
                 let elapsed = start.elapsed().as_secs_f64();
@@ -1460,10 +1462,65 @@ impl DSPKernel {
         channel_count: u32,
         frame_count: u32,
     ) {
+        // Legacy entry point — no sidechain. New callers should prefer
+        // `process_with_sidechain`. Routes through the same code path with
+        // a sentinel "disconnected" sidechain so behavior is identical to
+        // pre-sidechain builds when nothing is wired.
+        self.process_with_sidechain(
+            input_buffers,
+            output_buffers,
+            channel_count,
+            frame_count,
+            std::ptr::null(),
+            0,
+            false,
+        )
+    }
+
+    /// Process audio buffers with an optional sidechain input bus.
+    ///
+    /// Mirrors `process()` but accepts a second per-channel pointer array
+    /// and a "connected" flag describing whether the host has anything
+    /// routed to the sidechain slot in this render block. When
+    /// `sidechain_connected` is false (or `sidechain_buffers` is null),
+    /// backends that consume sidechain see silence.
+    ///
+    /// # Safety
+    /// - `input_buffers` / `output_buffers` constraints from `process()`
+    ///   apply.
+    /// - When `sidechain_connected` is true and `sidechain_buffers` is
+    ///   non-null, it must point to `sidechain_channel_count` valid
+    ///   `*const f32` pointers, each with at least `frame_count` samples.
+    pub unsafe fn process_with_sidechain(
+        &mut self,
+        input_buffers: *const *const f32,
+        output_buffers: *const *mut f32,
+        channel_count: u32,
+        frame_count: u32,
+        sidechain_buffers: *const *const f32,
+        sidechain_channel_count: u32,
+        sidechain_connected: bool,
+    ) {
         let channel_count = channel_count as usize;
         let frame_count = frame_count as usize;
         let inputs = std::slice::from_raw_parts(input_buffers, channel_count);
         let outputs = std::slice::from_raw_parts(output_buffers, channel_count);
+
+        let sidechain_channel_count = sidechain_channel_count as usize;
+        let sidechain_slice: &[*const f32] =
+            if sidechain_connected
+                && !sidechain_buffers.is_null()
+                && sidechain_channel_count > 0
+            {
+                std::slice::from_raw_parts(sidechain_buffers, sidechain_channel_count)
+            } else {
+                &[]
+            };
+        let sidechain = SidechainInput {
+            inputs: sidechain_slice,
+            channel_count: sidechain_slice.len(),
+            connected: sidechain_connected && !sidechain_slice.is_empty(),
+        };
 
         self.last_render_frame_count.store(frame_count as u32, Ordering::Relaxed);
 
@@ -1541,7 +1598,7 @@ impl DSPKernel {
 
             if let Some(ref mut backend) = *guard {
                 let t0 = std::time::Instant::now();
-                let ok = backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate, &params, &self.transport);
+                let ok = backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate, &params, &self.transport, sidechain);
                 // Ensure at least 1µs so sub-microsecond calls are still visible
                 let elapsed_us = (t0.elapsed().as_micros() as u32).max(1);
                 self.update_profiler(elapsed_us);
@@ -2461,11 +2518,11 @@ mod tests {
         std::fs::remove_file(script).ok();
     }
 
-    /// Pin the canonical-7-arg requirement: scripts with any other
-    /// arity (4/5/6/8) must fail at load time with a clear, actionable
-    /// error mentioning the canonical signature.
+    /// Pin the arity policy: 7-arg (canonical) and 8-arg (sidechain
+    /// opt-in) are accepted; everything else fails at load time with a
+    /// clear, actionable error.
     #[test]
-    fn test_load_script_rejects_non_seven_arg_signatures() {
+    fn test_load_script_rejects_invalid_arity_signatures() {
         let (python_home, _) = match test_python_paths() {
             Some(paths) => paths,
             None => {
@@ -2475,10 +2532,10 @@ mod tests {
         };
 
         let cases: &[(&str, &str)] = &[
-            ("4-arg legacy",  "def process(i, o, f, s): pass\n"),
-            ("5-arg",          "def process(i, o, f, s, p): pass\n"),
-            ("6-arg",          "def process(i, o, f, s, p, t): pass\n"),
-            ("8-arg",          "def process(i, o, f, s, p, t, tel, x): pass\n"),
+            ("4-arg legacy", "def process(i, o, f, s): pass\n"),
+            ("5-arg",         "def process(i, o, f, s, p): pass\n"),
+            ("6-arg",         "def process(i, o, f, s, p, t): pass\n"),
+            ("9-arg",         "def process(i, o, f, s, p, t, tel, sc, x): pass\n"),
         ];
 
         for (label, src) in cases {
@@ -2487,15 +2544,40 @@ mod tests {
             let loaded = kernel.load_script(&python_home, script.to_str().unwrap());
             assert!(
                 !loaded,
-                "{label}: expected load to fail for non-7-arg process()"
+                "{label}: expected load to fail for non-7/8-arg process()"
             );
             let err = kernel.last_error().expect("last_error should be set");
             assert!(
-                err.contains("must take exactly 7 arguments"),
-                "{label}: error should mention the 7-arg requirement, got: {err}"
+                err.contains("must take 7 or 8 arguments"),
+                "{label}: error should mention the 7/8-arg requirement, got: {err}"
             );
             std::fs::remove_file(script).ok();
         }
+    }
+
+    /// 8-arg (sidechain opt-in) scripts must load successfully — same
+    /// path as the 7-arg form, with an extra positional `sidechain`
+    /// numpy list at the end of the call.
+    #[test]
+    fn test_load_script_accepts_8_arg_sidechain_signature() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "def process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry, sidechain):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n",
+        );
+        let mut kernel = DSPKernel::new();
+        let loaded = kernel.load_script(&python_home, script.to_str().unwrap());
+        assert!(
+            loaded,
+            "8-arg process() should load successfully: {:?}",
+            kernel.last_error()
+        );
+        std::fs::remove_file(script).ok();
     }
 
     // --- Group B3: Benchmarking ---

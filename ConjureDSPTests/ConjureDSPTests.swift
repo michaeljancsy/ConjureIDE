@@ -111,8 +111,13 @@ struct ConjureDSPTests {
             options: .loadInProcess
         )
         let au = avAudioUnit.auAudioUnit
-        #expect(au.inputBusses.count == 1, "Effect should have 1 input bus")
+        // Bus 0: main input. Bus 1: optional sidechain (always
+        // advertised so DAWs show a sidechain slot for every
+        // ConjureDSP instance, even on presets that don't read it —
+        // see ConjureDSPExtensionAudioUnit.swift bus setup).
+        #expect(au.inputBusses.count == 2, "Effect should have 2 input busses (main + sidechain)")
         #expect(au.outputBusses.count == 1, "Effect should have 1 output bus")
+        #expect(au.inputBusses[1].name == "Sidechain")
     }
 
     @Test func audioUnitBypassDefaultsToFalse() async throws {

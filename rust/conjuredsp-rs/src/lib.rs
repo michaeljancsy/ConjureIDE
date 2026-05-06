@@ -66,11 +66,19 @@ pub use nam::NamModel;
 /// Declares all required WASM buffers, exports, and the `ctx()` helper.
 ///
 /// Expands to:
-/// - `INPUT_BUF`, `OUTPUT_BUF`, `PARAMS_BUF`, `TRANSPORT_BUF` static arrays
+/// - `INPUT_BUF`, `OUTPUT_BUF`, `PARAMS_BUF`, `TRANSPORT_BUF`, `SIDECHAIN_BUF` static arrays
 /// - `MAX_CH`, `MAX_FR` constants
 /// - `T_TEMPO` .. `T_SAMPLE_POS` transport field indices
-/// - `get_input_ptr()`, `get_output_ptr()`, `get_params_ptr()`, `get_transport_ptr()` exports
+/// - `get_input_ptr()`, `get_output_ptr()`, `get_params_ptr()`,
+///   `get_transport_ptr()`, `get_sidechain_ptr()`,
+///   `get_sidechain_state_ptr()` exports
 /// - `ctx()` helper function that creates a [`Context`]
+///
+/// `SIDECHAIN_BUF` mirrors `INPUT_BUF`'s layout (`MAX_CH * MAX_FR`
+/// f32s, channel-sequential). The host writes the second input bus
+/// here when one is connected and zero-fills when nothing is routed —
+/// scripts read via [`Context::sidechain`] / [`Context::sidechain_connected`]
+/// without per-block branches.
 #[macro_export]
 macro_rules! setup {
     () => {
@@ -87,6 +95,17 @@ macro_rules! setup {
         // export as "no telemetry" and never reads from this buffer.
         static mut TELEMETRY_BUF: [f32; conjuredsp::TELEMETRY_LEN] =
             [0.0; conjuredsp::TELEMETRY_LEN];
+        // Always allocated. Sidechain is opt-in at the script level
+        // (read via `ctx.sidechain()` / `ctx.sidechain_connected()`),
+        // but allocating here means the host can write into it
+        // unconditionally for any preset built against this macro
+        // version — old scripts ignore the data, new ones consume it.
+        // ~32 KiB at MAX_CH=2 / MAX_FR=4096; negligible vs. NAM tones.
+        static mut SIDECHAIN_BUF: [f32; MAX_CH * MAX_FR] = [0.0; MAX_CH * MAX_FR];
+        // [channel_count, connected (0/1)]. Host writes once per render
+        // block before `process()`; script reads via
+        // `Context::sidechain_connected`.
+        static mut SIDECHAIN_STATE: [i32; 2] = [0; 2];
 
         const T_TEMPO: usize = 0;
         const T_BEAT: usize = 1;
@@ -125,6 +144,23 @@ macro_rules! setup {
             unsafe { TELEMETRY_BUF.len() as i32 }
         }
 
+        #[no_mangle]
+        pub extern "C" fn get_sidechain_ptr() -> i32 {
+            unsafe { SIDECHAIN_BUF.as_ptr() as i32 }
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_sidechain_buf_len() -> i32 {
+            // Bytes, mirroring `get_telemetry_buf_len`. Host derives
+            // MAX_CH from this value (`bytes / 4 / MAX_FR`).
+            unsafe { (SIDECHAIN_BUF.len() * core::mem::size_of::<f32>()) as i32 }
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_sidechain_state_ptr() -> i32 {
+            unsafe { SIDECHAIN_STATE.as_ptr() as i32 }
+        }
+
         /// Create a [`conjuredsp::Context`] for safe buffer access.
         ///
         /// Argument order matches the host's `process()` calling
@@ -141,7 +177,7 @@ macro_rules! setup {
             sample_rate: f32,
         ) -> conjuredsp::Context {
             unsafe {
-                conjuredsp::Context::new(
+                conjuredsp::Context::new_with_sidechain(
                     input,
                     output,
                     channel_count,
@@ -149,6 +185,8 @@ macro_rules! setup {
                     sample_rate,
                     PARAMS_BUF.as_ptr(),
                     TELEMETRY_BUF.as_mut_ptr(),
+                    SIDECHAIN_BUF.as_ptr(),
+                    SIDECHAIN_STATE.as_ptr(),
                 )
             }
         }

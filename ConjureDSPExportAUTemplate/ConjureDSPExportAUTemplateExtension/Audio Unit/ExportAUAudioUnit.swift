@@ -50,6 +50,7 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
     // Audio busses
     private var _inputBus: AUAudioUnitBus!
+    private var _sidechainBus: AUAudioUnitBus!
     private var _outputBus: AUAudioUnitBus!
     private var _inputBusses: AUAudioUnitBusArray!
     private var _outputBusses: AUAudioUnitBusArray!
@@ -58,6 +59,9 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     private var inputPCMBuffer: AVAudioPCMBuffer?
     private var originalAudioBufferList: UnsafePointer<AudioBufferList>?
     private var mutableAudioBufferList: UnsafeMutablePointer<AudioBufferList>?
+    private var sidechainPCMBuffer: AVAudioPCMBuffer?
+    private var sidechainOriginalAudioBufferList: UnsafePointer<AudioBufferList>?
+    private var sidechainMutableAudioBufferList: UnsafeMutablePointer<AudioBufferList>?
     private var _maxFrames: AUAudioFrameCount = 0
 
     @objc override init(componentDescription: AudioComponentDescription, options: AudioComponentInstantiationOptions) throws {
@@ -70,10 +74,18 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         _inputBus = try AUAudioUnitBus(format: format)
         _inputBus.maximumChannelCount = 2
 
+        // Always-on optional sidechain bus, mirroring the main extension
+        // (see ConjureDSPExtensionAudioUnit.swift). Hosts show a
+        // sidechain slot for every exported AU; presets that don't read
+        // sidechain ignore the audio.
+        _sidechainBus = try AUAudioUnitBus(format: format)
+        _sidechainBus.maximumChannelCount = 2
+        _sidechainBus.name = "Sidechain"
+
         _outputBus = try AUAudioUnitBus(format: format)
         _outputBus.maximumChannelCount = 2
 
-        _inputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .input, busses: [_inputBus])
+        _inputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .input, busses: [_inputBus, _sidechainBus])
         _outputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .output, busses: [_outputBus])
 
         // Load runtime config
@@ -635,6 +647,10 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         originalAudioBufferList = inputPCMBuffer?.audioBufferList
         mutableAudioBufferList = inputPCMBuffer?.mutableAudioBufferList
 
+        sidechainPCMBuffer = AVAudioPCMBuffer(pcmFormat: _sidechainBus.format, frameCapacity: _maxFrames)
+        sidechainOriginalAudioBufferList = sidechainPCMBuffer?.audioBufferList
+        sidechainMutableAudioBufferList = sidechainPCMBuffer?.mutableAudioBufferList
+
         let sr = _outputBus.format.sampleRate
         dsp_kernel_initialize(kernel, Int32(inputChannelCount), Int32(outputChannelCount), sr)
         renderStats.sampleRate = sr
@@ -661,6 +677,9 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         inputPCMBuffer = nil
         originalAudioBufferList = nil
         mutableAudioBufferList = nil
+        sidechainPCMBuffer = nil
+        sidechainOriginalAudioBufferList = nil
+        sidechainMutableAudioBufferList = nil
         super.deallocateRenderResources()
         trace(.info, "deallocate", "render resources released")
     }
@@ -739,8 +758,30 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
                 return err
             }
 
+            // Sidechain pull (bus 1). Same disconnected-is-fine semantics
+            // as the main extension — kAudioUnitErr_NoConnection means
+            // the user hasn't routed anything, fall back to silence.
+            var sidechainConnected = false
+            if let scOriginal = au.sidechainOriginalAudioBufferList,
+               let scMutable = au.sidechainMutableAudioBufferList {
+                let scOrig = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: scOriginal))
+                let scMut = UnsafeMutableAudioBufferListPointer(scMutable)
+                scMutable.pointee.mNumberBuffers = scOriginal.pointee.mNumberBuffers
+                for i in 0..<scOrig.count {
+                    scMut[i].mNumberChannels = scOrig[i].mNumberChannels
+                    scMut[i].mData = scOrig[i].mData
+                    scMut[i].mDataByteSize = byteSize
+                }
+                var scPullFlags = AudioUnitRenderActionFlags(rawValue: 0)
+                let scErr = pullInputBlock(&scPullFlags, timestamp, frameCount, 1, scMutable)
+                sidechainConnected = (scErr == noErr)
+            }
+
             let inABL = UnsafeMutableAudioBufferListPointer(mutableABL)
             let outABL = UnsafeMutableAudioBufferListPointer(outputData)
+            let scABL: UnsafeMutableAudioBufferListPointer? = sidechainConnected
+                ? au.sidechainMutableAudioBufferList.map(UnsafeMutableAudioBufferListPointer.init)
+                : nil
 
             // If passed null output buffer pointers, process in-place.
             for i in 0..<outABL.count {
@@ -787,6 +828,8 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
                 if nextEvent == nil {
                     let frameOffset = frameCount - framesRemaining
                     Self.callKernelProcess(kernel: kernel, inABL: inABL, outABL: outABL,
+                                           sidechainABL: scABL,
+                                           sidechainConnected: sidechainConnected,
                                            channelCount: channelCount, frameOffset: frameOffset,
                                            frameCount: framesRemaining)
                     stats.recordRender(
@@ -804,6 +847,8 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
                 if framesThisSegment > 0 {
                     let frameOffset = frameCount - framesRemaining
                     Self.callKernelProcess(kernel: kernel, inABL: inABL, outABL: outABL,
+                                           sidechainABL: scABL,
+                                           sidechainConnected: sidechainConnected,
                                            channelCount: channelCount, frameOffset: frameOffset,
                                            frameCount: framesThisSegment)
                     framesRemaining -= framesThisSegment
@@ -830,16 +875,21 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         kernel: DSPKernelRef,
         inABL: UnsafeMutableAudioBufferListPointer,
         outABL: UnsafeMutableAudioBufferListPointer,
+        sidechainABL: UnsafeMutableAudioBufferListPointer?,
+        sidechainConnected: Bool,
         channelCount: UInt32,
         frameOffset: UInt32,
         frameCount: UInt32
     ) {
         let count = Int(channelCount)
+        let scCount = sidechainConnected ? (sidechainABL?.count ?? 0) : 0
 
         var inputPtrs = [UnsafePointer<Float>?]()
         inputPtrs.reserveCapacity(count)
         var outputPtrs = [UnsafeMutablePointer<Float>?]()
         outputPtrs.reserveCapacity(count)
+        var sidechainPtrs = [UnsafePointer<Float>?]()
+        sidechainPtrs.reserveCapacity(max(scCount, 1))
 
         for ch in 0..<count {
             let baseIn = inABL[ch].mData!.assumingMemoryBound(to: Float.self)
@@ -848,10 +898,32 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
             let baseOut = outABL[ch].mData!.assumingMemoryBound(to: Float.self)
             outputPtrs.append(baseOut.advanced(by: Int(frameOffset)))
         }
+        if scCount > 0, let scABL = sidechainABL {
+            for ch in 0..<scCount {
+                let baseSc = scABL[ch].mData!.assumingMemoryBound(to: Float.self)
+                sidechainPtrs.append(UnsafePointer(baseSc.advanced(by: Int(frameOffset))))
+            }
+        }
 
         inputPtrs.withUnsafeBufferPointer { inBuf in
             outputPtrs.withUnsafeBufferPointer { outBuf in
-                dsp_kernel_process(kernel, inBuf.baseAddress!, outBuf.baseAddress!, channelCount, frameCount)
+                sidechainPtrs.withUnsafeBufferPointer { scBuf in
+                    if scCount > 0 {
+                        dsp_kernel_process_with_sidechain(
+                            kernel,
+                            inBuf.baseAddress!, outBuf.baseAddress!,
+                            channelCount, frameCount,
+                            scBuf.baseAddress!, UInt32(scCount), true
+                        )
+                    } else {
+                        dsp_kernel_process_with_sidechain(
+                            kernel,
+                            inBuf.baseAddress!, outBuf.baseAddress!,
+                            channelCount, frameCount,
+                            nil, 0, false
+                        )
+                    }
+                }
             }
         }
     }

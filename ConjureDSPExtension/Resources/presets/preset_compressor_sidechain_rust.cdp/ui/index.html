@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Compressor (Sidechain)</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      /* Brand palette — matches ParameterSlidersView's gradient and the
+         spectrogram color map. Purple anchors the GR line; the knob arc
+         interpolates purple→ice across its sweep. */
+      --brand-purple: #B06EFF;
+      --brand-ice:    #7B9FFF;
+      --gr-line:      var(--brand-purple);
+    }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      font: 12px -apple-system, system-ui, sans-serif;
+      background: Canvas; color: CanvasText;
+    }
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      align-content: stretch;
+      gap: 12px;
+      padding: 14px 16px; box-sizing: border-box;
+    }
+
+    .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+    .title {
+      font-weight: 600; letter-spacing: 0.04em;
+      text-transform: uppercase; font-size: 0.72em; opacity: 0.55;
+    }
+    .right { display: flex; align-items: baseline; gap: 10px; }
+    .gr-readout {
+      font-variant-numeric: tabular-nums;
+      font-size: 1.15em;
+      color: var(--gr-line);
+      opacity: 0.95;
+    }
+    /* Sidechain pill — dim grey when nothing is routed, lit purple
+       when the host is feeding audio into the second input bus.
+       Tracks `ctx.sidechain_connected()` from the DSP via telemetry. */
+    .sc-pill {
+      font-weight: 600; letter-spacing: 0.06em;
+      text-transform: uppercase; font-size: 0.62em;
+      padding: 2px 8px; border-radius: 999px;
+      border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+      color: color-mix(in srgb, CanvasText 55%, transparent);
+      background: transparent;
+      transition: color 80ms ease, border-color 80ms ease, background 80ms ease;
+    }
+    .sc-pill.active {
+      color: var(--brand-purple);
+      border-color: var(--brand-purple);
+      background: color-mix(in srgb, var(--brand-purple) 14%, transparent);
+    }
+
+    /* Single big display canvas — input/output peak history with the
+       GR line overlaid along the top. Y-axis is 0 dB (top) to -60 dB
+       (bottom), shared by levels and GR (GR pulls down from 0 dB). */
+    .display-wrap { position: relative; min-height: 0; }
+    #display {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%; display: block;
+      border-radius: 8px;
+      background: color-mix(in srgb, CanvasText 7%, Canvas);
+    }
+
+    /* Knob row — 5 cdp-knobs with slotted custom SVG that uses the
+       brand gradient for the value arc. Knob size and label/value
+       layout come from cdp-knob; the SVG is what gives them the
+       FabFilter-style "filled arc" look. */
+    .knob-row {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+      align-items: end;
+      padding: 4px 0;
+    }
+    .knob-row cdp-knob {
+      --cdp-knob-size: 76px;
+      --cdp-knob-sweep: 270deg;
+      --cdp-knob-face-bg: color-mix(in srgb, CanvasText 10%, Canvas);
+      --cdp-knob-rim-bg: transparent;
+      --cdp-knob-indicator-color: CanvasText;
+      --cdp-knob-indicator-width: 2px;
+    }
+    /* Slotted SVG visual — track ring + brand-colored value arc + face +
+       indicator. Drawing the value arc as a stroked circle that's
+       rotated -135° so its start sits at the 7:30 position; the visible
+       length is driven by stroke-dasharray = norm * 270 (path length). */
+    .knob-svg { width: 100%; height: 100%; }
+    .knob-svg .track {
+      fill: none;
+      stroke: color-mix(in srgb, CanvasText 18%, transparent);
+      stroke-width: 4;
+    }
+    .knob-svg .arc {
+      fill: none;
+      stroke: var(--brand-purple);
+      stroke-width: 4;
+      stroke-linecap: round;
+      /* `transform-box: view-box` pegs transform-origin to the 64×64
+         SVG coordinate system instead of the element's own bbox or
+         the rendered device-pixel box. Without this, WebKit interprets
+         `32px` as device pixels and the rotation pivot drifts off-center
+         once the knob is sized up to 76px. */
+      transform-box: view-box;
+      transform-origin: center;
+      transform: rotate(-135deg);
+      stroke-dasharray: calc(var(--cdp-knob-norm, 0) * 270) 1000;
+    }
+    .knob-svg .face {
+      fill: var(--cdp-knob-face-bg);
+    }
+    .knob-svg .pip {
+      stroke: var(--cdp-knob-indicator-color);
+      stroke-width: var(--cdp-knob-indicator-width);
+      stroke-linecap: round;
+      fill: none;
+      transform-box: view-box;
+      transform-origin: center;
+      transform: rotate(calc(var(--cdp-knob-norm, 0) * 270deg - 135deg));
+    }
+    /* Track ring uses the same rotation start so the dasharray-based
+       drawing aligns with the value arc. */
+    .knob-svg .track {
+      transform-box: view-box;
+      transform-origin: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="head">
+    <span class="title">Compressor (Sidechain)</span>
+    <span class="right">
+      <span class="sc-pill" id="scPill" title="Sidechain input — lit when the host is feeding audio into the second input bus">SC</span>
+      <span class="gr-readout" id="grReadout">GR 0.0 dB</span>
+    </span>
+  </div>
+
+  <div class="display-wrap">
+    <canvas id="display" width="800" height="420"></canvas>
+  </div>
+
+  <div class="knob-row">
+    <cdp-knob param="threshold">
+      <svg slot="visual" class="knob-svg" viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="track" cx="32" cy="32" r="26" pathLength="270"
+                stroke-dasharray="270 1000" transform="rotate(-135 32 32)"/>
+        <circle class="arc"   cx="32" cy="32" r="26" pathLength="270"/>
+        <circle class="face"  cx="32" cy="32" r="20"/>
+        <line   class="pip"   x1="32" y1="14" x2="32" y2="20"/>
+      </svg>
+    </cdp-knob>
+    <cdp-knob param="ratio">
+      <svg slot="visual" class="knob-svg" viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="track" cx="32" cy="32" r="26" pathLength="270"
+                stroke-dasharray="270 1000" transform="rotate(-135 32 32)"/>
+        <circle class="arc"   cx="32" cy="32" r="26" pathLength="270"/>
+        <circle class="face"  cx="32" cy="32" r="20"/>
+        <line   class="pip"   x1="32" y1="14" x2="32" y2="20"/>
+      </svg>
+    </cdp-knob>
+    <cdp-knob param="attack">
+      <svg slot="visual" class="knob-svg" viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="track" cx="32" cy="32" r="26" pathLength="270"
+                stroke-dasharray="270 1000" transform="rotate(-135 32 32)"/>
+        <circle class="arc"   cx="32" cy="32" r="26" pathLength="270"/>
+        <circle class="face"  cx="32" cy="32" r="20"/>
+        <line   class="pip"   x1="32" y1="14" x2="32" y2="20"/>
+      </svg>
+    </cdp-knob>
+    <cdp-knob param="release">
+      <svg slot="visual" class="knob-svg" viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="track" cx="32" cy="32" r="26" pathLength="270"
+                stroke-dasharray="270 1000" transform="rotate(-135 32 32)"/>
+        <circle class="arc"   cx="32" cy="32" r="26" pathLength="270"/>
+        <circle class="face"  cx="32" cy="32" r="20"/>
+        <line   class="pip"   x1="32" y1="14" x2="32" y2="20"/>
+      </svg>
+    </cdp-knob>
+    <cdp-knob param="makeup">
+      <svg slot="visual" class="knob-svg" viewBox="0 0 64 64" aria-hidden="true">
+        <circle class="track" cx="32" cy="32" r="26" pathLength="270"
+                stroke-dasharray="270 1000" transform="rotate(-135 32 32)"/>
+        <circle class="arc"   cx="32" cy="32" r="26" pathLength="270"/>
+        <circle class="face"  cx="32" cy="32" r="20"/>
+        <line   class="pip"   x1="32" y1="14" x2="32" y2="20"/>
+      </svg>
+    </cdp-knob>
+  </div>
+
+  <script>
+  (function () {
+    const CDP = window.ConjureDSP;
+    const canvas = document.getElementById('display');
+    const ctx = canvas.getContext('2d');
+    const grReadout = document.getElementById('grReadout');
+    const scPill = document.getElementById('scPill');
+    let scActive = false;
+
+    function idx(key) {
+      const low = String(key).toLowerCase();
+      for (let i = 0; i < CDP.parameters.count; i++) {
+        const m = CDP.parameters.metadata(i);
+        if (!m) continue;
+        if ((m.name && m.name.toLowerCase() === low) ||
+            (m.key && m.key.toLowerCase() === low)) return i;
+      }
+      return -1;
+    }
+
+    // ------------------------------------------------------------------
+    // Theme-aware foreground (CanvasText) for grid/labels.
+    // ------------------------------------------------------------------
+    function resolveFG() {
+      const probe = document.createElement('span');
+      probe.style.cssText = 'color: CanvasText; position: absolute; visibility: hidden;';
+      document.body.appendChild(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
+    }
+    let FG = resolveFG();
+    let GR_COLOR = getComputedStyle(document.documentElement)
+      .getPropertyValue('--gr-line').trim() || '#B06EFF';
+    window.addEventListener('themechange', () => {
+      FG = resolveFG();
+      // Next paint tick (within 16.67 ms on a 60 Hz display) will use
+      // the new FG; no need to force a redraw here since paintTick is
+      // already running every vsync.
+    });
+
+    // ------------------------------------------------------------------
+    // Time-anchored history. Each push appends one entry stamped with
+    // performance.now(); paint maps every canvas x-pixel back to a
+    // wall-clock time and looks up a value from the ring. Visual scroll
+    // velocity is constant (driven by performance.now()), so IPC jitter
+    // between pushes never shows up as a scroll-rate hiccup.
+    // ------------------------------------------------------------------
+    const WINDOW_SEC = 8;             // visible history span
+    const ring = [];                  // [{ t, peakInDb, peakOutDb, grDb, grBlock|null }, ...]
+
+    function ampToDb(a) {
+      if (a <= 0 || !isFinite(a)) return -120;
+      const db = 20 * Math.log10(a);
+      return db < -120 ? -120 : db;
+    }
+
+    let smoothedGR = 0;
+
+    function onFrame(frame) {
+      const tele = frame.telemetry;
+      let gr = 0;
+      let grCurve = null;
+      if (tele) {
+        if (typeof tele.GR_DB === 'number') gr = tele.GR_DB;
+        if (Array.isArray(tele.GR_CURVE)) grCurve = tele.GR_CURVE;
+        // SC_ACTIVE telemetry slot is 1.0 when the DSP is keying off
+        // the sidechain bus and 0.0 when it has fallen back to internal
+        // detection. Toggle the pill class only on edges to avoid
+        // thrashing the DOM every frame.
+        if (typeof tele.SC_ACTIVE === 'number') {
+          const wantActive = tele.SC_ACTIVE >= 0.5;
+          if (wantActive !== scActive) {
+            scActive = wantActive;
+            scPill.classList.toggle('active', scActive);
+          }
+        }
+      }
+      smoothedGR = smoothedGR * 0.7 + gr * 0.3;
+      grReadout.textContent = 'GR \u2212' + smoothedGR.toFixed(1) + ' dB';
+
+      const t = performance.now();
+      ring.push({
+        t,
+        peakInDb:  ampToDb(frame.peakIn  || 0),
+        peakOutDb: ampToDb(frame.peakOut || 0),
+        grDb: gr,
+        grBlock: grCurve && grCurve.length ? Float32Array.from(grCurve) : null,
+      });
+      // Trim entries older than the visible window + slack.
+      const cutoff = t - (WINDOW_SEC + 0.25) * 1000;
+      while (ring.length > 0 && ring[0].t < cutoff) ring.shift();
+    }
+
+    // ------------------------------------------------------------------
+    // Display: -60..0 dB on Y, time on X (newest at right).
+    // ------------------------------------------------------------------
+    const DB_MIN = -60, DB_MAX = 0;
+
+    function drawDisplay() {
+      // Resize the backing store only when the CSS box actually changed.
+      // Setting canvas.width/height clears the canvas, so doing it every
+      // vsync is wasteful and visually identical to ctx.clearRect.
+      const targetW = Math.max(1, Math.round(canvas.clientWidth  * devicePixelRatio));
+      const targetH = Math.max(1, Math.round(canvas.clientHeight * devicePixelRatio));
+      if (canvas.width  !== targetW) canvas.width  = targetW;
+      if (canvas.height !== targetH) canvas.height = targetH;
+      const w = canvas.width, h = canvas.height;
+      if (w === 0 || h === 0) return;
+      ctx.clearRect(0, 0, w, h);
+
+      const padL = 6  * devicePixelRatio;
+      const padR = 32 * devicePixelRatio;   // gutter for dB labels
+      const padT = 6  * devicePixelRatio;
+      const padB = 6  * devicePixelRatio;
+      const iw = w - padL - padR, ih = h - padT - padB;
+
+      const yAt = (db) => {
+        const c = Math.max(DB_MIN, Math.min(DB_MAX, db));
+        return padT + ih * (1 - (c - DB_MIN) / (DB_MAX - DB_MIN));
+      };
+
+      // Horizontal grid + dB labels every 10 dB on the right gutter.
+      ctx.font = (10 * devicePixelRatio) + 'px -apple-system, system-ui, sans-serif';
+      ctx.textBaseline = 'middle';
+      for (let db = DB_MAX; db >= DB_MIN; db -= 10) {
+        const y = yAt(db);
+        ctx.strokeStyle = FG;
+        ctx.globalAlpha = db === 0 ? 0.20 : 0.10;
+        ctx.beginPath();
+        ctx.moveTo(padL, y);
+        ctx.lineTo(padL + iw, y);
+        ctx.stroke();
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = FG;
+        ctx.textAlign = 'left';
+        ctx.fillText(String(db), padL + iw + 4 * devicePixelRatio, y);
+      }
+      ctx.globalAlpha = 1;
+
+      // Threshold dashed line.
+      const tIdx = idx('threshold');
+      if (tIdx >= 0) {
+        const threshold = CDP.parameters.get(tIdx);
+        ctx.setLineDash([4 * devicePixelRatio, 4 * devicePixelRatio]);
+        ctx.strokeStyle = FG;
+        ctx.globalAlpha = 0.4;
+        ctx.beginPath();
+        const ty = yAt(threshold);
+        ctx.moveTo(padL, ty);
+        ctx.lineTo(padL + iw, ty);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      }
+
+      // Pixel ↔ wall-clock time. Right edge = now; left edge = now - WINDOW_SEC.
+      // Visual scroll velocity is purely a function of performance.now() —
+      // pushes never reset the anchor.
+      const tNow = performance.now();
+      const winMs = WINDOW_SEC * 1000;
+      const xRight = padL + iw;
+      const xPerMs = iw / winMs;
+      const xAt = (t) => xRight - (tNow - t) * xPerMs;
+
+      // Entry-driven rendering. Iterate the ring (the data we actually have,
+      // ~one entry per push) and emit a path vertex at each entry's
+      // floating-point xAt(t). The path's *shape* is invariant from frame to
+      // frame; tNow advancing just slides every vertex left by the same
+      // fractional amount. Canvas 2D AA handles the sub-pixel motion.
+      //
+      // The previous integer-pixel column-sampling loop produced flicker on
+      // thin/pointy peaks: with sub-pixel scroll velocity (~1.45 px/frame)
+      // and ~33 ms entry intervals (~3 columns each at 8 s/700 px), ~half
+      // the columns transitioned to a different owning entry each frame,
+      // and each transition was an instant multi-dB jump. Step rendering
+      // and slice-max envelopes both still sampled at integer pixel
+      // columns, so neither helped.
+      const N = ring.length;
+
+      // Filled level-history area for one channel (peakInDb / peakOutDb).
+      // Step-shape between entries: each entry's value is held flat from
+      // the previous entry's x to its own x, then a vertical riser. With
+      // entry-driven floating-point x this staircase scrolls smoothly.
+      function fillLevelArea(field, alpha) {
+        if (N === 0) return;
+        const baseline = padT + ih;
+        const x0 = xAt(ring[0].t);
+        const xLast = xAt(ring[N - 1].t);
+        ctx.beginPath();
+        ctx.moveTo(x0, baseline);
+        ctx.lineTo(x0, yAt(ring[0][field]));
+        for (let k = 1; k < N; k++) {
+          const xCur = xAt(ring[k].t);
+          ctx.lineTo(xCur, yAt(ring[k - 1][field]));   // horizontal at prev value
+          ctx.lineTo(xCur, yAt(ring[k][field]));       // riser to new value
+        }
+        // End the path at the newest entry's actual time, NOT at xRight.
+        // Extending to xRight would hold the latest value out as a flat
+        // line whenever the audio thread isn't producing frames (paused
+        // transport, bypassed AU, momentary stall) — visually a "stuck"
+        // bar at whatever the last sample happened to be. Since
+        // AudioCaptureManager now suppresses empty-drain publishes, the
+        // tNow→ring[N-1].t gap honestly reflects "no new data" and should
+        // simply not be drawn.
+        ctx.lineTo(xLast, baseline);
+        ctx.closePath();
+        ctx.fillStyle = FG;
+        ctx.globalAlpha = alpha;
+        ctx.fill();
+      }
+
+      // Clip the history layers to the inner plot rect so nothing
+      // bleeds into the gutter or off the left edge.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(padL, padT, iw, ih);
+      ctx.clip();
+
+      fillLevelArea('peakInDb',  0.10);   // input — softer
+      fillLevelArea('peakOutDb', 0.22);   // output — slightly stronger
+
+      ctx.globalAlpha = 1;
+
+      // GR line — pulled DOWN from 0 dB. When GR = 6 dB, the line sits at
+      // -6 dB on the scale. One linear segment per ring entry: vertices at
+      // (xAt(entry.t), yAt(-entry.grDb)). Same flicker-free invariant: the
+      // shape doesn't change between frames, only its x-offset does.
+      if (N > 0) {
+        const grPath = new Path2D();
+        const xLast = xAt(ring[N - 1].t);
+        grPath.moveTo(xAt(ring[0].t), yAt(-ring[0].grDb));
+        for (let k = 1; k < N; k++) {
+          grPath.lineTo(xAt(ring[k].t), yAt(-ring[k].grDb));
+        }
+        // End at the newest entry's actual time, NOT xRight. Same
+        // rationale as fillLevelArea above — extending to xRight would
+        // visibly hold the GR value across pauses/bypasses.
+
+        ctx.strokeStyle = GR_COLOR;
+        ctx.lineWidth = 2 * devicePixelRatio;
+        ctx.lineJoin = 'round';
+        ctx.stroke(grPath);
+
+        // Soft fill under the GR line, dropping to the 0 dB baseline at
+        // the newest entry's time (not xRight).
+        grPath.lineTo(xLast,            yAt(0));
+        grPath.lineTo(xAt(ring[0].t),   yAt(0));
+        grPath.closePath();
+        ctx.fillStyle = GR_COLOR;
+        ctx.globalAlpha = 0.18;
+        ctx.fill(grPath);
+        ctx.globalAlpha = 1;
+      }
+
+      ctx.restore();   // close the history-layer clip
+    }
+
+    // Continuous paint loop — runs every WebContent vsync. The visual
+    // scroll position is derived from performance.now() inside
+    // drawDisplay, so this loop alone produces continuous motion at
+    // display rate regardless of audio-push cadence. WKWebView pauses
+    // RAF callbacks when the page is hidden, so we don't need explicit
+    // visibility gating here.
+    function paintTick() {
+      drawDisplay();
+      requestAnimationFrame(paintTick);
+    }
+
+    function init() {
+      // Param/theme/resize changes are picked up by the next paintTick;
+      // no need to schedule a redraw — the loop is always running.
+      CDP.audio.onFrame(onFrame);
+      paintTick();
+    }
+    if (CDP && CDP.ready) CDP.ready(init);
+    else window.addEventListener('ConjureDSPReady', init);
+  })();
+  </script>
+</body>
+</html>
