@@ -30,11 +30,27 @@
  *                                       // offFrame() deactivates it.
  *   ConjureDSP.audio.offFrame(cb)       // remove a previously-registered cb
  *
+ *   ConjureDSP.transport.tempo               // BPM (read-only snapshot)
+ *   ConjureDSP.transport.isPlaying           // bool
+ *   ConjureDSP.transport.beatPosition        // current beat
+ *   ConjureDSP.transport.samplePosition      // current sample frame
+ *   ConjureDSP.transport.timeSigNumerator    // int (e.g. 4)
+ *   ConjureDSP.transport.timeSigDenominator  // int (e.g. 4)
+ *   ConjureDSP.transport.onChange(cb)        // cb({tempo, isPlaying, ...})
+ *                                            // fires only when something
+ *                                            // changes; ~30 Hz max. First
+ *                                            // subscriber activates the
+ *                                            // push channel; last
+ *                                            // offChange() deactivates it.
+ *                                            // Independent of audio.onFrame.
+ *   ConjureDSP.transport.offChange(cb)
+ *
  * Internal (Swift-facing; do not call from preset code):
  *   ConjureDSP._init(state)             // initial {metadata, values, theme}
  *   ConjureDSP._paramUpdate(i, v)       // DAW automation / MIDI / host change
  *   ConjureDSP._setTheme(theme)         // theme flip from OS/app
  *   ConjureDSP._audioFrame(frame)       // audio tick from capture manager
+ *   ConjureDSP._transportUpdate(snap)   // host transport change
  */
 
 (function() {
@@ -64,6 +80,21 @@
     var _audioLatestFrame = null;
     var _audioProcessedSeq = -1;
     var _audioRafHandle = 0;        // 0 = loop not running
+
+    // Transport push channel — independent of audio frames. Swift fires
+    // _transportUpdate only on actual changes (~30 Hz max), so no RAF
+    // dispatch loop is needed; handlers run synchronously inside
+    // _transportUpdate.
+    var _transport = {
+        tempo: 0,
+        isPlaying: false,
+        beatPosition: 0,
+        samplePosition: 0,
+        timeSigNumerator: 4,
+        timeSigDenominator: 4,
+    };
+    var _transportHandlers = [];
+    var _transportSubscribed = false;
 
     // `parameters.set(...)` fires onChange/onAnyChange handlers
     // synchronously, exactly like an external `_paramUpdate` callback
@@ -158,6 +189,24 @@
         }
     }
 
+    // Sync the transport subscription on consumer count transitions.
+    // Empty→non-empty posts subscribeTransport; non-empty→empty posts
+    // unsubscribeTransport. Symmetric with _syncAudioSubscription but
+    // simpler — no FFT flag, no RAF loop (Swift only pushes on changes).
+    function _syncTransportSubscription() {
+        if (_transportHandlers.length === 0) {
+            if (_transportSubscribed) {
+                postTo('unsubscribeTransport', {});
+                _transportSubscribed = false;
+            }
+            return;
+        }
+        if (!_transportSubscribed) {
+            postTo('subscribeTransport', {});
+            _transportSubscribed = true;
+        }
+    }
+
     var ConjureDSP = {
         apiVersion: 1,
 
@@ -228,6 +277,29 @@
             },
         },
 
+        transport: {
+            get tempo()              { return _transport.tempo; },
+            get isPlaying()          { return _transport.isPlaying; },
+            get beatPosition()       { return _transport.beatPosition; },
+            get samplePosition()     { return _transport.samplePosition; },
+            get timeSigNumerator()   { return _transport.timeSigNumerator; },
+            get timeSigDenominator() { return _transport.timeSigDenominator; },
+            onChange: function(cb) {
+                if (typeof cb !== 'function') return;
+                _transportHandlers.push(cb);
+                _syncTransportSubscription();
+            },
+            offChange: function(cb) {
+                for (var i = 0; i < _transportHandlers.length; i++) {
+                    if (_transportHandlers[i] === cb) {
+                        _transportHandlers.splice(i, 1);
+                        _syncTransportSubscription();
+                        return;
+                    }
+                }
+            },
+        },
+
         get theme() { return _theme; },
 
         ready: function(cb) {
@@ -289,6 +361,19 @@
     ConjureDSP._audioFrame = function(frame) {
         if (!frame) return;
         _audioLatestFrame = frame;
+    };
+
+    // Swift's TransportPushManager fires this when the host transport
+    // changed since the previous tick (~30 Hz max, no-change ticks
+    // suppressed at the source). Update the live snapshot then dispatch
+    // to subscribers synchronously — there's no display-rate decoupling
+    // to do (the dam is on the Swift side).
+    ConjureDSP._transportUpdate = function(snapshot) {
+        if (!snapshot) return;
+        _transport = snapshot;
+        for (var i = 0; i < _transportHandlers.length; i++) {
+            safeInvoke(_transportHandlers[i], [snapshot], 'transport.onChange');
+        }
     };
 
     // Forward uncaught JS errors to the plugin log so author-side bugs are

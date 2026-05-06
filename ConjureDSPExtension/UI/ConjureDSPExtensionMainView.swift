@@ -44,6 +44,7 @@ struct ConjureDSPExtensionMainView: View {
     // growth the original comment warned about.
     @ObservedObject var presetManager: PresetManager
     var captureManager: AudioCaptureManager
+    var transportManager: TransportPushManager
     var processProfiler: ProcessProfiler
     var memoryMonitor: MemoryMonitor
     var parameterState: ParameterState
@@ -365,7 +366,8 @@ struct ConjureDSPExtensionMainView: View {
                                 parameterState: parameterState,
                                 bundle: bundle,
                                 theme: colorScheme,
-                                captureManager: captureManager
+                                captureManager: captureManager,
+                                transportManager: transportManager
                             )
                             .frame(width: uiW, height: uiH)
                             .id(bundle.uiIndexURL)

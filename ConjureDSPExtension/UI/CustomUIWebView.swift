@@ -39,6 +39,11 @@ struct CustomUIWebView: NSViewRepresentable {
     /// consumer on `AudioCaptureManager` so capture runs even with the
     /// spectrogram hidden.
     var captureManager: AudioCaptureManager
+    /// Source of host transport pushes (tempo, isPlaying, beat position, time
+    /// signature). Custom UIs opt in via `window.ConjureDSP.transport.onChange(...)`.
+    /// Independent of audio frames so a UI that only wants tempo doesn't spin
+    /// up the audio capture pipeline.
+    var transportManager: TransportPushManager
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -86,6 +91,8 @@ struct CustomUIWebView: NSViewRepresentable {
         contentController.add(context.coordinator, name: "log")
         contentController.add(context.coordinator, name: "subscribeAudioFrames")
         contentController.add(context.coordinator, name: "unsubscribeAudioFrames")
+        contentController.add(context.coordinator, name: "subscribeTransport")
+        contentController.add(context.coordinator, name: "unsubscribeTransport")
 
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
 
@@ -108,6 +115,7 @@ struct CustomUIWebView: NSViewRepresentable {
         context.coordinator.webView = webView
         context.coordinator.parameterState = parameterState
         context.coordinator.captureManager = captureManager
+        context.coordinator.transportManager = transportManager
         context.coordinator.audioFPS = bundle.manifest.resolvedFPS
         context.coordinator.audioFramesAllowed = bundle.manifest.audioFramesEnabled
         context.coordinator.subscribe(to: parameterState)
@@ -194,6 +202,8 @@ struct CustomUIWebView: NSViewRepresentable {
         controller.removeScriptMessageHandler(forName: "log")
         controller.removeScriptMessageHandler(forName: "subscribeAudioFrames")
         controller.removeScriptMessageHandler(forName: "unsubscribeAudioFrames")
+        controller.removeScriptMessageHandler(forName: "subscribeTransport")
+        controller.removeScriptMessageHandler(forName: "unsubscribeTransport")
         coordinator.fileWatcher?.stop()
         coordinator.fileWatcher = nil
         coordinator.pendingReload?.cancel()
@@ -201,6 +211,9 @@ struct CustomUIWebView: NSViewRepresentable {
         coordinator.audioFrameCancellable?.cancel()
         coordinator.audioFrameCancellable = nil
         coordinator.captureManager?.setConsumer(id: coordinator.audioConsumerID, active: false)
+        coordinator.transportCancellable?.cancel()
+        coordinator.transportCancellable = nil
+        coordinator.transportManager?.setConsumer(id: coordinator.transportConsumerID, active: false)
         coordinator.cancellables.removeAll()
         coordinator.webView = nil
     }
@@ -241,6 +254,16 @@ struct CustomUIWebView: NSViewRepresentable {
         weak var webView: WKWebView?
         weak var parameterState: ParameterState?
         weak var captureManager: AudioCaptureManager?
+        weak var transportManager: TransportPushManager?
+
+        /// Stable id for this coordinator when registering as a transport
+        /// consumer. Distinct from `audioConsumerID` so subscribing to one
+        /// channel doesn't activate the other.
+        lazy var transportConsumerID: String = "customUI-transport-\(ObjectIdentifier(self).hashValue)"
+
+        /// Active only while the JS bridge has at least one
+        /// `transport.onChange` subscriber.
+        var transportCancellable: AnyCancellable?
 
         /// Retained so the scheme handler isn't torn down before WKWebView is.
         var schemeHandler: BundleAssetSchemeHandler?
@@ -551,6 +574,12 @@ struct CustomUIWebView: NSViewRepresentable {
                 includeFFT = false
                 stopAudioFrameForwarding()
 
+            case "subscribeTransport":
+                startTransportForwarding()
+
+            case "unsubscribeTransport":
+                stopTransportForwarding()
+
             default:
                 break
             }
@@ -586,6 +615,41 @@ struct CustomUIWebView: NSViewRepresentable {
             audioFrameCancellable?.cancel()
             audioFrameCancellable = nil
             syncCaptureState()
+        }
+
+        // MARK: Transport forwarding
+
+        fileprivate func startTransportForwarding() {
+            if transportCancellable == nil, let transportManager {
+                transportCancellable = transportManager.transportPublisher
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] snapshot in
+                        self?.forwardTransport(snapshot)
+                    }
+            }
+            transportManager?.setConsumer(id: transportConsumerID, active: true)
+        }
+
+        fileprivate func stopTransportForwarding() {
+            transportCancellable?.cancel()
+            transportCancellable = nil
+            transportManager?.setConsumer(id: transportConsumerID, active: false)
+        }
+
+        private func forwardTransport(_ snapshot: TransportSnapshot) {
+            guard isReady, let webView else { return }
+            let payload: [String: Any] = [
+                "tempo": snapshot.tempo,
+                "isPlaying": snapshot.isPlaying,
+                "beatPosition": snapshot.beatPosition,
+                "samplePosition": snapshot.samplePosition,
+                "timeSigNumerator": Int(snapshot.timeSigNumerator),
+                "timeSigDenominator": Int(snapshot.timeSigDenominator),
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            let js = "window.ConjureDSP && window.ConjureDSP._transportUpdate(\(json))"
+            webView.evaluateJavaScript(js, completionHandler: nil)
         }
 
         /// Monotonic sequence counter stamped onto every forwarded frame.

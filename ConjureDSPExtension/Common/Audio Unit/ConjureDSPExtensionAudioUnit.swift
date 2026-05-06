@@ -30,6 +30,14 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Only used by AudioCaptureManager on the UI thread.
 	var kernelReference: DSPKernelRef? { kernel }
 
+	/// Optional sink for transport-state pushes to custom UIs. Set by
+	/// AudioUnitViewController right after the AU is created. The render
+	/// block writes into this manager once per callback (audio-thread
+	/// safe — internally `os_unfair_lock`-protected). Independent of
+	/// `AudioCaptureManager` so a UI that only wants tempo doesn't spin
+	/// up the audio capture pipeline.
+	weak var transportPushManager: TransportPushManager?
+
 	// MARK: - Shared Python Runtime
 
 	/// App Group container URL for cross-app data sharing.
@@ -1781,6 +1789,19 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			dsp_kernel_set_transport(kernel, tempo, beatPosition, transportIsPlaying,
 									 Int32(timeSigNumerator), Int32(timeSigDenominator),
 									 samplePosition)
+
+			// Mirror to the custom-UI transport push channel. Only fires
+			// the lock+store if a UI is subscribed (the manager itself
+			// gates publishing on consumer count); the property load is
+			// a single nullable pointer read on the audio thread.
+			au.transportPushManager?.audioThreadStore(
+				tempo: tempo,
+				beatPosition: beatPosition,
+				samplePosition: samplePosition,
+				timeSigNumerator: Int32(timeSigNumerator),
+				timeSigDenominator: Int32(timeSigDenominator),
+				isPlaying: transportIsPlaying
+			)
 
 			// Process with events (replaces AUProcessHelper.processWithEvents)
 			let channelCount = UInt32(inABL.count)

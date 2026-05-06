@@ -135,6 +135,7 @@ pub extern "C" fn process(
 
     private var hostingView: SafeHostingView<ConjureDSPExtensionMainView>?
     private var captureManager: AudioCaptureManager?
+    private var transportManager: TransportPushManager?
     private var processProfiler: ProcessProfiler?
     private var memoryMonitor: MemoryMonitor?
     private var parameterState: ParameterState?
@@ -315,6 +316,14 @@ pub extern "C" fn process(
         capture.hostView = self.view
         let initialSR = au.outputBusses[0].format.sampleRate
         capture.sampleRate = initialSR > 0 ? initialSR : 44100.0
+
+        if transportManager == nil {
+            transportManager = TransportPushManager()
+        }
+        let transport = transportManager!
+        if let conjureAU = au as? ConjureDSPExtensionAudioUnit {
+            conjureAU.transportPushManager = transport
+        }
 
         if processProfiler == nil {
             processProfiler = ProcessProfiler()
@@ -819,6 +828,7 @@ pub extern "C" fn process(
             scriptSourcePublisher: scriptPublisher,
             presetManager: pm,
             captureManager: capture,
+            transportManager: transport,
             processProfiler: profiler,
             memoryMonitor: memMon,
             parameterState: ps,
