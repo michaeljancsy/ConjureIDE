@@ -36,6 +36,10 @@ struct AudioFrame {
     let peakOut: Float
     let fftInDB: [Float]?
     let fftOutDB: [Float]?
+    /// Host sample rate at the time the frame was captured. Lets UIs that
+    /// map FFT bins to absolute frequencies (e.g. the eq3 spectrum overlay)
+    /// stay correct at non-48k rates instead of hardcoding 48000.
+    let sampleRate: Double
     /// Script-published telemetry slots, keyed by declared name (e.g.
     /// `"Gr Db"` → `.scalar(-3.2)`, `"Scope"` → `.vector([...])`).
     /// `nil` when the loaded preset declares no telemetry — the common
@@ -188,6 +192,12 @@ final class AudioCaptureManager: ObservableObject {
     @Published var updateCounter: Int = 0
 
     // MARK: - Configuration
+
+    /// Host sample rate. Set by the view controller from the AU's output bus
+    /// format on capture activation. Stamped into every emitted `AudioFrame`
+    /// so UIs that need absolute frequencies (e.g. spectrum overlays) don't
+    /// have to hardcode an assumption.
+    var sampleRate: Double = 48000
 
     /// FFT size (number of samples per FFT window). Must be a power of 2.
     var fftSize: Int = 2048 {
@@ -582,6 +592,7 @@ final class AudioCaptureManager: ObservableObject {
                 peakOut: peakOut,
                 fftInDB: fftIn,
                 fftOutDB: fftOut,
+                sampleRate: sampleRate,
                 telemetry: telemetry,
                 timestamp: CACurrentMediaTime()
             ))

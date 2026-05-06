@@ -639,6 +639,7 @@ struct CustomUIWebView: NSViewRepresentable {
                 "rmsOut": frame.rmsOut,
                 "peakIn": frame.peakIn,
                 "peakOut": frame.peakOut,
+                "sampleRate": frame.sampleRate,
                 "t": frame.timestamp,
             ]
             // FFT bins are opt-in via `audio.onFrame(cb, { fft: true })`.
