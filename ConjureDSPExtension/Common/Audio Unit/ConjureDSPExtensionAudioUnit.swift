@@ -30,6 +30,17 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Only used by AudioCaptureManager on the UI thread.
 	var kernelReference: DSPKernelRef? { kernel }
 
+	/// Sink for transport-state pushes to custom UIs. Owned by the AU so
+	/// the audio thread reads a stable strong reference set at AU init
+	/// (Swift weak refs aren't safe for audio-thread reads — the runtime
+	/// uses a side-table lock). The render block writes into this manager
+	/// once per callback (audio-thread safe — internally
+	/// `os_unfair_lock`-protected). Independent of `AudioCaptureManager`
+	/// so a UI that only wants tempo doesn't spin up the audio capture
+	/// pipeline. Lifetime: lives as long as the AU instance; survives UI
+	/// open/close cycles, no per-VC churn.
+	let transportPushManager = TransportPushManager()
+
 	// MARK: - Shared Python Runtime
 
 	/// App Group container URL for cross-app data sharing.
@@ -1830,6 +1841,20 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			dsp_kernel_set_transport(kernel, tempo, beatPosition, transportIsPlaying,
 									 Int32(timeSigNumerator), Int32(timeSigDenominator),
 									 samplePosition)
+
+			// Mirror to the custom-UI transport push channel. Only fires
+			// the lock+store if a UI is subscribed (the manager itself
+			// gates publishing on consumer count). The property is a
+			// `let` set at AU init so this is a single strong-ref load
+			// — no weak-ref side-table lock on the audio thread.
+			au.transportPushManager.audioThreadStore(
+				tempo: tempo,
+				beatPosition: beatPosition,
+				samplePosition: samplePosition,
+				timeSigNumerator: Int32(timeSigNumerator),
+				timeSigDenominator: Int32(timeSigDenominator),
+				isPlaying: transportIsPlaying
+			)
 
 			// Process with events (replaces AUProcessHelper.processWithEvents)
 			let channelCount = UInt32(inABL.count)

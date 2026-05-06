@@ -316,6 +316,12 @@ pub extern "C" fn process(
         let initialSR = au.outputBusses[0].format.sampleRate
         capture.sampleRate = initialSR > 0 ? initialSR : 44100.0
 
+        // Owned by the AU (a `let` property set at AU init) so the audio
+        // thread reads a stable strong reference, not a weak that the main
+        // thread could be writing to. Survives VC churn for free.
+        let transport: TransportPushManager = (au as? ConjureDSPExtensionAudioUnit)?.transportPushManager
+            ?? TransportPushManager()
+
         if processProfiler == nil {
             processProfiler = ProcessProfiler()
         }
@@ -819,6 +825,7 @@ pub extern "C" fn process(
             scriptSourcePublisher: scriptPublisher,
             presetManager: pm,
             captureManager: capture,
+            transportManager: transport,
             processProfiler: profiler,
             memoryMonitor: memMon,
             parameterState: ps,

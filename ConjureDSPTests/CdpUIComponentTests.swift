@@ -392,6 +392,47 @@ struct CdpUIComponentTests {
         #expect(label == "Low Gain")
     }
 
+    @Test func sliderVerticalAppliesWritingMode() async throws {
+        // <cdp-slider orientation="vertical"> should flip the native
+        // <input type=range> into vertical layout via writing-mode.
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [
+            ["name": "Mix", "min": 0.0, "max": 1.0, "default": 0.5]
+        ])
+        try await createElement(h, tag: "cdp-slider", id: "s", attrs: ["param": "0", "orientation": "vertical"])
+        let writingMode = try await h.eval("getComputedStyle(document.getElementById('s').shadowRoot.querySelector('input')).writingMode") as? String
+        #expect(writingMode?.contains("vertical") == true, "vertical orientation should flip writing-mode; got \(writingMode ?? "nil")")
+    }
+
+    @Test func sliderVerticalExternalUpdateStillBindsValue() async throws {
+        // Vertical orientation must NOT regress the value-binding hot path.
+        // External _paramUpdate should still set input.value identically.
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [
+            ["name": "Mix", "min": 0.0, "max": 1.0, "default": 0.0]
+        ])
+        try await createElement(h, tag: "cdp-slider", id: "s", attrs: ["param": "0", "orientation": "vertical"])
+        try await h.eval("ConjureDSP._paramUpdate(0, 0.75)")
+        let raw = try await h.eval("document.getElementById('s').shadowRoot.querySelector('input').value") as? String
+        let num = Double(raw ?? "-1") ?? -1
+        #expect(abs(num - 0.75) < 1e-6, "got \(num)")
+    }
+
+    @Test func sliderHorizontalDefaultUnchanged() async throws {
+        // Sliders without an orientation attribute must stay horizontal.
+        // Pins the no-regression contract for existing UIs.
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [
+            ["name": "Mix", "min": 0.0, "max": 1.0, "default": 0.5]
+        ])
+        try await createElement(h, tag: "cdp-slider", id: "s", attrs: ["param": "0"])
+        let writingMode = try await h.eval("getComputedStyle(document.getElementById('s').shadowRoot.querySelector('input')).writingMode") as? String
+        #expect(writingMode?.contains("vertical") != true, "default slider should stay horizontal-tb; got \(writingMode ?? "nil")")
+    }
+
     // MARK: - <cdp-toggle>
 
     @Test func toggleReflectsInitialValue() async throws {

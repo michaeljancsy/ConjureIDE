@@ -1268,6 +1268,43 @@ enum DSPDocumentation {
       via `ExportCustomUIWebView`. Don't rely on devtools or host-only
       APIs.
 
+    ## Sizing your UI
+
+    The scaffold (`save_preset` with `scaffold_ui: true`) writes a
+    `manifest.ui` block sized 520 × 260. That fits a few stacked sliders
+    but clips quickly once you add panels, knob rows, or canvases. If
+    your layout overflows, bump the values in `manifest.json`:
+
+    ```json
+    "ui": { "entryHTML": "ui/index.html", "width": 720, "height": 420,
+            "fps": 30, "audioFrames": false }
+    ```
+
+    `width` / `height` are pt; the manifest value is the initial size
+    DAWs allocate, so set it to the size your layout actually needs.
+
+    `smoke_test_ui` reports a `content_overflow` block whenever the
+    rendered document is larger than the manifest dimensions:
+
+    ```json
+    "content_overflow": {
+        "actual_width": 612, "actual_height": 318,
+        "manifest_width": 520, "manifest_height": 260
+    }
+    ```
+
+    The field is absent when the layout fits. **Always run
+    `smoke_test_ui` after authoring a new UI or resizing an existing
+    one** — it catches overflow plus runtime JS errors (thrown in
+    `ready(cb)` callbacks, unbound `param=` references, etc.) that the
+    static validator can't see.
+
+    If a layout legitimately needs more than ~800 × 600, weigh whether a
+    custom UI is the right tool at all: narrow DAW panes (Logic's Smart
+    Controls, Live's device chain) will scroll-clip a tall webview, and
+    a scrollable layout inside a smaller manifest size often serves
+    users better than a fixed oversized one.
+
     ## Common failures and how to avoid them
 
     Each of these has broken past custom UIs. The static validator
