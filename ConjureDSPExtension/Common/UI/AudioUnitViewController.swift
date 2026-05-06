@@ -313,22 +313,24 @@ pub extern "C" fn process(
         let capture = captureManager!
         capture.kernel = au.kernelReference
         capture.hostView = self.view
+        let initialSR = au.outputBusses[0].format.sampleRate
+        capture.sampleRate = initialSR > 0 ? initialSR : 44100.0
 
         if processProfiler == nil {
             processProfiler = ProcessProfiler()
         }
         let profiler = processProfiler!
         profiler.kernel = au.kernelReference
-        let sr = au.outputBusses[0].format.sampleRate
-        profiler.sampleRate = sr > 0 ? sr : 44100.0
+        profiler.sampleRate = initialSR > 0 ? initialSR : 44100.0
         profiler.maxFrames = au.maximumFramesToRender > 0 ? au.maximumFramesToRender : 512
         profiler.start()
         if let conjureAU = au as? ConjureDSPExtensionAudioUnit {
             renderResourcesCancellable = conjureAU.renderConfigurationChanged
                 .receive(on: RunLoop.main)
-                .sink { [weak profiler] maxFrames, sampleRate in
+                .sink { [weak profiler, weak capture] maxFrames, sampleRate in
                     profiler?.maxFrames = maxFrames
                     profiler?.sampleRate = sampleRate
+                    capture?.sampleRate = sampleRate
                 }
         }
 

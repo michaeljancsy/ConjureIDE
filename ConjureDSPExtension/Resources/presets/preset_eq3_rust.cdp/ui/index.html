@@ -105,7 +105,7 @@
     let specIn = null;   // Float32Array, halfN bins of dB (-120..0)
     let specOut = null;
     let specBins = 0;
-    let specSampleRate = 48000;  // overwritten on first frame via fftSize inference
+    let specSampleRate = 48000;  // updated each frame from frame.sampleRate
     const SPEC_FLOOR = -90;      // floor dB shown on canvas (clamps below this)
     const SPEC_CEIL  = 0;        // top dB shown on canvas
     const SPEC_DECAY = 0.85;
@@ -113,7 +113,10 @@
 
     function ingestSpectrum(prev, fresh) {
       const n = fresh.length;
-      if (!prev || prev.length !== n) prev = new Float32Array(n);
+      // Pre-fill with SPEC_FLOOR so the first decay step doesn't pull
+      // from a 0 dB seed (which would otherwise show ~-13.5 dB on the
+      // canvas for one frame — a brief visible artifact at startup).
+      if (!prev || prev.length !== n) prev = new Float32Array(n).fill(SPEC_FLOOR);
       for (let i = 0; i < n; i++) {
         const decayed = prev[i] * SPEC_DECAY + SPEC_FLOOR * (1 - SPEC_DECAY);
         prev[i] = fresh[i] > decayed ? fresh[i] : decayed;
@@ -124,11 +127,13 @@
     if (CDP && CDP.audio && CDP.audio.onFrame) {
       CDP.audio.onFrame((frame) => {
         if (!frame.fftIn || !frame.fftOut) return;
-        // Infer FFT size from bin count: AudioCaptureManager passes halfN
-        // bins where halfN = fftSize/2. Bin i maps to f = i * SR / fftSize.
-        // The canvas only knows the bin index; SR is implicit and the
-        // spectrogram math doesn't change if SR drifts off 48k.
+        // halfN bins span 0..Nyquist; bin i maps to f = i * SR / fftSize.
+        // The host stamps the active sample rate onto every frame so the
+        // axis stays correct at non-48k rates.
         specBins = frame.fftIn.length;
+        if (typeof frame.sampleRate === 'number' && frame.sampleRate > 0) {
+          specSampleRate = frame.sampleRate;
+        }
         specIn  = ingestSpectrum(specIn,  frame.fftIn);
         specOut = ingestSpectrum(specOut, frame.fftOut);
         // Throttle spectrum-driven redraws so we don't compete with EQ
