@@ -154,6 +154,37 @@ void dsp_kernel_process(DSPKernelRef kernel,
                         uint32_t frame_count);
 
 /**
+ * Process audio with an optional sidechain input bus. Mirrors
+ * `dsp_kernel_process` and adds three trailing arguments describing the
+ * sidechain pull for this render block.
+ *
+ * When `sidechain_connected` is false (or `sidechain_buffers` is null,
+ * or `sidechain_channel_count` is zero), backends that consume sidechain
+ * audio see silence. Old presets that don't read sidechain are
+ * unaffected.
+ *
+ * Both sides of the FFI ship together, so this is purely additive — the
+ * legacy `dsp_kernel_process` entry point delegates to this one with no
+ * sidechain so callers that haven't been updated still work.
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * - `input_buffers` / `output_buffers` constraints from `dsp_kernel_process`
+ *   apply.
+ * - When `sidechain_connected` is true and `sidechain_buffers` is non-null,
+ *   it must point to `sidechain_channel_count` valid `*const f32` pointers,
+ *   each with at least `frame_count` samples.
+ */
+void dsp_kernel_process_with_sidechain(DSPKernelRef kernel,
+                                       const float *const *input_buffers,
+                                       float *const *output_buffers,
+                                       uint32_t channel_count,
+                                       uint32_t frame_count,
+                                       const float *const *sidechain_buffers,
+                                       uint32_t sidechain_channel_count,
+                                       bool sidechain_connected);
+
+/**
  * Update host DAW transport state. Called from the real-time audio thread
  * once per render callback, before the process loop.
  *

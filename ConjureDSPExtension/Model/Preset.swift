@@ -123,6 +123,7 @@ enum FactoryPresetRegistry {
         // Dynamics
         Entry(name: "Compressor (Python)", number: 20, resourceName: "preset_compressor", language: .python, category: .dynamics),
         Entry(name: "Compressor (Rust)", number: 21, resourceName: "preset_compressor_rust", language: .rust, category: .dynamics),
+        Entry(name: "Compressor — Sidechain (Rust)", number: 106, resourceName: "preset_compressor_sidechain_rust", language: .rust, category: .dynamics),
         Entry(name: "Limiter (Python)", number: 22, resourceName: "preset_limiter", language: .python, category: .dynamics),
         Entry(name: "Limiter (Rust)", number: 23, resourceName: "preset_limiter_rust", language: .rust, category: .dynamics),
         Entry(name: "Noise Gate (Python)", number: 24, resourceName: "preset_noisegate", language: .python, category: .dynamics),

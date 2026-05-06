@@ -573,6 +573,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	// Audio busses
 	private var _inputBus: AUAudioUnitBus!
+	private var _sidechainBus: AUAudioUnitBus!
 	private var _outputBus: AUAudioUnitBus!
 	private var _inputBusses: AUAudioUnitBusArray!
 	private var _outputBusses: AUAudioUnitBusArray!
@@ -581,6 +582,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	private var inputPCMBuffer: AVAudioPCMBuffer?
 	private var originalAudioBufferList: UnsafePointer<AudioBufferList>?
 	private var mutableAudioBufferList: UnsafeMutablePointer<AudioBufferList>?
+	// Sidechain (bus 1). Allocated alongside the main input bus so the
+	// host can route audio into it; left disconnected by default.
+	private var sidechainPCMBuffer: AVAudioPCMBuffer?
+	private var sidechainOriginalAudioBufferList: UnsafePointer<AudioBufferList>?
+	private var sidechainMutableAudioBufferList: UnsafeMutablePointer<AudioBufferList>?
 	private var _maxFrames: AUAudioFrameCount = 0
 
 	/// Debug-only timer that samples `dsp_kernel_get_parameter` from the
@@ -600,10 +606,18 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		_inputBus = try AUAudioUnitBus(format: format)
 		_inputBus.maximumChannelCount = 2
 
+		// Always-on optional sidechain bus. The host advertises it as a
+		// second input so DAWs (Logic, Live, Reaper) show a sidechain
+		// slot on every ConjureDSP instance. Presets that don't read
+		// sidechain ignore it; the audio just falls on the floor.
+		_sidechainBus = try AUAudioUnitBus(format: format)
+		_sidechainBus.maximumChannelCount = 2
+		_sidechainBus.name = "Sidechain"
+
 		_outputBus = try AUAudioUnitBus(format: format)
 		_outputBus.maximumChannelCount = 2
 
-		_inputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .input, busses: [_inputBus])
+		_inputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .input, busses: [_inputBus, _sidechainBus])
 		_outputBusses = AUAudioUnitBusArray(audioUnit: self, busType: .output, busses: [_outputBus])
 
 		buildParameterTree()
@@ -1679,6 +1693,13 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		originalAudioBufferList = inputPCMBuffer?.audioBufferList
 		mutableAudioBufferList = inputPCMBuffer?.mutableAudioBufferList
 
+		// Sidechain mirror — same channel count as the main input bus
+		// (the host's sidechain slot defaults to matching the primary
+		// input format in Logic/Live/Reaper).
+		sidechainPCMBuffer = AVAudioPCMBuffer(pcmFormat: _sidechainBus.format, frameCapacity: _maxFrames)
+		sidechainOriginalAudioBufferList = sidechainPCMBuffer?.audioBufferList
+		sidechainMutableAudioBufferList = sidechainPCMBuffer?.mutableAudioBufferList
+
 		dsp_kernel_initialize(kernel, Int32(inputChannelCount), Int32(outputChannelCount), _outputBus.format.sampleRate)
 
 		try super.allocateRenderResources()
@@ -1695,6 +1716,9 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		inputPCMBuffer = nil
 		originalAudioBufferList = nil
 		mutableAudioBufferList = nil
+		sidechainPCMBuffer = nil
+		sidechainOriginalAudioBufferList = nil
+		sidechainMutableAudioBufferList = nil
 		super.deallocateRenderResources()
 		SentryHelper.breadcrumb("deallocateRenderResources", category: "au.lifecycle")
 	}
@@ -1743,8 +1767,33 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			let err = pullInputBlock(&pullFlags, timestamp, frameCount, 0, mutableABL)
 			guard err == noErr else { return err }
 
+			// Pull the sidechain bus (bus index 1). When the host has
+			// nothing routed, pullInputBlock returns kAudioUnitErr_NoConnection;
+			// we treat that as "disconnected" and pass silence via
+			// `sidechainConnected = false`. Most DAWs (Logic, Live,
+			// Reaper) advertise the bus this way — the slot exists,
+			// it's just empty until the user wires a source.
+			var sidechainConnected = false
+			if let sidechainOriginalABL = au.sidechainOriginalAudioBufferList,
+			   let sidechainMutableABL = au.sidechainMutableAudioBufferList {
+				let scOrig = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: sidechainOriginalABL))
+				let scMut = UnsafeMutableAudioBufferListPointer(sidechainMutableABL)
+				sidechainMutableABL.pointee.mNumberBuffers = sidechainOriginalABL.pointee.mNumberBuffers
+				for i in 0..<scOrig.count {
+					scMut[i].mNumberChannels = scOrig[i].mNumberChannels
+					scMut[i].mData = scOrig[i].mData
+					scMut[i].mDataByteSize = byteSize
+				}
+				var scPullFlags = AudioUnitRenderActionFlags(rawValue: 0)
+				let scErr = pullInputBlock(&scPullFlags, timestamp, frameCount, 1, sidechainMutableABL)
+				sidechainConnected = (scErr == noErr)
+			}
+
 			let inABL = UnsafeMutableAudioBufferListPointer(mutableABL)
 			let outABL = UnsafeMutableAudioBufferListPointer(outputData)
+			let scABL: UnsafeMutableAudioBufferListPointer? = sidechainConnected
+				? au.sidechainMutableAudioBufferList.map(UnsafeMutableAudioBufferListPointer.init)
+				: nil
 
 			// If passed null output buffer pointers, process in-place in the input buffer.
 			for i in 0..<outABL.count {
@@ -1793,6 +1842,8 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					// Process remaining frames
 					let frameOffset = frameCount - framesRemaining
 					Self.callKernelProcess(kernel: kernel, inABL: inABL, outABL: outABL,
+										   sidechainABL: scABL,
+										   sidechainConnected: sidechainConnected,
 										   channelCount: channelCount, frameOffset: frameOffset,
 										   frameCount: framesRemaining)
 					return noErr
@@ -1804,6 +1855,8 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				if framesThisSegment > 0 {
 					let frameOffset = frameCount - framesRemaining
 					Self.callKernelProcess(kernel: kernel, inABL: inABL, outABL: outABL,
+										   sidechainABL: scABL,
+										   sidechainConnected: sidechainConnected,
 										   channelCount: channelCount, frameOffset: frameOffset,
 										   frameCount: framesThisSegment)
 					framesRemaining -= framesThisSegment
@@ -1818,28 +1871,56 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
-	/// Call the Rust kernel to process a segment of audio.
+	/// Call the Rust kernel to process a segment of audio, with an
+	/// optional sidechain bus. `sidechainABL` is non-nil only when the
+	/// host actually pulled audio successfully into the sidechain bus
+	/// for this render block; otherwise we pass null pointers + a
+	/// `sidechainConnected = false` flag so backends fall back to
+	/// internal detection.
 	private static func callKernelProcess(
 		kernel: DSPKernelRef,
 		inABL: UnsafeMutableAudioBufferListPointer,
 		outABL: UnsafeMutableAudioBufferListPointer,
+		sidechainABL: UnsafeMutableAudioBufferListPointer?,
+		sidechainConnected: Bool,
 		channelCount: UInt32,
 		frameOffset: UInt32,
 		frameCount: UInt32
 	) {
 		let count = Int(channelCount)
+		let scCount = sidechainConnected ? (sidechainABL?.count ?? 0) : 0
 
 		// Stack-allocate channel buffer pointer arrays (no heap allocation on audio thread)
 		withUnsafeTemporaryAllocation(of: UnsafePointer<Float>?.self, capacity: count) { inputBuf in
 			withUnsafeTemporaryAllocation(of: UnsafeMutablePointer<Float>?.self, capacity: count) { outputBuf in
-				for ch in 0..<count {
-					let baseIn = inABL[ch].mData!.assumingMemoryBound(to: Float.self)
-					inputBuf[ch] = UnsafePointer(baseIn.advanced(by: Int(frameOffset)))
+				withUnsafeTemporaryAllocation(of: UnsafePointer<Float>?.self, capacity: max(scCount, 1)) { sidechainBuf in
+					for ch in 0..<count {
+						let baseIn = inABL[ch].mData!.assumingMemoryBound(to: Float.self)
+						inputBuf[ch] = UnsafePointer(baseIn.advanced(by: Int(frameOffset)))
 
-					let baseOut = outABL[ch].mData!.assumingMemoryBound(to: Float.self)
-					outputBuf[ch] = baseOut.advanced(by: Int(frameOffset))
+						let baseOut = outABL[ch].mData!.assumingMemoryBound(to: Float.self)
+						outputBuf[ch] = baseOut.advanced(by: Int(frameOffset))
+					}
+					if scCount > 0, let scABL = sidechainABL {
+						for ch in 0..<scCount {
+							let baseSc = scABL[ch].mData!.assumingMemoryBound(to: Float.self)
+							sidechainBuf[ch] = UnsafePointer(baseSc.advanced(by: Int(frameOffset)))
+						}
+						dsp_kernel_process_with_sidechain(
+							kernel,
+							inputBuf.baseAddress!, outputBuf.baseAddress!,
+							channelCount, frameCount,
+							sidechainBuf.baseAddress!, UInt32(scCount), true
+						)
+					} else {
+						dsp_kernel_process_with_sidechain(
+							kernel,
+							inputBuf.baseAddress!, outputBuf.baseAddress!,
+							channelCount, frameCount,
+							nil, 0, false
+						)
+					}
 				}
-				dsp_kernel_process(kernel, inputBuf.baseAddress!, outputBuf.baseAddress!, channelCount, frameCount)
 			}
 		}
 	}

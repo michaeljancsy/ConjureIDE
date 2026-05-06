@@ -3,6 +3,29 @@ use crate::params::{ParamMetadata, TelemetryMetadata, PARAM_COUNT, TELEMETRY_LEN
 use std::any::Any;
 use std::collections::HashMap;
 
+/// Optional sidechain input bus passed to [`Backend::process`].
+///
+/// `connected = false` means the host has nothing routed to the sidechain
+/// slot in this render block. `inputs` is empty in that case; backends that
+/// consume sidechain audio must substitute silence.
+#[derive(Copy, Clone)]
+pub struct SidechainInput<'a> {
+    pub inputs: &'a [*const f32],
+    pub channel_count: usize,
+    pub connected: bool,
+}
+
+impl<'a> SidechainInput<'a> {
+    /// Sentinel "no sidechain wired" value — used by code paths that
+    /// haven't been updated to thread sidechain through yet, and as the
+    /// default for the legacy `dsp_kernel_process` FFI entry point.
+    pub const NONE: SidechainInput<'static> = SidechainInput {
+        inputs: &[],
+        channel_count: 0,
+        connected: false,
+    };
+}
+
 /// Trait for pluggable DSP processing backends (Python, WASM, etc.).
 ///
 /// Implementations must be real-time safe in `process()`:
@@ -23,6 +46,13 @@ pub trait Backend: Any {
     /// `params` contains the DAW-automatable parameter values (0.0–1.0),
     /// snapshotted once per audio callback from atomic storage.
     ///
+    /// `sidechain` carries an optional second input bus. When the host has
+    /// nothing routed to the sidechain slot, `sidechain.connected` is false
+    /// and `sidechain.inputs` is empty — backends that consume sidechain
+    /// must zero-fill their internal buffer in that case so scripts always
+    /// see a defined signal. Backends that don't consume sidechain ignore
+    /// the field; old presets are unaffected.
+    ///
     /// Takes `&mut self` because some backends (e.g. wasmtime) require mutable
     /// access to their execution state during function calls.
     ///
@@ -30,6 +60,9 @@ pub trait Backend: Any {
     /// - `inputs` must contain `channel_count` valid `*const f32` pointers.
     /// - `outputs` must contain `channel_count` valid `*mut f32` pointers.
     /// - Each channel buffer must contain at least `frame_count` samples.
+    /// - When `sidechain.connected` is true, `sidechain.inputs` must contain
+    ///   `sidechain.channel_count` valid `*const f32` pointers, each with at
+    ///   least `frame_count` samples.
     unsafe fn process(
         &mut self,
         inputs: &[*const f32],
@@ -39,6 +72,7 @@ pub trait Backend: Any {
         sample_rate: f64,
         params: &[f32; PARAM_COUNT],
         transport: &TransportState,
+        sidechain: SidechainInput<'_>,
     ) -> bool;
 
     /// Returns the last error message, if any.

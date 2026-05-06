@@ -1,4 +1,4 @@
-use crate::backend::Backend;
+use crate::backend::{Backend, SidechainInput};
 use crate::kernel::TransportState;
 use crate::params::PARAM_COUNT;
 use std::collections::HashMap;
@@ -145,6 +145,21 @@ pub struct WasmBackend {
     /// audio-thread `read_telemetry_vec` path is a pure slice read with
     /// no wasmtime function-call overhead.
     telemetry_vec_offsets: Vec<Option<i32>>,
+    /// Cached offset of the script's SIDECHAIN_BUF in WASM linear
+    /// memory (via `get_sidechain_ptr`). `None` for legacy modules
+    /// that don't declare sidechain — the host writes nothing in that
+    /// case, costing zero on the hot path.
+    sidechain_buf_offset: Option<i32>,
+    /// Cached offset of `SIDECHAIN_STATE: [i32; 2]` (channel_count,
+    /// connected) — written before each `process()` call so the script
+    /// knows whether to follow the sidechain or fall back to internal
+    /// detection. `None` when the export is missing.
+    sidechain_state_offset: Option<i32>,
+    /// Maximum sidechain channels the script's buffer can hold, derived
+    /// from `get_sidechain_buf_len()` (bytes / 4 / max_frames). Capped
+    /// at 2 in practice; used to clip when the host pulls more channels
+    /// than the script allocated.
+    sidechain_max_channels: usize,
 }
 
 /// Base offset in WASM linear memory to avoid the null page.
@@ -277,6 +292,33 @@ impl WasmBackend {
             _ => Vec::new(),
         };
 
+        // Probe for optional sidechain exports. Modules that don't
+        // declare `setup!()` with the sidechain block (or pre-sidechain
+        // setup macros) won't have these — we leave the offsets at None
+        // and the host writes nothing to sidechain memory at runtime.
+        let sidechain_buf_offset = instance
+            .get_typed_func::<(), i32>(&mut store, "get_sidechain_ptr")
+            .ok()
+            .and_then(|f| {
+                let _ = store.set_fuel(COMPILED_FUEL);
+                f.call(&mut store, ()).ok()
+            });
+        let sidechain_state_offset = instance
+            .get_typed_func::<(), i32>(&mut store, "get_sidechain_state_ptr")
+            .ok()
+            .and_then(|f| {
+                let _ = store.set_fuel(COMPILED_FUEL);
+                f.call(&mut store, ()).ok()
+            });
+        let sidechain_buf_len = instance
+            .get_typed_func::<(), i32>(&mut store, "get_sidechain_buf_len")
+            .ok()
+            .and_then(|f| {
+                let _ = store.set_fuel(COMPILED_FUEL);
+                f.call(&mut store, ()).ok()
+            })
+            .unwrap_or(0);
+
         // Probe for optional get_latency_samples() export
         let latency_samples = instance
             .get_typed_func::<(), i32>(&mut store, "get_latency_samples")
@@ -360,6 +402,16 @@ impl WasmBackend {
             })
             .unwrap_or(8); // Legacy default for old modules
 
+        // Compute sidechain channel capacity from declared buffer length.
+        // The macro emits SIDECHAIN_BUF: [f32; MAX_CH * MAX_FR]; bytes / 4
+        // / MAX_FRAMES gives MAX_CH. Falls back to 0 when sidechain isn't
+        // declared so the host write loop becomes a no-op.
+        let sidechain_max_channels = if sidechain_buf_len > 0 {
+            (sidechain_buf_len as usize / 4) / conjuredsp::MAX_FRAMES
+        } else {
+            0
+        };
+
         Ok(Self {
             store,
             memory,
@@ -385,6 +437,9 @@ impl WasmBackend {
             telemetry_metadata,
             telemetry_buf_offset,
             telemetry_vec_offsets,
+            sidechain_buf_offset,
+            sidechain_state_offset,
+            sidechain_max_channels,
         })
     }
 
@@ -1104,6 +1159,7 @@ impl Backend for WasmBackend {
         sample_rate: f64,
         params: &[f32; PARAM_COUNT],
         transport: &TransportState,
+        sidechain: SidechainInput<'_>,
     ) -> bool {
         if self.input_offset == 0 || channel_count == 0 || frame_count == 0 {
             return false;
@@ -1126,6 +1182,74 @@ impl Backend for WasmBackend {
             let src_bytes =
                 std::slice::from_raw_parts(src.as_ptr() as *const u8, frame_count * 4);
             dst.copy_from_slice(src_bytes);
+        }
+
+        // Sidechain copy: same channel-sequential layout as the main
+        // input bus, sized to MAX_FR per channel (the macro's static
+        // allocation). Modules that don't declare sidechain leave
+        // `sidechain_buf_offset` at None, so this whole block becomes a
+        // no-op for legacy presets — zero overhead on the hot path.
+        if let Some(offset) = self.sidechain_buf_offset {
+            let sc_offset = offset as usize;
+            // Per-channel stride mirrors the macro: MAX_FR f32s per ch
+            // (not the runtime frame_count) so successive blocks always
+            // land at the same offsets and the script-side accessor
+            // can index by `channel * MAX_FR + frame`.
+            let stride_bytes = conjuredsp::MAX_FRAMES * 4;
+            let frame_bytes = frame_count * 4;
+            let usable_ch = self
+                .sidechain_max_channels
+                .min(if sidechain.connected {
+                    sidechain.channel_count
+                } else {
+                    self.sidechain_max_channels
+                });
+            for ch in 0..usable_ch {
+                let dst_off = sc_offset + ch * stride_bytes;
+                if dst_off + frame_bytes > mem_data.len() {
+                    break;
+                }
+                let dst = &mut mem_data[dst_off..dst_off + frame_bytes];
+                if sidechain.connected && ch < sidechain.channel_count {
+                    let src = std::slice::from_raw_parts(
+                        sidechain.inputs[ch],
+                        frame_count,
+                    );
+                    let src_bytes = std::slice::from_raw_parts(
+                        src.as_ptr() as *const u8,
+                        frame_bytes,
+                    );
+                    dst.copy_from_slice(src_bytes);
+                } else {
+                    // Disconnected: zero the live block so scripts see
+                    // silence instead of last block's audio. We only
+                    // touch frame_count bytes — the remaining MAX_FR
+                    // tail isn't read by the script's accessor.
+                    for b in dst.iter_mut() {
+                        *b = 0;
+                    }
+                }
+            }
+            // Publish sidechain state ([channel_count, connected]) so
+            // the script can branch on whether the host actually wired
+            // anything up. Layout is fixed — see the `sidechain!()`
+            // story in conjuredsp-rs.
+            if let Some(state_offset) = self.sidechain_state_offset {
+                let state_off = state_offset as usize;
+                if state_off + 8 <= mem_data.len() {
+                    // Report `usable_ch`, not `sidechain.channel_count`:
+                    // when the host pulls more channels than the script
+                    // allocated for, only `usable_ch` were actually
+                    // written into SIDECHAIN_BUF. Telling the script the
+                    // raw count would invite reads of stale / zero
+                    // channels above the buffer's capacity.
+                    let ch_le = (usable_ch as i32).to_le_bytes();
+                    let conn_le = (if sidechain.connected { 1i32 } else { 0i32 })
+                        .to_le_bytes();
+                    mem_data[state_off..state_off + 4].copy_from_slice(&ch_le);
+                    mem_data[state_off + 4..state_off + 8].copy_from_slice(&conn_le);
+                }
+            }
         }
 
         // Write params into WASM memory if the module exports get_params_ptr.
@@ -1443,6 +1567,7 @@ mod tests {
                 44100.0,
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
+            crate::backend::SidechainInput::NONE,
             )
         };
         assert!(ok, "process should succeed");
@@ -1469,6 +1594,7 @@ mod tests {
                 44100.0,
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
+            crate::backend::SidechainInput::NONE,
             )
         };
         assert!(ok, "process should succeed");
@@ -1494,6 +1620,7 @@ mod tests {
                 44100.0,
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
+            crate::backend::SidechainInput::NONE,
             )
         };
         assert!(ok);
@@ -1556,6 +1683,7 @@ mod tests {
                 44100.0,
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
+            crate::backend::SidechainInput::NONE,
             )
         };
         assert!(!ok, "Infinite loop should fail due to fuel exhaustion");
@@ -1583,6 +1711,7 @@ mod tests {
                 44100.0,
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
+            crate::backend::SidechainInput::NONE,
             )
         };
         assert!(!ok, "Should fail without initialize");
@@ -1607,6 +1736,7 @@ mod tests {
                     48000.0,
                     &[0.0; PARAM_COUNT],
                     &TransportState::default(),
+                crate::backend::SidechainInput::NONE,
                 )
             };
             assert!(ok);
@@ -1637,6 +1767,7 @@ mod tests {
                     44100.0,
                     &[0.0; PARAM_COUNT],
                     &TransportState::default(),
+                crate::backend::SidechainInput::NONE,
                 )
             };
             assert!(ok, "Callback {} should succeed", i);
@@ -1777,6 +1908,7 @@ mod tests {
                 44100.0,
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
+            crate::backend::SidechainInput::NONE,
             )
         };
         assert!(ok, "WASI module should process audio");
@@ -1801,6 +1933,7 @@ mod tests {
                 44100.0,
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
+            crate::backend::SidechainInput::NONE,
             )
         };
         assert!(ok, "Module calling environ_sizes_get should work");
@@ -1861,6 +1994,7 @@ mod tests {
                 44100.0,
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
+            crate::backend::SidechainInput::NONE,
             )
         };
         assert!(ok, "Module with buffer getters should process audio");
@@ -2042,7 +2176,7 @@ mod tests {
         let params = [0.0_f32; PARAM_COUNT];
         let transport = crate::kernel::TransportState::default();
         unsafe {
-            backend.process(&inputs, &outputs, 1, 256, 48000.0, &params, &transport);
+            backend.process(&inputs, &outputs, 1, 256, 48000.0, &params, &transport, crate::backend::SidechainInput::NONE);
         }
 
         let mut tele = [0.0_f32; crate::params::TELEMETRY_LEN];
@@ -2118,7 +2252,7 @@ mod tests {
             backend.process(
                 &[input.as_ptr()],
                 &[output.as_mut_ptr()],
-                1, 4, 44100.0, &params, &transport,
+                1, 4, 44100.0, &params, &transport, crate::backend::SidechainInput::NONE,
             );
         }
         assert_eq!(backend.memory_bytes(), 65536 * 2, "should grow by 1 page after process");
@@ -2127,7 +2261,7 @@ mod tests {
             backend.process(
                 &[input.as_ptr()],
                 &[output.as_mut_ptr()],
-                1, 4, 44100.0, &params, &transport,
+                1, 4, 44100.0, &params, &transport, crate::backend::SidechainInput::NONE,
             );
         }
         assert_eq!(backend.memory_bytes(), 65536 * 3, "should grow by another page");
@@ -2237,7 +2371,7 @@ fn main() {}
         let ok = unsafe {
             backend.process(
                 &[input.as_ptr()], &[output.as_mut_ptr()],
-                1, n, 48000.0, &params, &transport,
+                1, n, 48000.0, &params, &transport, crate::backend::SidechainInput::NONE,
             )
         };
         assert!(ok, "Process should succeed");
@@ -2381,7 +2515,7 @@ fn main() {}
         let ok = unsafe {
             backend.process(
                 &[input.as_ptr()], &[output.as_mut_ptr()],
-                1, n, 48000.0, &params, &transport,
+                1, n, 48000.0, &params, &transport, crate::backend::SidechainInput::NONE,
             )
         };
         assert!(ok, "Process should succeed");
@@ -2432,7 +2566,7 @@ fn main() {}
         let ok2 = unsafe {
             backend2.process(
                 &[input.as_ptr()], &[output2.as_mut_ptr()],
-                1, n, 48000.0, &params, &transport,
+                1, n, 48000.0, &params, &transport, crate::backend::SidechainInput::NONE,
             )
         };
         assert!(ok2, "Process should succeed even with empty slot");
