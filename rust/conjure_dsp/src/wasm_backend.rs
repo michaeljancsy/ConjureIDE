@@ -1237,7 +1237,13 @@ impl Backend for WasmBackend {
             if let Some(state_offset) = self.sidechain_state_offset {
                 let state_off = state_offset as usize;
                 if state_off + 8 <= mem_data.len() {
-                    let ch_le = (sidechain.channel_count as i32).to_le_bytes();
+                    // Report `usable_ch`, not `sidechain.channel_count`:
+                    // when the host pulls more channels than the script
+                    // allocated for, only `usable_ch` were actually
+                    // written into SIDECHAIN_BUF. Telling the script the
+                    // raw count would invite reads of stale / zero
+                    // channels above the buffer's capacity.
+                    let ch_le = (usable_ch as i32).to_le_bytes();
                     let conn_le = (if sidechain.connected { 1i32 } else { 0i32 })
                         .to_le_bytes();
                     mem_data[state_off..state_off + 4].copy_from_slice(&ch_le);
