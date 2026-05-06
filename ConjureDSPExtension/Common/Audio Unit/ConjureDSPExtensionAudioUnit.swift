@@ -30,13 +30,16 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Only used by AudioCaptureManager on the UI thread.
 	var kernelReference: DSPKernelRef? { kernel }
 
-	/// Optional sink for transport-state pushes to custom UIs. Set by
-	/// AudioUnitViewController right after the AU is created. The render
-	/// block writes into this manager once per callback (audio-thread
-	/// safe — internally `os_unfair_lock`-protected). Independent of
-	/// `AudioCaptureManager` so a UI that only wants tempo doesn't spin
-	/// up the audio capture pipeline.
-	weak var transportPushManager: TransportPushManager?
+	/// Sink for transport-state pushes to custom UIs. Owned by the AU so
+	/// the audio thread reads a stable strong reference set at AU init
+	/// (Swift weak refs aren't safe for audio-thread reads — the runtime
+	/// uses a side-table lock). The render block writes into this manager
+	/// once per callback (audio-thread safe — internally
+	/// `os_unfair_lock`-protected). Independent of `AudioCaptureManager`
+	/// so a UI that only wants tempo doesn't spin up the audio capture
+	/// pipeline. Lifetime: lives as long as the AU instance; survives UI
+	/// open/close cycles, no per-VC churn.
+	let transportPushManager = TransportPushManager()
 
 	// MARK: - Shared Python Runtime
 
@@ -1792,9 +1795,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 			// Mirror to the custom-UI transport push channel. Only fires
 			// the lock+store if a UI is subscribed (the manager itself
-			// gates publishing on consumer count); the property load is
-			// a single nullable pointer read on the audio thread.
-			au.transportPushManager?.audioThreadStore(
+			// gates publishing on consumer count). The property is a
+			// `let` set at AU init so this is a single strong-ref load
+			// — no weak-ref side-table lock on the audio thread.
+			au.transportPushManager.audioThreadStore(
 				tempo: tempo,
 				beatPosition: beatPosition,
 				samplePosition: samplePosition,

@@ -135,7 +135,6 @@ pub extern "C" fn process(
 
     private var hostingView: SafeHostingView<ConjureDSPExtensionMainView>?
     private var captureManager: AudioCaptureManager?
-    private var transportManager: TransportPushManager?
     private var processProfiler: ProcessProfiler?
     private var memoryMonitor: MemoryMonitor?
     private var parameterState: ParameterState?
@@ -317,13 +316,11 @@ pub extern "C" fn process(
         let initialSR = au.outputBusses[0].format.sampleRate
         capture.sampleRate = initialSR > 0 ? initialSR : 44100.0
 
-        if transportManager == nil {
-            transportManager = TransportPushManager()
-        }
-        let transport = transportManager!
-        if let conjureAU = au as? ConjureDSPExtensionAudioUnit {
-            conjureAU.transportPushManager = transport
-        }
+        // Owned by the AU (a `let` property set at AU init) so the audio
+        // thread reads a stable strong reference, not a weak that the main
+        // thread could be writing to. Survives VC churn for free.
+        let transport: TransportPushManager = (au as? ConjureDSPExtensionAudioUnit)?.transportPushManager
+            ?? TransportPushManager()
 
         if processProfiler == nil {
             processProfiler = ProcessProfiler()
