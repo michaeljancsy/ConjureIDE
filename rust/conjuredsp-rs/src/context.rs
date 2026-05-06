@@ -145,12 +145,15 @@ impl Context {
     ///
     /// Returns 0.0 when the host has nothing routed to the sidechain
     /// slot (see [`Context::sidechain_connected`]) or when the script
-    /// was built against a pre-sidechain `setup!()` macro. Indices past
-    /// `MAX_FRAMES` (per channel) clamp to silence rather than reading
-    /// past the buffer.
+    /// was built against a pre-sidechain `setup!()` macro. Out-of-range
+    /// channel or frame indices clamp to silence rather than reading
+    /// past `SIDECHAIN_BUF`.
     #[inline]
     pub fn sidechain(&self, channel: usize, frame: usize) -> f32 {
         if self.sidechain.is_null() {
+            return 0.0;
+        }
+        if channel >= crate::MAX_SIDECHAIN_CHANNELS {
             return 0.0;
         }
         if frame >= self.sidechain_stride {
@@ -339,6 +342,37 @@ mod tests {
             assert_eq!(ctx.sidechain(0, 3), -0.5);
             assert_eq!(ctx.sidechain(1, 0), 0.75);
             assert_eq!(ctx.sidechain(1, 7), -0.125);
+        }
+    }
+
+    #[test]
+    fn sidechain_out_of_range_channel_returns_silence() {
+        // Pin the bounds check on the channel index — the buffer is
+        // sized for `MAX_SIDECHAIN_CHANNELS` channels (currently 2);
+        // anything past that must clamp to silence so a script bug
+        // can't read past `SIDECHAIN_BUF`.
+        let params = [0.0_f32; 16];
+        let mut tele = [0.0_f32; TELEMETRY_LEN];
+        let sc = vec![0.5_f32; crate::MAX_SIDECHAIN_CHANNELS * crate::MAX_FRAMES];
+        let state: [i32; 2] = [crate::MAX_SIDECHAIN_CHANNELS as i32, 1];
+
+        unsafe {
+            let ctx = Context::new_with_sidechain(
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                0, 16, 48000.0,
+                params.as_ptr(),
+                tele.as_mut_ptr(),
+                sc.as_ptr(),
+                state.as_ptr(),
+            );
+            // In-range channels read the buffer.
+            assert_eq!(ctx.sidechain(0, 0), 0.5);
+            assert_eq!(ctx.sidechain(crate::MAX_SIDECHAIN_CHANNELS - 1, 0), 0.5);
+            // Out-of-range channels clamp to silence (no UB read).
+            assert_eq!(ctx.sidechain(crate::MAX_SIDECHAIN_CHANNELS, 0), 0.0);
+            assert_eq!(ctx.sidechain(crate::MAX_SIDECHAIN_CHANNELS + 5, 0), 0.0);
+            assert_eq!(ctx.sidechain(usize::MAX, 0), 0.0);
         }
     }
 

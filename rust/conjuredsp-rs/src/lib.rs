@@ -57,6 +57,12 @@ pub use params::{
 /// drives vector-telemetry slot length.
 pub const MAX_FRAMES: usize = 4096;
 
+/// Maximum channels the sidechain input bus is sized for in
+/// `setup!()`'s `SIDECHAIN_BUF`. Mirrored as `MAX_CH` in the macro.
+/// Used by `Context::sidechain` to bounds-check the channel index so
+/// scripts can't read past the buffer even with out-of-range input.
+pub const MAX_SIDECHAIN_CHANNELS: usize = 2;
+
 // Re-export JSON builders for macro use
 pub use json::{write_param_json, write_telemetry_json, JsonBuf};
 
