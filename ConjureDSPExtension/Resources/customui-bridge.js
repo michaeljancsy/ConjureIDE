@@ -371,8 +371,9 @@
     ConjureDSP._transportUpdate = function(snapshot) {
         if (!snapshot) return;
         _transport = snapshot;
-        for (var i = 0; i < _transportHandlers.length; i++) {
-            safeInvoke(_transportHandlers[i], [snapshot], 'transport.onChange');
+        var handlers = _transportHandlers.slice();
+        for (var i = 0; i < handlers.length; i++) {
+            safeInvoke(handlers[i], [snapshot], 'transport.onChange');
         }
     };
 

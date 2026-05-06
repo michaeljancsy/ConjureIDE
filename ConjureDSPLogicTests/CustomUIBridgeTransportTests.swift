@@ -213,4 +213,25 @@ struct CustomUIBridgeTransportTests {
         #expect(result == 0,
                 "subscribing audio frames must NOT subscribe the transport channel; got \(result)")
     }
+
+    /// Regression for splice-during-iteration: a handler that calls offChange
+    /// inside its own callback must not cause the next handler to be skipped.
+    /// _transportUpdate must snapshot the handler list before iterating.
+    @Test func handlerThatUnsubscribesDoesNotSkipSiblings() throws {
+        let ctx = try Self.makeContext()
+        let result = ctx.evaluateScript("""
+            var fires = [];
+            var cb1 = function(s) { fires.push('cb1'); ConjureDSP.transport.offChange(cb1); };
+            var cb2 = function(s) { fires.push('cb2'); };
+            var cb3 = function(s) { fires.push('cb3'); };
+            ConjureDSP.transport.onChange(cb1);
+            ConjureDSP.transport.onChange(cb2);
+            ConjureDSP.transport.onChange(cb3);
+            ConjureDSP._transportUpdate({ tempo: 100, isPlaying: false, beatPosition: 0,
+                                          samplePosition: 0, timeSigNumerator: 4, timeSigDenominator: 4 });
+            JSON.stringify(fires);
+        """)!.toString()!
+        #expect(result == "[\"cb1\",\"cb2\",\"cb3\"]",
+                "all 3 handlers must fire even when cb1 unsubscribes mid-iteration; got \(result)")
+    }
 }
