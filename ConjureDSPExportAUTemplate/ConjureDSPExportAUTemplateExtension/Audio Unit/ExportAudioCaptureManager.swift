@@ -37,6 +37,10 @@ struct AudioFrame {
     let peakOut: Float
     let fftInDB: [Float]?
     let fftOutDB: [Float]?
+    /// Host sample rate. Mirrors the main extension's field so preset UIs
+    /// that map FFT bins to absolute frequencies work identically inside an
+    /// exported AU.
+    let sampleRate: Double
     /// Script-published telemetry slots, keyed by declared name. `nil`
     /// when the loaded preset declares no telemetry. Mirrors the main
     /// extension's `AudioFrame.telemetry` shape so author UIs that
@@ -94,6 +98,10 @@ final class ExportAudioCaptureManager: ObservableObject {
     }
 
     // MARK: - FFT config
+
+    /// Host sample rate. Set by the view controller from the AU's output bus
+    /// format on capture activation. Stamped into every emitted `AudioFrame`.
+    var sampleRate: Double = 48000
 
     /// FFT window size. Must be a power of 2. 2048 matches the main
     /// extension's default so preset UIs see the same bin layout.
@@ -312,6 +320,7 @@ final class ExportAudioCaptureManager: ObservableObject {
                 peakOut: peakOut,
                 fftInDB: producedFFTColumn ? fftInputScratch : nil,
                 fftOutDB: producedFFTColumn ? fftOutputScratch : nil,
+                sampleRate: sampleRate,
                 telemetry: telemetry,
                 timestamp: CACurrentMediaTime()
             ))

@@ -14,17 +14,16 @@
     .band-label { font-weight: 600; letter-spacing: 0.02em; }
     .band-freq { font-size: 0.85em; opacity: 0.6; font-variant-numeric: tabular-nums; }
     .band-gain { font-size: 1.1em; font-variant-numeric: tabular-nums; }
-    .band-bypass { opacity: 0.55; font-size: 0.8em; cursor: pointer; user-select: none; }
-    .band-bypass[aria-pressed="true"] { color: CanvasText; opacity: 1; font-weight: 600; }
+    cdp-toggle.band-bypass { --cdp-label-width: 0; --cdp-value-width: 0; flex: 0 0 auto; }
     .band.inactive .band-gain { opacity: 0.35; }
   </style>
 </head>
 <body>
   <canvas id="response" width="800" height="400"></canvas>
   <div class="legend">
-    <div class="band" data-band="low"><div class="band-head"><span class="band-label">Low</span><span class="band-bypass" role="button" aria-pressed="false">bypass</span></div><div class="band-freq">200 Hz shelf</div><div class="band-gain">0.00 dB</div></div>
-    <div class="band" data-band="mid"><div class="band-head"><span class="band-label">Mid</span><span class="band-bypass" role="button" aria-pressed="false">bypass</span></div><div class="band-freq">1.0 kHz peak</div><div class="band-gain">0.00 dB</div></div>
-    <div class="band" data-band="high"><div class="band-head"><span class="band-label">High</span><span class="band-bypass" role="button" aria-pressed="false">bypass</span></div><div class="band-freq">5.0 kHz shelf</div><div class="band-gain">0.00 dB</div></div>
+    <div class="band" data-band="low" param="low_gain"><div class="band-head"><span class="band-label">Low</span><cdp-toggle class="band-bypass" param="low_bypass"></cdp-toggle></div><div class="band-freq">200 Hz shelf</div><div class="band-gain">0.00 dB</div></div>
+    <div class="band" data-band="mid" param="mid_gain"><div class="band-head"><span class="band-label">Mid</span><cdp-toggle class="band-bypass" param="mid_bypass"></cdp-toggle></div><div class="band-freq">1.0 kHz peak</div><div class="band-gain">0.00 dB</div></div>
+    <div class="band" data-band="high" param="high_gain"><div class="band-head"><span class="band-label">High</span><cdp-toggle class="band-bypass" param="high_bypass"></cdp-toggle></div><div class="band-freq">5.0 kHz shelf</div><div class="band-gain">0.00 dB</div></div>
   </div>
   <script>
   (function () {
@@ -106,7 +105,7 @@
     let specIn = null;   // Float32Array, halfN bins of dB (-120..0)
     let specOut = null;
     let specBins = 0;
-    let specSampleRate = 48000;  // overwritten on first frame via fftSize inference
+    let specSampleRate = 48000;  // updated each frame from frame.sampleRate
     const SPEC_FLOOR = -90;      // floor dB shown on canvas (clamps below this)
     const SPEC_CEIL  = 0;        // top dB shown on canvas
     const SPEC_DECAY = 0.85;
@@ -114,7 +113,10 @@
 
     function ingestSpectrum(prev, fresh) {
       const n = fresh.length;
-      if (!prev || prev.length !== n) prev = new Float32Array(n);
+      // Pre-fill with SPEC_FLOOR so the first decay step doesn't pull
+      // from a 0 dB seed (which would otherwise show ~-13.5 dB on the
+      // canvas for one frame — a brief visible artifact at startup).
+      if (!prev || prev.length !== n) prev = new Float32Array(n).fill(SPEC_FLOOR);
       for (let i = 0; i < n; i++) {
         const decayed = prev[i] * SPEC_DECAY + SPEC_FLOOR * (1 - SPEC_DECAY);
         prev[i] = fresh[i] > decayed ? fresh[i] : decayed;
@@ -125,11 +127,13 @@
     if (CDP && CDP.audio && CDP.audio.onFrame) {
       CDP.audio.onFrame((frame) => {
         if (!frame.fftIn || !frame.fftOut) return;
-        // Infer FFT size from bin count: AudioCaptureManager passes halfN
-        // bins where halfN = fftSize/2. Bin i maps to f = i * SR / fftSize.
-        // The canvas only knows the bin index; SR is implicit and the
-        // spectrogram math doesn't change if SR drifts off 48k.
+        // halfN bins span 0..Nyquist; bin i maps to f = i * SR / fftSize.
+        // The host stamps the active sample rate onto every frame so the
+        // axis stays correct at non-48k rates.
         specBins = frame.fftIn.length;
+        if (typeof frame.sampleRate === 'number' && frame.sampleRate > 0) {
+          specSampleRate = frame.sampleRate;
+        }
         specIn  = ingestSpectrum(specIn,  frame.fftIn);
         specOut = ingestSpectrum(specOut, frame.fftOut);
         // Throttle spectrum-driven redraws so we don't compete with EQ
@@ -265,6 +269,20 @@
         ctx.fill();
       });
       ctx.globalAlpha = 1;
+
+      // Frequency tick labels (log 20 Hz – 20 kHz). Drawn last so they
+      // sit on top of the curve / FFT fills, with low alpha so they
+      // don't dominate.
+      ctx.fillStyle = FG;
+      ctx.globalAlpha = 0.5;
+      ctx.font = `${10 * devicePixelRatio}px -apple-system, sans-serif`;
+      [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000].forEach(f => {
+        const t = Math.log(f / fMin) / Math.log(fMax / fMin);
+        const x = pad + t * innerW;
+        const label = f >= 1000 ? `${f / 1000}k` : `${f}`;
+        ctx.fillText(label, x + 2, h - pad - 2);
+      });
+      ctx.globalAlpha = 1;
     }
 
     // Alnum-only normalization so the same UI file matches across
@@ -330,18 +348,6 @@
       scheduleRedraw();
     }
 
-    // Legend click-to-bypass.
-    document.querySelectorAll('.band').forEach(row => {
-      const key = row.dataset.band;
-      const band = BANDS.find(b => b.key === key);
-      const btn = row.querySelector('.band-bypass');
-      btn.addEventListener('click', () => {
-        const cur = CDP.parameters.get(getIndex(band.bypassParam)) >= 0.5 ? 0 : 1;
-        CDP.parameters.set(getIndex(band.bypassParam), cur);
-        scheduleRedraw();
-      });
-    });
-
     function updateLegend() {
       document.querySelectorAll('.band').forEach(row => {
         const band = BANDS.find(b => b.key === row.dataset.band);
@@ -349,7 +355,6 @@
         const bypassed = CDP.parameters.get(getIndex(band.bypassParam)) >= 0.5;
         row.classList.toggle('inactive', bypassed);
         row.querySelector('.band-gain').textContent = (gain >= 0 ? '+' : '') + gain.toFixed(2) + ' dB';
-        row.querySelector('.band-bypass').setAttribute('aria-pressed', bypassed ? 'true' : 'false');
       });
     }
 

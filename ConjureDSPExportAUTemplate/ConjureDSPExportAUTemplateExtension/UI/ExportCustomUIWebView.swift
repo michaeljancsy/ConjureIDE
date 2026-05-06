@@ -352,6 +352,7 @@ struct ExportCustomUIWebView: NSViewRepresentable {
                 "rmsOut": frame.rmsOut,
                 "peakIn": frame.peakIn,
                 "peakOut": frame.peakOut,
+                "sampleRate": frame.sampleRate,
                 "t": frame.timestamp,
             ]
             if includeFFT {

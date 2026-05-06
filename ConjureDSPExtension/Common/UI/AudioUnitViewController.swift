@@ -264,14 +264,27 @@ pub extern "C" fn process(
         if let restored = au.scriptSource {
             initialScript = restored
             initialLanguage = au.currentScriptLanguage
-            // If no preset is selected yet (fresh launch, not a fullState restore with a preset),
-            // select the default factory preset in the preset manager
-            if pm.currentPreset == nil,
-               let defaultPreset = pm.presets.first(where: { preset in
-                   guard case .factory(let name) = preset.source else { return false }
-                   return name == ConjureDSPExtensionAudioUnit.defaultPresetResource
-               }) {
-                pm.setCurrentPreset(defaultPreset, source: restored)
+            // Seed `pm.currentPreset` so the picker reflects what's
+            // actually loaded in the kernel. Order of preference:
+            //   1. Whatever Logic asserted via `AUAudioUnit.currentPreset`
+            //      during AU init (this is the common path — Logic
+            //      auto-picks `factoryPresets[0]` on instantiate).
+            //   2. The AU's own `defaultPresetResource` (stereowidth).
+            // Without (1), the picker gets seeded from `defaultPresetResource`
+            // even when Logic has already loaded a different preset, and
+            // the picker silently lies about what's running.
+            if pm.currentPreset == nil {
+                let auCurrent = au.currentPreset
+                let matchedFromAU: Preset? = auCurrent.flatMap { aup in
+                    pm.presets.first { $0.factoryPresetNumber == aup.number }
+                }
+                let fallback = pm.presets.first { preset in
+                    guard case .factory(let name) = preset.source else { return false }
+                    return name == ConjureDSPExtensionAudioUnit.defaultPresetResource
+                }
+                if let chosen = matchedFromAU ?? fallback {
+                    pm.setCurrentPreset(chosen, source: restored)
+                }
             }
             // Benchmark the already-loaded script so the UI shows timing
             let benchSecs = dsp_kernel_benchmark_process(au.kernelReference)
@@ -300,22 +313,24 @@ pub extern "C" fn process(
         let capture = captureManager!
         capture.kernel = au.kernelReference
         capture.hostView = self.view
+        let initialSR = au.outputBusses[0].format.sampleRate
+        capture.sampleRate = initialSR > 0 ? initialSR : 44100.0
 
         if processProfiler == nil {
             processProfiler = ProcessProfiler()
         }
         let profiler = processProfiler!
         profiler.kernel = au.kernelReference
-        let sr = au.outputBusses[0].format.sampleRate
-        profiler.sampleRate = sr > 0 ? sr : 44100.0
+        profiler.sampleRate = initialSR > 0 ? initialSR : 44100.0
         profiler.maxFrames = au.maximumFramesToRender > 0 ? au.maximumFramesToRender : 512
         profiler.start()
         if let conjureAU = au as? ConjureDSPExtensionAudioUnit {
             renderResourcesCancellable = conjureAU.renderConfigurationChanged
                 .receive(on: RunLoop.main)
-                .sink { [weak profiler] maxFrames, sampleRate in
+                .sink { [weak profiler, weak capture] maxFrames, sampleRate in
                     profiler?.maxFrames = maxFrames
                     profiler?.sampleRate = sampleRate
+                    capture?.sampleRate = sampleRate
                 }
         }
 
@@ -867,12 +882,20 @@ pub extern "C" fn process(
             if au.retryLoadDefaultPreset() {
                 timer.invalidate()
                 self.runtimePollTimer = nil
-                log.info("Python runtime found after \(attempts)s — default preset loaded")
-                // Select the default preset in the preset manager
-                if let defaultPreset = pm.presets.first(where: { preset in
+                // If the host had already asserted `currentPreset` before
+                // Python was ready, retryLoadDefaultPreset took the
+                // "replay" path and the AU's setter is already syncing
+                // `pm.currentPreset` via its own @MainActor Task. Don't
+                // touch pm here — racing the setter would briefly flip
+                // the picker to stereowidth before settling on the
+                // host's actual choice.
+                if au.currentPreset != nil {
+                    log.info("Python runtime found after \(attempts)s — host's currentPreset replayed")
+                } else if let defaultPreset = pm.presets.first(where: { preset in
                     guard case .factory(let name) = preset.source else { return false }
                     return name == ConjureDSPExtensionAudioUnit.defaultPresetResource
                 }) {
+                    log.info("Python runtime found after \(attempts)s — bundled default loaded")
                     pm.setCurrentPreset(defaultPreset, source: au.scriptSource ?? "")
                 }
             } else if attempts >= maxAttempts {

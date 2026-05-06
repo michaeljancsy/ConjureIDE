@@ -376,14 +376,12 @@ struct ConjureDSPTests {
         #expect(restoredSource == Self.testScript, "Script should survive full save/restore cycle")
     }
 
-    @Test func fullStateWithDefaultPreset() async throws {
-        let (_, au) = try await Self.instantiateAU()
-        // Fresh AU loads the default preset — fullState should include its source
-        let state = au.fullState
-        #expect(state != nil, "fullState should return a dictionary")
-        let scriptData = state?[Self.scriptSourceKey] as? Data
-        #expect(scriptData != nil, "Fresh AU should have the default preset script in fullState")
-    }
+    // Note: the former `fullStateWithDefaultPreset` test asserted that a
+    // freshly-instantiated AU has its default preset's script in
+    // `fullState`. Option D removed the AU's auto-load — the host's
+    // `currentPreset`/`fullState` assignment is now the only thing that
+    // loads a script. The replacement assertion lives in
+    // `auInitDoesNotAutoLoadScript` below.
 
     @Test func fullStatePreservesBaseState() async throws {
         let (_, au1) = try await Self.instantiateAU()
@@ -502,6 +500,37 @@ struct ConjureDSPTests {
         #expect(source1 != source2, "Different presets should produce different scripts in fullState")
         #expect(source1.contains("def process"))
         #expect(source2.contains("def process"))
+    }
+
+    /// Regression: AU init must NOT auto-load a script. Pre-option-D the AU
+    /// loaded its own `defaultPresetResource` immediately on instantiate,
+    /// and Logic Pro's "auto-set `currentPreset = factoryPresets[0]`" XPC
+    /// call would race with that pre-load and silently clobber state. The
+    /// fix removes the AU's pre-load — the host's `currentPreset` (or
+    /// `fullState`) assignment is the single source of truth for which
+    /// script is running.
+    @Test func auInitDoesNotAutoLoadScript() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let state = au.fullState
+        let scriptData = state?[Self.scriptSourceKey] as? Data
+        #expect(scriptData == nil, "AU init should not auto-load a script (option D)")
+    }
+
+    /// Regression: setting `currentPreset` (as Logic does on AU init via
+    /// XPC) must load the matching factory preset's script. Verifies the
+    /// host-driven script-load contract that option D relies on.
+    @Test func settingCurrentPresetLoadsMatchingScript() async throws {
+        let (_, au) = try await Self.instantiateAU()
+        let presets = au.factoryPresets ?? []
+        let passthroughPreset = try #require(presets.first { $0.name == "Passthrough (Python)" })
+
+        au.currentPreset = passthroughPreset
+
+        #expect(au.currentPreset?.number == passthroughPreset.number)
+        let scriptData = au.fullState?[Self.scriptSourceKey] as? Data
+        let source = String(data: scriptData ?? Data(), encoding: .utf8) ?? ""
+        #expect(source.contains("Passthrough"),
+                "Setting currentPreset must load the matching script — kernel and host's currentPreset must not diverge")
     }
 
     @Test func fileRoundtrip() async throws {

@@ -15,6 +15,6 @@
     "width": 560,
     "height": 340,
     "fps": 30,
-    "audioFrames": false
+    "audioFrames": true
   }
 }

@@ -161,6 +161,8 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
             let mgr = self.captureManager ?? ExportAudioCaptureManager()
             mgr.kernel = au.kernelRef
             mgr.hostView = self.view
+            let sr = au.outputBusses[0].format.sampleRate
+            mgr.sampleRate = sr > 0 ? sr : 44100.0
             self.captureManager = mgr
         }
 
