@@ -587,6 +587,24 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Publishes script source when it changes externally (preset selection, fullState restore, AI compile).
 	public let scriptSourceDidChange = PassthroughSubject<ScriptSourceChange, Never>()
 
+	/// Payload for a silent script-load failure (host-driven preset switch
+	/// or extension boot). Surfaced to the SwiftUI layer so the user sees
+	/// the error even when they didn't drive the load via the in-plugin
+	/// browser (which already routes failures through `handleResult`).
+	public struct ScriptLoadFailure {
+		public let preset: String?
+		public let error: String
+		public init(preset: String?, error: String) {
+			self.preset = preset
+			self.error = error
+		}
+	}
+
+	/// Fires when a script load fails on a path that doesn't return its
+	/// error to a SwiftUI caller — currently `currentPreset.set` (DAW
+	/// preset menu) and `loadPythonScript` (extension boot, NAM-retry).
+	public let scriptLoadFailure = PassthroughSubject<ScriptLoadFailure, Never>()
+
 	/// Script-declared parameter names, keyed by address (0–7).
 	/// nil = no names declared (backward compatible, show all 8 with default labels).
 	private(set) var currentParamNames: [Int: String]? = nil
@@ -758,9 +776,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				let errMsg = String(cString: errPtr)
 				pluginLog.error("Failed to load Python DSP script: \(errMsg, privacy: .public)")
 				SentryHelper.capture("Failed to load Python DSP script", level: .error, category: "dsp.python", extra: ["error": errMsg])
+				scriptLoadFailure.send(ScriptLoadFailure(preset: nil, error: errMsg))
 			} else {
 				pluginLog.error("Failed to load Python DSP script (no error details), using Rust fallback DSP")
 				SentryHelper.capture("Failed to load Python DSP script (no error details)", level: .error, category: "dsp.python")
+				scriptLoadFailure.send(ScriptLoadFailure(preset: nil, error: "Failed to load Python DSP script"))
 			}
 		}
 	}
@@ -1799,6 +1819,15 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					currentWasmBytes = nil
 					scriptSourceDidChange.send(ScriptSourceChange(source: source))
 					pluginLog.info("Loaded factory preset: \(entry.name, privacy: .public)")
+				} else {
+					// Host-driven failures don't return to a SwiftUI caller —
+					// surface them via the publisher so the StatusBarView still
+					// shows the error instead of silently leaving the kernel in
+					// passthrough.
+					scriptLoadFailure.send(ScriptLoadFailure(
+						preset: entry.name,
+						error: result.error ?? "Failed to load preset"
+					))
 				}
 				dsp_kernel_end_preset_transition(kernel)
 			case .rust:
@@ -1808,10 +1837,15 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				scriptSourceDidChange.send(ScriptSourceChange(source: source))
 				pluginLog.info("Loaded Rust factory preset: \(entry.name, privacy: .public)")
 				let kernelRef = kernel
+				let presetName = entry.name
 				Task {
 					let result = await self.compileAndRun(source: source)
 					if !result.success {
 						pluginLog.error("Failed to compile Rust factory preset: \(result.error ?? "unknown", privacy: .public)")
+						self.scriptLoadFailure.send(ScriptLoadFailure(
+							preset: presetName,
+							error: result.error ?? "Failed to compile preset"
+						))
 					}
 					dsp_kernel_end_preset_transition(kernelRef)
 				}

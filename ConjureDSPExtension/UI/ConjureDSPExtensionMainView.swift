@@ -30,6 +30,11 @@ struct ConjureDSPExtensionMainView: View {
     var defaultLanguage: ScriptLanguage = .python
     var extensionBundle: Bundle
     var scriptSourcePublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.ScriptSourceChange, Never>?
+    /// Fires when a script load fails on a non-SwiftUI-driven path
+    /// (DAW preset menu, extension boot, NAM-retry). Surfaced to the same
+    /// StatusBarView as Run/in-plugin-browser failures so the user always
+    /// sees the error.
+    var scriptLoadFailurePublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.ScriptLoadFailure, Never>?
     // captureManager / processProfiler / memoryMonitor are NOT observed
     // here — they fire at 4Hz+ and re-evaluating this whole body on every
     // publish caused ~12MB/min growth. Child views that actually render
@@ -820,6 +825,19 @@ struct ConjureDSPExtensionMainView: View {
             if let processTimeMs = change.processTimeMs, let budgetMs = change.budgetMs {
                 lastBenchmark = (processTimeMs, budgetMs)
             }
+        }
+        .onReceive(scriptLoadFailurePublisher ?? Empty().eraseToAnyPublisher()) { failure in
+            // Route DAW-preset-menu and extension-boot load failures
+            // through the same red-banner path as Run / in-plugin browser
+            // failures. Synthesizing a `ScriptSaveResult` keeps every
+            // load-failure surface inside `handleResult` (single source
+            // of truth for the StatusBarView / editor markers).
+            handleResult(ScriptSaveResult(
+                success: false,
+                error: failure.error,
+                processTimeMs: nil,
+                budgetMs: nil
+            ))
         }
         .onChange(of: scriptSource) { _, newValue in
             presetManager.scriptDidChange(to: newValue)

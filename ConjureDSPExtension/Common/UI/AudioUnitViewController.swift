@@ -812,6 +812,14 @@ pub extern "C" fn process(
             .receive(on: DispatchQueue.main)
             .eraseToAnyPublisher()
 
+        // Surfaces load failures from non-SwiftUI-driven paths (DAW
+        // preset menu, extension boot, NAM-retry) so the SwiftUI status
+        // bar shows the same red error it would for Run / in-plugin
+        // browser failures.
+        let scriptLoadFailurePublisher = au.scriptLoadFailure
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
+
         let buildID = extensionBundle.infoDictionary?["BuildID"] as? Int ?? 0
 
         // Bundle-private STATE channel coordinator — owned by the AU,
@@ -825,6 +833,7 @@ pub extern "C" fn process(
             defaultLanguage: initialLanguage,
             extensionBundle: extensionBundle,
             scriptSourcePublisher: scriptPublisher,
+            scriptLoadFailurePublisher: scriptLoadFailurePublisher,
             presetManager: pm,
             captureManager: capture,
             transportManager: transport,

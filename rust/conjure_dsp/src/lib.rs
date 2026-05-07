@@ -2,6 +2,7 @@ mod backend;
 mod kernel;
 mod license;
 mod params;
+mod passthrough_backend;
 mod python_backend;
 mod ring_buffer;
 mod wasm_backend;

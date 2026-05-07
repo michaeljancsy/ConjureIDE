@@ -619,6 +619,46 @@ impl DSPKernel {
     /// directly with no fade. On subsequent loads it is staged into
     /// `pending_backend` and the audio thread performs a fade-out → swap →
     /// fade-in declick envelope so users don't hear a pop on preset switch.
+    /// Install a bit-exact passthrough backend in response to a failed
+    /// script/wasm load. The previous backend is dropped so the user
+    /// hears something obviously different (dry signal) instead of the
+    /// stale backend continuing to render with the new preset's UI
+    /// driving its kernel param slots — which used to feel like the new
+    /// preset worked when actually it was the old script being modulated
+    /// through new knob ranges.
+    ///
+    /// Clears every script-derived cache (param metadata, names,
+    /// telemetry, state defaults) and resets the state buffer to `{}` so
+    /// a subsequent successful load doesn't blend with stale data from
+    /// the rejected script. Latency goes back to zero.
+    fn install_passthrough_after_failed_load(&mut self) {
+        let mut pb = crate::passthrough_backend::PassthroughBackend::new();
+        if self.channel_count > 0 {
+            pb.initialize(self.channel_count, self.sample_rate, self.max_frames_to_render);
+        }
+        let boxed: Box<dyn Backend> = Box::new(pb);
+
+        self.update_param_names_cache(std::collections::HashMap::new());
+        self.update_param_metadata_cache(None);
+        self.update_telemetry_metadata_cache(None);
+        self.update_state_defaults_cache(None);
+        self.set_state_cap(DEFAULT_STATE_CAP_BYTES);
+        let _ = self.set_state_json_bytes(b"{}");
+        self.latency_samples = 0;
+        self.reset_profiler();
+        self.wasm_memory_bytes.store(0, Ordering::Relaxed);
+        self.nam_paths = Vec::new();
+
+        // Use the same install path the success branches use. With a
+        // live backend present we ride the existing 5 ms declick
+        // envelope; on a fresh kernel we install immediately.
+        if self.has_live_backend() {
+            self.stage_backend_for_swap(boxed, None);
+        } else {
+            self.install_backend_immediate(boxed, None);
+        }
+    }
+
     pub fn load_script(&mut self, python_home: &str, script_path: &str) -> bool {
         match PythonBackend::load(python_home, script_path) {
             Ok(mut pb) => {
@@ -671,6 +711,7 @@ impl DSPKernel {
                 true
             }
             Err(err_msg) => {
+                self.install_passthrough_after_failed_load();
                 if let Ok(mut guard) = self.last_error.lock() { *guard = Some(err_msg); }
                 false
             }
@@ -726,6 +767,7 @@ impl DSPKernel {
                 true
             }
             Err(err_msg) => {
+                self.install_passthrough_after_failed_load();
                 if let Ok(mut guard) = self.last_error.lock() { *guard = Some(err_msg); }
                 false
             }
@@ -2727,6 +2769,7 @@ mod tests {
         for (label, src) in cases {
             let script = write_temp_script(src);
             let mut kernel = DSPKernel::new();
+            kernel.initialize(1, 1, 48000.0);
             let loaded = kernel.load_script(&python_home, script.to_str().unwrap());
             assert!(
                 !loaded,
@@ -2737,8 +2780,81 @@ mod tests {
                 err.contains("must take exactly one argument"),
                 "{label}: error should mention the 1-arg ctx requirement, got: {err}"
             );
+
+            // Pin the passthrough-on-failure contract: after a rejected
+            // load, the kernel must render input bit-exactly. The previous
+            // bug was that the prior backend kept running, with the new
+            // preset's UI driving its kernel param slots — felt like the
+            // new preset worked but actually wasn't.
+            let input: [f32; 4] = [0.1, -0.2, 0.7, -0.9];
+            let mut output: [f32; 4] = [0.0; 4];
+            let input_ptr: *const f32 = input.as_ptr();
+            let output_ptr: *mut f32 = output.as_mut_ptr();
+            unsafe {
+                kernel.process(&input_ptr, &output_ptr, 1, 4);
+            }
+            assert_eq!(
+                output, input,
+                "{label}: rejected load must drop kernel into passthrough, got {output:?}"
+            );
+
             std::fs::remove_file(script).ok();
         }
+    }
+
+    /// After a rejected load, kernel-side param + telemetry metadata
+    /// must clear. Otherwise a subsequent successful load could blend
+    /// the rejected script's stale metadata into the new run, and the
+    /// audio thread would denormalize new param writes through the old
+    /// (now meaningless) ranges.
+    #[test]
+    fn test_load_script_failure_clears_metadata_caches() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+
+        // Step 1: load a healthy ctx-form script that declares PARAMS +
+        // TELEMETRY so both metadata caches get populated.
+        let healthy = write_temp_script(
+            "PARAMS = {'cutoff': {'min': 20.0, 'max': 20000.0, 'default': 1000.0, 'unit': 'Hz', 'curve': 'log'}}\n\
+             TELEMETRY = {'rms': {'unit': ''}}\n\
+             def process(ctx):\n    pass\n",
+        );
+        let mut kernel = DSPKernel::new();
+        kernel.initialize(1, 1, 48000.0);
+        assert!(
+            kernel.load_script(&python_home, healthy.to_str().unwrap()),
+            "healthy script should load: {:?}",
+            kernel.last_error()
+        );
+        assert!(
+            !kernel.param_metadata_json_ptr().is_null(),
+            "param metadata should be populated after a successful load"
+        );
+        assert!(
+            !kernel.telemetry_metadata_json_ptr().is_null(),
+            "telemetry metadata should be populated after a successful load"
+        );
+
+        // Step 2: load a rejected script. Caches must clear.
+        let rejected = write_temp_script("def process(i, o, f, s, p, t, tel): pass\n");
+        let loaded = kernel.load_script(&python_home, rejected.to_str().unwrap());
+        assert!(!loaded, "7-arg script should be rejected");
+        assert!(
+            kernel.param_metadata_json_ptr().is_null(),
+            "rejected load must clear param metadata cache"
+        );
+        assert!(
+            kernel.telemetry_metadata_json_ptr().is_null(),
+            "rejected load must clear telemetry metadata cache"
+        );
+
+        std::fs::remove_file(healthy).ok();
+        std::fs::remove_file(rejected).ok();
     }
 
     /// Single-arg `def process(ctx):` is the only accepted shape.
