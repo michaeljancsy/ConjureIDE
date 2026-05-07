@@ -48,32 +48,32 @@ class _S:
         self.delay_fb = [0.0 for _ in range(nch)]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    drip = params["drip"] / 100.0
-    haze = params["haze"] / 100.0
-    drift = params["drift"] / 100.0
-    bleed = params["bleed"] / 100.0
-    mx = params["mix"]
+    drip = ctx.params["drip"] / 100.0
+    haze = ctx.params["haze"] / 100.0
+    drift = ctx.params["drift"] / 100.0
+    bleed = ctx.params["bleed"] / 100.0
+    mx = ctx.params["mix"]
 
-    delay_lpc = BiquadCoeffs.lowpass(1200.0, 0.707, sample_rate)
+    delay_lpc = BiquadCoeffs.lowpass(1200.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         s.delay_lp[ch].set_coeffs(delay_lpc)
 
     drip_depth = 0.85 * drip
     drive = 1.0 + 4.0 * haze
-    drift_base = DRIFT_BASE_MS * 0.001 * sample_rate
-    drift_depth = (2.0 + 8.0 * drift) * 0.001 * sample_rate
-    delay_d = DELAY_MS * 0.001 * sample_rate
+    drift_base = DRIFT_BASE_MS * 0.001 * ctx.sample_rate
+    drift_depth = (2.0 + 8.0 * drift) * 0.001 * ctx.sample_rate
+    delay_d = DELAY_MS * 0.001 * ctx.sample_rate
     delay_fb_amt = 0.55 + 0.30 * bleed
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         tri = s.drip_lfo.tick()
         pulse = (0.5 + 0.5 * tri)
         drip_env = (1.0 - drip_depth) + drip_depth * pulse * pulse
@@ -84,7 +84,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             dd = 1.0
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: drip amplitude gate
             gated = dry * drip_env
@@ -102,4 +102,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             s.delay_fb[ch] = s.delay_dl[ch].read(delay_d)
 
             wet = sat + s.delay_fb[ch] * 0.7
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

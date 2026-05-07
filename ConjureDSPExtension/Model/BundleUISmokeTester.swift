@@ -49,10 +49,12 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         hostParameterNames: [Int: String],
         hostParameterCount: Int,
         timeout: TimeInterval = 3.0,
-        resourceBundle: Bundle? = nil
+        resourceBundle: Bundle? = nil,
+        declaredStateKeys: [String] = []
     ) async -> Report {
         let tester = BundleUISmokeTester()
         tester.resourceBundle = resourceBundle ?? Bundle(for: BundleUISmokeTester.self)
+        tester.declaredStateKeys = declaredStateKeys
         return await withCheckedContinuation { cont in
             tester.start(
                 bundle: bundle,
@@ -173,6 +175,35 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
     /// the first few are diagnostic, the rest are noise.
     private static let textContrastIssueCap: Int = 10
 
+    /// Outcome of the bundle-private STATE channel probe. The smoke
+    /// tester drives the JS bridge surface (`ConjureDSP.state.*`) only —
+    /// there's no live kernel here, so we can't verify the audio side.
+    /// What we CAN verify is:
+    ///   - `state.get` returns something for the first declared key
+    ///   - `state.set` returns true (sync size check passed)
+    ///   - an `onChange` handler installed before the set fires once
+    /// Skipped (`ran = false`) when the caller didn't supply any
+    /// declared keys — there's nothing to probe.
+    struct StateProbeResult: Encodable, Equatable {
+        let ran: Bool
+        let key: String?
+        /// JSON-encoded value returned by `state.get(key)`. Stringified
+        /// because the bridge may return objects/arrays/primitives — a
+        /// JSON string is the most portable form for the Swift report.
+        let getReturned: String?
+        let setReturned: Bool?
+        let onChangeFiredCount: Int
+        let error: String?
+
+        enum CodingKeys: String, CodingKey {
+            case ran, key
+            case getReturned = "get_returned"
+            case setReturned = "set_returned"
+            case onChangeFiredCount = "on_change_fired_count"
+            case error
+        }
+    }
+
     struct Report: Encodable {
         let status: ReportStatus
         let readyFired: Bool
@@ -183,6 +214,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         let params: [ParamCoverage]
         let contentOverflow: ContentOverflow?
         let lowContrastTexts: [TextContrastIssue]
+        let stateProbe: StateProbeResult?
 
         enum CodingKeys: String, CodingKey {
             case status
@@ -194,6 +226,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             case params
             case contentOverflow = "content_overflow"
             case lowContrastTexts = "low_contrast_texts"
+            case stateProbe = "state_probe"
         }
     }
 
@@ -228,6 +261,11 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
     /// `Bundle(for: Self.self)`). Tests override with the appex's
     /// Resources bundle since the test target doesn't include them.
     fileprivate var resourceBundle: Bundle = Bundle(for: BundleUISmokeTester.self)
+    /// STATE keys the caller knows the script declares. The smoke
+    /// tester doesn't parse scripts itself — the validator does that
+    /// already and the MCP layer can hand them in. Empty array skips
+    /// the state probe entirely.
+    fileprivate var declaredStateKeys: [String] = []
 
     fileprivate static let bundleScheme = "conjuredsp-preset"
 
@@ -469,6 +507,13 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             )
         }
 
+        // STATE probe — only when the caller supplied declared keys
+        // and ready actually fired (probing a UI that never reached
+        // ready means the bridge state surface might not exist yet).
+        // Picks the first declared key, captures it, writes it back,
+        // and verifies the onChange + set return.
+        let stateProbe: StateProbeResult? = await runStateProbeIfPossible()
+
         // Build the content_overflow block when the rendered extent
         // exceeds declared on either axis by more than the tolerance.
         // Skipped entirely (nil) when ready didn't fire — the rendered
@@ -550,7 +595,102 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             components: componentsRaw,
             params: paramCoverage,
             contentOverflow: contentOverflow,
-            lowContrastTexts: lowContrastTexts
+            lowContrastTexts: lowContrastTexts,
+            stateProbe: stateProbe
+        )
+    }
+
+    /// Drive the JS bridge's `ConjureDSP.state.*` surface using the
+    /// first declared key. Returns nil when the caller didn't supply
+    /// any keys; otherwise returns a `StateProbeResult` reflecting
+    /// what the JS surface answered. Errors during the probe (e.g.
+    /// `state` API not present, throw inside set) collapse to the
+    /// `error` field rather than failing the whole smoke test — the
+    /// surface that's broken is still useful diagnostic info.
+    private func runStateProbeIfPossible() async -> StateProbeResult? {
+        guard let first = declaredStateKeys.first else { return nil }
+        guard readyAtMs != nil else {
+            return StateProbeResult(
+                ran: false,
+                key: first,
+                getReturned: nil,
+                setReturned: nil,
+                onChangeFiredCount: 0,
+                error: "ready did not fire — skipped state probe"
+            )
+        }
+        guard let wv = webView else { return nil }
+
+        // Embed the literal key into the JS — JSON-stringify it so that
+        // any quote / backslash characters in the (admittedly unusual)
+        // key are escaped properly. The probe runs synchronously: the
+        // bridge dispatches `onChange` from inside `state.set` (same
+        // contract as `parameters.set`), so we don't need a microtask
+        // settle. Sync also dodges WKWebView's quirk of not unwrapping
+        // returned Promises in the closure-style evaluateJavaScript.
+        let keyJSON = (try? String(data: JSONSerialization.data(
+            withJSONObject: first, options: [.fragmentsAllowed]
+        ), encoding: .utf8)) ?? "\"\(first)\""
+        let probe = """
+        (function () {
+            try {
+                var CDP = window.ConjureDSP;
+                if (!CDP || !CDP.state) {
+                    return JSON.stringify({error: 'ConjureDSP.state surface missing'});
+                }
+                var fired = 0;
+                var initial;
+                try { initial = CDP.state.get(\(keyJSON)); } catch (e) {}
+                try { CDP.state.onChange(\(keyJSON), function () { fired++; }); } catch (e) {}
+                var ok;
+                try { ok = CDP.state.set(\(keyJSON), initial); } catch (e) {
+                    return JSON.stringify({error: 'state.set threw: ' + (e && e.message ? e.message : String(e))});
+                }
+                var returnedJSON;
+                try { returnedJSON = JSON.stringify(initial); } catch (_) { returnedJSON = String(initial); }
+                return JSON.stringify({
+                    ok: ok === true,
+                    fired: fired,
+                    initial: returnedJSON
+                });
+            } catch (e) {
+                return JSON.stringify({error: 'probe threw: ' + (e && e.message ? e.message : String(e))});
+            }
+        })()
+        """
+        let raw: String = await withCheckedContinuation { cont in
+            wv.evaluateJavaScript(probe) { result, _ in
+                cont.resume(returning: (result as? String) ?? "{}")
+            }
+        }
+        guard let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return StateProbeResult(
+                ran: true,
+                key: first,
+                getReturned: nil,
+                setReturned: nil,
+                onChangeFiredCount: 0,
+                error: "probe returned unparseable JSON"
+            )
+        }
+        if let err = obj["error"] as? String {
+            return StateProbeResult(
+                ran: true,
+                key: first,
+                getReturned: nil,
+                setReturned: nil,
+                onChangeFiredCount: 0,
+                error: err
+            )
+        }
+        return StateProbeResult(
+            ran: true,
+            key: first,
+            getReturned: obj["initial"] as? String,
+            setReturned: obj["ok"] as? Bool,
+            onChangeFiredCount: (obj["fired"] as? Int) ?? 0,
+            error: nil
         )
     }
 

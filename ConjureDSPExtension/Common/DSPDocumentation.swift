@@ -77,11 +77,11 @@ enum DSPDocumentation {
 
     ## Python process() signature — copy this verbatim
 
-    Always use the 7-argument form, even if you don't need transport or
-    telemetry. Use `_transport` and `_telemetry` (Python's
-    underscore-prefix convention for unused args) when you don't read
-    them — adding telemetry later is a one-line edit instead of a
-    refactor. Every factory Python preset uses this canonical shape:
+    The single accepted signature is `def process(ctx):`. Everything the
+    DSP needs hangs off `ctx`: input/output buffers, params, transport,
+    telemetry, sidechain, and the bundle-private state mapping. This is
+    the only shape the kernel will load — older positional forms now
+    fail at script load with a clear error.
 
       import numpy as np
       from conjuredsp import freq, mix
@@ -91,59 +91,58 @@ enum DSPDocumentation {
           "mix": mix(default=0.5),
       }
 
-      def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-          drive = params["drive"]
-          mix_v = params["mix"]
-          for ch in range(len(inputs)):
-              # IMPORTANT: slice with [:frame_count] on BOTH sides.
+      def process(ctx):
+          drive = ctx.params["drive"]
+          mix_v = ctx.params["mix"]
+          for ch in range(len(ctx.inputs)):
+              # IMPORTANT: slice with [:ctx.frame_count] on BOTH sides.
               # inputs/outputs are pre-allocated to maximumFramesToRender
-              # (often larger than frame_count); reading or writing past
-              # frame_count gives stale or zero samples.
-              x = inputs[ch][:frame_count]
+              # (often larger than ctx.frame_count); reading or writing
+              # past ctx.frame_count gives stale or zero samples.
+              x = ctx.inputs[ch][:ctx.frame_count]
               wet = np.tanh(x * drive)
-              outputs[ch][:frame_count] = (1.0 - mix_v) * x + mix_v * wet
+              ctx.outputs[ch][:ctx.frame_count] = (1.0 - mix_v) * x + mix_v * wet
 
-    Notes on the args:
+    What hangs off `ctx`:
 
-    - `inputs` / `outputs` — lists of numpy float32 arrays, one per
-      channel. `len(inputs)` IS the channel count (no separate
-      `channel_count` arg, unlike Rust). Both arrays are sized to the
-      AU's `maximumFramesToRender`, NOT `frame_count` — always slice
-      with `[:frame_count]`.
-    - `frame_count` — int, samples in this block.
-    - `sample_rate` — float, Hz.
-    - `params` — dict keyed by parameter name when `PARAMS` metadata
-      is declared (the recommended path), or a plain list of 0–1
-      normalized floats in legacy mode (no PARAMS dict).
-    - `_transport` — dict from the host's transport state. **Exact
-      keys** (use these verbatim — wrong keys silently return None /
-      your fallback default and the bug is invisible until someone
-      changes tempo and you can't tell):
+    - `ctx.inputs` / `ctx.outputs` — lists of numpy float32 arrays, one
+      per channel. `len(ctx.inputs)` IS the channel count. Both arrays
+      are sized to the AU's `maximumFramesToRender`, NOT
+      `ctx.frame_count` — always slice with `[:ctx.frame_count]`.
+    - `ctx.frame_count` — int, samples in this block.
+    - `ctx.sample_rate` — float, Hz.
+    - `ctx.params` — read-only mapping keyed by parameter name when a
+      `PARAMS` dict is declared (the recommended path), or by integer
+      index in legacy mode (no PARAMS dict).
+    - `ctx.transport` — namespace from the host's transport state.
+      **Canonical keys** (the kernel publishes them with these exact
+      names; pre-rename keys are gone):
 
       ```python
-      transport = {
-          "tempo":        120.0,   # BPM — NOT "bpm". Use transport["tempo"].
-          "beat":         0.0,     # current beat position (float)
-          "playing":      False,   # bool
-          "time_sig_num": 4.0,     # time signature numerator
-          "time_sig_den": 4.0,     # time signature denominator
-          "sample_pos":   0.0,     # absolute sample position
-      }
+      ctx.transport.bpm                 # tempo in BPM
+      ctx.transport.beat                # current beat position (float)
+      ctx.transport.is_playing          # bool
+      ctx.transport.time_sig_numerator
+      ctx.transport.time_sig_denominator
+      ctx.transport.sample_position
       ```
 
-      Accept it even if you don't use it; rename to `transport` when
-      you do.
-    - `_telemetry` — dict pre-seeded with declared `TELEMETRY` slot
-      keys at zero. Write to it (e.g. `_telemetry["gr_db"] = -3.5`)
-      to publish per-block values to the host UI's `audio.onFrame`.
-      Rename to `telemetry` when you use it. **Reading telemetry from
-      JS also requires `manifest.ui.audioFrames: true`** — see the
-      `ui` topic for the manifest snippet.
-
-    The kernel still supports legacy 4/5/6-arg forms (back-compat for
-    older user presets). New code should always use the 7-arg
-    canonical so adding transport or telemetry later is just deleting
-    an underscore.
+      `ctx.transport` is always present — even when the DAW isn't
+      running, fields default to safe values (bpm=120, is_playing=False).
+    - `ctx.telemetry` — writable mapping pre-seeded with declared
+      `TELEMETRY` slot keys at zero. Write per-block values
+      (`ctx.telemetry["gr_db"] = -3.5`) to publish to the host UI's
+      `audio.onFrame`. **Reading telemetry from JS also requires
+      `manifest.ui.audioFrames: true`** — see the `ui` topic for the
+      manifest snippet.
+    - `ctx.sidechain` — list of float32 arrays, same shape as
+      `ctx.inputs`. Empty when the host hasn't connected a sidechain
+      bus; check `len(ctx.sidechain)` before reading.
+    - `ctx.state` — read-only mapping over the bundle-private STATE
+      channel (UI / MCP-writable, audio-readable). Mutating it inside
+      `process()` raises AttributeError — write only via
+      `ConjureDSP.state.set(...)` (JS) or the MCP `set_state` tool. See
+      the `state` topic.
 
     ## Rust process() signature — copy this verbatim
 
@@ -250,15 +249,15 @@ enum DSPDocumentation {
 
     Python:
       _filters = None
-      def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+      def process(ctx):
           global _filters
           if _filters is None:
-              _filters = [Biquad() for _ in range(len(inputs))]
-          coeffs = BiquadCoeffs.lowpass(params["cutoff"], 0.707, sample_rate)
-          for ch in range(len(inputs)):
+              _filters = [Biquad() for _ in range(len(ctx.inputs))]
+          coeffs = BiquadCoeffs.lowpass(ctx.params["cutoff"], 0.707, ctx.sample_rate)
+          for ch in range(len(ctx.inputs)):
               _filters[ch].set_coeffs(coeffs)
-              for i in range(frame_count):
-                  outputs[ch][i] = _filters[ch].process_sample(inputs[ch][i])
+              for i in range(ctx.frame_count):
+                  ctx.outputs[ch][i] = _filters[ch].process_sample(ctx.inputs[ch][i])
 
     Rust:
       static mut FILTERS: [Biquad; 2] = [Biquad::new(); 2];
@@ -390,9 +389,9 @@ enum DSPDocumentation {
               _lfos.append(lfo)
           _last_sr = sample_rate
 
-      def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-          if _last_sr != sample_rate:
-              _init_lfos(sample_rate, params["rate"])
+      def process(ctx):
+          if _last_sr != ctx.sample_rate:
+              _init_lfos(ctx.sample_rate, ctx.params["rate"])
           ...
     """
 
@@ -553,12 +552,12 @@ enum DSPDocumentation {
 
       model = load_model("tone3000://12345/67890")
 
-      def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-          gain = 10 ** (params["input_gain"] / 20.0)
-          mix_val = params["mix"]
-          for ch in range(len(inputs)):
-              wet = model.process(inputs[ch][:frame_count] * gain, ch)
-              outputs[ch][:frame_count] = inputs[ch][:frame_count] * (1 - mix_val) + wet * mix_val
+      def process(ctx):
+          gain = 10 ** (ctx.params["input_gain"] / 20.0)
+          mix_val = ctx.params["mix"]
+          for ch in range(len(ctx.inputs)):
+              wet = model.process(ctx.inputs[ch][:ctx.frame_count] * gain, ch)
+              ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count] * (1 - mix_val) + wet * mix_val
 
     ## Rust API — single model
 
@@ -624,6 +623,148 @@ enum DSPDocumentation {
     - WaveNet models maintain a sliding history window across callbacks (automatic)
     - If model sample rate != DAW sample rate, a warning is logged on first process() call
     - Use list_tones tool to see downloaded tones and their tone3000:// paths
+    """
+
+    static let state = """
+    # STATE — bundle-private state channel
+
+    A persistent JSON-shaped state mapping that is **UI-writable and
+    audio-readable**, lives outside the AU parameter tree, and persists
+    via the DAW project (not the bundle). Use it for things that aren't
+    parameters: step sequencers, slot selections, NAM model paths,
+    captured impulse responses, MIDI learn maps — anything you want the
+    user's edits to survive a reopen but don't want eating an AU
+    automation lane.
+
+    ## Why not parameters?
+
+    The 16-slot AU parameter tree is for things the DAW automates as
+    floats. STATE is for everything else: arrays, strings, structured
+    objects. Audio-thread reads are atomic-pointer-swap cheap, so a UI
+    can write 32 sequencer steps as a single JSON array and the next
+    render block sees them.
+
+    ## Python author surface
+
+    Declare defaults at module level — top-level `STATE = {…}`. The
+    kernel installs the dict on script load; new instances start from
+    these defaults; user edits are read back from the DAW project on
+    reopen.
+
+    ```python
+    STATE = {
+        "slots":     [0] * 32,         # 32-step sequence
+        "selected":  0,                # current slot
+        "ir_path":   None,             # nullable
+    }
+
+    def process(ctx):
+        slots = ctx.state["slots"]     # read-only view
+        i = int(ctx.state["selected"])
+        gate = slots[i]
+        # … apply gate to ctx.inputs / ctx.outputs …
+    ```
+
+    `ctx.state` is a **read-only mapping**. Mutating it inside
+    `process()` raises `AttributeError`. Writes only happen through
+    `ConjureDSP.state.set(...)` (JS) or the MCP `set_state` tool. This
+    is the boundary that lets the kernel make audio-thread reads
+    lock-free — the audio thread never has to coordinate with writers.
+
+    ## Rust author surface
+
+    Declare a state struct + the `state!()` declaration. The struct
+    must implement `Default` so new instances have well-defined values:
+
+    ```rust
+    use conjuredsp::*;
+    setup!();
+
+    state_struct! {
+        pub struct State {
+            pub slots: Vec<u8>,
+            pub selected: u32,
+            pub ir_path: Option<String>,
+        }
+    }
+    impl Default for State {
+        fn default() -> Self {
+            Self { slots: vec![0; 32], selected: 0, ir_path: None }
+        }
+    }
+
+    state!(State);
+    // Optional: bump the cap (default 64 KiB). Clamped to 1 MiB.
+    // state!(State, max_bytes = 131_072);
+
+    #[no_mangle] pub extern "C" fn process(...) {
+        let cx = ctx(...);
+        let s: &State = cx.state();
+        // read-only view; same audio/UI boundary as Python
+    }
+    ```
+
+    ## JS surface — `ConjureDSP.state.*`
+
+    UIs read and write state through the bridge. Mirrors
+    `ConjureDSP.parameters.*` in shape:
+
+    ```js
+    ConjureDSP.state.get('slots')               // current value
+    ConjureDSP.state.set('slots', [1, 0, 1, 0]) // returns false on
+                                                 // size-cap reject
+    ConjureDSP.state.onChange('slots', cb)      // fires on every set
+                                                 // AND external _stateUpdate
+    ConjureDSP.state.onAnyChange((k, v) => {})  // fires with (key, value)
+    ConjureDSP.state.reset('slots')             // restore one key to default
+    ConjureDSP.state.resetAll()                 // restore everything
+    ```
+
+    `set` returns boolean — `false` when the resulting buffer would
+    exceed the per-script cap. Handle it: a UI that silently drops
+    writes is the worst-of-both-worlds.
+
+    ## MCP surface
+
+    For agent / scripted access:
+
+    - `set_state {key, value}` — writes a single key (validates against
+      the script's declared keys when in strict mode).
+    - `get_state` — returns the full state map; pass `[{key}]` to read
+      one key.
+    - `reset_state` — full reset to script defaults; pass `[{key}]` to
+      reset a single key.
+
+    ## Persistence
+
+    State lives in the DAW project, not the bundle. Mechanism: the AU's
+    `fullState` and `fullStateForDocument` accessors embed the JSON
+    bytes under a `conjuredsp_state` key. Reopening the project hands
+    those bytes to `PresetStateManager.restore(from:)` which validates
+    + reinstalls them.
+
+    New instances always boot from the script's defaults — `STATE = {…}`
+    in Python or `Default::default()` in Rust. The bundle ships
+    behaviour, the DAW project ships per-instance edits.
+
+    ## Size cap
+
+    Default cap: **64 KiB**. Hard ceiling: **1 MiB**. Rust opt-in to
+    raise the per-script cap via `state!(State, max_bytes = N)`. Python
+    presets use the default. The cap protects the DAW project from
+    presets that unbounded-grow their state buffer (each
+    fullStateForDocument copy lands in the project file).
+
+    ## When to use STATE vs PARAMS vs TELEMETRY
+
+    | What | Mechanism | Audience |
+    |---|---|---|
+    | DAW-automatable float | `PARAMS` | host automation lanes, MIDI learn |
+    | UI/MCP-writable structured value | `STATE` | UI, agent, persisted edits |
+    | Per-block read-back from DSP | `TELEMETRY` | UI meters/visualizers |
+
+    Never put params on the STATE channel — you lose automation. Never
+    put state on the PARAMS channel — you lose anything that isn't a float.
     """
 
     static let ui = """
@@ -984,13 +1125,13 @@ enum DSPDocumentation {
     ctx.set_telemetry(ENV_DB, env_db);
     ```
 
-    Python (`process()` must accept all 7 args including transport):
+    Python (`ctx.telemetry` is the single writable mapping):
 
     ```python
     TELEMETRY = {"gr_db": {"unit": "dB"}, "env_db": {"unit": "dB"}}
-    def process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry):
-        telemetry["gr_db"] = max_gr_db_this_block
-        telemetry["env_db"] = env_db
+    def process(ctx):
+        ctx.telemetry["gr_db"] = max_gr_db_this_block
+        ctx.telemetry["env_db"] = env_db
     ```
 
     UI consumer — slot key is the script's source token verbatim
@@ -1053,11 +1194,10 @@ enum DSPDocumentation {
 
     ```python
     TELEMETRY = {"scope": {"shape": "vector"}}
-    def process(inputs, outputs, frame_count, sample_rate, params,
-                transport, telemetry):
-        # Run your per-frame DSP into outputs[0]; then publish a slice
-        # of length frame_count into the slot.
-        telemetry["scope"][:frame_count] = outputs[0][:frame_count]
+    def process(ctx):
+        # Run your per-frame DSP into ctx.outputs[0]; then publish a
+        # slice of length ctx.frame_count into the slot.
+        ctx.telemetry["scope"][:ctx.frame_count] = ctx.outputs[0][:ctx.frame_count]
     ```
 
     The pre-seeded numpy array lives in the dict — slice-assign into
@@ -1111,9 +1251,10 @@ enum DSPDocumentation {
     ## Worked example: telemetry meter + tempo-sync
 
     A complete three-file preset that exercises every piece authors
-    most often fumble: 7-arg Python signature, transport BPM, telemetry
-    slot, `audioFrames: true`, schemaVersion 2 declared params, and a
-    cdp-ui meter driven by the slot. Copy verbatim and edit.
+    most often fumble: single-ctx Python signature, transport BPM,
+    telemetry slot, `audioFrames: true`, schemaVersion 2 declared
+    params, and a cdp-ui meter driven by the slot. Copy verbatim and
+    edit.
 
     `process.py`:
 
@@ -1131,27 +1272,26 @@ enum DSPDocumentation {
 
     _phase = 0.0  # 0..1 cycle position
 
-    def process(inputs, outputs, frame_count, sample_rate, params,
-                transport, telemetry):
+    def process(ctx):
         global _phase
-        depth_db = params["depth"]
-        beats_per_cycle = [1.0, 0.5, 0.25][int(params["rate_div"])]
-        bpm = transport["tempo"]               # NOT "bpm" — see params docs
+        depth_db = ctx.params["depth"]
+        beats_per_cycle = [1.0, 0.5, 0.25][int(ctx.params["rate_div"])]
+        bpm = ctx.transport.bpm                    # canonical key
         rate_hz = (bpm / 60.0) / beats_per_cycle
         gain_floor = 10.0 ** (-depth_db / 20.0)
 
         max_gr_db = 0.0
-        for i in range(frame_count):
-            _phase = (_phase + rate_hz / sample_rate) % 1.0
+        for i in range(ctx.frame_count):
+            _phase = (_phase + rate_hz / ctx.sample_rate) % 1.0
             # Triangle envelope: peaks at depth at phase=0, returns to 1.0 at 0.5
             env = gain_floor + (1.0 - gain_floor) * abs(2.0 * _phase - 1.0)
             gr_db_now = -20.0 * math.log10(max(env, 1e-9))
             if gr_db_now > max_gr_db:
                 max_gr_db = gr_db_now
-            for ch in range(len(inputs)):
-                outputs[ch][i] = inputs[ch][i] * env
+            for ch in range(len(ctx.inputs)):
+                ctx.outputs[ch][i] = ctx.inputs[ch][i] * env
 
-        telemetry["gr_db"] = max_gr_db        # peak GR over the block
+        ctx.telemetry["gr_db"] = max_gr_db        # peak GR over the block
     ```
 
     `manifest.json`:
@@ -1215,10 +1355,10 @@ enum DSPDocumentation {
     ```
 
     What this exercises end-to-end:
-    - 7-arg `process` (Python takes `transport` + `telemetry` by name)
-    - `transport["tempo"]` (not `"bpm"`)
-    - `TELEMETRY = {...}` declaration → `telemetry["gr_db"] = ...` in
-      `process` → `frame.telemetry["gr_db"]` in JS
+    - Canonical single-ctx `process(ctx)` signature
+    - `ctx.transport.bpm` (canonical key)
+    - `TELEMETRY = {...}` declaration → `ctx.telemetry["gr_db"] = ...`
+      in `process` → `frame.telemetry["gr_db"]` in JS
     - `manifest.ui.audioFrames: true` so the frame pipeline runs
     - `schemaVersion: 2` with declared `params` so the UI renders
       correct defaults during script load
@@ -1513,13 +1653,13 @@ enum DSPDocumentation {
 
     /// All sections joined (excludes NAM — requires knowing downloaded tones).
     static var allDocs: String {
-        [params, filters, delays, oscillators, utilities, accel, ui]
+        [params, filters, delays, oscillators, utilities, accel, state, ui]
             .joined(separator: "\n\n")
     }
 
     /// All sections including NAM (for the MCP get_docs "all" topic).
     static var allDocsWithNam: String {
-        [params, filters, delays, oscillators, utilities, accel, nam, ui]
+        [params, filters, delays, oscillators, utilities, accel, nam, state, ui]
             .joined(separator: "\n\n")
     }
 
@@ -1656,15 +1796,15 @@ enum DSPDocumentation {
     ## Typical usage pattern
 
       _filters = None
-      def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+      def process(ctx):
           global _filters
           if _filters is None:
-              _filters = [Biquad() for _ in range(len(inputs))]
-          coeffs = BiquadCoeffs.lowpass(params["cutoff"], 0.707, sample_rate)
-          for ch in range(len(inputs)):
+              _filters = [Biquad() for _ in range(len(ctx.inputs))]
+          coeffs = BiquadCoeffs.lowpass(ctx.params["cutoff"], 0.707, ctx.sample_rate)
+          for ch in range(len(ctx.inputs)):
               _filters[ch].set_coeffs(coeffs)
-              for i in range(frame_count):
-                  outputs[ch][i] = _filters[ch].process_sample(inputs[ch][i])
+              for i in range(ctx.frame_count):
+                  ctx.outputs[ch][i] = _filters[ch].process_sample(ctx.inputs[ch][i])
     """
 
     private static let rustFilters = """
@@ -1839,9 +1979,9 @@ enum DSPDocumentation {
               _lfos.append(lfo)
           _last_sr = sample_rate
 
-      def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-          if _last_sr != sample_rate:
-              _init_lfos(sample_rate, params["rate"])
+      def process(ctx):
+          if _last_sr != ctx.sample_rate:
+              _init_lfos(ctx.sample_rate, ctx.params["rate"])
           ...
     """
 

@@ -65,50 +65,50 @@ def _resolve_sync(idx, time_sig_num):
     return bar if idx == 5 else 2.0 * bar
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    collapse = params["collapse"] / 100.0
-    gravity = params["gravity"] / 100.0
-    sub = params["sub"] / 100.0
-    mx = params["mix"]
+    collapse = ctx.params["collapse"] / 100.0
+    gravity = ctx.params["gravity"] / 100.0
+    sub = ctx.params["sub"] / 100.0
+    mx = ctx.params["mix"]
 
     # Host transport for beat-locked sync. If the host isn't playing or has no
     # tempo, both sync modes fall back to free-running so the preset still
     # works in auval and stopped DAWs.
-    tempo = transport["tempo"]
-    beat = transport["beat"]
-    playing = transport["playing"]
-    time_sig_num = transport["time_sig_num"]
+    tempo = ctx.transport.bpm
+    beat = ctx.transport.beat
+    playing = ctx.transport.is_playing
+    time_sig_num = ctx.transport.time_sig_numerator
     sync_active = bool(playing) and tempo > 0.0
-    beats_per_sample = (tempo / 60.0) / sample_rate if sync_active else 0.0
+    beats_per_sample = (tempo / 60.0) / ctx.sample_rate if sync_active else 0.0
 
-    grav_div = _resolve_sync(int(round(params["gravity_sync"])), time_sig_num) if sync_active else 0.0
-    coll_div = _resolve_sync(int(round(params["collapse_sync"])), time_sig_num) if sync_active else 0.0
+    grav_div = _resolve_sync(int(round(ctx.params["gravity_sync"])), time_sig_num) if sync_active else 0.0
+    coll_div = _resolve_sync(int(round(ctx.params["collapse_sync"])), time_sig_num) if sync_active else 0.0
     grav_synced = grav_div > 0.0
     coll_synced = coll_div > 0.0
 
     # Sub-bass lowpass coefficients (80 Hz Q=0.7)
-    sub_lpc = BiquadCoeffs.lowpass(80.0, 0.707, sample_rate)
+    sub_lpc = BiquadCoeffs.lowpass(80.0, 0.707, ctx.sample_rate)
     # Schwarzschild ringing bandpass at 110 Hz, Q=18
-    ringc = BiquadCoeffs.bandpass(110.0, 18.0, sample_rate)
+    ringc = BiquadCoeffs.bandpass(110.0, 18.0, ctx.sample_rate)
     for ch in range(nch):
         s.sub_lp[ch].set_coeffs(sub_lpc)
         s.ring[ch].set_coeffs(ringc)
 
     # Closing lowpass: cutoff sweeps from 8000 Hz (collapse=0) to 350 Hz (collapse=1)
     close_fc = 8000.0 - 7650.0 * collapse
-    close_alpha = math.exp(-2.0 * math.pi * close_fc / sample_rate)
+    close_alpha = math.exp(-2.0 * math.pi * close_fc / ctx.sample_rate)
     close_one_minus = 1.0 - close_alpha
 
     # Pitch shifter
-    base_d = SHIFT_BASE_MS * 0.001 * sample_rate
-    grain_samples = GRAIN_MS * 0.001 * sample_rate
+    base_d = SHIFT_BASE_MS * 0.001 * ctx.sample_rate
+    grain_samples = GRAIN_MS * 0.001 * ctx.sample_rate
     # Grain phase advances at drift rate; full cycle = falls behind by grain_samples
     grain_rate = (0.4 + 1.6 * gravity) / grain_samples
 
@@ -118,12 +118,12 @@ def process(inputs, outputs, frame_count, sample_rate, params, transport, _telem
     inv_levels = 1.0 / levels
 
     # Allpass times in samples
-    ap_d = [max(AP_MS[k] * 0.001 * sample_rate, 1.0) for k in range(4)]
+    ap_d = [max(AP_MS[k] * 0.001 * ctx.sample_rate, 1.0) for k in range(4)]
 
     rumble_gain = sub * 1.5
     ring_gain = 0.4
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # Pitch-shifter grain phase: free-running by default, beat-locked when synced.
         if grav_synced:
             beat_now = beat + i * beats_per_sample
@@ -150,14 +150,14 @@ def process(inputs, outputs, frame_count, sample_rate, params, transport, _telem
             if eff_collapse > 1.0:
                 eff_collapse = 1.0
             cur_close_fc = 8000.0 - 7650.0 * eff_collapse
-            cur_close_alpha = math.exp(-2.0 * math.pi * cur_close_fc / sample_rate)
+            cur_close_alpha = math.exp(-2.0 * math.pi * cur_close_fc / ctx.sample_rate)
             cur_close_one_minus = 1.0 - cur_close_alpha
         else:
             cur_close_alpha = close_alpha
             cur_close_one_minus = close_one_minus
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: sub-bass rumble bus (rectify → LP → gain)
             rectified = abs(dry)
@@ -190,4 +190,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, transport, _telem
 
             # Stage G: final wet sum + mix
             wet = rumble + crushed + ringing
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

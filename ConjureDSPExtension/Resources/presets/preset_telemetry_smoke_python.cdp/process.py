@@ -29,29 +29,29 @@ TELEMETRY = {
 _envelope = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry):
+def process(ctx):
     global _envelope
 
-    drive = max(1.0, params["drive"])
+    drive = max(1.0, ctx.params["drive"])
 
     # 50ms attack, 200ms release smoothing.
-    attack_coeff = float(np.exp(-1.0 / (0.050 * sample_rate)))
-    release_coeff = float(np.exp(-1.0 / (0.200 * sample_rate)))
+    attack_coeff = float(np.exp(-1.0 / (0.050 * ctx.sample_rate)))
+    release_coeff = float(np.exp(-1.0 / (0.200 * ctx.sample_rate)))
 
     # Block peak across all channels — drives both the envelope follower
     # and the published PEAK_DB telemetry.
     block_peak = 0.0
-    for ch_in in inputs:
-        peak_ch = float(np.max(np.abs(ch_in[:frame_count]))) if frame_count > 0 else 0.0
+    for ch_in in ctx.inputs:
+        peak_ch = float(np.max(np.abs(ch_in[:ctx.frame_count]))) if ctx.frame_count > 0 else 0.0
         if peak_ch > block_peak:
             block_peak = peak_ch
 
     # Per-sample envelope follower — uses the absolute value of the
     # last channel for the per-sample feedback (good enough for a
     # smoke test; production code would link across channels properly).
-    last_ch = inputs[-1]
+    last_ch = ctx.inputs[-1]
     env = _envelope
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         target = abs(float(last_ch[i])) * drive
         coeff = attack_coeff if target > env else release_coeff
         env = target + coeff * (env - target)
@@ -59,12 +59,12 @@ def process(inputs, outputs, frame_count, sample_rate, params, transport, teleme
 
     # Soft-clip drive applied to every output channel. np.tanh is
     # vectorised and cheap.
-    for ch_in, ch_out in zip(inputs, outputs):
-        ch_out[:frame_count] = np.tanh(ch_in[:frame_count] * drive)
+    for ch_in, ch_out in zip(ctx.inputs, ctx.outputs):
+        ch_out[:ctx.frame_count] = np.tanh(ch_in[:ctx.frame_count] * drive)
 
     # dB conversion. -120 floor keeps the UI's bar from log(0)-ing.
     def lin_to_db(x):
         return -120.0 if x <= 1e-6 else float(20.0 * np.log10(x))
 
-    telemetry["peak_db"] = lin_to_db(block_peak)
-    telemetry["envelope_db"] = lin_to_db(env)
+    ctx.telemetry["peak_db"] = lin_to_db(block_peak)
+    ctx.telemetry["envelope_db"] = lin_to_db(env)

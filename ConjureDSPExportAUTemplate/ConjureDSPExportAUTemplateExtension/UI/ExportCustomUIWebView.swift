@@ -45,6 +45,11 @@ struct ExportCustomUIWebView: NSViewRepresentable {
     /// ignored. Matches the main extension's CustomUIWebView and the
     /// documented manifest contract.
     var audioFramesAllowed: Bool = false
+    /// Coordinator for the bundle-private STATE channel. Owned by the AU,
+    /// passed in here so the JS bridge's `state.set` / `state.reset` calls
+    /// route through the same actor as DAW persistence. Forwarded
+    /// non-`.ui` origin changes are pushed back to JS via `_stateUpdate`.
+    var stateManager: ExportPresetStateManager
 
     fileprivate static let bundleScheme = "conjuredsp-preset"
 
@@ -93,6 +98,9 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         // errors — they just never receive frames.
         contentController.add(context.coordinator, name: "subscribeAudioFrames")
         contentController.add(context.coordinator, name: "unsubscribeAudioFrames")
+        // Bundle-private STATE channel — UI-writable, audio-readable JSON.
+        contentController.add(context.coordinator, name: "stateSet")
+        contentController.add(context.coordinator, name: "stateReset")
 
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
 
@@ -115,7 +123,9 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         context.coordinator.parameterState = parameterState
         context.coordinator.captureManager = captureManager
         context.coordinator.audioFramesAllowed = audioFramesAllowed
+        context.coordinator.stateManager = stateManager
         context.coordinator.subscribe(to: parameterState)
+        context.coordinator.subscribe(toStateManager: stateManager)
         context.coordinator.observeWindowVisibility()
 
         let entry = entryHTMLPath.hasPrefix("ui/") ? entryHTMLPath : "ui/\(entryHTMLPath)"
@@ -154,6 +164,8 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         controller.removeScriptMessageHandler(forName: "log")
         controller.removeScriptMessageHandler(forName: "subscribeAudioFrames")
         controller.removeScriptMessageHandler(forName: "unsubscribeAudioFrames")
+        controller.removeScriptMessageHandler(forName: "stateSet")
+        controller.removeScriptMessageHandler(forName: "stateReset")
         // Drop the audio consumer registration so the capture manager's
         // display link stops when this webview goes away. Without this,
         // a DAW that re-creates the view tears down one webview and
@@ -162,6 +174,8 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         coordinator.audioFrameCancellable?.cancel()
         coordinator.audioFrameCancellable = nil
         coordinator.captureManager?.setConsumer(id: coordinator.audioConsumerID, active: false)
+        coordinator.stateCancellable?.cancel()
+        coordinator.stateCancellable = nil
         coordinator.cancellables.removeAll()
         coordinator.webView = nil
     }
@@ -200,6 +214,14 @@ struct ExportCustomUIWebView: NSViewRepresentable {
         weak var webView: WKWebView?
         weak var parameterState: ExportParameterState?
         weak var captureManager: ExportAudioCaptureManager?
+        /// Coordinator for the bundle-private STATE channel. Weak: same
+        /// lifetime contract as captureManager — the AU owns it, this
+        /// view's coordinator just forwards messages and listens for
+        /// non-`.ui` origin updates to push back into JS.
+        weak var stateManager: ExportPresetStateManager?
+        /// Subscription to `stateManager.stateChanges`. Active for the
+        /// lifetime of the coordinator (cleared in `dismantleNSView`).
+        var stateCancellable: AnyCancellable?
 
         /// Retained so the scheme handler isn't torn down before WKWebView is.
         var schemeHandler: BundleAssetSchemeHandler?
@@ -415,6 +437,67 @@ struct ExportCustomUIWebView: NSViewRepresentable {
             webView.evaluateJavaScript(js) { _, _ in }
         }
 
+        // MARK: STATE channel forwarding
+
+        /// Subscribe to STATE channel changes. Forwards every non-`.ui`
+        /// origin update to JS via `_stateUpdate(key, value)`. `.ui`
+        /// origin is suppressed because the bridge already fired
+        /// `onChange` synchronously inside `state.set(...)`; forwarding
+        /// here would double-fire the JS-side handler.
+        ///
+        /// Whole-mirror events (key == nil → preset load / DAW restore)
+        /// are forwarded as `_stateUpdate(null, null)` so the JS side
+        /// knows to re-pull `state.get()` for everything.
+        func subscribe(toStateManager mgr: ExportPresetStateManager) {
+            stateCancellable?.cancel()
+            let publisher = MainActor.assumeIsolated { mgr.stateChanges }
+            stateCancellable = publisher
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] change in
+                    guard let self else { return }
+                    if change.origin == .ui { return }
+                    self.forwardStateUpdate(key: change.key, value: change.value)
+                }
+        }
+
+        private func forwardStateUpdate(key: String?, value: Any?) {
+            guard isReady, let webView else { return }
+            let keyJSON: String
+            if let key {
+                keyJSON = Self.jsonStringLiteral(key)
+            } else {
+                keyJSON = "null"
+            }
+            let valueJSON: String
+            if let value, !(value is NSNull) {
+                if let data = try? JSONSerialization.data(
+                    withJSONObject: value,
+                    options: [.fragmentsAllowed]
+                ), let str = String(data: data, encoding: .utf8) {
+                    valueJSON = str
+                } else {
+                    valueJSON = "null"
+                }
+            } else {
+                valueJSON = "null"
+            }
+            let js = "window.ConjureDSP && window.ConjureDSP._stateUpdate(\(keyJSON), \(valueJSON))"
+            webView.evaluateJavaScript(js, completionHandler: nil)
+        }
+
+        /// JSON-encode a single string as a quoted JS-safe literal.
+        /// Wraps in a one-element array so JSONSerialization (which
+        /// rejects fragment-level strings on older OS versions)
+        /// always produces valid output, then strips the brackets.
+        fileprivate static func jsonStringLiteral(_ s: String) -> String {
+            if let data = try? JSONSerialization.data(withJSONObject: [s], options: []),
+               let arr = String(data: data, encoding: .utf8),
+               arr.count >= 4 {
+                return String(arr.dropFirst().dropLast())
+            }
+            return "\"\""
+        }
+
         // MARK: Initial state payload
 
         func sendInit() {
@@ -447,11 +530,26 @@ struct ExportCustomUIWebView: NSViewRepresentable {
                     ])
                 }
             }
-            return [
+            var payload: [String: Any] = [
                 "metadata": metadata,
                 "values": state.values,
                 "theme": lastTheme,
             ]
+            // Bundle-private STATE channel snapshot. Same shape as the
+            // main extension's CustomUIWebView so authored UIs see the
+            // same `_init` payload in-plugin and exported.
+            if let stateMgr = stateManager {
+                MainActor.assumeIsolated {
+                    payload["state"] = stateMgr.snapshotForInit()
+                    payload["declaredStateKeys"] = stateMgr.declaredKeys
+                    payload["maxStateBytes"] = stateMgr.maxBytes
+                }
+            } else {
+                payload["state"] = [:] as [String: Any]
+                payload["declaredStateKeys"] = [] as [String]
+                payload["maxStateBytes"] = 0
+            }
+            return payload
         }
 
         // MARK: WKScriptMessageHandler
@@ -522,6 +620,28 @@ struct ExportCustomUIWebView: NSViewRepresentable {
 
             case "unsubscribeAudioFrames":
                 stopAudioFrameForwarding()
+
+            case "stateSet":
+                // JS bridge `state.set(key, value)`. Origin `.ui` so the
+                // stateChanges sink suppresses the echo back to JS — the
+                // bridge already fired its own onChange synchronously
+                // inside `state.set` and forwarding here would double-fire.
+                guard let body = message.body as? [String: Any],
+                      let key = body["key"] as? String else { return }
+                let value = body["value"]  // may be NSNull → delete
+                MainActor.assumeIsolated {
+                    _ = stateManager?.set(key: key, value: value, origin: .ui)
+                }
+
+            case "stateReset":
+                // JS bridge `state.reset(key?)`. nil/missing key = full
+                // reset to script defaults. `.ui` origin same suppression
+                // logic as stateSet.
+                let body = message.body as? [String: Any]
+                let key = body?["key"] as? String
+                MainActor.assumeIsolated {
+                    _ = stateManager?.reset(key: key, origin: .ui)
+                }
 
             default:
                 break

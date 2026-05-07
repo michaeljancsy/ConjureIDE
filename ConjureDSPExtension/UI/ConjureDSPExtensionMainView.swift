@@ -48,6 +48,10 @@ struct ConjureDSPExtensionMainView: View {
     var processProfiler: ProcessProfiler
     var memoryMonitor: MemoryMonitor
     var parameterState: ParameterState
+    /// Coordinator for the bundle-private STATE channel — passed to
+    /// CustomUIWebView so the JS bridge's `state.set` / `state.reset`
+    /// calls route through the same actor as MCP and DAW persistence.
+    var stateManager: PresetStateManager
     // subscriptionManager MUST be @ObservedObject — the demo expired overlay
     // reads isLicensed and demoSecondsRemaining directly in this view's body.
     @ObservedObject var subscriptionManager: SubscriptionManager
@@ -367,7 +371,8 @@ struct ConjureDSPExtensionMainView: View {
                                 bundle: bundle,
                                 theme: colorScheme,
                                 captureManager: captureManager,
-                                transportManager: transportManager
+                                transportManager: transportManager,
+                                stateManager: stateManager
                             )
                             .frame(width: uiW, height: uiH)
                             .id(bundle.uiIndexURL)

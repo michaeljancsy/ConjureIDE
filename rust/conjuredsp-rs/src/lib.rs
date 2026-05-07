@@ -632,3 +632,211 @@ macro_rules! _params_indices {
         conjuredsp::_params_indices!($idx + 1usize; $( $REST ),*);
     };
 }
+
+/// Default per-script cap for the state buffer in bytes (matches the
+/// host's `DEFAULT_STATE_CAP_BYTES`). Scripts can override via
+/// `state!(T, max_bytes = N)`.
+pub const DEFAULT_STATE_CAP_BYTES: usize = 65_536;
+
+/// Header size at the start of `STATE_BUF`. Layout:
+///   bytes [0..8]   — current state generation, little-endian u64
+///   bytes [8..12]  — used length of the JSON content, little-endian u32
+///   bytes [12..]   — JSON content (UTF-8 bytes)
+///
+/// Read by the script-side `state!()` macro to decide whether to
+/// re-deserialize. Written by the host on every render block before
+/// calling `process()`.
+pub const STATE_HEADER_BYTES: usize = 12;
+
+/// Declares a JSON-deserializable struct for bundle-private persisted
+/// state. Auto-applies `#[derive(serde::Deserialize, Default, Clone)]`
+/// and `#[serde(default)]` on every field, so a single bad / renamed
+/// field falls back to that field's default rather than nuking the
+/// whole struct.
+///
+/// # Example
+///
+/// ```ignore
+/// state_struct! {
+///     pub struct State {
+///         slots: Vec<u8>,
+///         dry: f32,
+///     }
+/// }
+/// state!(State);
+/// ```
+///
+/// Authors who want explicit serde control (custom `with`, `serialize`
+/// derive, etc.) should use a hand-rolled struct + `state!(T)` instead
+/// — but lose the field-level fallback unless they annotate every
+/// field with `#[serde(default)]` themselves.
+#[macro_export]
+macro_rules! state_struct {
+    (
+        $(#[$outer:meta])*
+        $vis:vis struct $name:ident {
+            $(
+                $(#[$inner:meta])*
+                $fvis:vis $fname:ident : $fty:ty
+            ),* $(,)?
+        }
+    ) => {
+        $(#[$outer])*
+        #[derive(serde::Deserialize, Default, Clone)]
+        $vis struct $name {
+            $(
+                $(#[$inner])*
+                #[serde(default)]
+                $fvis $fname : $fty,
+            )*
+        }
+    };
+}
+
+/// Declares the bundle-private state type for this preset and emits the
+/// host-facing exports + script-facing `cx.state::<T>()` cache.
+///
+/// Forms:
+/// - `state!(T);` — uses `DEFAULT_STATE_CAP_BYTES` (64 KiB) max content size.
+/// - `state!(T, max_bytes = N);` — explicit cap up to 1 MiB. Script
+///   author trades audio-thread parse latency for headroom.
+///
+/// `T` must implement `serde::Deserialize` + `Default + Clone`. The
+/// `state_struct! { … }` wrapper produces both automatically; for hand-
+/// rolled structs the author is responsible.
+///
+/// Generates:
+/// - `STATE_BUF: [u8; max_bytes + STATE_HEADER_BYTES]` static — the
+///   shared buffer the host writes into.
+/// - `static mut STATE_CACHED: Option<(u64, T)>` — script-side cache,
+///   re-parsed only when the host's gen advances.
+/// - `get_state_buf_ptr()`, `get_state_buf_capacity()` exports — the
+///   host's discovery handles for the buffer.
+/// - An extension trait `Context::state<T>()` accessor that returns
+///   `&T` (always succeeds — falls back to `T::default()` on parse
+///   failure to match Python's lazy semantics).
+///
+/// # Example
+///
+/// ```ignore
+/// state_struct! {
+///     pub struct State {
+///         slots: Vec<u8>,
+///         dry: f32,
+///     }
+/// }
+/// setup!();
+/// params! { /* ... */ }
+/// state!(State);
+///
+/// fn process() {
+///     let cx = ctx(/* … */);
+///     let s: &State = cx.state();
+///     // …
+/// }
+/// ```
+#[macro_export]
+macro_rules! state {
+    ($T:ty) => {
+        $crate::state!($T, max_bytes = $crate::DEFAULT_STATE_CAP_BYTES);
+    };
+    ($T:ty, max_bytes = $cap:expr) => {
+        const STATE_MAX_BYTES: usize = $cap;
+        const STATE_BUF_TOTAL: usize = STATE_MAX_BYTES + $crate::STATE_HEADER_BYTES;
+
+        // Initialize gen to a sentinel `u64::MAX - 1` so the first cache
+        // miss compares unequal even if the host's gen starts at 0 —
+        // ensures `state!()` returns a properly populated value on the
+        // first `cx.state()` call.
+        static mut STATE_BUF: [u8; STATE_BUF_TOTAL] = {
+            let mut buf = [0u8; STATE_BUF_TOTAL];
+            // Pre-write a sentinel gen so the cache miss logic fires
+            // even before the host has written anything (e.g. the
+            // script reads state during smoke testing without a kernel).
+            buf[0] = 0xff;
+            buf[1] = 0xff;
+            buf[2] = 0xff;
+            buf[3] = 0xff;
+            buf[4] = 0xff;
+            buf[5] = 0xff;
+            buf[6] = 0xff;
+            buf[7] = 0xff;
+            buf
+        };
+
+        static mut STATE_CACHED: Option<(u64, $T)> = None;
+
+        #[no_mangle]
+        pub extern "C" fn get_state_buf_ptr() -> i32 {
+            unsafe { STATE_BUF.as_ptr() as i32 }
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_state_buf_capacity() -> i32 {
+            STATE_BUF_TOTAL as i32
+        }
+
+        // Extension trait that adds `state::<T>()` to `Context`.
+        // Defined inside the macro expansion so it's in scope at the
+        // script's `process()` site without an extra `use`. Couldn't
+        // live on `Context` itself: the per-preset cache is emitted by
+        // this macro into the script's crate, not the conjuredsp crate.
+        trait __CdpStateExt {
+            fn state(&self) -> &$T;
+        }
+
+        impl __CdpStateExt for conjuredsp::Context {
+            #[inline]
+            fn state(&self) -> &$T {
+                // SAFETY: the script-side execution model is
+                // single-threaded (one wasmtime Store per AU instance,
+                // each with its own linear memory). Nothing else can
+                // touch STATE_BUF / STATE_CACHED while this runs.
+                unsafe {
+                    let buf_ptr = STATE_BUF.as_ptr();
+                    let mut gen_bytes = [0u8; 8];
+                    core::ptr::copy_nonoverlapping(
+                        buf_ptr,
+                        gen_bytes.as_mut_ptr(),
+                        8,
+                    );
+                    let gen = u64::from_le_bytes(gen_bytes);
+
+                    if let Some((cached_gen, cached_val)) = &STATE_CACHED {
+                        if *cached_gen == gen {
+                            return cached_val;
+                        }
+                    }
+
+                    // Cache miss — re-parse from the buffer.
+                    let mut len_bytes = [0u8; 4];
+                    core::ptr::copy_nonoverlapping(
+                        buf_ptr.add(8),
+                        len_bytes.as_mut_ptr(),
+                        4,
+                    );
+                    let used_len =
+                        u32::from_le_bytes(len_bytes) as usize;
+                    let max_content =
+                        STATE_BUF_TOTAL - $crate::STATE_HEADER_BYTES;
+                    let n = used_len.min(max_content);
+                    let content = core::slice::from_raw_parts(
+                        buf_ptr.add($crate::STATE_HEADER_BYTES),
+                        n,
+                    );
+                    let parsed: $T = if n == 0 {
+                        <$T as core::default::Default>::default()
+                    } else {
+                        serde_json::from_slice::<$T>(content)
+                            .unwrap_or_else(|_| {
+                                <$T as core::default::Default>::default()
+                            })
+                    };
+                    STATE_CACHED = Some((gen, parsed));
+                    // Re-borrow from the just-stored cache.
+                    &STATE_CACHED.as_ref().unwrap().1
+                }
+            }
+        }
+    };
+}

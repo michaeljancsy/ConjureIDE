@@ -49,33 +49,33 @@ class _S:
         self.sweep_lfo = LFO(sr, freq=SWEEP_HZ, waveform="sine")
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    ripple = params["ripple"] / 100.0
-    bubble = params["bubble"] / 100.0
-    drone = params["drone"] / 100.0
-    sweep = params["sweep"] / 100.0
-    mx = params["mix"]
+    ripple = ctx.params["ripple"] / 100.0
+    bubble = ctx.params["bubble"] / 100.0
+    drone = ctx.params["drone"] / 100.0
+    sweep = ctx.params["sweep"] / 100.0
+    mx = ctx.params["mix"]
 
-    sub_lpc = BiquadCoeffs.lowpass(80.0, 0.707, sample_rate)
-    wet_lpc = BiquadCoeffs.lowpass(2000.0, 0.707, sample_rate)
+    sub_lpc = BiquadCoeffs.lowpass(80.0, 0.707, ctx.sample_rate)
+    wet_lpc = BiquadCoeffs.lowpass(2000.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         s.sub_lp[ch].set_coeffs(sub_lpc)
         s.wet_lp[ch].set_coeffs(wet_lpc)
 
-    tap_base = TAP_BASE_MS * 0.001 * sample_rate
-    base_depth = (10.0 + 40.0 * bubble) * 0.001 * sample_rate
+    tap_base = TAP_BASE_MS * 0.001 * ctx.sample_rate
+    base_depth = (10.0 + 40.0 * bubble) * 0.001 * ctx.sample_rate
     sweep_depth = 0.6 * sweep
     fb_amt = 0.45 + 0.45 * ripple
     drone_gain = 0.5 + 1.2 * drone
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         tl = s.tap_lfo[0].tick()
         tr = s.tap_lfo[1].tick()
         sw = s.sweep_lfo.tick()
@@ -92,8 +92,8 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             fb_from_l = s.delay[0].read(tap_l)
             fb_from_r = s.delay[1].read(tap_r)
 
-            l_dry = float(inputs[0][i])
-            r_dry = float(inputs[1][i])
+            l_dry = float(ctx.inputs[0][i])
+            r_dry = float(ctx.inputs[1][i])
 
             # Ping-pong routing: L delay receives dry_L + R's tap feedback
             s.delay[0].write(l_dry + fb_from_r * fb_amt)
@@ -108,14 +108,14 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             l_wet = s.wet_lp[0].process_sample(l_wet_raw)
             r_wet = s.wet_lp[1].process_sample(r_wet_raw)
 
-            outputs[0][i] = l_dry * (1.0 - mx) + l_wet * mx
-            outputs[1][i] = r_dry * (1.0 - mx) + r_wet * mx
+            ctx.outputs[0][i] = l_dry * (1.0 - mx) + l_wet * mx
+            ctx.outputs[1][i] = r_dry * (1.0 - mx) + r_wet * mx
         else:
             # Mono fallback
             fb_out = s.delay[0].read(tap_l)
-            dry = float(inputs[0][i])
+            dry = float(ctx.inputs[0][i])
             s.delay[0].write(dry + fb_out * fb_amt)
             sub_voice = s.sub_lp[0].process_sample(abs(dry)) * drone_gain
             wet_raw = fb_out + sub_voice
             wet = s.wet_lp[0].process_sample(wet_raw)
-            outputs[0][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[0][i] = dry * (1.0 - mx) + wet * mx

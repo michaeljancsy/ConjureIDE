@@ -51,39 +51,39 @@ class _S:
         self.grain_phase = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    flutter = params["flutter"] / 100.0
-    bright = params["bright"] / 100.0
-    jitter = params["jitter"] / 100.0
-    shimmer = params["shimmer"] / 100.0
-    mx = params["mix"]
+    flutter = ctx.params["flutter"] / 100.0
+    bright = ctx.params["bright"] / 100.0
+    jitter = ctx.params["jitter"] / 100.0
+    shimmer = ctx.params["shimmer"] / 100.0
+    mx = ctx.params["mix"]
 
     bp_q = 3.0 + 7.0 * bright
-    bp_c = [BiquadCoeffs.bandpass(BP_HZ[k], bp_q, sample_rate)
+    bp_c = [BiquadCoeffs.bandpass(BP_HZ[k], bp_q, ctx.sample_rate)
             for k in range(3)]
     for ch in range(nch):
         for k in range(3):
             s.bp[ch][k].set_coeffs(bp_c[k])
 
     trem_depth = 0.60 * flutter
-    jitter_base = JITTER_BASE_MS * 0.001 * sample_rate
-    jitter_depth = (0.3 + 2.2 * jitter) * 0.001 * sample_rate
+    jitter_base = JITTER_BASE_MS * 0.001 * ctx.sample_rate
+    jitter_depth = (0.3 + 2.2 * jitter) * 0.001 * ctx.sample_rate
 
-    base_d = SHIFT_BASE_MS * 0.001 * sample_rate
-    grain_samples = GRAIN_MS * 0.001 * sample_rate
+    base_d = SHIFT_BASE_MS * 0.001 * ctx.sample_rate
+    grain_samples = GRAIN_MS * 0.001 * ctx.sample_rate
     grain_rate = 1.0 / grain_samples
 
     shimmer_amt = 0.6 * shimmer
     bp_gain = (0.5 + 0.5 * bright) / 3.0
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         t0 = s.trem_lfo[0].tick()
         t1 = s.trem_lfo[1].tick()
         t2 = s.trem_lfo[2].tick()
@@ -110,7 +110,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         s.grain_phase = (s.grain_phase + grain_rate) % 1.0
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
             dry_trem = dry * trem_mod
 
             bp_sum = 0.0
@@ -127,4 +127,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             shimmer_voice = (w0 * g0 + w1 * g1) * shimmer_amt
 
             wet = jittered + shimmer_voice
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

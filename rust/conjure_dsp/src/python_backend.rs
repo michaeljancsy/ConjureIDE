@@ -1,4 +1,4 @@
-use crate::backend::{Backend, SidechainInput};
+use crate::backend::{Backend, SidechainInput, StateSnapshot};
 use crate::kernel::TransportState;
 use crate::params::{ParamMetadata, TelemetryMetadata, PARAM_COUNT, TELEMETRY_LEN};
 use numpy::{PyArray1, PyArrayMethods};
@@ -21,73 +21,85 @@ static PYTHON_ENV_INIT: OnceLock<()> = OnceLock::new();
 
 /// Python DSP backend using pyo3 and numpy.
 ///
-/// Loads a Python script containing a
-/// `process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry[, sidechain])`
-/// function and calls it each render callback with pre-allocated numpy
-/// arrays. Two arities are accepted:
-/// - 7 args: canonical, no sidechain. The script never sees the second
-///   input bus even if the host has audio routed to it.
-/// - 8 args: opt in to the sidechain bus. The 8th positional arg is a
-///   list of per-channel `numpy.ndarray[float32]` buffers (zero-filled
-///   when the host hasn't routed anything).
+/// Loads a Python script containing a single-arg `process(ctx)` function
+/// and calls it each render callback. The `ctx` object is built once at
+/// `initialize()` time and mutated in place per block — its attributes:
 ///
-/// Use `_transport` / `_telemetry` / `_sidechain` (Python's
-/// underscore-prefix convention for unused args) when you don't read
-/// them. Scripts with any other arity are rejected at load time.
+///   `inputs`        list of `numpy.ndarray[float32]` per channel
+///   `outputs`       list of `numpy.ndarray[float32]` per channel
+///   `sidechain`     list of per-channel sidechain numpy arrays (always
+///                   present; zero-filled when nothing is routed)
+///   `params`        read-only mapping (denormalized values keyed by
+///                   declared name, or 0–1 indexed list in legacy mode)
+///   `state`         read-only mapping over bundle-private persisted JSON
+///                   (re-parsed only when the kernel's state generation
+///                   bumps; cached otherwise)
+///   `telemetry`     writable dict for `ctx.telemetry["x"] = …` writes
+///   `transport`     read-only namespace with `bpm`, `beat`,
+///                   `is_playing`, `time_sig_numerator`,
+///                   `time_sig_denominator`, `sample_position`
+///   `sample_rate`   float
+///   `frame_count`   int
+///
+/// Scripts whose `process` doesn't take exactly one positional arg are
+/// rejected at load time with a clear error.
 pub struct PythonBackend {
     py_process_fn: Py<PyAny>,
-    /// Whether the script's `process()` declares the optional 8th
-    /// `sidechain` arg. Captured at load time from `co_argcount`.
-    py_wants_sidechain: bool,
+    /// The single ctx object passed to process(). Rebuilt on channel-
+    /// count or max-frames change; mutated in place each block.
+    py_ctx: Option<Py<PyAny>>,
+    /// Underlying numpy arrays for `ctx.inputs` (the list itself is a
+    /// child of `py_ctx`).
     py_input_arrays: Vec<Py<PyAny>>,
+    /// Underlying numpy arrays for `ctx.outputs`.
     py_output_arrays: Vec<Py<PyAny>>,
-    /// Pre-allocated numpy arrays for the sidechain input bus. Sized to
-    /// the same `max_frames` as the main inputs and to `MAX_SIDECHAIN_CH`
-    /// channels (whichever is smaller per block). Always allocated when
-    /// `py_wants_sidechain` is true so the call list never reshapes.
+    /// Underlying numpy arrays for `ctx.sidechain` (always allocated;
+    /// zero-filled when host has nothing routed).
     py_sidechain_arrays: Vec<Py<PyAny>>,
-    /// Cached PyList wrapping `py_sidechain_arrays` (rebuilt when
-    /// channel count changes).
-    py_sidechain_list: Option<Py<PyAny>>,
     py_channel_count: usize,
     last_error: Option<String>,
     param_names: HashMap<u8, String>,
-    /// Rich parameter metadata from `PARAMS` dict. When present, process()
-    /// passes a dict of denormalized values instead of a list of 0–1 floats.
+    /// Rich parameter metadata from `PARAMS` dict. When present, ctx.params
+    /// is a read-only dict of denormalized values; otherwise it's a
+    /// read-only list of 0–1 floats.
     param_metadata: Option<Vec<ParamMetadata>>,
     /// Script-declared telemetry slot metadata (from `TELEMETRY` dict).
-    /// `None` when the script doesn't declare one — matches the missing-
-    /// metadata-export semantics in the WASM backend.
     telemetry_metadata: Option<Vec<TelemetryMetadata>>,
-    /// Cached PyDict for telemetry slots (created once, values updated
-    /// in-place each block). Pre-seeded with `0.0` for each declared
-    /// slot so script `telemetry["x"] = …` writes are dict updates,
-    /// not key creations.
+    /// The same dict object exposed as `ctx.telemetry` — pre-seeded with
+    /// `0.0` for each declared slot so script writes are dict updates.
     py_telemetry_dict: Option<Py<PyAny>>,
     /// Per-block telemetry snapshot the kernel reads via `read_telemetry`.
-    /// Filled by `process_with_python` after the script returns; values
-    /// are addressed by the metadata index, in declaration order.
     telemetry_buf: [f32; TELEMETRY_LEN],
-    /// Max frames the host may pass to `process()` — used to size the
-    /// per-vector-slot numpy arrays we pre-seed in the telemetry dict so
-    /// scripts can write full per-frame buffers in-place without
-    /// per-block reallocation.
+    /// Max frames the host may pass to `process()`.
     py_max_frames: usize,
-    /// Script-declared algorithmic latency in samples (from `LATENCY` constant).
+    /// Script-declared algorithmic latency in samples.
     latency_samples: u32,
-    /// Cached PyList wrapping py_input_arrays (rebuilt on channel count change).
-    py_input_list: Option<Py<PyAny>>,
-    /// Cached PyList wrapping py_output_arrays (rebuilt on channel count change).
-    py_output_list: Option<Py<PyAny>>,
-    /// Cached PyDict for transport state (created once, values updated in-place).
-    py_transport_dict: Option<Py<PyAny>>,
-    /// Cached PyDict for params when using rich metadata (created once, values updated in-place).
-    py_params_dict: Option<Py<PyAny>>,
-    /// Cached PyList for params in legacy mode (no metadata). Created once, values updated in-place
-    /// each callback to avoid per-callback allocation of 16 Python float objects + list.
-    py_params_list: Option<Py<PyAny>>,
-    /// Unique module name in sys.modules for this instance (e.g., "dsp_script_0").
-    /// Stored so Drop can remove it from sys.modules to prevent memory leaks.
+    /// Script-declared `STATE` dict at load time (the per-instance
+    /// defaults). The Swift coordinator pushes these into the kernel
+    /// via `dsp_kernel_set_state_json` at script load before any UI
+    /// has a chance to write.
+    state_defaults_json: Option<String>,
+    /// Per-script byte cap for state. Exposed via `state_max_bytes()`
+    /// so Swift can plumb it through `dsp_kernel_set_state_cap`. Python
+    /// presets currently have no opt-in syntax — defaults to None and
+    /// the coordinator falls back to `DEFAULT_STATE_CAP_BYTES`.
+    state_max_bytes: Option<usize>,
+    /// Cached generation of the state buffer last parsed into
+    /// `py_state_dict`. Initialized to a sentinel `u64::MAX` so the
+    /// first block always re-parses (even when the buffer hasn't
+    /// changed) — that ensures `ctx.state` reflects either the
+    /// persisted state OR the script defaults from the moment the
+    /// first block runs.
+    py_state_gen: u64,
+    /// Read-only mapping wrapped via `MappingProxyType` — what
+    /// `ctx.state` returns. Re-built on every gen bump from the
+    /// underlying parsed dict so script attempts to mutate raise
+    /// `AttributeError`.
+    py_state_dict: Option<Py<PyAny>>,
+    /// Set of declared STATE keys (used for "unknown persisted key"
+    /// logging at script load).
+    state_declared_keys: Vec<String>,
+    /// Unique module name in sys.modules.
     module_name: String,
 }
 
@@ -106,7 +118,6 @@ impl Drop for PythonBackend {
 
 impl PythonBackend {
     /// Prepend a directory to Python's `sys.path` so packages in it are importable.
-    /// Idempotent — skips if the path is already present.
     pub fn inject_site_packages(path: &str) -> Result<(), String> {
         Python::with_gil(|py| -> Result<(), PyErr> {
             let sys = py.import("sys")?;
@@ -122,125 +133,140 @@ impl PythonBackend {
         .map_err(|e| e.to_string())
     }
 
-    /// Load a Python script containing a `process()` function.
-    /// `python_home` sets PYTHONHOME before interpreter init.
+    /// Load a Python script containing a `process(ctx)` function.
     pub fn load(python_home: &str, script_path: &str) -> Result<Self, String> {
         eprintln!(
             "ConjureDSP-Rust: PythonBackend::load called, python_home={}, script_path={}",
             python_home, script_path
         );
 
-        // Set PYTHONHOME and PYTHONDONTWRITEBYTECODE exactly once. POSIX setenv()
-        // is not thread-safe, and concurrent AU instance creation (e.g., DAW track
-        // duplication) can corrupt the environment table. These values are always
-        // the same across instances, so set-once is correct.
         let python_home_owned = python_home.to_string();
         PYTHON_ENV_INIT.get_or_init(|| {
             std::env::set_var("PYTHONHOME", &python_home_owned);
             std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
         });
 
-        let result: Result<(Py<PyAny>, HashMap<u8, String>, Option<Vec<ParamMetadata>>, Option<Vec<TelemetryMetadata>>, u32, String, bool), PyErr> =
-            Python::with_gil(|py| {
-                let code = std::fs::read_to_string(script_path)
-                    .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        struct LoadResult {
+            process_fn: Py<PyAny>,
+            param_names: HashMap<u8, String>,
+            param_metadata: Option<Vec<ParamMetadata>>,
+            telemetry_metadata: Option<Vec<TelemetryMetadata>>,
+            latency: u32,
+            state_defaults_json: Option<String>,
+            state_declared_keys: Vec<String>,
+            state_max_bytes: Option<usize>,
+            module_name: String,
+        }
 
-                let code_c = CString::new(code)
-                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-                let path_c = CString::new(script_path)
-                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let result: Result<LoadResult, PyErr> = Python::with_gil(|py| {
+            let code = std::fs::read_to_string(script_path)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
-                // Each backend instance gets a unique module name so multiple AU
-                // instances in the same DAW process don't collide in sys.modules.
-                let instance_id = INSTANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
-                let mod_name_str = format!("dsp_script_{}", instance_id);
-                let module_name = CString::new(mod_name_str.as_str())
-                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            let code_c = CString::new(code)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            let path_c = CString::new(script_path)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
-                // Remove any cached module so from_code creates a fresh one.
-                // This handles the reload case where the same instance ID slot
-                // is reused (e.g., hot-reload within a single AU instance).
-                let sys = py.import("sys")?;
-                let sys_modules = sys.getattr("modules")?;
-                let _ = sys_modules.call_method1("pop", (mod_name_str.as_str(), py.None()));
+            let instance_id = INSTANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let mod_name_str = format!("dsp_script_{}", instance_id);
+            let module_name = CString::new(mod_name_str.as_str())
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
-                let module = PyModule::from_code(py, &code_c, &path_c, &module_name)?;
-                let process_fn = module.getattr("process")?;
+            let sys = py.import("sys")?;
+            let sys_modules = sys.getattr("modules")?;
+            let _ = sys_modules.call_method1("pop", (mod_name_str.as_str(), py.None()));
 
-                // Accept the canonical 7-arg signature, plus the
-                // sidechain-opt-in 8-arg form. The 8th positional arg is
-                // a list of per-channel numpy arrays for the sidechain
-                // input bus (zero-filled when the host has nothing
-                // routed). Anything else is a typo or stale convention;
-                // reject at load time so the user sees a clear error
-                // instead of a TypeError every render block.
-                let arity: usize = process_fn
-                    .getattr("__code__")?
-                    .getattr("co_argcount")?
-                    .extract()?;
-                if arity != 7 && arity != 8 {
-                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                        "process() must take 7 or 8 arguments \
-                        (inputs, outputs, frame_count, sample_rate, params, \
-                        transport, telemetry[, sidechain]); got {} args. \
-                        Use _transport / _telemetry / _sidechain as \
-                        parameter names if you don't read them.",
-                        arity
-                    )));
-                }
-                let wants_sidechain = arity == 8;
+            let module = PyModule::from_code(py, &code_c, &path_c, &module_name)?;
+            let process_fn = module.getattr("process")?;
 
-                // Try PARAMS dict first (rich metadata):
-                //   PARAMS = {"threshold": {"min": -40, "max": -3, "unit": "dB", "default": -20}, ...}
-                let (param_names, param_metadata) =
-                    Self::extract_params(py, &module);
+            // Single-arg ctx signature is the only accepted shape. Old
+            // 7- and 8-arg forms are rejected at load time so authors
+            // don't see a confusing TypeError every render block.
+            let arity: usize = process_fn
+                .getattr("__code__")?
+                .getattr("co_argcount")?
+                .extract()?;
+            if arity != 1 {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "process() must take exactly one argument (ctx); got {} args. \
+                    Migrate from the legacy positional form: \
+                    `def process(ctx):` and read inputs/outputs/params/state/etc. \
+                    via `ctx.inputs[0]`, `ctx.params[\"name\"]`, `ctx.state[\"key\"]`.",
+                    arity
+                )));
+            }
 
-                // Extract optional TELEMETRY dict for the DSP→UI scalar
-                // channel. Same shape as PARAMS but a smaller schema:
-                //   TELEMETRY = {"env": {"unit": ""}, "gr_db": {"unit": "dB"}}
-                let telemetry_metadata = Self::extract_telemetry(&module);
+            let (param_names, param_metadata) = Self::extract_params(py, &module);
+            let telemetry_metadata = Self::extract_telemetry(&module);
 
-                // Extract optional LATENCY constant (algorithmic latency in samples)
-                let latency: u32 = module
-                    .getattr("LATENCY")
-                    .ok()
-                    .and_then(|v| v.extract::<u32>().ok())
-                    .unwrap_or(0);
+            let latency: u32 = module
+                .getattr("LATENCY")
+                .ok()
+                .and_then(|v| v.extract::<u32>().ok())
+                .unwrap_or(0);
 
-                Ok((process_fn.unbind(), param_names, param_metadata, telemetry_metadata, latency, mod_name_str, wants_sidechain))
-            });
+            // STATE defaults: script-declared per-instance persistent state.
+            // Serialized to a JSON string here; the Swift coordinator
+            // installs it as the kernel's initial state buffer for fresh
+            // instances. Re-loading the same preset re-applies these
+            // defaults; loading from a DAW project session restores the
+            // saved state instead.
+            let (state_defaults_json, state_declared_keys) = Self::extract_state_defaults(&module);
+
+            // Optional opt-in: script can declare a custom byte cap as
+            // a module-level constant `STATE_MAX_BYTES = N`.
+            let state_max_bytes = module
+                .getattr("STATE_MAX_BYTES")
+                .ok()
+                .and_then(|v| v.extract::<usize>().ok());
+
+            Ok(LoadResult {
+                process_fn: process_fn.unbind(),
+                param_names,
+                param_metadata,
+                telemetry_metadata,
+                latency,
+                state_defaults_json,
+                state_declared_keys,
+                state_max_bytes,
+                module_name: mod_name_str,
+            })
+        });
 
         match result {
-            Ok((process_fn, param_names, param_metadata, telemetry_metadata, latency, module_name, wants_sidechain)) => {
-                eprintln!("ConjureDSP-Rust: Python script loaded successfully (latency={}, sidechain={})", latency, wants_sidechain);
+            Ok(r) => {
+                eprintln!(
+                    "ConjureDSP-Rust: Python script loaded successfully (latency={}, state_keys={})",
+                    r.latency,
+                    r.state_declared_keys.len()
+                );
                 Ok(Self {
-                    py_process_fn: process_fn,
-                    py_wants_sidechain: wants_sidechain,
+                    py_process_fn: r.process_fn,
+                    py_ctx: None,
                     py_input_arrays: Vec::new(),
                     py_output_arrays: Vec::new(),
                     py_sidechain_arrays: Vec::new(),
-                    py_sidechain_list: None,
                     py_channel_count: 0,
                     last_error: None,
-                    param_names,
-                    param_metadata,
-                    telemetry_metadata,
+                    param_names: r.param_names,
+                    param_metadata: r.param_metadata,
+                    telemetry_metadata: r.telemetry_metadata,
                     py_telemetry_dict: None,
                     telemetry_buf: [0.0; TELEMETRY_LEN],
                     py_max_frames: 0,
-                    latency_samples: latency,
-                    py_input_list: None,
-                    py_output_list: None,
-                    py_transport_dict: None,
-                    py_params_dict: None,
-                    py_params_list: None,
-                    module_name,
+                    latency_samples: r.latency,
+                    state_defaults_json: r.state_defaults_json,
+                    state_max_bytes: r.state_max_bytes,
+                    py_state_gen: u64::MAX, // force initial parse
+                    py_state_dict: None,
+                    state_declared_keys: r.state_declared_keys,
+                    module_name: r.module_name,
                 })
             }
             Err(e) => {
                 let py_err_msg = Python::with_gil(|py| {
-                    // Format traceback to include line numbers for the error parser
-                    let tb_str = e.traceback(py)
+                    let tb_str = e
+                        .traceback(py)
                         .and_then(|tb| tb.format().ok())
                         .unwrap_or_default();
                     let msg = e.value(py).to_string();
@@ -260,18 +286,33 @@ impl PythonBackend {
         }
     }
 
-    /// Extract parameter metadata from the Python module.
-    /// Tries `PARAMS` dict first (rich metadata), falls back to `PARAM_NAMES` (names only).
+    /// JSON for the script's declared `STATE = {…}` defaults, or `None`
+    /// when the script declared none. Swift uses this to seed the
+    /// kernel's state buffer at script load.
+    pub fn state_defaults_json(&self) -> Option<&str> {
+        self.state_defaults_json.as_deref()
+    }
+
+    /// Optional script-declared byte cap (`STATE_MAX_BYTES = N`).
+    pub fn state_max_bytes(&self) -> Option<usize> {
+        self.state_max_bytes
+    }
+
+    /// Names of every key declared in the script's `STATE` dict, in
+    /// declaration order. Used by the validator and the smoke tester to
+    /// resolve `ConjureDSP.state.get/set` references against the script.
+    pub fn state_declared_keys(&self) -> &[String] {
+        &self.state_declared_keys
+    }
+
     fn extract_params(
         py: Python<'_>,
         module: &Bound<'_, PyModule>,
     ) -> (HashMap<u8, String>, Option<Vec<ParamMetadata>>) {
-        // Try PARAMS dict first: {"threshold": {"min": -40, "max": -3, "unit": "dB", "default": -20}}
         if let Ok(attr) = module.getattr("PARAMS") {
             if let Ok(dict) = attr.downcast::<PyDict>() {
                 let mut metadata = Vec::new();
                 let mut names = HashMap::new();
-                // Python 3.7+ dicts preserve insertion order
                 for (i, (key, val)) in dict.iter().enumerate() {
                     if i >= PARAM_COUNT {
                         break;
@@ -322,7 +363,6 @@ impl PythonBackend {
                             .ok()
                             .flatten()
                             .and_then(|v| v.extract::<Vec<String>>().ok());
-                        // Title-case the name for display, keep original as key
                         let display_name = Self::to_title_case(&name);
                         names.insert(i as u8, display_name.clone());
                         metadata.push(ParamMetadata {
@@ -344,7 +384,6 @@ impl PythonBackend {
             }
         }
 
-        // Fall back to PARAM_NAMES dict: {0: "Cutoff", 1: "Resonance"}
         let param_names = match module.getattr("PARAM_NAMES") {
             Ok(attr) => {
                 if let Ok(dict) = attr.downcast::<PyDict>() {
@@ -365,15 +404,10 @@ impl PythonBackend {
             }
             Err(_) => HashMap::new(),
         };
-
+        let _ = py; // silence unused
         (param_names, None)
     }
 
-    /// Extract the optional `TELEMETRY` dict from the loaded module.
-    /// Schema mirrors PARAMS but smaller — just `{name: {unit?: str}}`.
-    /// Returns `None` when the script doesn't declare one (the common
-    /// case for legacy scripts), so the kernel skips the per-block
-    /// snapshot read entirely.
     fn extract_telemetry(module: &Bound<'_, PyModule>) -> Option<Vec<TelemetryMetadata>> {
         let attr = module.getattr("TELEMETRY").ok()?;
         let dict = attr.downcast::<PyDict>().ok()?;
@@ -386,7 +420,6 @@ impl PythonBackend {
                 Ok(n) => n,
                 Err(_) => continue,
             };
-            // Per-slot dict is optional — `{"x": {}}` is fine, no unit.
             let spec_dict = val.downcast::<PyDict>().ok();
             let unit = spec_dict
                 .as_ref()
@@ -398,14 +431,6 @@ impl PythonBackend {
                 .and_then(|spec| spec.get_item("shape").ok().flatten())
                 .and_then(|v| v.extract::<String>().ok())
                 .unwrap_or_else(|| "scalar".to_string());
-            // Pass-through naming: the JS-facing key is the dict key
-            // verbatim. Differs from PARAMS, which title-cases for the
-            // DAW display label — telemetry has no DAW surface so the
-            // canonicalization would only mangle acronyms (DB / RMS /
-            // GR / FFT). UIs that target both Rust and Python presets
-            // read both forms via the `??` chain (the Rust side emits
-            // SCREAMING_SNAKE; the Python side emits whatever the
-            // dict key is, conventionally snake_case).
             metadata.push(TelemetryMetadata {
                 name: key_str.clone(),
                 key: key_str,
@@ -413,10 +438,47 @@ impl PythonBackend {
                 shape,
             });
         }
-        if metadata.is_empty() { None } else { Some(metadata) }
+        if metadata.is_empty() {
+            None
+        } else {
+            Some(metadata)
+        }
     }
 
-    /// Convert snake_case or lowercase name to Title Case for display.
+    /// Extract the script's `STATE = {…}` module-level dict, returning
+    /// (json_string, declared_keys). Returns (None, []) when the script
+    /// doesn't declare a STATE dict.
+    fn extract_state_defaults(module: &Bound<'_, PyModule>) -> (Option<String>, Vec<String>) {
+        let attr = match module.getattr("STATE") {
+            Ok(a) => a,
+            Err(_) => return (None, Vec::new()),
+        };
+        let dict = match attr.downcast::<PyDict>() {
+            Ok(d) => d,
+            Err(_) => return (None, Vec::new()),
+        };
+        // Order-preserving collection of keys (Python 3.7+ dict insertion
+        // order is reliable). We use it to build the validator surface
+        // and the "unknown persisted key" log line.
+        let keys: Vec<String> = dict
+            .iter()
+            .filter_map(|(k, _)| k.extract::<String>().ok())
+            .collect();
+        // json.dumps(STATE) — using Python's json module for round-trip
+        // fidelity (dates, NaNs, custom encoders are all out of scope but
+        // simple dict-of-lists/dict/strings/numbers/bools work).
+        let py = dict.py();
+        let json_module = match py.import("json") {
+            Ok(m) => m,
+            Err(_) => return (None, keys),
+        };
+        let json_str = json_module
+            .call_method1("dumps", (dict,))
+            .ok()
+            .and_then(|s| s.extract::<String>().ok());
+        (json_str, keys)
+    }
+
     fn to_title_case(s: &str) -> String {
         s.split('_')
             .filter(|w| !w.is_empty())
@@ -434,17 +496,16 @@ impl PythonBackend {
             .join(" ")
     }
 
-    /// Allocate numpy arrays for the given channel count, sized to max_frames.
-    /// Also pre-builds cached PyList/PyDict objects to avoid per-callback allocations.
+    /// (Re)build the per-block ctx object — numpy arrays sized to
+    /// (channel_count × max_frames), wrapped lists, telemetry dict
+    /// pre-seeded with declared slot keys. Called from `initialize()`
+    /// and any time the channel count or max frames changes.
     fn allocate_py_arrays(&mut self, channel_count: usize, max_frames: usize) {
-        // Track max_frames for vector-telemetry numpy array sizing. Drop
-        // any cached telemetry dict when the size changes so the next
-        // build re-seeds vector slots with arrays of the correct length.
         if self.py_max_frames != max_frames {
             self.py_telemetry_dict = None;
         }
         self.py_max_frames = max_frames;
-        Python::with_gil(|py| {
+        Python::with_gil(|py| -> PyResult<()> {
             self.py_input_arrays = (0..channel_count)
                 .map(|_| {
                     PyArray1::<f32>::zeros(py, max_frames, false)
@@ -452,7 +513,6 @@ impl PythonBackend {
                         .unbind()
                 })
                 .collect();
-
             self.py_output_arrays = (0..channel_count)
                 .map(|_| {
                     PyArray1::<f32>::zeros(py, max_frames, false)
@@ -460,69 +520,144 @@ impl PythonBackend {
                         .unbind()
                 })
                 .collect();
+            // Sidechain mirrors main inputs unconditionally — old
+            // pre-state presets see a list of zero-filled arrays they
+            // can ignore; new presets read it via `ctx.sidechain[ch]`.
+            self.py_sidechain_arrays = (0..channel_count)
+                .map(|_| {
+                    PyArray1::<f32>::zeros(py, max_frames, false)
+                        .into_any()
+                        .unbind()
+                })
+                .collect();
 
-            // Sidechain mirrors the main input bus (same channel_count,
-            // same max_frames). Allocated only when the script declared
-            // an 8th `sidechain` arg — keeps existing 7-arg presets at
-            // zero numpy overhead.
-            self.py_sidechain_arrays = if self.py_wants_sidechain {
-                (0..channel_count)
-                    .map(|_| {
-                        PyArray1::<f32>::zeros(py, max_frames, false)
-                            .into_any()
-                            .unbind()
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+            // Build the canonical ctx object. We use `types.SimpleNamespace`
+            // for read-mostly attributes (transport, sample_rate,
+            // frame_count, params, state) and direct attribute writes for
+            // the lists / telemetry dict that scripts are expected to read.
+            let types_module = py.import("types")?;
+            let simple_ns_cls = types_module.getattr("SimpleNamespace")?;
+            let ctx = simple_ns_cls.call0()?;
 
-            // Cache PyLists wrapping the numpy arrays (stable across callbacks)
-            if let Ok(list) =
-                PyList::new(py, self.py_input_arrays.iter().map(|a| a.bind(py)))
-            {
-                self.py_input_list = Some(list.into_any().unbind());
-            }
-            if let Ok(list) =
-                PyList::new(py, self.py_output_arrays.iter().map(|a| a.bind(py)))
-            {
-                self.py_output_list = Some(list.into_any().unbind());
-            }
-            if self.py_wants_sidechain {
-                if let Ok(list) =
-                    PyList::new(py, self.py_sidechain_arrays.iter().map(|a| a.bind(py)))
-                {
-                    self.py_sidechain_list = Some(list.into_any().unbind());
-                }
-            } else {
-                self.py_sidechain_list = None;
-            }
+            let input_list = PyList::new(py, self.py_input_arrays.iter().map(|a| a.bind(py)))?;
+            let output_list = PyList::new(py, self.py_output_arrays.iter().map(|a| a.bind(py)))?;
+            let sidechain_list =
+                PyList::new(py, self.py_sidechain_arrays.iter().map(|a| a.bind(py)))?;
+            ctx.setattr("inputs", input_list)?;
+            ctx.setattr("outputs", output_list)?;
+            ctx.setattr("sidechain", sidechain_list)?;
 
-            // Cache transport dict (keys are stable, values updated in-place each callback)
-            let dict = PyDict::new(py);
-            let _ = dict.set_item("tempo", 120.0f64);
-            let _ = dict.set_item("beat", 0.0f64);
-            let _ = dict.set_item("playing", false);
-            let _ = dict.set_item("time_sig_num", 4.0f64);
-            let _ = dict.set_item("time_sig_den", 4.0f64);
-            let _ = dict.set_item("sample_pos", 0.0f64);
-            self.py_transport_dict = Some(dict.into_any().unbind());
+            // Transport: a SimpleNamespace with the canonical field names.
+            // We rebuild the whole namespace each block (six attribute
+            // writes — cheap) rather than caching one to set fields on,
+            // because SimpleNamespace doesn't enforce read-only attrs and
+            // we want the script's view to reflect *only* the current
+            // block's transport. Initialize with sensible defaults here
+            // so a script that reads ctx.transport.bpm before the host
+            // pushes any transport sees 120 BPM, not garbage.
+            let tport = simple_ns_cls.call0()?;
+            tport.setattr("bpm", 120.0_f64)?;
+            tport.setattr("beat", 0.0_f64)?;
+            tport.setattr("is_playing", false)?;
+            tport.setattr("time_sig_numerator", 4_i32)?;
+            tport.setattr("time_sig_denominator", 4_i32)?;
+            tport.setattr("sample_position", 0.0_f64)?;
+            ctx.setattr("transport", tport)?;
 
-            // Cache params dict (keys are stable, values updated in-place each callback)
+            ctx.setattr("sample_rate", 44100.0_f64)?;
+            ctx.setattr("frame_count", 0_u32)?;
+
+            // Params: pre-seed with metadata keys (or empty for legacy
+            // mode) so the first block's writes are dict updates, not
+            // insertions. We expose this via MappingProxyType so the
+            // script can't mutate it from inside process().
             if let Some(ref metadata) = self.param_metadata {
                 let dict = PyDict::new(py);
                 for meta in metadata.iter() {
-                    let _ = dict.set_item(&meta.key, meta.default);
+                    dict.set_item(&meta.key, meta.default)?;
                 }
-                self.py_params_dict = Some(dict.into_any().unbind());
+                let mappingproxy = py.import("types")?.getattr("MappingProxyType")?;
+                let proxy = mappingproxy.call1((dict,))?;
+                ctx.setattr("params", proxy)?;
             } else {
-                // Cache legacy params list (16 zeros, values updated in-place each callback)
-                if let Ok(list) = PyList::new(py, [0.0f32; PARAM_COUNT].iter()) {
-                    self.py_params_list = Some(list.into_any().unbind());
+                let list = PyList::new(py, [0.0f32; PARAM_COUNT].iter())?;
+                ctx.setattr("params", list)?;
+            }
+
+            // Telemetry: a writable dict pre-seeded with declared slot
+            // keys. Vector slots get a numpy array sized to MAX_FRAMES
+            // (mirrors the legacy semantics — scripts write
+            // `ctx.telemetry["scope"][:n] = …`).
+            let telemetry_dict = PyDict::new(py);
+            if let Some(ref meta) = self.telemetry_metadata {
+                for slot in meta {
+                    if slot.is_vector() {
+                        let arr = PyArray1::<f32>::zeros(py, self.py_max_frames, false);
+                        telemetry_dict.set_item(&slot.key, arr)?;
+                    } else {
+                        telemetry_dict.set_item(&slot.key, 0.0_f32)?;
+                    }
                 }
             }
-        });
+            ctx.setattr("telemetry", &telemetry_dict)?;
+            self.py_telemetry_dict = Some(telemetry_dict.into_any().unbind());
+
+            // State: starts as MappingProxyType over an empty dict.
+            // Replaced on first call to `update_state_view` (which the
+            // process loop always calls before invoking process()).
+            let empty = PyDict::new(py);
+            let mappingproxy = py.import("types")?.getattr("MappingProxyType")?;
+            let proxy = mappingproxy.call1((empty,))?;
+            ctx.setattr("state", proxy)?;
+
+            self.py_ctx = Some(ctx.unbind());
+            Ok(())
+        })
+        .ok();
         self.py_channel_count = channel_count;
+    }
+
+    /// Update `ctx.state` if the kernel's state generation has changed
+    /// since the last block. In the steady state this is one Python
+    /// `setattr` skip — no dict creation, no JSON parse.
+    fn update_state_view(
+        &mut self,
+        py: Python<'_>,
+        state: &StateSnapshot,
+    ) -> PyResult<()> {
+        if state.generation == self.py_state_gen {
+            return Ok(());
+        }
+        // Parse the JSON byte buffer into a Python dict (json.loads
+        // round-trip — same approach as `extract_state_defaults`). On
+        // parse error fall back to an empty dict; the script will see
+        // missing keys and the kernel will fall through to passthrough
+        // when it raises.
+        let json_module = py.import("json")?;
+        let bytes_view = pyo3::types::PyBytes::new(py, state.bytes.as_ref());
+        let parsed = json_module
+            .call_method1("loads", (bytes_view,))
+            .or_else(|_| -> PyResult<Bound<'_, PyAny>> {
+                Ok(PyDict::new(py).into_any())
+            })?;
+        // If the parsed value isn't a dict (e.g. a script writes a list
+        // as the top-level state), wrap it in a single-key dict so
+        // ctx.state's mapping interface stays consistent. Real usage
+        // always has dict-shaped state.
+        let dict_value: Bound<'_, PyAny> = if parsed.downcast::<PyDict>().is_ok() {
+            parsed
+        } else {
+            let d = PyDict::new(py);
+            d.set_item("_root", parsed)?;
+            d.into_any()
+        };
+        let mappingproxy = py.import("types")?.getattr("MappingProxyType")?;
+        let proxy = mappingproxy.call1((dict_value,))?;
+        if let Some(ref ctx_handle) = self.py_ctx {
+            ctx_handle.bind(py).setattr("state", proxy)?;
+        }
+        self.py_state_gen = state.generation;
+        Ok(())
     }
 
     /// Delegate audio processing to the loaded Python script.
@@ -537,9 +672,22 @@ impl PythonBackend {
         params: &[f32; PARAM_COUNT],
         transport: &TransportState,
         sidechain: SidechainInput<'_>,
+        state: &StateSnapshot,
     ) -> bool {
         let result: Result<(), PyErr> = Python::with_gil(|py| {
-            // Copy input audio data into pre-allocated numpy arrays
+            // Refresh state view (no-op when generation hasn't moved).
+            self.update_state_view(py, state)?;
+
+            let ctx_handle = match self.py_ctx {
+                Some(ref c) => c.bind(py),
+                None => {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "PythonBackend: ctx not initialized",
+                    ));
+                }
+            };
+
+            // Copy input audio into pre-allocated numpy arrays.
             for ch in 0..channel_count {
                 let src = std::slice::from_raw_parts(inputs[ch], frame_count);
                 let py_arr: &Bound<'_, PyArray1<f32>> =
@@ -549,183 +697,86 @@ impl PythonBackend {
             }
 
             // Refresh sidechain numpy arrays. Always overwrite the full
-            // window: when sidechain.connected is false (or a channel is
-            // missing) we fill zeros so scripts always observe a defined
-            // signal rather than stale audio from the previous block.
-            if self.py_wants_sidechain {
-                for ch in 0..self.py_sidechain_arrays.len() {
-                    let py_arr: &Bound<'_, PyArray1<f32>> =
-                        self.py_sidechain_arrays[ch].bind(py).downcast()?;
-                    let py_slice = py_arr.as_slice_mut()?;
-                    let dst = &mut py_slice[..frame_count];
-                    if sidechain.connected && ch < sidechain.channel_count {
-                        let src = std::slice::from_raw_parts(
-                            sidechain.inputs[ch],
-                            frame_count,
-                        );
-                        dst.copy_from_slice(src);
-                    } else {
-                        for v in dst.iter_mut() {
-                            *v = 0.0;
-                        }
+            // window so scripts see a defined signal even after a
+            // host-disconnect.
+            for ch in 0..self.py_sidechain_arrays.len() {
+                let py_arr: &Bound<'_, PyArray1<f32>> =
+                    self.py_sidechain_arrays[ch].bind(py).downcast()?;
+                let py_slice = py_arr.as_slice_mut()?;
+                let dst = &mut py_slice[..frame_count];
+                if sidechain.connected && ch < sidechain.channel_count {
+                    let src = std::slice::from_raw_parts(sidechain.inputs[ch], frame_count);
+                    dst.copy_from_slice(src);
+                } else {
+                    for v in dst.iter_mut() {
+                        *v = 0.0;
                     }
                 }
             }
 
-            // Use cached Python lists (rebuilt only on channel count change)
-            let input_list = match self.py_input_list {
-                Some(ref cached) => cached.bind(py).clone(),
-                None => PyList::new(py, self.py_input_arrays.iter().map(|a| a.bind(py)))?.into_any(),
-            };
-            let output_list = match self.py_output_list {
-                Some(ref cached) => cached.bind(py).clone(),
-                None => PyList::new(py, self.py_output_arrays.iter().map(|a| a.bind(py)))?.into_any(),
-            };
-
-            // Update params: use cached dict (update values in-place) or create list for legacy mode
-            let params_obj: Bound<'_, PyAny> = if let Some(ref metadata) = self.param_metadata {
-                if let Some(ref cached) = self.py_params_dict {
-                    let dict = cached.bind(py);
-                    for (i, meta) in metadata.iter().enumerate() {
-                        let actual = meta.denormalize(params[i]);
-                        dict.set_item(&meta.key, actual)?;
-                    }
-                    dict.clone()
-                } else {
-                    let dict = PyDict::new(py);
-                    for (i, meta) in metadata.iter().enumerate() {
-                        let actual = meta.denormalize(params[i]);
-                        dict.set_item(&meta.key, actual)?;
-                    }
-                    dict.into_any()
+            // Update params (denormalize via metadata when present).
+            if let Some(ref metadata) = self.param_metadata {
+                let params_attr = ctx_handle.getattr("params")?;
+                // MappingProxyType wraps the underlying dict; reach
+                // through `__wrapped__`-style by re-reading the raw
+                // dict from the proxy via `dict()`. Cheap because the
+                // dict is small. Alternative: cache a separate dict
+                // handle — but that doubles per-allocate complexity for
+                // little gain (pyo3 dispatch dominates).
+                let underlying = params_attr.call_method0("copy")?;
+                let dict = underlying.downcast::<PyDict>()?;
+                for (i, meta) in metadata.iter().enumerate() {
+                    let actual = meta.denormalize(params[i]);
+                    dict.set_item(&meta.key, actual)?;
                 }
-            } else if let Some(ref cached) = self.py_params_list {
-                let list = cached.bind(py);
+                let mappingproxy = py.import("types")?.getattr("MappingProxyType")?;
+                let proxy = mappingproxy.call1((dict,))?;
+                ctx_handle.setattr("params", proxy)?;
+            } else {
+                let params_attr = ctx_handle.getattr("params")?;
+                let list = params_attr.downcast::<PyList>()?;
                 for (i, &val) in params.iter().enumerate() {
                     list.set_item(i, val)?;
                 }
-                list.clone()
-            } else {
-                PyList::new(py, params.iter())?.into_any()
-            };
-
-            // Update the cached transport dict in place. Allocated by
-            // allocate_render_resources; should always be present here.
-            let transport_obj: Bound<'_, PyAny> = if let Some(ref cached) = self.py_transport_dict {
-                let dict = cached.bind(py);
-                dict.set_item("tempo", transport.tempo)?;
-                dict.set_item("beat", transport.beat_position)?;
-                dict.set_item("playing", transport.is_playing)?;
-                dict.set_item("time_sig_num", transport.time_sig_numerator)?;
-                dict.set_item("time_sig_den", transport.time_sig_denominator)?;
-                dict.set_item("sample_pos", transport.sample_position)?;
-                dict.clone()
-            } else {
-                let dict = PyDict::new(py);
-                dict.set_item("tempo", transport.tempo)?;
-                dict.set_item("beat", transport.beat_position)?;
-                dict.set_item("playing", transport.is_playing)?;
-                dict.set_item("time_sig_num", transport.time_sig_numerator)?;
-                dict.set_item("time_sig_den", transport.time_sig_denominator)?;
-                dict.set_item("sample_pos", transport.sample_position)?;
-                dict.into_any()
-            };
-
-            // Telemetry dict pre-seeded with declared-slot keys at zero so
-            // the script's `telemetry["x"] = …` writes are dict updates,
-            // never key insertions. Cached on first build to avoid
-            // per-block PyDict allocation on the hot path.
-            let telemetry_obj: Bound<'_, PyAny> = if let Some(ref cached) = self.py_telemetry_dict {
-                cached.bind(py).clone()
-            } else {
-                let new_dict = PyDict::new(py);
-                if let Some(ref meta) = self.telemetry_metadata {
-                    for slot in meta {
-                        if slot.is_vector() {
-                            // Vector slots get a pre-allocated numpy
-                            // array sized to MAX_FRAMES so scripts can
-                            // write per-frame samples in place
-                            // (`telemetry["scope"][:n] = …`) without
-                            // per-block allocation. Length stays fixed
-                            // across blocks; the kernel uses the live
-                            // `frame_count` to truncate on read.
-                            let arr = PyArray1::<f32>::zeros(py, self.py_max_frames, false);
-                            new_dict.set_item(&slot.key, arr)?;
-                        } else {
-                            new_dict.set_item(&slot.key, 0.0_f32)?;
-                        }
-                    }
-                }
-                let any = new_dict.into_any();
-                self.py_telemetry_dict = Some(any.clone().unbind());
-                any
-            };
-
-            // Canonical 7- or 8-arg call. Anything else was rejected at
-            // load time (see PythonBackend::load). The 8-arg form opts
-            // in to the sidechain bus; old presets stay on the 7-arg
-            // path with no behavior change.
-            if self.py_wants_sidechain {
-                let sidechain_list: Bound<'_, PyAny> = match self.py_sidechain_list {
-                    Some(ref cached) => cached.bind(py).clone(),
-                    None => PyList::new(
-                        py,
-                        self.py_sidechain_arrays.iter().map(|a| a.bind(py)),
-                    )?
-                    .into_any(),
-                };
-                self.py_process_fn.call1(
-                    py,
-                    (
-                        input_list, output_list, frame_count as u32, sample_rate,
-                        params_obj,
-                        &transport_obj,
-                        &telemetry_obj,
-                        sidechain_list,
-                    ),
-                )?;
-            } else {
-                self.py_process_fn.call1(
-                    py,
-                    (
-                        input_list, output_list, frame_count as u32, sample_rate,
-                        params_obj,
-                        &transport_obj,
-                        &telemetry_obj,
-                    ),
-                )?;
             }
 
-            // Snapshot the telemetry dict back into the f32 buffer the
-            // kernel reads via `read_telemetry`. Slots without a numeric
-            // entry stay at the previous block's value — that's
-            // acceptable for a meter (a missed update reads as "no
-            // change") and keeps the hot path branch-free.
-            //
-            // Split the borrow manually: we hold &mut self.telemetry_buf
-            // while iterating &self.telemetry_metadata. Pull metadata out
-            // first via a raw pointer dance? No — easier to just buffer
-            // the keys upfront. Since the metadata vec is set at load
-            // time and never mutated during process(), a quick clone of
-            // the keys is acceptable; this path runs only when telemetry
-            // is in use, and the slot count is ≤8.
+            // Update transport (always rebuild the namespace — six
+            // attribute writes is cheaper than caching + comparing).
+            let tport = ctx_handle.getattr("transport")?;
+            tport.setattr("bpm", transport.bpm)?;
+            tport.setattr("beat", transport.beat)?;
+            tport.setattr("is_playing", transport.is_playing)?;
+            tport.setattr("time_sig_numerator", transport.time_sig_numerator)?;
+            tport.setattr("time_sig_denominator", transport.time_sig_denominator)?;
+            tport.setattr("sample_position", transport.sample_position)?;
+
+            ctx_handle.setattr("sample_rate", sample_rate)?;
+            ctx_handle.setattr("frame_count", frame_count as u32)?;
+
+            // Single ctx call.
+            self.py_process_fn.call1(py, (ctx_handle,))?;
+
+            // Snapshot telemetry back into the f32 buffer the kernel reads.
             if let Some(ref meta) = self.telemetry_metadata {
-                let dict = telemetry_obj.downcast::<PyDict>()?;
-                for (i, slot) in meta.iter().enumerate() {
-                    if i >= TELEMETRY_LEN { break; }
-                    // Vector slots write directly into the cached numpy
-                    // array — no scalar copy-out. The kernel calls
-                    // `read_telemetry_vec` to drain those.
-                    if slot.is_vector() { continue; }
-                    if let Ok(Some(val)) = dict.get_item(&slot.key) {
-                        if let Ok(v) = val.extract::<f32>() {
-                            self.telemetry_buf[i] = v;
+                if let Some(ref dict_handle) = self.py_telemetry_dict {
+                    let dict = dict_handle.bind(py).downcast::<PyDict>()?;
+                    for (i, slot) in meta.iter().enumerate() {
+                        if i >= TELEMETRY_LEN {
+                            break;
+                        }
+                        if slot.is_vector() {
+                            continue;
+                        }
+                        if let Ok(Some(val)) = dict.get_item(&slot.key) {
+                            if let Ok(v) = val.extract::<f32>() {
+                                self.telemetry_buf[i] = v;
+                            }
                         }
                     }
                 }
             }
 
-            // Copy output from pre-allocated numpy arrays back to audio buffers
+            // Copy output back to audio buffers.
             for ch in 0..channel_count {
                 let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
                 let py_arr: &Bound<'_, PyArray1<f32>> =
@@ -741,12 +792,17 @@ impl PythonBackend {
             Ok(()) => true,
             Err(e) => {
                 let err_msg = Python::with_gil(|py| {
-                    let tb_str = e.traceback(py)
+                    let tb_str = e
+                        .traceback(py)
                         .and_then(|tb| tb.format().ok())
                         .unwrap_or_default();
                     let msg = format!("Python process error: {}", e.value(py));
                     e.print(py);
-                    if tb_str.is_empty() { msg } else { format!("{}{}", tb_str, msg) }
+                    if tb_str.is_empty() {
+                        msg
+                    } else {
+                        format!("{}{}", tb_str, msg)
+                    }
                 });
                 self.last_error = Some(err_msg);
                 false
@@ -756,7 +812,9 @@ impl PythonBackend {
 }
 
 impl Backend for PythonBackend {
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 
     fn initialize(&mut self, channel_count: usize, _sample_rate: f64, max_frames: u32) {
         self.allocate_py_arrays(channel_count, max_frames as usize);
@@ -768,13 +826,9 @@ impl Backend for PythonBackend {
                 self.py_input_arrays.clear();
                 self.py_output_arrays.clear();
                 self.py_sidechain_arrays.clear();
-                self.py_input_list = None;
-                self.py_output_list = None;
-                self.py_sidechain_list = None;
-                self.py_transport_dict = None;
-                self.py_params_dict = None;
-                self.py_params_list = None;
                 self.py_telemetry_dict = None;
+                self.py_state_dict = None;
+                self.py_ctx = None;
             });
         }
     }
@@ -789,12 +843,25 @@ impl Backend for PythonBackend {
         params: &[f32; PARAM_COUNT],
         transport: &TransportState,
         sidechain: SidechainInput<'_>,
+        state: &StateSnapshot,
     ) -> bool {
         if self.py_input_arrays.is_empty() {
-            self.last_error = Some("Python arrays not allocated — initialize() not called or failed".to_string());
+            self.last_error = Some(
+                "Python arrays not allocated — initialize() not called or failed".to_string(),
+            );
             return false;
         }
-        self.process_with_python(inputs, outputs, channel_count, frame_count, sample_rate, params, transport, sidechain)
+        self.process_with_python(
+            inputs,
+            outputs,
+            channel_count,
+            frame_count,
+            sample_rate,
+            params,
+            transport,
+            sidechain,
+            state,
+        )
     }
 
     fn last_error(&self) -> Option<&str> {
@@ -817,6 +884,14 @@ impl Backend for PythonBackend {
         self.telemetry_metadata.as_deref()
     }
 
+    fn state_defaults_json(&self) -> Option<&str> {
+        self.state_defaults_json.as_deref()
+    }
+
+    fn state_max_bytes(&self) -> Option<usize> {
+        self.state_max_bytes
+    }
+
     fn read_telemetry(&self, out: &mut [f32; TELEMETRY_LEN]) {
         if self.telemetry_metadata.is_none() {
             return;
@@ -830,9 +905,6 @@ impl Backend for PythonBackend {
         frame_count: usize,
         out: &mut [f32],
     ) {
-        // Validate slot is declared and shape=vector before going
-        // through the GIL. Saves a few hundred ns per scalar slot per
-        // block in the kernel's harvest loop.
         let meta = match &self.telemetry_metadata {
             Some(m) => m,
             None => return,
@@ -849,20 +921,16 @@ impl Backend for PythonBackend {
         if n == 0 {
             return;
         }
-        // Acquiring the GIL on the audio thread is a known cost we
-        // already pay every block in `process_with_python`. Doing it
-        // again here adds ~1 µs per declared vector slot — well within
-        // the budget for typical 1–4 vector slots.
         let _ = Python::with_gil(|py| -> Result<(), pyo3::PyErr> {
             let dict = dict_handle.bind(py);
-            let val = match dict.downcast::<PyDict>().ok().and_then(|d|
-                d.get_item(&spec.key).ok().flatten())
+            let val = match dict
+                .downcast::<PyDict>()
+                .ok()
+                .and_then(|d| d.get_item(&spec.key).ok().flatten())
             {
                 Some(v) => v,
                 None => return Ok(()),
             };
-            // The script may have rebound the slot to a non-numpy value;
-            // tolerate that gracefully (silent no-op).
             let arr: &Bound<'_, PyArray1<f32>> = match val.downcast::<PyArray1<f32>>() {
                 Ok(a) => a,
                 Err(_) => return Ok(()),

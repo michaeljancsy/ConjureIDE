@@ -53,46 +53,46 @@ class _S:
         self.grain_phase = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    depth = params["depth"] / 100.0
-    descent = params["descent"] / 100.0
-    bell_amt = params["bell"] / 100.0
-    tail = params["tail"] / 100.0
-    mx = params["mix"]
+    depth = ctx.params["depth"] / 100.0
+    descent = ctx.params["descent"] / 100.0
+    bell_amt = ctx.params["bell"] / 100.0
+    tail = ctx.params["tail"] / 100.0
+    mx = ctx.params["mix"]
 
     # Closing lowpass: 6000 Hz → 400 Hz as depth increases
     close_fc = 6000.0 - 5600.0 * depth
-    close_alpha = math.exp(-2.0 * math.pi * close_fc / sample_rate)
+    close_alpha = math.exp(-2.0 * math.pi * close_fc / ctx.sample_rate)
     close_one_minus = 1.0 - close_alpha
 
     # Bell resonator (high-Q peaking EQ at 880 Hz, +12 dB)
-    bell_c = BiquadCoeffs.peak(BELL_HZ, 12.0, 12.0, sample_rate)
-    sub_lpc = BiquadCoeffs.lowpass(70.0, 0.707, sample_rate)
-    tail_lpc = BiquadCoeffs.lowpass(1500.0, 0.707, sample_rate)
+    bell_c = BiquadCoeffs.peak(BELL_HZ, 12.0, 12.0, ctx.sample_rate)
+    sub_lpc = BiquadCoeffs.lowpass(70.0, 0.707, ctx.sample_rate)
+    tail_lpc = BiquadCoeffs.lowpass(1500.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         s.bell[ch].set_coeffs(bell_c)
         s.sub_lp[ch].set_coeffs(sub_lpc)
         s.tail_lp[ch].set_coeffs(tail_lpc)
 
     # Pitch shifter — descent rate scales grain phase advance
-    base_d = SHIFT_BASE_MS * 0.001 * sample_rate
-    grain_samples = GRAIN_MS * 0.001 * sample_rate
+    base_d = SHIFT_BASE_MS * 0.001 * ctx.sample_rate
+    grain_samples = GRAIN_MS * 0.001 * ctx.sample_rate
     grain_rate = (0.2 + 1.0 * descent) / grain_samples
 
-    tail_d = TAIL_MS * 0.001 * sample_rate
+    tail_d = TAIL_MS * 0.001 * ctx.sample_rate
     tail_fb_amt = 0.55 + 0.30 * tail
 
     bell_gain = bell_amt * 0.6
     sub_gain = 1.2
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         ph0 = s.grain_phase
         ph1 = (s.grain_phase + 0.5) % 1.0
         w0 = math.sin(math.pi * ph0)
@@ -105,7 +105,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         s.grain_phase = (s.grain_phase + grain_rate) % 1.0
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: dual-tap downward pitch shifter
             s.shift_dl[ch].write(dry)
@@ -131,4 +131,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
 
             # Final wet sum + mix
             wet = closed + bell_voice + sub_voice + s.tail_fb[ch] * 0.5
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

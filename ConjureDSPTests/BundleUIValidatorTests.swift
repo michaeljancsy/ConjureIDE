@@ -22,7 +22,7 @@ struct BundleUIValidatorTests {
         manifest: String,
         uiHTML: String? = nil,
         entryScriptName: String = "process.py",
-        entryScriptBody: String = "def process(i,o,f,s,p): pass\n"
+        entryScriptBody: String = "def process(ctx): pass\n"
     ) throws -> PresetBundle {
         let tempRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("BundleUIValidatorTests-\(UUID().uuidString).cdp")
@@ -1206,5 +1206,158 @@ struct BundleUIValidatorTests {
         let report = BundleUIValidator.validate(bundle)
         #expect(report.status == .warn)
         #expect(report.issues.allSatisfy { $0.severity == .warn })
+    }
+
+    // MARK: - state_key_referenced_in_ui
+
+    /// Baseline: HTML refers to a STATE key declared in the script's
+    /// `STATE = {…}` dict — no issue is emitted.
+    @Test func declaredStateKeyResolves() throws {
+        let scriptBody = """
+        STATE = {"declared_key": 0}
+
+        def process(ctx):
+            pass
+        """
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          ConjureDSP.ready(() => {
+            const v = ConjureDSP.state.get('declared_key');
+            ConjureDSP.state.set('declared_key', v);
+          });
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: baselineManifest,
+            uiHTML: ui,
+            entryScriptName: "process.py",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
+                "declared key 'declared_key' must resolve cleanly; issues: \(report.issues)")
+    }
+
+    /// Typo case: the UI references a key that doesn't exist in the
+    /// script's STATE dict. Validator must fail and offer the nearest
+    /// declared name as a "did you mean" hint.
+    @Test func unresolvedStateKeyFlaggedWithSuggestion() throws {
+        let scriptBody = """
+        STATE = {"declared_key": 0}
+
+        def process(ctx):
+            pass
+        """
+        // Typo: declared_kye. Levenshtein distance 1 from declared_key.
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          ConjureDSP.state.set('declared_kye', 1);
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: baselineManifest,
+            uiHTML: ui,
+            entryScriptName: "process.py",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        let issue = report.issues.first { $0.check == "state_key_referenced_in_ui" }
+        #expect(issue != nil, "typo 'declared_kye' must be flagged; got \(report.issues)")
+        #expect(issue?.severity == .fail)
+        #expect(issue?.suggestion?.contains("declared_key") == true,
+                "suggestion must point at the nearest declared name; got \(issue?.suggestion ?? "<nil>")")
+    }
+
+    /// Dynamic-key references — first arg isn't a literal — are
+    /// silently skipped because we can't statically resolve the key.
+    @Test func dynamicStateKeyReferenceSkipped() throws {
+        let scriptBody = """
+        STATE = {"declared_key": 0}
+
+        def process(ctx):
+            pass
+        """
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          var myVar = 'whatever';
+          ConjureDSP.state.set(myVar, 1);
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: baselineManifest,
+            uiHTML: ui,
+            entryScriptName: "process.py",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
+                "dynamic-key references (non-literal first arg) must be silently skipped")
+    }
+
+    /// Backtick template-literal quoting must resolve the same way as
+    /// single / double quotes. People template-literal these "for no
+    /// real reason" all the time.
+    @Test func backtickQuotedStateKeyResolves() throws {
+        let scriptBody = """
+        STATE = {"backtick_key": 0}
+
+        def process(ctx):
+            pass
+        """
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          const v = ConjureDSP.state.get(`backtick_key`);
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: baselineManifest,
+            uiHTML: ui,
+            entryScriptName: "process.py",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
+                "backtick-quoted state key must resolve; issues: \(report.issues)")
+    }
+
+    /// Both single-quote and double-quote forms must work. (The
+    /// regex shouldn't be biased toward one quote style.)
+    @Test func bothQuoteStylesResolveStateKeys() throws {
+        let scriptBody = """
+        STATE = {"foo": 0, "bar": 0}
+
+        def process(ctx):
+            pass
+        """
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          ConjureDSP.state.set("foo", 1);
+          ConjureDSP.state.set('bar', 2);
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: baselineManifest,
+            uiHTML: ui,
+            entryScriptName: "process.py",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
+                "both quote styles must resolve declared state keys; issues: \(report.issues)")
     }
 }

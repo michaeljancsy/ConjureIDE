@@ -44,24 +44,24 @@ class _S:
         self.presence = [Biquad() for _ in range(nch)]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    fold = params["fold"] / 100.0
-    sermon = params["sermon"] / 100.0
-    presence = params["presence"] / 100.0
-    crust = params["crust"] / 100.0
-    mx = params["mix"]
+    fold = ctx.params["fold"] / 100.0
+    sermon = ctx.params["sermon"] / 100.0
+    presence = ctx.params["presence"] / 100.0
+    crust = ctx.params["crust"] / 100.0
+    mx = ctx.params["mix"]
 
-    formant_c = [BiquadCoeffs.peak(FORMANT_HZ[k], 4.0, 8.0, sample_rate)
+    formant_c = [BiquadCoeffs.peak(FORMANT_HZ[k], 4.0, 8.0, ctx.sample_rate)
                  for k in range(3)]
     presence_c = BiquadCoeffs.peak(PRESENCE_HZ, 2.5, 3.0 + 6.0 * presence,
-                                    sample_rate)
+                                    ctx.sample_rate)
     for ch in range(nch):
         for k in range(3):
             s.formant[ch][k].set_coeffs(formant_c[k])
@@ -73,13 +73,13 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     # Hard clip ceiling — more crust → lower ceiling → more clipping
     clip_ceil = 1.0 - 0.7 * crust
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         lm = [s.formant_lfo[k].tick() for k in range(3)]
         fm = [(1.0 - formant_depth) + formant_depth * (0.5 + 0.5 * lm[k])
               for k in range(3)]
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: sin-based wavefolder
             folded = math.sin(dry * fold_scale)
@@ -101,4 +101,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             else:
                 wet = presenced
 
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

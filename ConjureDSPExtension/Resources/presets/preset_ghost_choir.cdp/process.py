@@ -69,27 +69,27 @@ class _S:
         self.lfo_trem = LFO(sr, freq=TREM_HZ, waveform="triangle")
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    voices_ms = params["voices"]
-    air_hz = params["air"]
-    whisper = params["whisper"] / 100.0
-    wash = params["wash"] / 100.0
-    mx = params["mix"]
+    voices_ms = ctx.params["voices"]
+    air_hz = ctx.params["air"]
+    whisper = ctx.params["whisper"] / 100.0
+    wash = ctx.params["wash"] / 100.0
+    mx = ctx.params["mix"]
 
     # Filter coefficients
-    lpc = BiquadCoeffs.lowpass(air_hz, 0.707, sample_rate)
-    formant_c = [BiquadCoeffs.peak(FORMANT_HZ[k], FORMANT_Q, FORMANT_GAIN, sample_rate)
+    lpc = BiquadCoeffs.lowpass(air_hz, 0.707, ctx.sample_rate)
+    formant_c = [BiquadCoeffs.peak(FORMANT_HZ[k], FORMANT_Q, FORMANT_GAIN, ctx.sample_rate)
                  for k in range(3)]
-    whisper_bpc = BiquadCoeffs.bandpass(2500.0, 4.0, sample_rate)
-    whisper_hsc = BiquadCoeffs.highshelf(8000.0, 0.707, 6.0, sample_rate)
-    comb_lpc = BiquadCoeffs.lowpass(3000.0, 0.707, sample_rate)
+    whisper_bpc = BiquadCoeffs.bandpass(2500.0, 4.0, ctx.sample_rate)
+    whisper_hsc = BiquadCoeffs.highshelf(8000.0, 0.707, 6.0, ctx.sample_rate)
+    comb_lpc = BiquadCoeffs.lowpass(3000.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         s.lp[ch].set_coeffs(lpc)
         for k in range(3):
@@ -100,22 +100,22 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             s.comb_lp[ch][k].set_coeffs(comb_lpc)
 
     # Delay times (samples)
-    ch_d = [CH_MS[k] * 0.001 * sample_rate for k in range(8)]
-    voice_depth = voices_ms * 0.001 * sample_rate
-    rev_d = max(REV_DELAY_MS * 0.001 * sample_rate, 1.0)
-    comb_d = [COMB_MS[k] * 0.001 * sample_rate for k in range(4)]
-    comb_depth = COMB_DEPTH_MS * 0.001 * sample_rate
-    ap_d = [max(AP_MS[k] * 0.001 * sample_rate, 1.0) for k in range(2)]
+    ch_d = [CH_MS[k] * 0.001 * ctx.sample_rate for k in range(8)]
+    voice_depth = voices_ms * 0.001 * ctx.sample_rate
+    rev_d = max(REV_DELAY_MS * 0.001 * ctx.sample_rate, 1.0)
+    comb_d = [COMB_MS[k] * 0.001 * ctx.sample_rate for k in range(4)]
+    comb_depth = COMB_DEPTH_MS * 0.001 * ctx.sample_rate
+    ap_d = [max(AP_MS[k] * 0.001 * ctx.sample_rate, 1.0) for k in range(2)]
 
     # Reversed-attack one-pole (100 ms attack)
-    rev_alpha = math.exp(-1.0 / (0.100 * sample_rate))
+    rev_alpha = math.exp(-1.0 / (0.100 * ctx.sample_rate))
     one_minus_rev = 1.0 - rev_alpha
 
     trem_depth = 0.08
 
     wet = [0.0 for _ in range(nch)]
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # Tick global LFOs
         chl = [s.lfo_chorus[k].tick() for k in range(8)]
         cbl = [s.lfo_combs[k].tick() for k in range(4)]
@@ -123,7 +123,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         trem_gain = 1.0 - trem_depth * (1.0 - (trem + 1.0) * 0.5)
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: lowpass formant softening
             x = s.lp[ch].process_sample(dry)
@@ -206,5 +206,5 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
 
         # Stage I: breathing tremolo + final mix
         for ch in range(nch):
-            dry = float(inputs[ch][i])
-            outputs[ch][i] = dry * (1.0 - mx) + wet[ch] * trem_gain * mx
+            dry = float(ctx.inputs[ch][i])
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet[ch] * trem_gain * mx

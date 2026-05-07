@@ -44,24 +44,24 @@ class _S:
         self.countdown = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    density = params["density"] / 100.0
-    shimmer = params["shimmer"] / 100.0
-    bloom = params["bloom"] / 100.0
-    subpad = params["subpad"] / 100.0
-    mx = params["mix"]
+    density = ctx.params["density"] / 100.0
+    shimmer = ctx.params["shimmer"] / 100.0
+    bloom = ctx.params["bloom"] / 100.0
+    subpad = ctx.params["subpad"] / 100.0
+    mx = ctx.params["mix"]
 
     bell_q = 18.0 + 27.0 * shimmer
-    bell_c = [BiquadCoeffs.bandpass(BELL_HZ[k], bell_q, sample_rate)
+    bell_c = [BiquadCoeffs.bandpass(BELL_HZ[k], bell_q, ctx.sample_rate)
               for k in range(4)]
-    sub_lpc = BiquadCoeffs.lowpass(80.0, 0.707, sample_rate)
+    sub_lpc = BiquadCoeffs.lowpass(80.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         for k in range(4):
             s.bell[ch][k].set_coeffs(bell_c[k])
@@ -72,17 +72,17 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     bell_gain = 2.0 + 4.0 * bloom
     sub_gain = 0.6 + 1.2 * subpad
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         s.countdown -= 1.0
         impulse = 0.0
         if s.countdown <= 0.0:
             impulse = 1.0
             next_ms = CLICK_MS[s.click_ix] * period_scale
-            s.countdown = next_ms * 0.001 * sample_rate
+            s.countdown = next_ms * 0.001 * ctx.sample_rate
             s.click_ix = (s.click_ix + 1) % 8
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: sub-pad bed from rectified input
             sub_voice = s.sub_lp[ch].process_sample(abs(dry)) * sub_gain
@@ -94,4 +94,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             bell_voice = bell_sum * bell_gain
 
             wet = bell_voice + sub_voice
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

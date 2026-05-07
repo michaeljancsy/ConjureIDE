@@ -79,14 +79,14 @@ struct CustomUIBridgeTransportTests {
         let ctx = try Self.makeContext()
         let result = ctx.evaluateScript("""
             JSON.stringify({
-                tempo: ConjureDSP.transport.tempo,
+                bpm: ConjureDSP.transport.bpm,
                 isPlaying: ConjureDSP.transport.isPlaying,
-                beatPosition: ConjureDSP.transport.beatPosition,
+                beat: ConjureDSP.transport.beat,
                 num: ConjureDSP.transport.timeSigNumerator,
                 den: ConjureDSP.transport.timeSigDenominator,
             });
         """)!.toString()!
-        #expect(result == "{\"tempo\":0,\"isPlaying\":false,\"beatPosition\":0,\"num\":4,\"den\":4}",
+        #expect(result == "{\"bpm\":0,\"isPlaying\":false,\"beat\":0,\"num\":4,\"den\":4}",
                 "default snapshot before any push must be zero / 4-over-4; got \(result)")
     }
 
@@ -94,19 +94,19 @@ struct CustomUIBridgeTransportTests {
         let ctx = try Self.makeContext()
         let result = ctx.evaluateScript("""
             ConjureDSP._transportUpdate({
-                tempo: 120, isPlaying: true, beatPosition: 1.5,
+                bpm: 120, isPlaying: true, beat: 1.5,
                 samplePosition: 66150,
                 timeSigNumerator: 6, timeSigDenominator: 8
             });
             JSON.stringify({
-                tempo: ConjureDSP.transport.tempo,
+                bpm: ConjureDSP.transport.bpm,
                 isPlaying: ConjureDSP.transport.isPlaying,
-                beatPosition: ConjureDSP.transport.beatPosition,
+                beat: ConjureDSP.transport.beat,
                 num: ConjureDSP.transport.timeSigNumerator,
                 den: ConjureDSP.transport.timeSigDenominator,
             });
         """)!.toString()!
-        #expect(result == "{\"tempo\":120,\"isPlaying\":true,\"beatPosition\":1.5,\"num\":6,\"den\":8}",
+        #expect(result == "{\"bpm\":120,\"isPlaying\":true,\"beat\":1.5,\"num\":6,\"den\":8}",
                 "_transportUpdate must update the live snapshot; got \(result)")
     }
 
@@ -116,10 +116,10 @@ struct CustomUIBridgeTransportTests {
         let ctx = try Self.makeContext()
         let result = ctx.evaluateScript("""
             var fires = [];
-            ConjureDSP.transport.onChange(function(s) { fires.push(s.tempo); });
-            ConjureDSP._transportUpdate({ tempo: 140, isPlaying: false, beatPosition: 0,
+            ConjureDSP.transport.onChange(function(s) { fires.push(s.bpm); });
+            ConjureDSP._transportUpdate({ bpm: 140, isPlaying: false, beat: 0,
                                           samplePosition: 0, timeSigNumerator: 4, timeSigDenominator: 4 });
-            ConjureDSP._transportUpdate({ tempo: 141, isPlaying: false, beatPosition: 0,
+            ConjureDSP._transportUpdate({ bpm: 141, isPlaying: false, beat: 0,
                                           samplePosition: 0, timeSigNumerator: 4, timeSigDenominator: 4 });
             JSON.stringify(fires);
         """)!.toString()!
@@ -131,9 +131,9 @@ struct CustomUIBridgeTransportTests {
         let ctx = try Self.makeContext()
         let result = ctx.evaluateScript("""
             var a = 0, b = 0;
-            ConjureDSP.transport.onChange(function(s) { a = s.tempo; });
-            ConjureDSP.transport.onChange(function(s) { b = s.tempo * 2; });
-            ConjureDSP._transportUpdate({ tempo: 100, isPlaying: false, beatPosition: 0,
+            ConjureDSP.transport.onChange(function(s) { a = s.bpm; });
+            ConjureDSP.transport.onChange(function(s) { b = s.bpm * 2; });
+            ConjureDSP._transportUpdate({ bpm: 100, isPlaying: false, beat: 0,
                                           samplePosition: 0, timeSigNumerator: 4, timeSigDenominator: 4 });
             JSON.stringify({ a: a, b: b });
         """)!.toString()!

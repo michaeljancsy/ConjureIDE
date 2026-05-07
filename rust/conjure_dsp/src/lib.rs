@@ -766,6 +766,103 @@ pub unsafe extern "C" fn dsp_kernel_last_render_frame_count(kernel: DSPKernelRef
     (*kernel).last_render_frame_count()
 }
 
+// ─── State channel FFI ────────────────────────────────────────────────
+//
+// The state channel is a per-instance JSON byte buffer that flows from
+// custom UI / MCP writers into the audio thread for backend consumption.
+// State is owned by the DAW project (or user preset bundle) — see the
+// AU's `fullState` / `fullStateForDocument` overrides — and never written
+// to disk inside the bundle.
+
+/// Set the per-script cap on the state buffer in bytes. Called by Swift
+/// at script load (passes the script's declared `max_bytes` from
+/// `state!(T, max_bytes = N)` in Rust, or the default 64 KiB for Python
+/// presets which currently have no opt-in syntax). Subsequent
+/// `dsp_kernel_set_state_json` calls reject inputs over this size.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_set_state_cap(kernel: DSPKernelRef, max_bytes: usize) {
+    (*kernel).set_state_cap(max_bytes);
+}
+
+/// Returns the currently configured state cap in bytes.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_state_cap(kernel: DSPKernelRef) -> usize {
+    (*kernel).state_cap()
+}
+
+/// Try to install a new state buffer. Validates that the bytes are
+/// well-formed JSON and within the per-script cap. Returns `true` on
+/// success, `false` on rejection. On failure the existing buffer +
+/// generation are unchanged.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+/// - `bytes` must be a valid pointer to `len` bytes (or null when len==0).
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_set_state_json(
+    kernel: DSPKernelRef,
+    bytes: *const u8,
+    len: usize,
+) -> bool {
+    let slice = if len == 0 || bytes.is_null() {
+        b"{}".as_ref()
+    } else {
+        std::slice::from_raw_parts(bytes, len)
+    };
+    (*kernel).set_state_json_bytes(slice)
+}
+
+/// Copy the current state buffer into the caller-provided buffer.
+/// Writes up to `max_len` bytes and returns the actual length the kernel
+/// wanted to write (so callers can detect truncation). Pass `out=null,
+/// max_len=0` to query length only.
+///
+/// # Safety
+/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+/// - When `max_len > 0`, `out` must be valid for `max_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_get_state_json(
+    kernel: DSPKernelRef,
+    out: *mut u8,
+    max_len: usize,
+) -> usize {
+    let bytes = (*kernel).state_json_bytes_copy();
+    let want = bytes.len();
+    if max_len > 0 && !out.is_null() {
+        let n = want.min(max_len);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, n);
+    }
+    want
+}
+
+/// Read the current state generation counter without taking the buffer.
+/// Used by the smoke tester to verify that a UI write actually landed.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_state_generation(kernel: DSPKernelRef) -> u64 {
+    (*kernel).state_generation()
+}
+
+/// Returns a pointer to the most recently loaded backend's STATE
+/// defaults JSON, or null when none was declared (Python-only
+/// concept — WASM gets defaults from its `Default` impl). Pointer is
+/// valid until the next script load or kernel destroy.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_kernel_state_defaults_json(kernel: DSPKernelRef) -> *const c_char {
+    (*kernel).state_defaults_json_ptr()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

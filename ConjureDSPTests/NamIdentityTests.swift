@@ -105,9 +105,9 @@ struct NamIdentityTests {
 
             model = load_model("tone3000://60092/351559")
 
-            def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-                for ch in range(len(inputs)):
-                    outputs[ch][:frame_count] = model.process(inputs[ch][:frame_count], ch)
+            def process(ctx):
+                for ch in range(len(ctx.inputs)):
+                    ctx.outputs[ch][:ctx.frame_count] = model.process(ctx.inputs[ch][:ctx.frame_count], ch)
             """
         var state: [String: Any] = au.fullState ?? [:]
         state["pythonScriptSource"] = namScript.data(using: .utf8)!

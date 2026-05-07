@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="light dark">
+  <title>Slice n Dice</title>
+  <style>
+    :root { color-scheme: light dark; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font: 12px -apple-system, system-ui, sans-serif;
+      background: Canvas;
+      color: CanvasText;
+      box-sizing: border-box;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 14px 18px;
+    }
+    .row {
+      display: flex;
+      gap: 16px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+    .cell {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 4px;
+      min-width: 96px;
+    }
+    .cell label {
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      opacity: 0.75;
+    }
+    canvas#slots {
+      display: block;
+      width: 100%;
+      height: 240px;
+      background: color-mix(in srgb, CanvasText 6%, Canvas);
+      border-radius: 6px;
+      cursor: crosshair;
+      touch-action: none;
+    }
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      opacity: 0.6;
+    }
+    .footer button {
+      font: inherit;
+      color: inherit;
+      background: color-mix(in srgb, CanvasText 8%, Canvas);
+      border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+      border-radius: 4px;
+      padding: 4px 10px;
+      cursor: pointer;
+    }
+    .footer button:hover {
+      background: color-mix(in srgb, CanvasText 14%, Canvas);
+    }
+  </style>
+</head>
+<body>
+  <div class="row">
+    <div class="cell">
+      <label>Sync</label>
+      <cdp-choice param="sync_mode"></cdp-choice>
+    </div>
+    <div class="cell">
+      <label>Note</label>
+      <cdp-choice param="note_value"></cdp-choice>
+    </div>
+    <div class="cell">
+      <label>Time (q)</label>
+      <cdp-knob param="time_quarter"></cdp-knob>
+    </div>
+    <div class="cell">
+      <label>Dry</label>
+      <cdp-knob param="dry_level"></cdp-knob>
+    </div>
+    <div class="cell">
+      <label>Wet</label>
+      <cdp-knob param="wet_level"></cdp-knob>
+    </div>
+  </div>
+
+  <canvas id="slots" width="640" height="240"></canvas>
+
+  <div class="footer">
+    <span>Click and drag bars to paint a 32-step gate pattern.</span>
+    <button id="clearBtn" type="button">Clear</button>
+  </div>
+
+  <script>
+    (function () {
+      var NUM_STEPS = 32;
+      var MAX_VAL = 15;
+
+      var canvas = document.getElementById('slots');
+      var c2d = canvas.getContext('2d');
+      var clearBtn = document.getElementById('clearBtn');
+
+      // Local mirror of the slots array. Always replaced with a fresh
+      // array (never mutated in place) before calling state.set so the
+      // bridge's JSON snapshot is unambiguous.
+      var slots = new Array(NUM_STEPS);
+      for (var i = 0; i < NUM_STEPS; i++) slots[i] = 0;
+
+      function styleColor(varName, fallback) {
+        var s = getComputedStyle(document.body).getPropertyValue(varName);
+        if (s) s = s.trim();
+        return s || fallback;
+      }
+
+      function resize() {
+        var rect = canvas.getBoundingClientRect();
+        var dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+        canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+        c2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+        draw();
+      }
+
+      function draw() {
+        var rect = canvas.getBoundingClientRect();
+        var W = rect.width;
+        var H = rect.height;
+        c2d.clearRect(0, 0, W, H);
+
+        var slotW = W / NUM_STEPS;
+        var accent = styleColor('--cdp-accent', '#ff8a3d');
+        var trackBg = 'color-mix(in srgb, CanvasText 10%, transparent)';
+
+        // Background track ticks (every 4 steps for beat alignment).
+        c2d.fillStyle = trackBg;
+        for (var i = 0; i < NUM_STEPS; i++) {
+          if (i % 4 === 0) {
+            c2d.fillRect(i * slotW, 0, slotW, H);
+          }
+        }
+
+        // Bars.
+        c2d.fillStyle = accent;
+        for (var j = 0; j < NUM_STEPS; j++) {
+          var v = slots[j] || 0;
+          if (v < 0) v = 0;
+          if (v > MAX_VAL) v = MAX_VAL;
+          var h = (v / MAX_VAL) * (H - 2);
+          if (h > 0) {
+            c2d.fillRect(j * slotW + 1, H - h - 1, Math.max(1, slotW - 2), h);
+          }
+        }
+      }
+
+      function paintAt(clientX, clientY) {
+        var rect = canvas.getBoundingClientRect();
+        var x = clientX - rect.left;
+        var y = clientY - rect.top;
+        var idx = Math.floor((x / rect.width) * NUM_STEPS);
+        if (idx < 0) idx = 0;
+        if (idx > NUM_STEPS - 1) idx = NUM_STEPS - 1;
+
+        // Map y to a 0..MAX_VAL height (y=0 at top → MAX_VAL).
+        var t = 1 - (y / rect.height);
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        var v = Math.round(t * MAX_VAL);
+
+        if (slots[idx] === v) return;
+        // Build a fresh array — bridge captures by JSON serialization,
+        // so in-place mutation isn't sufficient on its own. Slicing keeps
+        // the contract explicit.
+        var next = slots.slice();
+        next[idx] = v;
+        slots = next;
+        ConjureDSP.state.set('slots', slots);
+        draw();
+      }
+
+      var dragging = false;
+      canvas.addEventListener('pointerdown', function (e) {
+        dragging = true;
+        try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+        paintAt(e.clientX, e.clientY);
+        e.preventDefault();
+      });
+      canvas.addEventListener('pointermove', function (e) {
+        if (dragging) paintAt(e.clientX, e.clientY);
+      });
+      function endDrag(e) {
+        if (!dragging) return;
+        dragging = false;
+        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+      canvas.addEventListener('pointerup', endDrag);
+      canvas.addEventListener('pointercancel', endDrag);
+
+      clearBtn.addEventListener('click', function () {
+        var next = new Array(NUM_STEPS);
+        for (var i = 0; i < NUM_STEPS; i++) next[i] = 0;
+        slots = next;
+        ConjureDSP.state.set('slots', slots);
+        draw();
+      });
+
+      window.addEventListener('resize', resize);
+
+      ConjureDSP.ready(function () {
+        // Pull the persisted slots (or script default) from the bridge.
+        var initial = ConjureDSP.state.get('slots');
+        if (Array.isArray(initial) && initial.length === NUM_STEPS) {
+          slots = initial.slice();
+        }
+
+        ConjureDSP.state.onChange('slots', function (v) {
+          if (Array.isArray(v) && v.length === NUM_STEPS) {
+            slots = v.slice();
+            draw();
+          }
+        });
+
+        resize();
+      });
+    })();
+  </script>
+</body>
+</html>

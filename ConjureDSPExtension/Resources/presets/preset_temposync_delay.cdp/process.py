@@ -19,7 +19,7 @@ _delay_buf = None
 _write_pos = 0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, transport, _telemetry):
+def process(ctx):
     """
     Tempo-Synced Delay — delay time locked to host BPM.
 
@@ -33,13 +33,13 @@ def process(inputs, outputs, frame_count, sample_rate, params, transport, _telem
     """
     global _delay_buf, _write_pos
 
-    div_idx = int(round(params["division"]))
+    div_idx = int(round(ctx.params["division"]))
     div_idx = max(0, min(div_idx, len(DIVISIONS) - 1))
-    feedback = params["feedback"]
-    mix = params["mix"]
+    feedback = ctx.params["feedback"]
+    mix = ctx.params["mix"]
 
-    tempo = transport["tempo"]
-    n_ch = len(inputs)
+    tempo = ctx.transport.bpm
+    n_ch = len(ctx.inputs)
 
     if _delay_buf is None or len(_delay_buf) != n_ch:
         _delay_buf = [np.zeros(MAX_DELAY, dtype=np.float32) for _ in range(n_ch)]
@@ -48,24 +48,24 @@ def process(inputs, outputs, frame_count, sample_rate, params, transport, _telem
     if tempo > 0:
         beats = DIVISIONS[div_idx]
         delay_seconds = beats * 60.0 / tempo
-        delay_samples = int(delay_seconds * sample_rate)
+        delay_samples = int(delay_seconds * ctx.sample_rate)
     else:
-        delay_samples = int(0.25 * sample_rate)  # fallback 250 ms
+        delay_samples = int(0.25 * ctx.sample_rate)  # fallback 250 ms
 
     delay_samples = max(1, min(delay_samples, MAX_DELAY - 1))
     wp = _write_pos
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         rp = (wp - delay_samples + MAX_DELAY) % MAX_DELAY
 
         for ch in range(n_ch):
             delayed = _delay_buf[ch][rp]
 
             # Write input + feedback to delay line
-            _delay_buf[ch][wp] = inputs[ch][i] + delayed * feedback
+            _delay_buf[ch][wp] = ctx.inputs[ch][i] + delayed * feedback
 
             # Mix dry + wet
-            outputs[ch][i] = inputs[ch][i] * (1.0 - mix) + delayed * mix
+            ctx.outputs[ch][i] = ctx.inputs[ch][i] * (1.0 - mix) + delayed * mix
 
         wp = (wp + 1) % MAX_DELAY
 

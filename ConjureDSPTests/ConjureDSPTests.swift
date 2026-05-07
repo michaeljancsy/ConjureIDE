@@ -344,9 +344,9 @@ struct ConjureDSPTests {
     private static let testScript = """
         import numpy as np
 
-        def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-            for ch in range(len(inputs)):
-                outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25
+        def process(ctx):
+            for ch in range(len(ctx.inputs)):
+                ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count] * 0.25
         """
 
     @Test func fullStateRoundtrip() async throws {
@@ -577,9 +577,9 @@ struct ConjureDSPTests {
         // Load a script that multiplies all samples by 0.25
         let quarterGainScript = """
             import numpy as np
-            def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):
-                for ch in range(len(inputs)):
-                    outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25
+            def process(ctx):
+                for ch in range(len(ctx.inputs)):
+                    ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count] * 0.25
             """
         var state: [String: Any] = au.fullState ?? [:]
         state[Self.scriptSourceKey] = quarterGainScript.data(using: .utf8)!

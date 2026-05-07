@@ -7,7 +7,7 @@ PARAMS = {
 }
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Bitcrush — bit depth reduction and sample rate reduction.
 
@@ -21,12 +21,12 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         bit_depth:  Quantization depth (1–16 bits)
         downsample: Sample rate reduction factor (1–16x)
     """
-    bit_depth = int(params["bit_depth"])
-    downsample = int(params["downsample"])
+    bit_depth = int(ctx.params["bit_depth"])
+    downsample = int(ctx.params["downsample"])
     levels = 2 ** bit_depth
 
-    for ch in range(len(inputs)):
-        signal = inputs[ch][:frame_count]
+    for ch in range(len(ctx.inputs)):
+        signal = ctx.inputs[ch][:ctx.frame_count]
 
         # Bit depth reduction: quantize to fewer levels.
         # Use half-away-from-zero rounding (matches Rust f32::round) rather than
@@ -36,7 +36,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         crushed = np.trunc(scaled + np.sign(scaled) * 0.5) / levels
 
         # Sample rate reduction: hold every Nth sample
-        for i in range(frame_count):
+        for i in range(ctx.frame_count):
             if i % downsample == 0:
                 held = crushed[i]
-            outputs[ch][i] = held
+            ctx.outputs[ch][i] = held

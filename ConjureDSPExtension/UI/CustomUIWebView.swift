@@ -44,6 +44,11 @@ struct CustomUIWebView: NSViewRepresentable {
     /// Independent of audio frames so a UI that only wants tempo doesn't spin
     /// up the audio capture pipeline.
     var transportManager: TransportPushManager
+    /// Coordinator for the bundle-private STATE channel. Owned by the AU,
+    /// passed in here so the JS bridge's `state.set` / `state.reset` calls
+    /// route through the same actor as MCP and DAW persistence. Forwarded
+    /// non-`.ui` origin changes are pushed back to JS via `_stateUpdate`.
+    var stateManager: PresetStateManager
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -93,6 +98,8 @@ struct CustomUIWebView: NSViewRepresentable {
         contentController.add(context.coordinator, name: "unsubscribeAudioFrames")
         contentController.add(context.coordinator, name: "subscribeTransport")
         contentController.add(context.coordinator, name: "unsubscribeTransport")
+        contentController.add(context.coordinator, name: "stateSet")
+        contentController.add(context.coordinator, name: "stateReset")
 
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
 
@@ -116,9 +123,11 @@ struct CustomUIWebView: NSViewRepresentable {
         context.coordinator.parameterState = parameterState
         context.coordinator.captureManager = captureManager
         context.coordinator.transportManager = transportManager
+        context.coordinator.stateManager = stateManager
         context.coordinator.audioFPS = bundle.manifest.resolvedFPS
         context.coordinator.audioFramesAllowed = bundle.manifest.audioFramesEnabled
         context.coordinator.subscribe(to: parameterState)
+        context.coordinator.subscribe(toStateManager: stateManager)
         context.coordinator.observeWindowAndReload()
 
         // Percent-encode the path before interpolating into the URL
@@ -204,6 +213,8 @@ struct CustomUIWebView: NSViewRepresentable {
         controller.removeScriptMessageHandler(forName: "unsubscribeAudioFrames")
         controller.removeScriptMessageHandler(forName: "subscribeTransport")
         controller.removeScriptMessageHandler(forName: "unsubscribeTransport")
+        controller.removeScriptMessageHandler(forName: "stateSet")
+        controller.removeScriptMessageHandler(forName: "stateReset")
         coordinator.fileWatcher?.stop()
         coordinator.fileWatcher = nil
         coordinator.pendingReload?.cancel()
@@ -214,6 +225,8 @@ struct CustomUIWebView: NSViewRepresentable {
         coordinator.transportCancellable?.cancel()
         coordinator.transportCancellable = nil
         coordinator.transportManager?.setConsumer(id: coordinator.transportConsumerID, active: false)
+        coordinator.stateCancellable?.cancel()
+        coordinator.stateCancellable = nil
         coordinator.cancellables.removeAll()
         coordinator.webView = nil
     }
@@ -255,6 +268,14 @@ struct CustomUIWebView: NSViewRepresentable {
         weak var parameterState: ParameterState?
         weak var captureManager: AudioCaptureManager?
         weak var transportManager: TransportPushManager?
+        /// Coordinator for the bundle-private STATE channel. Weak: same
+        /// lifetime contract as the other managers — the AU owns it,
+        /// this view's coordinator just forwards messages and listens
+        /// for non-`.ui` origin updates to push back into JS.
+        weak var stateManager: PresetStateManager?
+        /// Subscription to `stateManager.stateChanges`. Active for the
+        /// lifetime of the coordinator (cleared in `dismantleNSView`).
+        var stateCancellable: AnyCancellable?
 
         /// Stable id for this coordinator when registering as a transport
         /// consumer. Distinct from `audioConsumerID` so subscribing to one
@@ -425,6 +446,69 @@ struct CustomUIWebView: NSViewRepresentable {
                 .store(in: &paramCancellables)
         }
 
+        /// Subscribe to STATE channel changes. Forwards every non-`.ui`
+        /// origin update to JS via `_stateUpdate(key, value)`. `.ui`
+        /// origin is suppressed because the bridge already fired
+        /// `onChange` synchronously inside `state.set(...)`; forwarding
+        /// here would double-fire the JS-side handler.
+        ///
+        /// Whole-mirror events (key == nil → preset load / DAW restore /
+        /// MCP reset_state) are forwarded as `_stateUpdate(null, null)`
+        /// so the JS side knows to re-pull `state.get()` for everything.
+        func subscribe(toStateManager mgr: PresetStateManager) {
+            stateCancellable?.cancel()
+            let publisher = MainActor.assumeIsolated { mgr.stateChanges }
+            stateCancellable = publisher
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] change in
+                    guard let self else { return }
+                    // Suppress `.ui`-origin echoes — the JS bridge
+                    // already fired its own onChange inside `state.set`.
+                    if change.origin == .ui { return }
+                    self.forwardStateUpdate(key: change.key, value: change.value)
+                }
+        }
+
+        private func forwardStateUpdate(key: String?, value: Any?) {
+            guard isReady, let webView else { return }
+            // Encode the (key, value) pair as two JSON literals. Both
+            // can be JSON `null` for the "everything reset" broadcast.
+            let keyJSON: String
+            if let key {
+                keyJSON = Self.jsonStringLiteral(key)
+            } else {
+                keyJSON = "null"
+            }
+            let valueJSON: String
+            if let value, !(value is NSNull) {
+                if let data = try? JSONSerialization.data(
+                    withJSONObject: value,
+                    options: [.fragmentsAllowed]
+                ), let str = String(data: data, encoding: .utf8) {
+                    valueJSON = str
+                } else {
+                    valueJSON = "null"
+                }
+            } else {
+                valueJSON = "null"
+            }
+            let js = "window.ConjureDSP && window.ConjureDSP._stateUpdate(\(keyJSON), \(valueJSON))"
+            webView.evaluateJavaScript(js, completionHandler: nil)
+        }
+
+        /// JSON-encode a single string as a quoted JS-safe literal.
+        /// Wraps in a one-element array so JSONSerialization (which
+        /// rejects fragment-level strings on older OS versions)
+        /// always produces valid output, then strips the brackets.
+        private static func jsonStringLiteral(_ s: String) -> String {
+            if let data = try? JSONSerialization.data(withJSONObject: [s], options: []),
+               let arr = String(data: data, encoding: .utf8),
+               arr.count >= 4 {
+                return String(arr.dropFirst().dropLast())
+            }
+            return "\"\""
+        }
+
         private func forwardExternalValue(index: Int, value: Float) {
             guard isReady, let webView else {
                 // paramFlow.notice("[7.swift.forward.skip] idx=\(index, privacy: .public) v=\(value, privacy: .public) reason=\(self.isReady ? "no-webview" : "not-ready", privacy: .public)")
@@ -500,11 +584,30 @@ struct CustomUIWebView: NSViewRepresentable {
             // Truncate values to match — otherwise JS sees count=1 but
             // values array has length 16, which is harmless but misleading.
             let values = Array(state.values.prefix(count))
-            return [
+            var payload: [String: Any] = [
                 "metadata": metadata,
                 "values": values,
                 "theme": lastTheme,
             ]
+            // Bundle-private STATE channel snapshot. `state` is the
+            // current Swift-mirror dict (script defaults overlaid with
+            // any DAW-restored or in-flight UI writes);
+            // `declaredStateKeys` lists the keys the script declared so
+            // a custom UI can build its bindings without guessing;
+            // `maxStateBytes` lets authors size their writes against
+            // the per-script cap.
+            if let stateMgr = stateManager {
+                MainActor.assumeIsolated {
+                    payload["state"] = stateMgr.snapshotForInit()
+                    payload["declaredStateKeys"] = stateMgr.declaredKeys
+                    payload["maxStateBytes"] = stateMgr.maxBytes
+                }
+            } else {
+                payload["state"] = [:] as [String: Any]
+                payload["declaredStateKeys"] = [] as [String]
+                payload["maxStateBytes"] = 0
+            }
+            return payload
         }
 
         // MARK: WKScriptMessageHandler
@@ -579,6 +682,28 @@ struct CustomUIWebView: NSViewRepresentable {
 
             case "unsubscribeTransport":
                 stopTransportForwarding()
+
+            case "stateSet":
+                // JS bridge `state.set(key, value)`. Origin `.ui` so the
+                // stateChanges sink suppresses the echo back to JS — the
+                // bridge already fired its own onChange synchronously
+                // inside `state.set` and forwarding here would double-fire.
+                guard let body = message.body as? [String: Any],
+                      let key = body["key"] as? String else { return }
+                let value = body["value"]  // may be NSNull → delete
+                MainActor.assumeIsolated {
+                    _ = stateManager?.set(key: key, value: value, origin: .ui)
+                }
+
+            case "stateReset":
+                // JS bridge `state.reset(key?)`. nil/missing key = full
+                // reset to script defaults. `.ui` origin same suppression
+                // logic as stateSet.
+                let body = message.body as? [String: Any]
+                let key = body?["key"] as? String
+                MainActor.assumeIsolated {
+                    _ = stateManager?.reset(key: key, origin: .ui)
+                }
 
             default:
                 break

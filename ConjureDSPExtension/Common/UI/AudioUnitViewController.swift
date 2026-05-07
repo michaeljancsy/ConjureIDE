@@ -817,6 +817,11 @@ pub extern "C" fn process(
 
         let buildID = extensionBundle.infoDictionary?["BuildID"] as? Int ?? 0
 
+        // Bundle-private STATE channel coordinator — owned by the AU,
+        // passed through to the SwiftUI tree so CustomUIWebView can wire
+        // the JS bridge `state.set`/`state.reset` round-trip.
+        let stateMgr = au.presetStateManager
+
         let content = ConjureDSPExtensionMainView(
             buildID: buildID,
             defaultScriptSource: initialScript,
@@ -829,6 +834,7 @@ pub extern "C" fn process(
             processProfiler: profiler,
             memoryMonitor: memMon,
             parameterState: ps,
+            stateManager: stateMgr,
             subscriptionManager: lm,
             gitHubService: gh,
             gitCoordinator: gc,

@@ -17,7 +17,7 @@ _delay_lines = None
 _gain = 1.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Lookahead Limiter — transparent brick-wall limiter.
 
@@ -33,22 +33,22 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     global _delay_lines, _gain
 
     if _delay_lines is None:
-        _delay_lines = [DelayLine(LATENCY + 1) for _ in range(len(inputs))]
+        _delay_lines = [DelayLine(LATENCY + 1) for _ in range(len(ctx.inputs))]
 
-    threshold_db = params["threshold"]
-    release_ms = params["release"]
+    threshold_db = ctx.params["threshold"]
+    release_ms = ctx.params["release"]
 
     threshold = db_to_gain(threshold_db)
-    release_coeff = smooth_coeff(release_ms, sample_rate)
+    release_coeff = smooth_coeff(release_ms, ctx.sample_rate)
 
-    gain_arr = np.ones(frame_count, dtype=np.float32)
+    gain_arr = np.ones(ctx.frame_count, dtype=np.float32)
     g = _gain
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # Peak detect from raw (non-delayed) input
         peak = 0.0
-        for ch in range(len(inputs)):
-            peak = max(peak, abs(inputs[ch][i]))
+        for ch in range(len(ctx.inputs)):
+            peak = max(peak, abs(ctx.inputs[ch][i]))
 
         # Compute target gain
         if peak > threshold:
@@ -67,9 +67,9 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
 
     _gain = g
 
-    for ch in range(len(inputs)):
+    for ch in range(len(ctx.inputs)):
         dl = _delay_lines[ch]
-        for i in range(frame_count):
-            dl.write(inputs[ch][i])
+        for i in range(ctx.frame_count):
+            dl.write(ctx.inputs[ch][i])
             delayed = dl.tap(LATENCY)
-            outputs[ch][i] = delayed * gain_arr[i]
+            ctx.outputs[ch][i] = delayed * gain_arr[i]

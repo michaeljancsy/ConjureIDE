@@ -34,24 +34,24 @@ class _S:
         self.lfos = [LFO(sr, freq=r, waveform="sine")
                      for r in [0.11, 0.15, 0.19, 0.27]]
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    decay = params["decay"] / 100.0
-    dark = params["darkness"]
-    haunt = params["haunt"] / 100.0
-    sz = 0.5 + params["size"] / 100.0
-    pd_samp = params["pre_delay"] * 0.001 * sample_rate
-    mx = params["mix"]
+    decay = ctx.params["decay"] / 100.0
+    dark = ctx.params["darkness"]
+    haunt = ctx.params["haunt"] / 100.0
+    sz = 0.5 + ctx.params["size"] / 100.0
+    pd_samp = ctx.params["pre_delay"] * 0.001 * ctx.sample_rate
+    mx = ctx.params["mix"]
 
     fb = 0.75 + decay * 0.22
-    lpc = BiquadCoeffs.lowpass(dark, 0.6, sample_rate)
-    hpc = BiquadCoeffs.highpass(80.0, 0.707, sample_rate)
+    lpc = BiquadCoeffs.lowpass(dark, 0.6, ctx.sample_rate)
+    hpc = BiquadCoeffs.highpass(80.0, 0.707, ctx.sample_rate)
     mod_depth = haunt * 20.0
 
     # Set filter coefficients once per block
@@ -61,14 +61,14 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         s.hp[ch].set_coeffs(hpc)
 
     # Precompute base delay times (stable within block)
-    cb_d = [COMB_MS[c] * sz * 0.001 * sample_rate for c in range(4)]
-    ap_d = [max(AP_MS[a] * sz * 0.001 * sample_rate, 1.0) for a in range(2)]
+    cb_d = [COMB_MS[c] * sz * 0.001 * ctx.sample_rate for c in range(4)]
+    ap_d = [max(AP_MS[a] * sz * 0.001 * ctx.sample_rate, 1.0) for a in range(2)]
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         m = [lfo.tick() for lfo in s.lfos]
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Pre-delay (cathedral distance)
             s.pd[ch].write(dry)
@@ -96,4 +96,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             # Highpass wet signal to prevent rumble buildup
             sig = s.hp[ch].process_sample(sig)
 
-            outputs[ch][i] = dry * (1.0 - mx) + sig * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + sig * mx

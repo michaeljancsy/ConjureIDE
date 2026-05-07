@@ -9,7 +9,7 @@ PARAMS = {
 _prev_out = [0.0, 0.0]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Low-Pass Filter — simple 1-pole IIR low-pass.
 
@@ -21,15 +21,15 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _prev_out
 
-    cutoff_hz = params["cutoff"]
+    cutoff_hz = ctx.params["cutoff"]
 
-    a = math.exp(-2.0 * math.pi * cutoff_hz / sample_rate)
+    a = math.exp(-2.0 * math.pi * cutoff_hz / ctx.sample_rate)
     b = 1.0 - a
 
-    for ch in range(len(inputs)):
+    for ch in range(len(ctx.inputs)):
         y = _prev_out[ch] if ch < len(_prev_out) else 0.0
-        for i in range(frame_count):
-            y = b * inputs[ch][i] + a * y
-            outputs[ch][i] = y
+        for i in range(ctx.frame_count):
+            y = b * ctx.inputs[ch][i] + a * y
+            ctx.outputs[ch][i] = y
         if ch < len(_prev_out):
             _prev_out[ch] = y

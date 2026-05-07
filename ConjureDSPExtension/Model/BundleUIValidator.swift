@@ -100,6 +100,7 @@ enum BundleUIValidator {
             issues.append(contentsOf: checkParamReferences(html: html, bundle: bundle))
             issues.append(contentsOf: checkUnboundDeclaredParams(html: html, bundle: bundle))
             issues.append(contentsOf: checkTelemetryReferences(html: html, bundle: bundle))
+            issues.append(contentsOf: checkStateReferences(html: html, bundle: bundle))
             issues.append(contentsOf: checkNoExternalNetwork(html: html))
             issues.append(contentsOf: checkNoSystemColorInCanvas(html: html))
             issues.append(contentsOf: checkHasInteractiveSurface(html: html, bundle: bundle))
@@ -1147,6 +1148,203 @@ enum BundleUIValidator {
             range: NSRange(location: 0, length: ns.length),
             withTemplate: ""
         )
+    }
+
+    /// Every `ConjureDSP.state.{get,set,onChange,onAnyChange}('K', ...)`
+    /// reference in the UI must resolve to a key declared in the script's
+    /// `STATE` block (Python) / `state_struct!` block (Rust). The bundle
+    /// STATE channel is bundle-private and not part of the AU parameter
+    /// tree, so a typo here silently fails — `set` is a no-op, `get`
+    /// returns the default, `onChange` never fires.
+    ///
+    /// Dynamic-key references (non-literal first arg, e.g.
+    /// `state.set(myVar, ...)`) are silently skipped — they can't be
+    /// statically resolved. Same for cases where we can't parse the
+    /// script (we emit a `warn` so the author isn't blocked, but each
+    /// individual key reference is otherwise allowed through).
+    ///
+    /// TODO: STATE-defaults-over-cap warning. Need to compare the literal
+    /// `STATE = {...}` / `state_struct!` defaults against a declared
+    /// `STATE_MAX_BYTES = N` / `state!(T, max_bytes = N)`. Both are
+    /// heuristic and the runtime smoke test catches this anyway when the
+    /// kernel rejects on apply, so leaving as a follow-up.
+    private static func checkStateReferences(html: String, bundle: PresetBundle) -> [Issue] {
+        // Pull every literal-key `state.<api>('KEY', ...)` reference out
+        // of the UI HTML / inline JS. Multi-quote-style support so we
+        // pick up both single- and double-quoted, plus backticks (people
+        // template-literal these for "no real reason" all the time).
+        let refRegex = try? NSRegularExpression(
+            pattern: #"ConjureDSP\.state\.(?:get|set|onChange|onAnyChange)\s*\(\s*(['"`])([^'"`]+)\1"#,
+            options: []
+        )
+        guard let regex = refRegex else { return [] }
+
+        let scanned = stripHTMLComments(html)
+        let ns = scanned as NSString
+        let matches = regex.matches(in: scanned, range: NSRange(location: 0, length: ns.length))
+
+        // No literal references — nothing to validate.
+        if matches.isEmpty { return [] }
+
+        // Try to parse declared STATE keys from the bundle's script
+        // source. Imperfect (regex over Python / Rust source, not a
+        // real parser) so a parse failure falls back to a warn instead
+        // of blocking the author.
+        let scriptKeysOpt = declaredStateKeys(forBundle: bundle)
+
+        var issues: [Issue] = []
+        guard let declared = scriptKeysOpt else {
+            issues.append(
+                Issue(
+                    severity: .warn,
+                    check: "state_keys_unparseable",
+                    file: "ui/index.html",
+                    message: "UI references ConjureDSP.state.* but the validator could not parse STATE keys from the script for verification.",
+                    suggestion: "If the keys are correct at runtime you can ignore this; otherwise simplify the STATE declaration so the static lint can read it (top-level `STATE = {\"key\": default, ...}` for Python, `state_struct! { pub struct State { pub key: T, ... } }` for Rust)."
+                )
+            )
+            return issues
+        }
+
+        let declaredNorms = Set(declared.map { looseNormalize($0) })
+        let declaredDecls = declared.map { name in
+            PresetManifest.ParamDecl(
+                name: name, key: nil, min: 0, max: 0, default: 0,
+                unit: nil, curve: nil, style: nil, options: nil
+            )
+        }
+
+        var seenUnresolved: Set<String> = []
+        for match in matches where match.numberOfRanges >= 3 {
+            let value = ns.substring(with: match.range(at: 2))
+            if declaredNorms.contains(looseNormalize(value)) { continue }
+            if seenUnresolved.contains(value) { continue }
+            seenUnresolved.insert(value)
+            let nearest = nearestDeclaredName(to: value, declared: declaredDecls)
+            issues.append(
+                Issue(
+                    severity: .fail,
+                    check: "state_key_referenced_in_ui",
+                    file: "ui/index.html",
+                    message: "ConjureDSP.state reference uses key \"\(value)\" but the script declares no such STATE key.",
+                    suggestion: nearest.map { "Did you mean \"\($0)\"?" } ?? "Add \"\(value)\" to the script's STATE declaration, or update the UI to use an existing key."
+                )
+            )
+        }
+        return issues
+    }
+
+    /// Best-effort extraction of declared STATE keys from the bundle's
+    /// entry script. Returns nil when we can't parse (caller decides
+    /// whether to warn or proceed).
+    ///
+    /// Python: scan for top-level `STATE = {...}` and pull string keys
+    /// out of the literal dict. Won't catch dynamically-built dicts.
+    /// Rust: scan for `state_struct! { pub struct <Name> { ... } }` and
+    /// pull field names out of the struct body. Won't catch types
+    /// declared outside the macro.
+    private static func declaredStateKeys(forBundle bundle: PresetBundle) -> [String]? {
+        guard let source = try? String(contentsOf: bundle.entryScriptURL, encoding: .utf8) else {
+            return nil
+        }
+        let ext = bundle.entryScriptURL.pathExtension.lowercased()
+        switch ext {
+        case "py":
+            return parsePythonStateKeys(source: source)
+        case "rs":
+            return parseRustStateKeys(source: source)
+        default:
+            return nil
+        }
+    }
+
+    private static func parsePythonStateKeys(source: String) -> [String]? {
+        // Find the literal `STATE = {` and scan to the matching `}`.
+        // Tolerant: ignores leading whitespace, type annotations, and
+        // trailing comments. Returns nil if we can't find the dict.
+        guard let startRegex = try? NSRegularExpression(
+            pattern: #"(?m)^\s*STATE\s*(?::[^=]+)?=\s*\{"#,
+            options: []
+        ) else { return nil }
+        let ns = source as NSString
+        guard let match = startRegex.firstMatch(
+            in: source, range: NSRange(location: 0, length: ns.length)
+        ) else { return nil }
+        // Find the closing `}` by walking braces.
+        let openIdx = match.range.location + match.range.length - 1  // points at `{`
+        var depth = 1
+        var i = openIdx + 1
+        while i < ns.length && depth > 0 {
+            let ch = ns.character(at: i)
+            if ch == 0x7B /* { */ { depth += 1 }
+            else if ch == 0x7D /* } */ { depth -= 1 }
+            i += 1
+        }
+        guard depth == 0 else { return nil }
+        let body = ns.substring(with: NSRange(location: openIdx + 1, length: i - openIdx - 2))
+        // Pull `"key":` / `'key':` pairs out. Top-level only — nested
+        // dicts get filtered downstream by simple brace tracking.
+        guard let keyRegex = try? NSRegularExpression(
+            pattern: #"["']([^"']+)["']\s*:"#,
+            options: []
+        ) else { return nil }
+        let bns = body as NSString
+        let keyMatches = keyRegex.matches(in: body, range: NSRange(location: 0, length: bns.length))
+        var keys: [String] = []
+        var depthAt: [Int: Int] = [:]
+        var bd = 0
+        // Compute depth at every offset cheaply by walking once.
+        for j in 0..<bns.length {
+            let ch = bns.character(at: j)
+            if ch == 0x7B /* { */ { bd += 1 }
+            else if ch == 0x7D /* } */ { bd -= 1 }
+            depthAt[j] = bd
+        }
+        for m in keyMatches where m.numberOfRanges >= 2 {
+            // Only count keys at top-level (depth 0 at the offset).
+            let off = m.range.location
+            if (depthAt[off] ?? 0) != 0 { continue }
+            keys.append(bns.substring(with: m.range(at: 1)))
+        }
+        return keys
+    }
+
+    private static func parseRustStateKeys(source: String) -> [String]? {
+        // Look for `state_struct! { pub struct <Name> { ... } }` and
+        // extract field names from the struct body. Field syntax is
+        // `name: Type,` — we capture the identifier before the colon.
+        guard let startRegex = try? NSRegularExpression(
+            pattern: #"state_struct!\s*\{[^{}]*?pub\s+struct\s+\w+\s*\{"#,
+            options: []
+        ) else { return nil }
+        let ns = source as NSString
+        guard let match = startRegex.firstMatch(
+            in: source, range: NSRange(location: 0, length: ns.length)
+        ) else { return nil }
+        let openIdx = match.range.location + match.range.length - 1
+        var depth = 1
+        var i = openIdx + 1
+        while i < ns.length && depth > 0 {
+            let ch = ns.character(at: i)
+            if ch == 0x7B /* { */ { depth += 1 }
+            else if ch == 0x7D /* } */ { depth -= 1 }
+            i += 1
+        }
+        guard depth == 0 else { return nil }
+        let body = ns.substring(with: NSRange(location: openIdx + 1, length: i - openIdx - 2))
+        // `pub? name: Type,` — the `pub` is optional in older / inner
+        // syntax variants; tolerate either.
+        guard let fieldRegex = try? NSRegularExpression(
+            pattern: #"(?:pub\s+)?(\w+)\s*:"#,
+            options: []
+        ) else { return nil }
+        let bns = body as NSString
+        let fieldMatches = fieldRegex.matches(in: body, range: NSRange(location: 0, length: bns.length))
+        var keys: [String] = []
+        for m in fieldMatches where m.numberOfRanges >= 2 {
+            keys.append(bns.substring(with: m.range(at: 1)))
+        }
+        return keys
     }
 
     /// Every `<cdp-scope telemetry="X">` reference must resolve to a slot

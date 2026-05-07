@@ -41,6 +41,18 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// open/close cycles, no per-VC churn.
 	let transportPushManager = TransportPushManager()
 
+	/// Coordinator for the bundle-private STATE channel — UI-writable,
+	/// audio-readable JSON that is NOT in the AU parameter tree. Lifetime
+	/// matches the AU instance. The kernel pointer is captured at init;
+	/// `applyDefaults` is called after every successful script/WASM load
+	/// to reset to the new preset's STATE defaults. `@MainActor` so the
+	/// Swift mirror stays coherent across UI / MCP / fullState writes —
+	/// the underlying kernel FFI is itself thread-safe by atomic-swap.
+	@MainActor
+	private(set) lazy var presetStateManager: PresetStateManager = {
+		PresetStateManager(kernel: self.kernelReference)
+	}()
+
 	// MARK: - Shared Python Runtime
 
 	/// App Group container URL for cross-app data sharing.
@@ -728,6 +740,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				readParamNames()
 			}
 
+			// Snapshot the new script's STATE defaults into the
+			// PresetStateManager. fullState restore (if a host saved
+			// per-instance state) runs AFTER this and overwrites.
+			applyPresetStateDefaults()
+
 			// Warm-start: run process() a few times so any first-call allocations
 			// (e.g. global buffer creation) happen before real audio arrives.
 			// benchmark_process does 1 warm-up + 5 timed calls; it handles
@@ -965,6 +982,64 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		paramNamesDidChange.send(currentParamNames)
 	}
 
+	/// After a successful script/WASM load, snapshot the kernel's
+	/// declared STATE defaults + cap and push them into
+	/// `presetStateManager`. This resets the Swift mirror, bumps the
+	/// kernel's state generation, and broadcasts a `.presetLoad`
+	/// stateChange so any live custom UI re-pulls. fullState restore (in
+	/// the setter above) runs AFTER this and overwrites the defaults
+	/// when the DAW saved per-instance state — that's the right
+	/// ordering: defaults are the floor, restore is the override.
+	///
+	/// Nonisolated so it's safe to call from `reloadScript` /
+	/// `loadWasm`, which can run on the AU's XPC thread (host preset
+	/// pickers, auval, the test harness's async context). The kernel
+	/// FFI is thread-safe by atomic-swap; the @MainActor
+	/// `presetStateManager.applyDefaults` mirror update is dispatched
+	/// asynchronously to main so this method itself never blocks.
+	private func applyPresetStateDefaults() {
+		var defaultsJSON = "{}"
+		if let cstr = dsp_kernel_state_defaults_json(kernel) {
+			defaultsJSON = String(cString: cstr)
+		}
+		let cap = Int(dsp_kernel_state_cap(kernel))
+		// Push cap + initial buffer to the kernel synchronously
+		// (thread-safe). The audio thread's snapshot_state on its
+		// next callback will observe these bytes.
+		dsp_kernel_set_state_cap(kernel, UInt(cap))
+		let bytes = Data(defaultsJSON.utf8)
+		if !bytes.isEmpty {
+			_ = bytes.withUnsafeBytes { raw -> Bool in
+				guard let base = raw.baseAddress else { return false }
+				return dsp_kernel_set_state_json(
+					kernel,
+					base.assumingMemoryBound(to: UInt8.self),
+					UInt(bytes.count)
+				)
+			}
+		}
+		// declaredKeys: until we surface them via FFI, parse the
+		// top-level keys of the defaults JSON. Good enough for v1 —
+		// every key the script declared has a default entry, so the
+		// strict-mode `set_state` check has the right vocabulary.
+		var declaredKeys: [String] = []
+		if let data = defaultsJSON.data(using: .utf8),
+		   let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+			declaredKeys = Array(dict.keys)
+		}
+		// Hop to main to update the Swift mirror — never block.
+		let capturedJSON = defaultsJSON
+		let capturedKeys = declaredKeys
+		let capturedCap = cap
+		Task { @MainActor [weak self] in
+			self?.presetStateManager.applyDefaults(
+				defaultsJSON: capturedJSON,
+				declaredKeys: capturedKeys,
+				maxBytes: capturedCap
+			)
+		}
+	}
+
 	/// Mark the start of a preset-load window. The audio thread ramps the
 	/// output to silence and *holds* silence — even after a backend swap —
 	/// until `endPresetTransition` is called. Idempotent.
@@ -1020,6 +1095,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				paramNamesDidChange.send(names)
 			}
 
+			// Snapshot the new script's STATE defaults — same handoff
+			// as `loadPythonScript`. fullState setter / DAW restore
+			// (when present) overwrites afterward.
+			applyPresetStateDefaults()
+
 			// Benchmark the process function
 			let benchmarkSecs = dsp_kernel_benchmark_process(kernel)
 			var processTimeMs: Double? = nil
@@ -1063,6 +1143,13 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			if let namError = injectNamModelIfNeeded() {
 				return (false, namError, nil, nil)
 			}
+
+			// Snapshot the new module's STATE defaults. WASM presets
+			// generally return "{}" via `dsp_kernel_state_defaults_json`
+			// (their defaults flow through Rust's `T::default()`), but
+			// we still apply so the cap is synced and the
+			// `presetStateManager` mirror is reset to a known state.
+			applyPresetStateDefaults()
 
 			let benchmarkSecs = dsp_kernel_benchmark_process(kernel)
 			var processTimeMs: Double? = nil
@@ -1441,6 +1528,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	private static let scriptSourceKey = "pythonScriptSource"
 	private static let scriptLanguageKey = "scriptLanguage"
 	private static let wasmBytesKey = "wasmBytes"
+	/// Bundle-private STATE channel bytes (JSON UTF-8). UI-writable,
+	/// audio-readable, NOT in the AU parameter tree. Persisted into
+	/// DAW project state so per-instance UI scribbles (XY pad
+	/// positions, sequencer steps, etc.) survive session reopen.
+	private static let stateKey = "conjuredsp_state"
 
 	public override var fullState: [String : Any]? {
 		get {
@@ -1452,6 +1544,31 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			state[Self.scriptLanguageKey] = currentScriptLanguage.rawValue
 			if let wasmBytes = currentWasmBytes {
 				state[Self.wasmBytesKey] = wasmBytes
+			}
+			// Embed the bundle-private STATE blob so DAW project saves
+			// round-trip per-instance UI state alongside the script
+			// source. Always written — empty `{}` is harmless and keeps
+			// the schema stable across presets that may flip from "no
+			// STATE" to "has STATE" mid-project.
+			//
+			// fullState may be read from XPC threads (auval, host preset
+			// pickers), so we go directly to the kernel's atomic-swap
+			// JSON buffer rather than through the @MainActor
+			// PresetStateManager. The kernel guarantees thread-safety on
+			// `dsp_kernel_get_state_json`.
+			let needed = Int(dsp_kernel_get_state_json(kernel, nil, 0))
+			if needed > 0 {
+				var bytes = Data(count: needed)
+				let written = bytes.withUnsafeMutableBytes { raw -> Int in
+					guard let base = raw.baseAddress else { return 0 }
+					return Int(dsp_kernel_get_state_json(
+						kernel,
+						base.assumingMemoryBound(to: UInt8.self),
+						UInt(needed)
+					))
+				}
+				if written < bytes.count { bytes = bytes.prefix(written) }
+				state[Self.stateKey] = bytes
 			}
 			return state
 		}
@@ -1502,8 +1619,38 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				}
 			}
 
+			// Restore the STATE blob AFTER the script load finishes so it
+			// overwrites the script-load-time defaults that
+			// `applyPresetStateDefaults` just pushed. The script-load path
+			// always runs first (resetting to defaults) so legacy sessions
+			// with no `conjuredsp_state` key keep the defaults — we only
+			// override when the host actually saved one. Bypass the
+			// @MainActor PresetStateManager and call the kernel directly,
+			// since fullState setter may be invoked from XPC threads.
+			if let stateBytes = state[Self.stateKey] as? Data, !stateBytes.isEmpty {
+				_ = stateBytes.withUnsafeBytes { raw -> Bool in
+					guard let base = raw.baseAddress else { return false }
+					return dsp_kernel_set_state_json(
+						kernel,
+						base.assumingMemoryBound(to: UInt8.self),
+						UInt(stateBytes.count)
+					)
+				}
+			}
+
 			pluginLog.info("Restored \(language.rawValue) script from fullState (\(source.count) chars)")
 		}
+	}
+
+	/// Dual override of `fullStateForDocument`. Some hosts (Logic for
+	/// project saves) read this property; others (auval, AU testing
+	/// hosts) only call `fullState`. Mirroring both with identical
+	/// content guarantees the bundle-private STATE blob survives in
+	/// every host path, so per-instance UI state isn't silently
+	/// dropped at project save / reopen.
+	public override var fullStateForDocument: [String : Any]? {
+		get { return self.fullState }
+		set { self.fullState = newValue }
 	}
 
 	// MARK: - Preset Manager

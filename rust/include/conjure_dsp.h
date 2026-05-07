@@ -5,6 +5,21 @@
 #include <stdbool.h>
 
 /**
+ * Default per-script cap for the JSON state buffer (64 KiB). Scripts can
+ * raise this via `state!(T, max_bytes = N)` (Rust) — Python presets pin
+ * the same default but currently have no opt-in syntax. Audio-thread
+ * deserialize cost scales linearly with buffer size, so the default keeps
+ * per-block parse time well under 100 µs even on slower hardware.
+ */
+#define DEFAULT_STATE_CAP_BYTES 65536
+
+/**
+ * Hard upper bound on the per-script cap. Going past 1 MiB risks
+ * non-trivial audio-thread parse latency on every state mutation.
+ */
+#define MAX_STATE_CAP_BYTES 1048576
+
+/**
  * Maximum number of parameters exposed to the DAW.
  */
 #define PARAM_COUNT 16
@@ -562,6 +577,70 @@ uint64_t dsp_kernel_wasm_memory_bytes(DSPKernelRef kernel);
  * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
  */
 uint32_t dsp_kernel_last_render_frame_count(DSPKernelRef kernel);
+
+/**
+ * Set the per-script cap on the state buffer in bytes. Called by Swift
+ * at script load (passes the script's declared `max_bytes` from
+ * `state!(T, max_bytes = N)` in Rust, or the default 64 KiB for Python
+ * presets which currently have no opt-in syntax). Subsequent
+ * `dsp_kernel_set_state_json` calls reject inputs over this size.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+void dsp_kernel_set_state_cap(DSPKernelRef kernel, uintptr_t max_bytes);
+
+/**
+ * Returns the currently configured state cap in bytes.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+uintptr_t dsp_kernel_state_cap(DSPKernelRef kernel);
+
+/**
+ * Try to install a new state buffer. Validates that the bytes are
+ * well-formed JSON and within the per-script cap. Returns `true` on
+ * success, `false` on rejection. On failure the existing buffer +
+ * generation are unchanged.
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * - `bytes` must be a valid pointer to `len` bytes (or null when len==0).
+ */
+bool dsp_kernel_set_state_json(DSPKernelRef kernel, const uint8_t *bytes, uintptr_t len);
+
+/**
+ * Copy the current state buffer into the caller-provided buffer.
+ * Writes up to `max_len` bytes and returns the actual length the kernel
+ * wanted to write (so callers can detect truncation). Pass `out=null,
+ * max_len=0` to query length only.
+ *
+ * # Safety
+ * - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * - When `max_len > 0`, `out` must be valid for `max_len` bytes.
+ */
+uintptr_t dsp_kernel_get_state_json(DSPKernelRef kernel, uint8_t *out, uintptr_t max_len);
+
+/**
+ * Read the current state generation counter without taking the buffer.
+ * Used by the smoke tester to verify that a UI write actually landed.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+uint64_t dsp_kernel_state_generation(DSPKernelRef kernel);
+
+/**
+ * Returns a pointer to the most recently loaded backend's STATE
+ * defaults JSON, or null when none was declared (Python-only
+ * concept — WASM gets defaults from its `Default` impl). Pointer is
+ * valid until the next script load or kernel destroy.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+const char *dsp_kernel_state_defaults_json(DSPKernelRef kernel);
 
 /**
  * C = A * B where A is m×k, B is k×n, C is m×n. Stride params are element strides.

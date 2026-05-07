@@ -6,7 +6,7 @@ PARAMS = {
 }
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Soft Clip — tanh waveshaping saturation.
 
@@ -18,8 +18,8 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     Params:
         drive: Saturation amount (1–15x)
     """
-    drive = params["drive"]
+    drive = ctx.params["drive"]
     norm = 1.0 / np.tanh(drive)
 
-    for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = np.tanh(drive * inputs[ch][:frame_count]) * norm
+    for ch in range(len(ctx.inputs)):
+        ctx.outputs[ch][:ctx.frame_count] = np.tanh(drive * ctx.inputs[ch][:ctx.frame_count]) * norm

@@ -16,7 +16,7 @@ PARAMS = {
 model = load_model("tone3000://19/56")
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     NAM Tone — Neural Amp Modeler preset.
 
@@ -28,10 +28,10 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         input_gain: Drive into the model in dB (-60 to +12)
         mix: Dry/wet blend (0 = fully dry, 1 = fully wet)
     """
-    gain = 10 ** (params["input_gain"] / 20.0)
-    mix_val = params["mix"]
+    gain = 10 ** (ctx.params["input_gain"] / 20.0)
+    mix_val = ctx.params["mix"]
 
-    for ch in range(len(inputs)):
-        dry = inputs[ch][:frame_count]
+    for ch in range(len(ctx.inputs)):
+        dry = ctx.inputs[ch][:ctx.frame_count]
         wet = model.process(dry * gain, ch)
-        outputs[ch][:frame_count] = dry * (1.0 - mix_val) + wet * mix_val
+        ctx.outputs[ch][:ctx.frame_count] = dry * (1.0 - mix_val) + wet * mix_val

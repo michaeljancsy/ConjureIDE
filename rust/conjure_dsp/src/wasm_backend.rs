@@ -1,8 +1,21 @@
-use crate::backend::{Backend, SidechainInput};
+use crate::backend::{Backend, SidechainInput, StateSnapshot};
 use crate::kernel::TransportState;
 use crate::params::PARAM_COUNT;
 use std::collections::HashMap;
 use wasmtime::*;
+
+/// Header prefix the host writes into STATE_BUF before the live JSON
+/// bytes:
+///   bytes [0..8]   — current state generation, little-endian u64
+///   bytes [8..12]  — used length of the JSON content, little-endian u32
+///   bytes [12..]   — JSON content (UTF-8 bytes)
+///
+/// The script-side `state!()` macro reads the gen + used_len from this
+/// prefix to decide whether to re-deserialize. Keeping the header inline
+/// in STATE_BUF (rather than splitting into separate exports + host
+/// imports) lets the script side stay import-free — useful for the
+/// export AU template, which doesn't bundle the conjuredsp host module.
+const STATE_HEADER_BYTES: usize = 12;
 
 // ---------------------------------------------------------------------------
 // Accelerate framework FFI (Apple vDSP / vecLib)
@@ -160,6 +173,20 @@ pub struct WasmBackend {
     /// at 2 in practice; used to clip when the host pulls more channels
     /// than the script allocated.
     sidechain_max_channels: usize,
+    /// Cached offset of the script's STATE_BUF in WASM linear memory
+    /// (via `get_state_buf_ptr`). `None` for modules that didn't declare
+    /// `state!()` — host skips state-buffer writes entirely so legacy
+    /// presets pay zero overhead.
+    state_buf_offset: Option<i32>,
+    /// Total capacity of the script's STATE_BUF in bytes, including the
+    /// 12-byte header. Read once at load via `get_state_buf_capacity`.
+    /// Useful to surface to Swift as the per-script cap (capacity minus
+    /// header).
+    state_buf_capacity: usize,
+    /// Cached generation of the last state push into linear memory.
+    /// When `state.generation` matches this, the audio thread skips the
+    /// memcpy — the script's own cached value is still correct.
+    last_state_gen_pushed: u64,
 }
 
 /// Base offset in WASM linear memory to avoid the null page.
@@ -412,6 +439,28 @@ impl WasmBackend {
             0
         };
 
+        // Probe state buffer exports (emitted by the `state!()` /
+        // `state_struct!()` macros). Modules that didn't declare state
+        // skip both probes silently — the host writes nothing into linear
+        // memory for state, costing zero on the hot path.
+        let state_buf_offset = instance
+            .get_typed_func::<(), i32>(&mut store, "get_state_buf_ptr")
+            .ok()
+            .and_then(|f| {
+                let _ = store.set_fuel(COMPILED_FUEL);
+                f.call(&mut store, ()).ok()
+            })
+            .filter(|&p| p > 0);
+        let state_buf_capacity = instance
+            .get_typed_func::<(), i32>(&mut store, "get_state_buf_capacity")
+            .ok()
+            .and_then(|f| {
+                let _ = store.set_fuel(COMPILED_FUEL);
+                f.call(&mut store, ()).ok()
+            })
+            .map(|n| if n < 0 { 0 } else { n as usize })
+            .unwrap_or(0);
+
         Ok(Self {
             store,
             memory,
@@ -440,7 +489,26 @@ impl WasmBackend {
             sidechain_buf_offset,
             sidechain_state_offset,
             sidechain_max_channels,
+            state_buf_offset,
+            state_buf_capacity,
+            // Initial sentinel: forces the first block to push state into
+            // linear memory regardless of whether the kernel's gen is 0.
+            // After that, audio-thread writes are gated on gen mismatch.
+            last_state_gen_pushed: u64::MAX,
         })
+    }
+
+    /// Maximum bytes the script's STATE_BUF can hold for actual JSON
+    /// content (capacity minus the 12-byte header). `None` when the
+    /// module didn't declare `state!()`. Swift uses this to set the
+    /// kernel's per-script state cap so writes from the UI / MCP path
+    /// can never overflow the WASM-side buffer.
+    pub fn state_max_bytes(&self) -> Option<usize> {
+        if self.state_buf_offset.is_some() && self.state_buf_capacity > STATE_HEADER_BYTES {
+            Some(self.state_buf_capacity - STATE_HEADER_BYTES)
+        } else {
+            None
+        }
     }
 
     /// Extract telemetry slot metadata from `get_telemetry_metadata_ptr/_len`
@@ -1160,6 +1228,7 @@ impl Backend for WasmBackend {
         params: &[f32; PARAM_COUNT],
         transport: &TransportState,
         sidechain: SidechainInput<'_>,
+        state: &StateSnapshot,
     ) -> bool {
         if self.input_offset == 0 || channel_count == 0 || frame_count == 0 {
             return false;
@@ -1172,6 +1241,36 @@ impl Backend for WasmBackend {
         }
 
         let mem_data = self.memory.data_mut(&mut self.store);
+
+        // State buffer push. Writes a `[gen_u64_le, used_len_u32_le,
+        // content...]` header into STATE_BUF when the kernel's
+        // generation changed since our last push. The script's
+        // `state!()` macro reads this header to decide whether to
+        // re-deserialize. Skip cost when nothing changed (cheap u64
+        // compare). Skip entirely for modules that didn't declare
+        // `state!()` — `state_buf_offset` is None.
+        if let Some(state_off) = self.state_buf_offset {
+            if self.last_state_gen_pushed != state.generation
+                && self.state_buf_capacity >= STATE_HEADER_BYTES
+            {
+                let off = state_off as usize;
+                let max_content = self.state_buf_capacity - STATE_HEADER_BYTES;
+                let bytes = state.bytes.as_ref();
+                let content_len = bytes.len().min(max_content);
+                if off + STATE_HEADER_BYTES + content_len <= mem_data.len() {
+                    let gen_le = state.generation.to_le_bytes();
+                    let len_le = (content_len as u32).to_le_bytes();
+                    mem_data[off..off + 8].copy_from_slice(&gen_le);
+                    mem_data[off + 8..off + 12].copy_from_slice(&len_le);
+                    if content_len > 0 {
+                        mem_data[off + STATE_HEADER_BYTES
+                            ..off + STATE_HEADER_BYTES + content_len]
+                            .copy_from_slice(&bytes[..content_len]);
+                    }
+                    self.last_state_gen_pushed = state.generation;
+                }
+            }
+        }
 
         // Copy input audio into WASM linear memory (bulk memcpy — both ARM64 and WASM are little-endian)
         let input_byte_offset = self.input_offset as usize;
@@ -1277,14 +1376,14 @@ impl Backend for WasmBackend {
         }
 
         // Write transport data into WASM memory if the module exports get_transport_ptr.
-        // Layout: [tempo_f32, beat_position_f32, is_playing_f32 (0/1), time_sig_num_f32, time_sig_den_f32, sample_position_f32]
+        // Layout: [bpm_f32, beat_f32, is_playing_f32 (0/1), time_sig_numerator_f32, time_sig_denominator_f32, sample_position_f32]
         if self.transport_offset != 0 {
             let transport_byte_offset = self.transport_offset as usize;
             let transport_end = transport_byte_offset + 6 * 4;
             if transport_end <= mem_data.len() {
                 let vals: [f32; 6] = [
-                    transport.tempo as f32,
-                    transport.beat_position as f32,
+                    transport.bpm as f32,
+                    transport.beat as f32,
                     if transport.is_playing { 1.0 } else { 0.0 },
                     transport.time_sig_numerator as f32,
                     transport.time_sig_denominator as f32,
@@ -1353,6 +1452,10 @@ impl Backend for WasmBackend {
 
     fn telemetry_metadata(&self) -> Option<&[crate::params::TelemetryMetadata]> {
         self.telemetry_metadata.as_deref()
+    }
+
+    fn state_max_bytes(&self) -> Option<usize> {
+        WasmBackend::state_max_bytes(self)
     }
 
     fn read_telemetry(&self, out: &mut [f32; crate::params::TELEMETRY_LEN]) {
@@ -1568,6 +1671,7 @@ mod tests {
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
             crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             )
         };
         assert!(ok, "process should succeed");
@@ -1595,6 +1699,7 @@ mod tests {
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
             crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             )
         };
         assert!(ok, "process should succeed");
@@ -1621,6 +1726,7 @@ mod tests {
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
             crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             )
         };
         assert!(ok);
@@ -1684,6 +1790,7 @@ mod tests {
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
             crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             )
         };
         assert!(!ok, "Infinite loop should fail due to fuel exhaustion");
@@ -1712,6 +1819,7 @@ mod tests {
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
             crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             )
         };
         assert!(!ok, "Should fail without initialize");
@@ -1737,6 +1845,7 @@ mod tests {
                     &[0.0; PARAM_COUNT],
                     &TransportState::default(),
                 crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
                 )
             };
             assert!(ok);
@@ -1768,6 +1877,7 @@ mod tests {
                     &[0.0; PARAM_COUNT],
                     &TransportState::default(),
                 crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
                 )
             };
             assert!(ok, "Callback {} should succeed", i);
@@ -1909,6 +2019,7 @@ mod tests {
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
             crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             )
         };
         assert!(ok, "WASI module should process audio");
@@ -1934,6 +2045,7 @@ mod tests {
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
             crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             )
         };
         assert!(ok, "Module calling environ_sizes_get should work");
@@ -1995,6 +2107,7 @@ mod tests {
                 &[0.0; PARAM_COUNT],
                 &TransportState::default(),
             crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             )
         };
         assert!(ok, "Module with buffer getters should process audio");
@@ -2176,7 +2289,7 @@ mod tests {
         let params = [0.0_f32; PARAM_COUNT];
         let transport = crate::kernel::TransportState::default();
         unsafe {
-            backend.process(&inputs, &outputs, 1, 256, 48000.0, &params, &transport, crate::backend::SidechainInput::NONE);
+            backend.process(&inputs, &outputs, 1, 256, 48000.0, &params, &transport, crate::backend::SidechainInput::NONE, &crate::backend::StateSnapshot::empty());
         }
 
         let mut tele = [0.0_f32; crate::params::TELEMETRY_LEN];
@@ -2253,6 +2366,7 @@ mod tests {
                 &[input.as_ptr()],
                 &[output.as_mut_ptr()],
                 1, 4, 44100.0, &params, &transport, crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             );
         }
         assert_eq!(backend.memory_bytes(), 65536 * 2, "should grow by 1 page after process");
@@ -2262,6 +2376,7 @@ mod tests {
                 &[input.as_ptr()],
                 &[output.as_mut_ptr()],
                 1, 4, 44100.0, &params, &transport, crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             );
         }
         assert_eq!(backend.memory_bytes(), 65536 * 3, "should grow by another page");
@@ -2372,6 +2487,7 @@ fn main() {}
             backend.process(
                 &[input.as_ptr()], &[output.as_mut_ptr()],
                 1, n, 48000.0, &params, &transport, crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             )
         };
         assert!(ok, "Process should succeed");
@@ -2516,6 +2632,7 @@ fn main() {}
             backend.process(
                 &[input.as_ptr()], &[output.as_mut_ptr()],
                 1, n, 48000.0, &params, &transport, crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             )
         };
         assert!(ok, "Process should succeed");
@@ -2567,6 +2684,7 @@ fn main() {}
             backend2.process(
                 &[input.as_ptr()], &[output2.as_mut_ptr()],
                 1, n, 48000.0, &params, &transport, crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
             )
         };
         assert!(ok2, "Process should succeed even with empty slot");

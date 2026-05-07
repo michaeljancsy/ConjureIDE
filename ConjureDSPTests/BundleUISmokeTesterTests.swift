@@ -46,7 +46,7 @@ struct BundleUISmokeTesterTests {
         manifest: String,
         uiHTML: String,
         entryScriptName: String = "process.py",
-        entryScriptBody: String = "def process(i,o,f,s,p): pass\n"
+        entryScriptBody: String = "def process(ctx): pass\n"
     ) throws -> (PresetBundle, URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("SmokeTest_\(UUID().uuidString).cdp", isDirectory: true)

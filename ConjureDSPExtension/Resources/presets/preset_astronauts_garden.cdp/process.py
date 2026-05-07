@@ -56,43 +56,43 @@ class _S:
         self.comb_fb = [[0.0 for _ in range(4)] for _ in range(nch)]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    bloom = params["bloom"] / 100.0
-    drift = params["drift"] / 100.0
-    chorus = params["chorus"] / 100.0
-    garden = params["garden"] / 100.0
-    mx = params["mix"]
+    bloom = ctx.params["bloom"] / 100.0
+    drift = ctx.params["drift"] / 100.0
+    chorus = ctx.params["chorus"] / 100.0
+    garden = ctx.params["garden"] / 100.0
+    mx = ctx.params["mix"]
 
     modal_q = 10.0 + 20.0 * bloom
     modal_c = []
     for k in range(8):
         f = FUNDAMENTAL * HARMONICS[k]
-        if f > sample_rate * 0.45:
-            f = sample_rate * 0.45
-        modal_c.append(BiquadCoeffs.bandpass(f, modal_q, sample_rate))
-    comb_lpc = BiquadCoeffs.lowpass(3500.0, 0.707, sample_rate)
+        if f > ctx.sample_rate * 0.45:
+            f = ctx.sample_rate * 0.45
+        modal_c.append(BiquadCoeffs.bandpass(f, modal_q, ctx.sample_rate))
+    comb_lpc = BiquadCoeffs.lowpass(3500.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         for k in range(8):
             s.modal[ch][k].set_coeffs(modal_c[k])
         for k in range(4):
             s.comb_lp[ch][k].set_coeffs(comb_lpc)
 
-    chorus_base = [CHORUS_MS[k] * 0.001 * sample_rate for k in range(4)]
-    chorus_depth = (1.5 + 4.5 * chorus) * 0.001 * sample_rate
-    comb_d = [COMB_MS[k] * 0.001 * sample_rate for k in range(4)]
+    chorus_base = [CHORUS_MS[k] * 0.001 * ctx.sample_rate for k in range(4)]
+    chorus_depth = (1.5 + 4.5 * chorus) * 0.001 * ctx.sample_rate
+    comb_d = [COMB_MS[k] * 0.001 * ctx.sample_rate for k in range(4)]
     comb_fb_amt = 0.55 + 0.30 * garden
 
     modal_gain = 1.0 / 8.0
     ring_depth = 0.5 + 0.5 * drift  # depth of carrier amplitude
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # Sub-Hz LFOs (ring carriers — both shared across channels)
         r0 = s.ring_lfo[0].tick()
         r1 = s.ring_lfo[1].tick()
@@ -107,7 +107,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         carrier = (1.0 - ring_depth) + ring_depth * 0.5 * (r0 + r1)
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: 8-partial just-intonation modal bank
             modal_sum = 0.0
@@ -138,4 +138,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             tail_sum = tail_sum * 0.25
 
             wet = chorus_sum + tail_sum
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx
