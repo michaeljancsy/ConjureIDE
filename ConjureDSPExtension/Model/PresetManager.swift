@@ -711,25 +711,21 @@ class PresetManager: ObservableObject {
         let manifestURL = bundle.rootURL.appendingPathComponent(PresetManifest.filename)
         let updatedManifest: PresetManifest = {
             if bundle.manifest.ui != nil { return bundle.manifest }
-            // IMPORTANT: pass `params` through. The memberwise init
-            // defaults optional fields to nil when omitted, so forgetting
-            // this here silently drops manifest-v2 param declarations
-            // and the bundle reverts to the v1 DSP-extraction path on
-            // the next load.
-            return PresetManifest(
-                schemaVersion: bundle.manifest.schemaVersion,
-                entry: bundle.manifest.entry,
-                language: bundle.manifest.language,
-                ui: PresetManifest.UI(
-                    entryHTML: "ui/index.html",
-                    width: 520,
-                    height: 260,
-                    fps: 30,
-                    audioFrames: false
-                ),
-                params: bundle.manifest.params,
-                meta: bundle.manifest.meta
+            // Mutate a copy instead of rebuilding via the memberwise
+            // init. The latter defaults any unmentioned optional field
+            // to nil, so adding a new property to PresetManifest (e.g.,
+            // `paramsNote`, `telemetry`) and forgetting to thread it
+            // through here silently drops it on every "+ Add Custom UI"
+            // — exactly what bit `paramsNote` when it landed.
+            var updated = bundle.manifest
+            updated.ui = PresetManifest.UI(
+                entryHTML: "ui/index.html",
+                width: 520,
+                height: 260,
+                fps: 30,
+                audioFrames: false
             )
+            return updated
         }()
         try updatedManifest.jsonData().write(to: manifestURL)
 

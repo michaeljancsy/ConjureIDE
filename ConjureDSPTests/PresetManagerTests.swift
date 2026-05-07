@@ -782,6 +782,63 @@ struct PresetManagerTests {
         #expect(after == preExisting, "Scaffold should not clobber a pre-existing index.html")
     }
 
+    /// Pinned regression: scaffoldCustomUI must preserve every manifest
+    /// field, not just `params` / `meta`. Sentry Seer flagged the original
+    /// implementation for silently dropping `paramsNote` (and would have
+    /// dropped any other Optional-defaulted property added later — same
+    /// trap with `telemetry`). Switching the inner builder from a
+    /// memberwise init to `var updated = bundle.manifest; updated.ui =
+    /// ...` makes that class of bug structurally impossible.
+    @Test @MainActor func scaffoldCustomUIPreservesAllManifestFields() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "AllFields", source: "pass\n")
+        var bundle = try #require(manager.loadBundle(for: preset))
+
+        // Pre-populate every Optional field we care about — these are
+        // the ones a memberwise-init rebuild would silently lose.
+        let cutoff = PresetManifest.ParamDecl(
+            name: "Cutoff", key: nil, min: 20, max: 20000, default: 1000,
+            unit: "Hz", curve: "log", style: nil, options: nil
+        )
+        _ = try manager.syncManifestParamsFromKernel(
+            for: bundle, params: [cutoff]
+        )
+        bundle = try #require(manager.loadBundle(for: preset))
+
+        // Hand-add `meta` and `telemetry` blocks on disk via JSON-tree
+        // mutation so we don't depend on PresetManager APIs for either.
+        let manifestURL = bundle.rootURL
+            .appendingPathComponent(PresetManifest.filename)
+        var raw = try #require(
+            (try? JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)))
+                as? [String: Any]
+        )
+        raw["meta"] = ["author": "test", "description": "regression"]
+        raw["telemetry"] = [["name": "level", "shape": "scalar", "unit": "dB"]]
+        try JSONSerialization.data(
+            withJSONObject: raw, options: [.prettyPrinted, .sortedKeys]
+        ).write(to: manifestURL)
+        bundle = try #require(manager.loadBundle(for: preset))
+
+        // Sanity-check the precondition before scaffolding.
+        #expect(bundle.manifest.params?.count == 1)
+        #expect(bundle.manifest.paramsNote != nil)
+        #expect(bundle.manifest.meta?.author == "test")
+        #expect(bundle.manifest.telemetry?.count == 1)
+        #expect(bundle.manifest.ui == nil, "Precondition: no UI block yet")
+
+        _ = try manager.scaffoldCustomUI(for: bundle)
+
+        let after = try #require(manager.loadBundle(for: preset))
+        #expect(after.manifest.ui != nil, "Scaffold should have added the ui block")
+        #expect(after.manifest.params?.count == 1, "params must survive")
+        #expect(after.manifest.paramsNote != nil, "paramsNote must survive — Sentry Seer regression")
+        #expect(after.manifest.meta?.author == "test", "meta must survive")
+        #expect(after.manifest.telemetry?.count == 1, "telemetry must survive")
+    }
+
     // MARK: - External file watcher
 
     /// Regression guard for the "Reload UI" toolbar button never appearing
