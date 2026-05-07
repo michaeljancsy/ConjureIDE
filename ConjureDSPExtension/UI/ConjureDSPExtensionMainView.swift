@@ -813,15 +813,25 @@ struct ConjureDSPExtensionMainView: View {
             scriptSource = change.source
             lastRunSource = change.source
             selectedLanguage = ScriptLanguage.detect(from: change.source)
+            // Only MCP-driven source changes clear the error here, because the
+            // MCP compile_and_run success path doesn't go through `handleResult`
+            // (it's a JSON-RPC handler, not a SwiftUI callback). Every other
+            // source change either:
+            //   - Goes through `handleResult` (Run, in-plugin browser, Save) —
+            //     which clears errors on success and sets them on failure.
+            //   - Fires `scriptSourceDidChange` BEFORE the compile result is
+            //     known (e.g. `selectPreset` so the editor shows the new
+            //     source immediately). For that case, clearing errors here
+            //     races with `handleResult` because the sink is dispatched
+            //     async on main and lands AFTER the Task continuation that
+            //     ran `handleResult` — the user would see the red error flash
+            //     for one frame and then disappear.
             if change.origin == .mcp {
                 mcpFlashToken = UUID()
+                errorMessage = nil
+                errorDetails = nil
+                editorMarkers = []
             }
-            // Clear error — this fires after successful compile (preset select, AI fix, fullState restore).
-            // warningMessage is NOT cleared here: handleResult manages it, and clearing here
-            // would race with handleResult during preset selection, making warnings invisible.
-            errorMessage = nil
-            errorDetails = nil
-            editorMarkers = []
             if let processTimeMs = change.processTimeMs, let budgetMs = change.budgetMs {
                 lastBenchmark = (processTimeMs, budgetMs)
             }
