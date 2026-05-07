@@ -1398,9 +1398,9 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	private func loadPassthroughScript() {
 		guard let pythonHome = self.pythonHome else { return }
 		let passthrough = """
-		def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-		    for ch in range(len(inputs)):
-		        outputs[ch][:frame_count] = inputs[ch][:frame_count]
+		def process(ctx):
+		    for ch_in, ch_out in zip(ctx.inputs, ctx.outputs):
+		        ch_out[:ctx.frame_count] = ch_in[:ctx.frame_count]
 		"""
 		let tempDir = FileManager.default.temporaryDirectory
 		let tempFile = tempDir.appendingPathComponent("passthrough_\(UUID().uuidString).py")

@@ -13,6 +13,6 @@
     "audioFrames": true
   },
   "meta": {
-    "description": "Python twin of preset_telemetry_smoke.cdp \u2014 same DSP, same UI, exercises the Python TELEMETRY dict + 7-arg process() dispatch path."
+    "description": "Python twin of preset_telemetry_smoke.cdp \u2014 same DSP, same UI, exercises the Python TELEMETRY dict via ctx.telemetry."
   }
 }

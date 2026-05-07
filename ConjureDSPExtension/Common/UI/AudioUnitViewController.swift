@@ -55,32 +55,29 @@ PARAMS = {
 }
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     \"""
     Process audio buffers.
 
     Called once per audio render callback with pre-allocated numpy arrays.
-    Write your processed audio into outputs[ch][:frame_count].
+    Write your processed audio into ctx.outputs[ch][:ctx.frame_count].
 
-    Always declare all 7 args, even if you don't use transport or
-    telemetry — this matches the canonical ConjureDSP convention. Drop
-    the underscore from `_transport` / `_telemetry` when you start using
-    them.
-
-    Args:
-        inputs:      list of numpy.float32 arrays, one per channel
-        outputs:     list of numpy.float32 arrays, one per channel
-        frame_count: number of valid samples this callback
-        sample_rate: current sample rate in Hz (e.g. 44100.0)
-        params:      dict of actual parameter values keyed by PARAMS name
-        _transport:  dict with tempo/beat/playing/time_sig_num/time_sig_den/sample_pos
-        _telemetry:  dict — write per-block readouts the UI can show
+    `ctx` exposes:
+        ctx.inputs       list of numpy.float32 arrays, one per channel
+        ctx.outputs      list of numpy.float32 arrays, one per channel
+        ctx.frame_count  number of valid samples this callback
+        ctx.sample_rate  current sample rate in Hz (e.g. 44100.0)
+        ctx.params       dict of actual parameter values keyed by PARAMS name
+        ctx.transport    read-only mapping (bpm, beat, is_playing, ...)
+        ctx.telemetry    write per-block scalar readouts the UI can show
+        ctx.state        read-only mapping over the bundle's STATE channel
+        ctx.sidechain    sidechain input arrays (when a sidechain bus is connected)
     \"""
-    gain_db = params["gain"]
+    gain_db = ctx.params["gain"]
     gain = 10.0 ** (gain_db / 20.0)
 
-    for ch in range(len(inputs)):
-        np.multiply(inputs[ch][:frame_count], gain, out=outputs[ch][:frame_count])
+    for ch_in, ch_out in zip(ctx.inputs, ctx.outputs):
+        np.multiply(ch_in[:ctx.frame_count], gain, out=ch_out[:ctx.frame_count])
 """
 
     static let newRustTemplate = """

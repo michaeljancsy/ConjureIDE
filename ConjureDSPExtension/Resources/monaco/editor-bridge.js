@@ -450,20 +450,23 @@ const bridge = {
                     // ── ConjureDSP API ──
                     sug('process', Kind.Function,
                         [
-                            'def process(inputs, outputs, frame_count, sample_rate, params):',
+                            'def process(ctx):',
                             '\t"""',
                             '\t${1:Description}',
                             '\t"""',
-                            '\tfor ch in range(len(inputs)):',
-                            '\t\tfor i in range(frame_count):',
-                            '\t\t\toutputs[ch][i] = inputs[ch][i]${0}',
+                            '\tfor ch_in, ch_out in zip(ctx.inputs, ctx.outputs):',
+                            '\t\tch_out[:ctx.frame_count] = ch_in[:ctx.frame_count]${0}',
                         ].join('\n'),
                         'ConjureDSP DSP process function. Called each render callback.\n\n' +
-                        'Args:\n  inputs: list of numpy float32 arrays (one per channel)\n' +
-                        '  outputs: list of numpy float32 arrays (one per channel)\n' +
-                        '  frame_count: number of samples to process\n' +
-                        '  sample_rate: audio sample rate in Hz\n' +
-                        '  params: dict of parameter values (if PARAMS defined) or list of 0-1 floats',
+                        '`ctx` exposes:\n' +
+                        '  ctx.inputs / ctx.outputs: list of numpy float32 arrays (per channel)\n' +
+                        '  ctx.frame_count: valid samples this callback\n' +
+                        '  ctx.sample_rate: Hz\n' +
+                        '  ctx.params: dict keyed by PARAMS name (or 0-1 floats if no PARAMS)\n' +
+                        '  ctx.transport: read-only (bpm, beat, is_playing, ...)\n' +
+                        '  ctx.telemetry: write per-block scalar readouts\n' +
+                        '  ctx.state: read-only mapping over the bundle STATE channel\n' +
+                        '  ctx.sidechain: sidechain input arrays',
                         true),
 
                     sug('PARAMS', Kind.Variable,
@@ -488,7 +491,7 @@ const bridge = {
                             '_${1:state} = ${2:0.0}',
                             '',
                             '',
-                            'def process(inputs, outputs, frame_count, sample_rate, params):',
+                            'def process(ctx):',
                             '\tglobal _${1:state}',
                             '\t${0}',
                         ].join('\n'),

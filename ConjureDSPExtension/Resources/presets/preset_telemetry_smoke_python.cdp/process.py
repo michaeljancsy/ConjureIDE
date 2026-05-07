@@ -9,10 +9,9 @@
 #                 state that the existing audio.onFrame fields can't
 #                 reach — the whole point of the telemetry channel.
 #
-# The 7-arg process() signature is what triggers the kernel's
-# telemetry-aware dispatch path. Authors who want telemetry but not
-# transport accept transport as an unused arg, same way the existing
-# levels work.
+# Telemetry flows through ctx.telemetry — the Python backend always
+# exposes it via the single-ctx process() API, so authors who want
+# telemetry but not transport just ignore ctx.transport.
 
 import numpy as np
 
