@@ -28,19 +28,34 @@ struct PresetManifest: Codable, Equatable {
     /// of `ParameterSlidersView`.
     var ui: UI?
 
-    /// Parameter declarations. When present, this is the authoritative
-    /// source of metadata: the AU parameter tree, stock sliders, and the
-    /// custom-UI JS bridge's `_init` all build from these BEFORE the DSP
-    /// script is compiled or loaded. That lets custom UIs render
-    /// immediately instead of waiting on rustc for a Rust preset, and
-    /// eliminates the "first `_init` has stale previous-preset metadata"
-    /// race that we otherwise paper over with UI-side loader hacks.
+    /// Parameter declarations. Cache of the kernel-extracted metadata,
+    /// refreshed on every save and on drift detection at load. Lets the
+    /// AU parameter tree, stock sliders, and the custom-UI JS bridge's
+    /// `_init` all build from these BEFORE the DSP script is compiled or
+    /// loaded — custom UIs render immediately instead of waiting on
+    /// rustc for a Rust preset, and the "first `_init` has stale
+    /// previous-preset metadata" race that we otherwise paper over with
+    /// UI-side loader hacks goes away.
     ///
-    /// A post-DSP-load validator warns when the DSP's own param
-    /// declarations drift from this list. Manifests without `params` keep
-    /// the v1 behavior (metadata sourced from DSP extraction); the loader
-    /// hacks above still apply in that path.
+    /// Authority lives in the script (`PARAMS` / `params!()`); this
+    /// block is overwritten on every successful save and whenever a load
+    /// detects drift between the manifest and the kernel. Hand-edits
+    /// here will be lost on the next save — `_paramsNote` documents
+    /// that contract in the file itself.
+    ///
+    /// Manifests without `params` keep the v1 behavior (metadata sourced
+    /// from DSP extraction); the loader hacks above still apply in that
+    /// path.
     var params: [ParamDecl]?
+
+    /// Sibling note that appears alphabetically just above `params` in
+    /// the pretty-printed JSON. Set to a fixed warning string by
+    /// `PresetManager.syncManifestParamsFromKernel` on every non-empty
+    /// write; cleared along with `params` on empty input. Underscore
+    /// prefix marks it as machine-managed (JSON has no comment syntax).
+    /// Default `nil` so existing memberwise-init call sites compile
+    /// without passing it.
+    var paramsNote: String? = nil
 
     /// Parameter declaration — mirrors
     /// `ConjureDSPExtensionAudioUnit.ParamMetadata` intentionally. The
@@ -94,6 +109,23 @@ struct PresetManifest: Codable, Equatable {
 
     /// Optional free-form author metadata.
     var meta: Meta?
+
+    /// Map `paramsNote` to the on-disk key `_paramsNote`. The underscore
+    /// is illegal in a Swift property name but is the conventional way to
+    /// flag a machine-managed sibling field in JSON (closest equivalent
+    /// to a comment). Listing every property is required when overriding
+    /// CodingKeys — synthesized `Codable` won't fall back to defaults
+    /// for unlisted fields.
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case entry
+        case language
+        case ui
+        case params
+        case paramsNote = "_paramsNote"
+        case telemetry
+        case meta
+    }
 
     struct UI: Codable, Equatable {
         /// Relative path (from the bundle root) to the HTML entry point.

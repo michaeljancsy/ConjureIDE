@@ -147,6 +147,7 @@ pub extern "C" fn process(
     private var paramNamesCancellable: AnyCancellable?
     private var paramMetadataCancellable: AnyCancellable?
     private var renderResourcesCancellable: AnyCancellable?
+    private var manifestDriftCancellable: AnyCancellable?
     private var runtimePollTimer: Timer?
 
     /// App Group container URL — uses direct path construction to avoid
@@ -403,6 +404,38 @@ pub extern "C" fn process(
         }
         let gc = gitCoordinator!
         Task { await gc.initIfNeeded() }
+
+        // Subscribe to the AU's auto-sync signal: when a load detects
+        // drift between `manifest.params` and the kernel's freshly-
+        // extracted metadata, the AU rewrites the manifest on disk and
+        // emits the bundle root URL here. We route that through
+        // `gc.recordSave` so the auto-rewrite shows up in the preset
+        // repo's git log alongside every other preset mutation.
+        //
+        // `.receive(on: DispatchQueue.main)` pushes the sink to the
+        // back of the run loop's queue. That matters in the save flow
+        // path: `reloadScript(persistManifest: true)` emits this
+        // Publisher synchronously, and the save closure then
+        // immediately enqueues its OWN `gc.recordSave(message: "Update
+        // <name>")`. With async delivery, the save's commit task
+        // arrives at `gc` first, captures BOTH the source diff and
+        // the manifest sync diff in one commit with the user's chosen
+        // message, and the sync's commit becomes a no-op (nothing
+        // left in the working tree). On non-save paths (e.g.
+        // `selectPreset` against a stale bundle), no save is in
+        // flight, so the sync's commit fires and captures the
+        // manifest rewrite by itself.
+        manifestDriftCancellable = au.manifestDriftCorrected
+            .receive(on: DispatchQueue.main)
+            .sink { [weak gc] bundleURL in
+                guard let gc else { return }
+                Task { @MainActor in
+                    _ = await gc.recordSave(
+                        paths: [bundleURL],
+                        message: "Sync manifest.params from kernel"
+                    )
+                }
+            }
         lm.verifyTokenWithKernel = { [weak au] token in
             au?.verifyToken(token) ?? SubscriptionStatus.noSubscription.rawValue
         }
@@ -431,7 +464,13 @@ pub extern "C" fn process(
             // old backend's continuous DSP state.
             au.beginPresetTransition()
             defer { au.endPresetTransition() }
-            let result = await au.compileAndRun(source: source)
+            // `persistManifest: true` is the Rust save path's lifeline:
+            // the synchronous Rust save closure can't fire the sync
+            // (no kernel compile happens there), so the next Run is
+            // where the compile + sync chain completes. Python iterates
+            // through the same path and gets the same auto-correction
+            // when the editor's params drift from disk.
+            let result = await au.compileAndRun(source: source, persistManifest: true)
             Analytics.track(.scriptRun, properties: [
                 "language": ScriptLanguage.detect(from: source).rawValue,
                 "success": result.success,
@@ -492,11 +531,21 @@ pub extern "C" fn process(
                 case .python:
                     au.beginPresetTransition()
                     defer { au.endPresetTransition() }
-                    let result = au.reloadScript(source: source)
+                    // `persistManifest: true` so the manifest's
+                    // `params` block stays in sync with the saved
+                    // source. The Publisher → AVC sink → recordSave
+                    // path coordinates with `doCommit` below; see the
+                    // `manifestDriftCancellable` doc comment for why
+                    // both can fire without producing two commits.
+                    let result = au.reloadScript(source: source, persistManifest: true)
                     pm.setCurrentPreset(saved, source: source)
                     doCommit(result.success)
                     return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
                 case .rust:
+                    // No reloadScript here — Rust compile is async and
+                    // happens when the user clicks Run. The eventual
+                    // `compileAndRun(persistManifest: true)` call from
+                    // `onRun` is what propagates the manifest sync.
                     au.currentScriptLanguage = .rust
                     pm.setCurrentPreset(saved, source: source)
                     doCommit(true)
@@ -543,11 +592,17 @@ pub extern "C" fn process(
                 case .python:
                     au.beginPresetTransition()
                     defer { au.endPresetTransition() }
-                    let result = au.reloadScript(source: source)
+                    // Same `persistManifest: true` rationale as the
+                    // `onSavePreset` Python branch.
+                    let result = au.reloadScript(source: source, persistManifest: true)
                     pm.setCurrentPreset(saved, source: source)
                     doCommit(result.success)
                     return ScriptSaveResult(success: result.success, error: result.error, processTimeMs: result.processTimeMs, budgetMs: result.budgetMs)
                 case .rust:
+                    // Save-As of a Rust preset: same as `onSavePreset` —
+                    // no synchronous compile here, the manifest sync
+                    // happens on the next Run via `compileAndRun`'s
+                    // persistManifest plumbing.
                     au.currentScriptLanguage = .rust
                     pm.setCurrentPreset(saved, source: source)
                     doCommit(true)
@@ -673,7 +728,13 @@ pub extern "C" fn process(
 
                 switch language {
                 case .python:
-                    let result = au.reloadScript(source: source)
+                    // `persistManifest: true` so the New-Preset
+                    // template's `PARAMS` lands in the manifest's
+                    // `params` block on first save — the bundle starts
+                    // life with metadata authors can immediately bind
+                    // `<cdp-slider param="…">` against without an
+                    // intermediate Run.
+                    let result = au.reloadScript(source: source, persistManifest: true)
                     pm.setCurrentPreset(saved, source: source)
                     // Propagate the new source to the Monaco editor.
                     // Without this, the editor stays on the previous
