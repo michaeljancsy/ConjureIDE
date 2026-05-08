@@ -1316,12 +1316,87 @@ enum DSPDocumentation {
     whenever you tweak the script. 16 slots max per script (scalar +
     vector combined). Zero overhead for presets that don't declare any.
 
-    ## Vector telemetry (per-frame visualizers)
+    ## Vector telemetry (array visualizers)
 
     Scalar slots emit one value per block — fine for meters that show
-    "how much" but useless for an oscilloscope or waveform display
-    that needs the *shape* of the signal. Declare a `vector_telemetry`
-    slot to publish one float per audio frame in the current block:
+    "how much" but useless when the UI needs an array per block (one
+    value per comb-filter tap, per grain in a pool, per audio frame
+    for a scope). Declare a `vector_telemetry` slot and the host
+    publishes a JS Array on every `audio.onFrame` tick.
+
+    **Length contract.** Each slot is a fixed buffer of capacity
+    `MAX_FRAMES` (4096). The host reads exactly `frame_count` floats
+    from the slot per block — that's also the JS Array length the UI
+    receives. Indices past what your script wrote are stale (initially
+    zero, then whatever the previous block left there). Plan for that
+    on the read side: write your N values into the first N indices and
+    have the UI consume only those.
+
+    **Common pattern: fixed-length control vector.** Publish N floats
+    per block — one per "channel" of whatever you're visualizing (e.g.
+    one per comb-filter tap, one per grain in a pool). The UI reads
+    `frame.telemetry["BAR_ENERGY"]` and takes the first N elements.
+
+    Rust:
+
+    ```rust
+    use conjuredsp::*;
+    setup!();
+    const TAPS: usize = 6;
+    telemetry! {
+        BAR_ENERGY = vector_telemetry(),
+    }
+    // inside process(): write one energy value per tap.
+    let mut bars = [0.0f32; TAPS];
+    for t in 0..TAPS { bars[t] = comb[t].rms(); }
+    ctx.set_telemetry_vector(BAR_ENERGY, &bars);
+    ```
+
+    Python:
+
+    ```python
+    TAPS = 6
+    TELEMETRY = {"BAR_ENERGY": {"shape": "vector"}}
+    def process(ctx):
+        # Slice-assign into the pre-seeded numpy array — don't replace it.
+        for t in range(TAPS):
+            ctx.telemetry["BAR_ENERGY"][t] = comb[t].rms()
+    ```
+
+    UI consumer — `<cdp-scope length="6">` truncates rendering to the
+    first six samples, so the stale tail never paints:
+
+    ```html
+    <cdp-scope telemetry="BAR_ENERGY" length="6" min="0" max="1"></cdp-scope>
+    ```
+
+    Or hand-rolled, slicing the first N off the JS Array:
+
+    ```js
+    ConjureDSP.audio.onFrame(frame => {
+        if (!frame.telemetry) return;
+        const bars = frame.telemetry["BAR_ENERGY"];
+        if (!Array.isArray(bars)) return;        // legacy/scalar
+        const visible = bars.slice(0, 6);        // ignore stale tail
+        // draw six bars from `visible`…
+    });
+    ```
+
+    **Slot name casing.** `frame.telemetry["…"]` in raw JS is an exact
+    object-property lookup — `frame.telemetry["BAR_ENERGY"]` and
+    `frame.telemetry["bar_energy"]` are different keys, and only the one
+    your script actually published resolves. Match casing on both sides,
+    or use the `??` fallback shown under "Telemetry slots" above. The
+    `<cdp-scope telemetry="…">` (and `<cdp-bargraph>`) attribute is the
+    one exception: the component runs the same case/underscore/space-
+    insensitive resolver as `param=`, so a single UI binds to both a
+    Rust `BAR_ENERGY` slot and a Python `bar_energy` slot.
+
+    **Audio-rate pattern: per-sample vector.** When the UI needs the
+    *shape* of the signal (oscilloscope, waveform display), publish
+    `frame_count` values — one per audio frame in the current block.
+    No truncation needed on the read side; the JS Array length already
+    matches what you wrote.
 
     Rust:
 
@@ -1351,37 +1426,17 @@ enum DSPDocumentation {
         ctx.telemetry["scope"][:ctx.frame_count] = ctx.outputs[0][:ctx.frame_count]
     ```
 
-    The pre-seeded numpy array lives in the dict — slice-assign into
-    it, don't replace it. Length must equal `frame_count`; longer
-    slices are truncated to `MAX_FRAMES` (4096), shorter slices leave
-    stale data past the live tail (the host caps the read to the
-    actual published length).
-
-    UI consumer — the ergonomic path is `<cdp-scope>`, which subscribes
-    to `audio.onFrame`, decimates long vectors to one min+max pair per
-    pixel column, and auto-ranges the y-axis for you:
+    `<cdp-scope>` decimates long vectors to one min+max pair per pixel
+    column and auto-ranges the y-axis:
 
     ```html
     <cdp-scope telemetry="scope" min="-1" max="1" grid></cdp-scope>
     ```
 
-    Hand-rolled `<canvas>` is the escape hatch when `<cdp-scope>` doesn't
-    cover your visualization (e.g. dual-trace overlay, frequency-domain
-    plot, custom annotations). `frame.telemetry["scope"]` is a JS Array,
-    not a number:
-
-    ```js
-    ConjureDSP.audio.onFrame(frame => {
-        if (!frame.telemetry) return;
-        const scope = frame.telemetry["scope"];   // [-0.3, 0.4, …]
-        if (!Array.isArray(scope)) return;        // legacy/scalar
-        // draw onto a <canvas>: one pixel column per sample, etc.
-    });
-    ```
-
-    Same `audioFrames: true` manifest gate. Same 16-slot budget. Pick
-    vector only when you need waveform shape — for a meter, a scalar
-    slot is one float instead of `frame_count` floats per block.
+    Same `audioFrames: true` manifest gate. Same 16-slot budget (scalar
+    + vector combined). Pick vector only when the UI actually needs
+    multiple values per block — a single-value meter is a scalar slot,
+    one float instead of `frame_count` floats per block.
 
     **Optional `manifest.telemetry` block for static lint.** If you
     want `validate_bundle` to catch typos in `<cdp-scope telemetry="…">`
