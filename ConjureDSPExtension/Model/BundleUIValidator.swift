@@ -1169,6 +1169,13 @@ enum BundleUIValidator {
     /// heuristic and the runtime smoke test catches this anyway when the
     /// kernel rejects on apply, so leaving as a follow-up.
     private static func checkStateReferences(html: String, bundle: PresetBundle) -> [Issue] {
+        // Rust scripts use a dynamic raw-bytes STATE channel — there are
+        // no statically-declared keys for the validator to compare UI
+        // references against. Skip the lint entirely.
+        if bundle.entryScriptURL.pathExtension.lowercased() == "rs" {
+            return []
+        }
+
         // Pull every literal-key `state.<api>('KEY', ...)` reference out
         // of the UI HTML / inline JS. Multi-quote-style support so we
         // pick up both single- and double-quoted, plus backticks (people
@@ -1333,7 +1340,7 @@ enum BundleUIValidator {
 
     private static func parseRustStateKeys(source: String) -> [String]? {
         _ = source
-        return nil
+        return []
     }
 
     /// Every `<cdp-scope telemetry="X">` reference must resolve to a slot

@@ -1403,4 +1403,64 @@ struct BundleUIValidatorTests {
         #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
                 "all referenced keys are declared and must resolve; issues: \(report.issues)")
     }
+
+    /// Rust scripts use a dynamic raw-bytes STATE channel — there are no
+    /// statically-declared keys for the validator to compare UI
+    /// references against. The validator must not emit
+    /// `state_keys_unparseable` (false-positive warn) or
+    /// `state_key_referenced_in_ui` (false-positive fail) for any UI
+    /// `ConjureDSP.state.*` reference paired with a `state!()` Rust
+    /// script.
+    @Test func rustStateMacroSkipsLint() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.rs",
+          "language": "rust",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 400,
+            "height": 240,
+            "fps": 30,
+            "audioFrames": false
+          }
+        }
+        """
+        let scriptBody = """
+        use conjuredsp::*;
+        setup!();
+        params! { CUTOFF = freq() }
+        state!();
+
+        #[no_mangle]
+        pub extern "C" fn process(frame_count: u32, sample_rate: f32) {
+            let _cx = ctx(frame_count, sample_rate);
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          ConjureDSP.ready(() => {
+            const v = ConjureDSP.state.get('whatever_key');
+            ConjureDSP.state.set('whatever_key', v);
+          });
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: manifest,
+            uiHTML: ui,
+            entryScriptName: "process.rs",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "state_keys_unparseable" },
+                "Rust scripts must not trigger state_keys_unparseable; issues: \(report.issues)")
+        #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
+                "Rust scripts use a dynamic byte API; UI state.* references must not be flagged; issues: \(report.issues)")
+    }
 }
