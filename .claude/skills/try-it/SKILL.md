@@ -159,6 +159,56 @@ Flag rationale:
 
 Don't set a timeout on the Bash call shorter than ~10 min — the subagent does real work (Rust compile takes a few seconds, smoke_test_ui can take a few seconds, multi-step iterations add up). 600000 ms is fine.
 
+### Multi-harness sweeps (codex / gemini)
+
+The default dispatch above is `claude -p`. When the user asks for a multi-harness comparison sweep (e.g. "5 prompts × 3 providers"), use these CLIs for the other two harnesses. **All three must run sequentially** — the AU's MCP server is single-tenant and `compile_and_run` mutates global kernel state, so concurrent harnesses clobber each other.
+
+**Codex** — MCP URL passes inline via `-c`, so no global config writes. Always pipe `< /dev/null` to stdin or codex hangs waiting for additional input even when a prompt is provided as an argument.
+
+```bash
+( cd "$WORKSPACE" && codex exec \
+    --skip-git-repo-check \
+    --dangerously-bypass-approvals-and-sandbox \
+    --json \
+    -c "mcp_servers.conjuredsp.url=\"http://localhost:$MCP_PORT/mcp\"" \
+    "$SUBAGENT_PROMPT" \
+  < /dev/null ) > "$LOG" 2>&1
+```
+
+Codex emits `{"type":"turn.completed", "usage":{...}}` and `{"type":"item.completed", "item":{"type":"agent_message", "text":...}}` events. The CLI does **not** report a per-run USD cost — capture `usage.input_tokens` / `usage.output_tokens` instead and leave `cost_usd: n/a` in the summary frontmatter.
+
+**Gemini** — has two pitfalls.
+
+1. **MCP URL is read from a persistent global config** (`gemini mcp add` writes `~/.gemini/settings.json`), not a per-call flag. If the AU was rebuilt since the config was last set, the URL is stale and the agent silently sees zero MCP tools — it'll then fall back to shell-curl probes or just give up. **Always refresh immediately before every gemini invocation:**
+
+   ```bash
+   gemini mcp remove conjuredsp 2>/dev/null
+   gemini mcp add --transport http conjuredsp "http://localhost:$MCP_PORT/mcp"
+   ```
+
+2. **`gemini-2.5-pro` daily quota is tight** — ~2–3 multi-iteration preset-authoring runs and you hit `code: 429, "exhausted your capacity on this model"` with a 12+ hour reset. Detect this in the `result` event (`status:"error"` and `error.message` contains `exhausted`) and **automatically retry the same prompt with `-m gemini-2.5-flash`**. Flash's quota is much more generous and it's still capable enough for most preset tasks.
+
+   Pseudocode for the gemini branch:
+
+   ```bash
+   gemini mcp remove conjuredsp 2>/dev/null
+   gemini mcp add --transport http conjuredsp "http://localhost:$MCP_PORT/mcp"
+   MODEL_USED="gemini-2.5-pro"
+   ( cd "$WORKSPACE" && gemini --yolo -m "$MODEL_USED" \
+       --output-format stream-json -p "$SUBAGENT_PROMPT" < /dev/null ) > "$LOG" 2>&1
+   if grep -q '"reason":"QUOTA_EXHAUSTED"\|exhausted your capacity' "$LOG"; then
+     MODEL_USED="gemini-2.5-pro→gemini-2.5-flash (quota fallback)"
+     ( cd "$WORKSPACE" && gemini --yolo -m gemini-2.5-flash \
+         --output-format stream-json -p "$SUBAGENT_PROMPT" < /dev/null ) > "$LOG" 2>&1
+   fi
+   ```
+
+   **Always pipe `< /dev/null`** — same reason as codex.
+
+   In the per-run summary frontmatter, set `agent_model: <MODEL_USED>` so cross-run aggregation knows the fallback fired. When a fallback happened, also add a `[skill]` line in `## Friction findings`: `gemini-2.5-pro quota exhausted; auto-fell back to gemini-2.5-flash.`
+
+   **Don't** set `--allowed-mcp-server-names conjuredsp` — that flag has inverted semantics in some gemini-cli builds and silently hides the configured server from the model. Leave the global allowlist alone.
+
 ## Step 6: Surface the report
 
 Read the JSONL log. Extract and show to the user:
@@ -181,8 +231,8 @@ Format: follow `test-run-summaries/_TEMPLATE.md` exactly. Fields and where they 
 - `date`: ISO 8601 with timezone offset, current local time.
 - `prompt`: the user's args, verbatim, quoted.
 - `outcome`: `success` if `type:"result"` event has `is_error: false` AND a fresh `.cdp` bundle landed in the App Group `Presets/`; `partial` if the subagent gave up but reported usefully; `failed` if the harness errored or no preset was produced.
-- `agent_harness`: hardcode `claude-code` for the default `claude -p` dispatch. If a future variant of this skill dispatches Gemini CLI, Codex, or another harness, that variant fills accordingly.
-- `agent_model`: from the first `type:"system",subtype:"init"` event's `model` field in the JSONL log.
+- `agent_harness`: `claude-code` for the default `claude -p` dispatch. For multi-harness sweeps use `codex-cli` or `gemini-cli`.
+- `agent_model`: from the first `type:"system",subtype:"init"` (claude) or `type:"init"` (gemini) event's `model` field. Codex doesn't surface a model field — record `codex-cli` and let the run's `usage` totals carry the signal. **If a gemini quota fallback fired** (Pro 429 → flash retry, see Step 5 multi-harness section), record `agent_model: gemini-2.5-pro→gemini-2.5-flash (quota fallback)` so cross-run aggregation can spot it.
 - `build_commit`: `git rev-parse --short HEAD` at run time.
 - `preset_name`, `preset_path`: from the subagent's digest (it names what it built); confirm by listing `~/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/Presets/` for the freshest `.cdp` bundle.
 - `language`: `rust` or `python` — read from the bundle's `manifest.json`.
