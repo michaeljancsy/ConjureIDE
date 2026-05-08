@@ -470,6 +470,72 @@ struct BundleUISmokeTesterTests {
                 "stringification must avoid '[object Object]'; got \(String(describing: entry))")
     }
 
+    // MARK: - Layout density / small-control checks
+
+    @Test @MainActor func flagsTinySliderInSmallControls() async throws {
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <cdp-slider param="cutoff" style="width:30px"></cdp-slider>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: twoParamManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff", 1: "resonance"],
+            hostParameterCount: 2,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        #expect(!report.smallControls.isEmpty,
+                "expected small_controls to flag the 30px-wide slider; got \(report.smallControls)")
+        let slider = report.smallControls.first { $0.tag == "cdp-slider" }
+        #expect(slider != nil,
+                "expected a cdp-slider entry in smallControls; got tags \(report.smallControls.map(\.tag))")
+        #expect(slider?.param == "cutoff")
+    }
+
+    @Test @MainActor func flagsSparseLayoutWhenControlInCornerOfLargeCanvas() async throws {
+        let sparseManifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.py",
+          "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 600, "height": 400, "fps": 30, "audioFrames": false
+          }
+        }
+        """
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <div style="position:absolute;left:0;top:0">
+            <cdp-toggle param="cutoff" style="width:32px;height:18px"></cdp-toggle>
+          </div>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: sparseManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff"],
+            hostParameterCount: 1,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        #expect(report.coverageRatio < 0.20,
+                "tiny corner control should have coverage_ratio well under 0.20; got \(report.coverageRatio)")
+        #expect(report.layoutFlags.contains("sparse"),
+                "sparse flag must be set when coverage_ratio < 0.20; got \(report.layoutFlags)")
+    }
+
     @Test @MainActor func cdpXYUnboundWhenAxisMissing() async throws {
         // param-y names a param that doesn't exist → xy pad doesn't
         // bind and drags move nothing.

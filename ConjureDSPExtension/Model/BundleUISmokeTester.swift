@@ -204,6 +204,17 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         }
     }
 
+    struct SmallControl: Encodable, Equatable {
+        let tag: String
+        let param: String?
+        let width: Double
+        let height: Double
+
+        enum CodingKeys: String, CodingKey {
+            case tag, param, width, height
+        }
+    }
+
     struct Report: Encodable {
         let status: ReportStatus
         let readyFired: Bool
@@ -216,6 +227,10 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         let contentOverflow: ContentOverflow?
         let lowContrastTexts: [TextContrastIssue]
         let stateProbe: StateProbeResult?
+        let smallControls: [SmallControl]
+        let coverageRatio: Double
+        let bboxRatio: Double
+        let layoutFlags: [String]
 
         enum CodingKeys: String, CodingKey {
             case status
@@ -229,6 +244,10 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             case contentOverflow = "content_overflow"
             case lowContrastTexts = "low_contrast_texts"
             case stateProbe = "state_probe"
+            case smallControls = "small_controls"
+            case coverageRatio = "coverage_ratio"
+            case bboxRatio = "bbox_ratio"
+            case layoutFlags = "layout_flags"
         }
     }
 
@@ -512,6 +531,54 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             )
         }
 
+        // Layout probe — runs only after ready fires so layout has
+        // settled. Captures every interactive control's rect, flags
+        // ones below per-tag minimums, and computes coverage / bbox
+        // density against the manifest's declared canvas.
+        var smallControls: [SmallControl] = []
+        var coverageRatio: Double = 0
+        var bboxRatio: Double = 0
+        var layoutFlags: [String] = []
+        if readyAtMs != nil, let wv = webView {
+            let raw: String = await withCheckedContinuation { cont in
+                wv.evaluateJavaScript(Self.layoutProbeScript) { result, _ in
+                    cont.resume(returning: (result as? String) ?? "{}")
+                }
+            }
+            if let data = raw.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let controls = obj["controls"] as? [[String: Any]] ?? []
+                for c in controls {
+                    let tag = (c["tag"] as? String) ?? ""
+                    let w = (c["width"] as? Double) ?? 0
+                    let h = (c["height"] as? Double) ?? 0
+                    if Self.isControlTooSmall(tag: tag, w: w, h: h) {
+                        smallControls.append(SmallControl(
+                            tag: tag,
+                            param: c["param"] as? String,
+                            width: w,
+                            height: h
+                        ))
+                    }
+                }
+                let canvasArea = Double(declaredWidth) * Double(declaredHeight)
+                if canvasArea > 0 {
+                    let coverage = (obj["coverage"] as? Double) ?? 0
+                    let bboxW = (obj["bboxW"] as? Double) ?? 0
+                    let bboxH = (obj["bboxH"] as? Double) ?? 0
+                    coverageRatio = (coverage / canvasArea * 1000).rounded() / 1000
+                    bboxRatio = (bboxW * bboxH / canvasArea * 1000).rounded() / 1000
+                    let hasInteractive = !controls.isEmpty
+                    if hasInteractive && coverageRatio < 0.20 {
+                        layoutFlags.append("sparse")
+                    }
+                    if hasInteractive && bboxRatio < 0.40 {
+                        layoutFlags.append("clustered")
+                    }
+                }
+            }
+        }
+
         // STATE probe — only when the caller supplied declared keys
         // and ready actually fired (probing a UI that never reached
         // ready means the bridge state surface might not exist yet).
@@ -602,7 +669,11 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             params: paramCoverage,
             contentOverflow: contentOverflow,
             lowContrastTexts: lowContrastTexts,
-            stateProbe: stateProbe
+            stateProbe: stateProbe,
+            smallControls: smallControls,
+            coverageRatio: coverageRatio,
+            bboxRatio: bboxRatio,
+            layoutFlags: layoutFlags
         )
     }
 
@@ -896,6 +967,78 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         waitReady();
     })();
     """
+
+    /// Measures every interactive control's rendered rect post-layout.
+    /// The smoke tester defers this probe behind the 150ms post-ready
+    /// settle window and triggers a forced reflow via offsetHeight read,
+    /// so flex / grid layout has already settled by the time this runs.
+    /// Returns a JSON string with per-control dimensions plus aggregate
+    /// density metrics — the Swift side compares against per-tag
+    /// minimums and the manifest's declared canvas to decide which are
+    /// too small or laid out too sparsely.
+    private static let layoutProbeScript = """
+    (function () {
+        try {
+            void document.body.offsetHeight;
+            var sels = ['cdp-slider', 'cdp-knob', 'cdp-toggle', 'cdp-choice', 'cdp-xy', 'button', 'input'];
+            var nodes = document.querySelectorAll(sels.join(','));
+            var controls = [];
+            var minLeft = Infinity, minTop = Infinity, maxRight = -Infinity, maxBottom = -Infinity;
+            var coverage = 0;
+            for (var i = 0; i < nodes.length; i++) {
+                var el = nodes[i];
+                var r = el.getBoundingClientRect();
+                var tag = el.tagName ? el.tagName.toLowerCase() : '';
+                var paramAttr = el.getAttribute ? el.getAttribute('param') : null;
+                controls.push({
+                    tag: tag,
+                    param: paramAttr,
+                    width: r.width,
+                    height: r.height
+                });
+                if (r.width > 0 && r.height > 0) {
+                    coverage += r.width * r.height;
+                    if (r.left < minLeft) minLeft = r.left;
+                    if (r.top < minTop) minTop = r.top;
+                    if (r.right > maxRight) maxRight = r.right;
+                    if (r.bottom > maxBottom) maxBottom = r.bottom;
+                }
+            }
+            var hasAny = controls.some(function (c) { return c.width > 0 && c.height > 0; });
+            var bboxW = hasAny ? (maxRight - minLeft) : 0;
+            var bboxH = hasAny ? (maxBottom - minTop) : 0;
+            return JSON.stringify({
+                controls: controls,
+                coverage: coverage,
+                bboxW: bboxW,
+                bboxH: bboxH
+            });
+        } catch (e) {
+            return JSON.stringify({error: 'layout probe threw: ' + (e && e.message ? e.message : String(e))});
+        }
+    })()
+    """
+
+    /// Per-tag minimum sizes (width, height) used by the layout probe
+    /// to flag controls too small to grab. The slider's long-axis check
+    /// uses `max(w, h) >= 60` so vertical sliders aren't false-flagged.
+    private static let smallControlMinima: [String: (Double, Double)] = [
+        "cdp-slider": (60, 16),
+        "cdp-knob": (24, 24),
+        "cdp-xy": (60, 60),
+        "cdp-toggle": (28, 16),
+        "cdp-choice": (60, 24),
+        "button": (60, 24),
+        "input": (60, 24),
+    ]
+
+    private static func isControlTooSmall(tag: String, w: Double, h: Double) -> Bool {
+        guard let (minW, minH) = smallControlMinima[tag] else { return false }
+        if tag == "cdp-slider" {
+            return max(w, h) < minW || min(w, h) < minH
+        }
+        return w < minW || h < minH
+    }
 
     /// Measures the rendered content extent on both the body and the
     /// document element (some pages put their main content on body,
