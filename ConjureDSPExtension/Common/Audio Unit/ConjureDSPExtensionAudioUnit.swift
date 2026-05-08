@@ -1799,9 +1799,17 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			// `applyPresetStateDefaults` just pushed. The script-load path
 			// always runs first (resetting to defaults) so legacy sessions
 			// with no `conjuredsp_state` key keep the defaults — we only
-			// override when the host actually saved one. Bypass the
-			// @MainActor PresetStateManager and call the kernel directly,
-			// since fullState setter may be invoked from XPC threads.
+			// override when the host actually saved one.
+			//
+			// Two writes for two readers: the kernel sync write makes the
+			// saved bytes visible to the audio thread before
+			// `end_preset_transition` fires, and the @MainActor task hop
+			// to `presetStateManager.restore` updates the Swift mirror
+			// (which `applyPresetStateDefaults`'s queued task would
+			// otherwise leave at script defaults — desyncing the custom
+			// UI from the kernel for the rest of the session). The two
+			// MainActor tasks run in FIFO order, so the restore lands
+			// after the defaults push.
 			if let stateBytes = state[Self.stateKey] as? Data, !stateBytes.isEmpty {
 				_ = stateBytes.withUnsafeBytes { raw -> Bool in
 					guard let base = raw.baseAddress else { return false }
@@ -1810,6 +1818,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						base.assumingMemoryBound(to: UInt8.self),
 						UInt(stateBytes.count)
 					)
+				}
+				let capturedBytes = stateBytes
+				Task { @MainActor [weak self] in
+					self?.presetStateManager.restore(from: capturedBytes)
 				}
 			}
 
