@@ -261,7 +261,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     @MainActor
     private func mcpGetParameters(input: [String: Any]) -> (String, Bool) {
         let metadata = currentParamMetadata
-        let includeUnused = (input["include_unused"] as? Bool) ?? false
+        let includeUnused = Self.coerceBool(input["include_unused"]) ?? false
 
         // Default behavior: when the script declares metadata, only
         // surface the declared params. Generic Param 0..15 entries
@@ -448,7 +448,15 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             return currentScriptLanguage
         }()
 
-        let scaffoldUI = (input["scaffold_ui"] as? Bool) ?? false
+        // Lenient bool parsing: agents (especially Sonnet via the MCP
+        // bridge) routinely send `"scaffold_ui": "true"` as a JSON
+        // string instead of the schema-declared boolean. The strict
+        // `as? Bool` cast silently drops a non-bool to nil → defaulted
+        // to false → scaffold became a no-op while the response still
+        // looked like success. Accept bool, "true"/"false" (case-
+        // insensitive), and 0/1 integers; anything else falls back to
+        // the documented `false` default.
+        let scaffoldUI = Self.coerceBool(input["scaffold_ui"]) ?? false
         let pm = presetManager
 
         do {
@@ -1395,5 +1403,50 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             return "{}"
         }
         return str
+    }
+
+    /// Coerce an MCP tool input value into a Bool, accepting the shapes
+    /// agents commonly send through JSON-RPC even when the schema
+    /// declares `type: "boolean"`. Returns nil when the value isn't
+    /// recognizable as a boolean — callers fall back to the documented
+    /// default.
+    ///
+    /// Accepted shapes:
+    ///  - native `Bool` (the schema-correct path)
+    ///  - `"true"` / `"false"` / `"yes"` / `"no"` / `"1"` / `"0"` strings
+    ///    (case-insensitive, trimmed)
+    ///  - `0` / `1` numbers (Int or Double)
+    ///
+    /// Why coerce instead of strict-rejecting: a /try-it sweep on
+    /// 2026-05-08 caught Sonnet routinely sending `"scaffold_ui": "true"`
+    /// as a JSON string. The strict `as? Bool` cast returned nil, the
+    /// `?? false` default kicked in, and `save_preset` silently produced
+    /// a bundle without the requested ui scaffold while the response
+    /// payload still read like success. The agent then hand-authored
+    /// the manifest+ui block from scratch (as observed in runs 01, 07,
+    /// 09 of the sweep). Coercion is the minimum-friction fix; a
+    /// stricter error would help diagnose but breaks more agents than
+    /// it helps.
+    static func coerceBool(_ value: Any?) -> Bool? {
+        switch value {
+        case let b as Bool:
+            return b
+        case let s as String:
+            switch s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "yes", "1": return true
+            case "false", "no", "0": return false
+            default: return nil
+            }
+        case let i as Int:
+            if i == 0 { return false }
+            if i == 1 { return true }
+            return nil
+        case let d as Double:
+            if d == 0.0 { return false }
+            if d == 1.0 { return true }
+            return nil
+        default:
+            return nil
+        }
     }
 }

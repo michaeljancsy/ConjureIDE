@@ -42,6 +42,13 @@ struct PresetManifest: Codable, Equatable {
     /// hacks above still apply in that path.
     var params: [ParamDecl]?
 
+    /// Sibling note that appears alphabetically just above `params` in
+    /// the pretty-printed JSON. Test-target mirror of the field on the
+    /// extension's `PresetManifest`; needed here so save-rewrite tests
+    /// can pin that the kernel-derived note is cleared alongside the
+    /// `params` cache it documents.
+    var paramsNote: String? = nil
+
     /// Parameter declaration — mirrors
     /// `ConjureDSPExtensionAudioUnit.ParamMetadata` intentionally. The
     /// duplication keeps the manifest schema decoupled from the AU type
@@ -68,6 +75,19 @@ struct PresetManifest: Codable, Equatable {
 
     /// Optional free-form author metadata.
     var meta: Meta?
+
+    /// Map `paramsNote` to the on-disk key `_paramsNote`. Mirrors the
+    /// CodingKeys override on the extension's `PresetManifest` so the
+    /// test target encodes/decodes manifests bit-identical to runtime.
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case entry
+        case language
+        case ui
+        case params
+        case paramsNote = "_paramsNote"
+        case meta
+    }
 
     struct UI: Codable, Equatable {
         /// Relative path (from the bundle root) to the HTML entry point.
@@ -129,6 +149,31 @@ extension PresetManifest {
     /// Whether the bundle opts into audio frame delivery.
     var audioFramesEnabled: Bool {
         ui?.audioFrames ?? false
+    }
+
+    /// Test-target mirror of `defaultScaffoldUI` on the extension. See
+    /// the extension's docstring for the rationale.
+    static let defaultScaffoldUI = UI(
+        entryHTML: "ui/index.html",
+        width: 520,
+        height: 260,
+        fps: 30,
+        audioFrames: true
+    )
+
+    /// Test-target mirror of `applyingSaveRewrites(scaffoldUI:)` on the
+    /// extension's `PresetManifest`. See the extension's docstring for
+    /// the failure-mode rationale (Failures #1 / #2 / #4 in the
+    /// 2026-05-08 /try-it sweep). Both copies must stay in sync — the
+    /// `SavePresetScaffoldRewriteTests` suite pins the contract.
+    func applyingSaveRewrites(scaffoldUI: Bool) -> PresetManifest {
+        var copy = self
+        copy.params = nil
+        copy.paramsNote = nil
+        if scaffoldUI, copy.ui == nil {
+            copy.ui = Self.defaultScaffoldUI
+        }
+        return copy
     }
 }
 

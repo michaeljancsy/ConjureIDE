@@ -473,6 +473,21 @@ class PresetManager: ObservableObject {
                 manifestNeedsRewrite = true
             }
 
+            // Apply the deterministic save-rewrite: clear the stale
+            // `params` cache and add a `ui` block when the caller
+            // requested scaffolding and the manifest doesn't yet
+            // declare one. See `applyingSaveRewrites` for the
+            // failure-mode rationale (Failures #1 / #2 / #4 in the
+            // 2026-05-08 /try-it sweep). Skip the rewrite-driven
+            // disk write when the manifest is already in shape — the
+            // rewrite is idempotent, so this is just an
+            // optimization for the common no-op re-save.
+            let rewritten = manifest.applyingSaveRewrites(scaffoldUI: scaffoldUI)
+            if rewritten != manifest {
+                manifest = rewritten
+                manifestNeedsRewrite = true
+            }
+
             // Write the entry script according to whatever the manifest
             // says its entry path is — respects user edits to `entry` too.
             let scriptURL = bundleURL.appendingPathComponent(manifest.entry)
