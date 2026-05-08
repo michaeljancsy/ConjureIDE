@@ -1242,18 +1242,18 @@ enum DSPDocumentation {
 
     ```python
     TAPS = 6
-    TELEMETRY = {"bar_energy": {"shape": "vector"}}
+    TELEMETRY = {"BAR_ENERGY": {"shape": "vector"}}
     def process(ctx):
         # Slice-assign into the pre-seeded numpy array — don't replace it.
         for t in range(TAPS):
-            ctx.telemetry["bar_energy"][t] = comb[t].rms()
+            ctx.telemetry["BAR_ENERGY"][t] = comb[t].rms()
     ```
 
     UI consumer — `<cdp-scope length="6">` truncates rendering to the
     first six samples, so the stale tail never paints:
 
     ```html
-    <cdp-scope telemetry="bar_energy" length="6" min="0" max="1"></cdp-scope>
+    <cdp-scope telemetry="BAR_ENERGY" length="6" min="0" max="1"></cdp-scope>
     ```
 
     Or hand-rolled, slicing the first N off the JS Array:
@@ -1267,6 +1267,16 @@ enum DSPDocumentation {
         // draw six bars from `visible`…
     });
     ```
+
+    **Slot name casing.** `frame.telemetry["…"]` in raw JS is an exact
+    object-property lookup — `frame.telemetry["BAR_ENERGY"]` and
+    `frame.telemetry["bar_energy"]` are different keys, and only the one
+    your script actually published resolves. Match casing on both sides,
+    or use the `??` fallback shown under "Telemetry slots" above. The
+    `<cdp-scope telemetry="…">` (and `<cdp-bargraph>`) attribute is the
+    one exception: the component runs the same case/underscore/space-
+    insensitive resolver as `param=`, so a single UI binds to both a
+    Rust `BAR_ENERGY` slot and a Python `bar_energy` slot.
 
     **Audio-rate pattern: per-sample vector.** When the UI needs the
     *shape* of the signal (oscilloscope, waveform display), publish
