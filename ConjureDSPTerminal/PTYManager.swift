@@ -785,6 +785,10 @@ final class PTYManager {
     After save_preset, tell the user what you named the new bundle so \
     they can find it in the preset browser.
 
+    **When iterating with `compile_and_run`, finish with `save_preset` to persist the bundle to disk** \
+    — `compile_and_run` only updates kernel state, so without a save the script vanishes on the next \
+    preset load (or when the DAW project reopens) and the kernel falls back to passthrough.
+
     **Validation protocol (mandatory before claiming done on a UI task):**
 
     Two tools, used in sequence. Static lint first (catches authoring \
