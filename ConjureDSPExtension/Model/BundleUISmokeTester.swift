@@ -49,10 +49,12 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         hostParameterNames: [Int: String],
         hostParameterCount: Int,
         timeout: TimeInterval = 3.0,
-        resourceBundle: Bundle? = nil
+        resourceBundle: Bundle? = nil,
+        declaredStateKeys: [String] = []
     ) async -> Report {
         let tester = BundleUISmokeTester()
         tester.resourceBundle = resourceBundle ?? Bundle(for: BundleUISmokeTester.self)
+        tester.declaredStateKeys = declaredStateKeys
         return await withCheckedContinuation { cont in
             tester.start(
                 bundle: bundle,
@@ -173,16 +175,78 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
     /// the first few are diagnostic, the rest are noise.
     private static let textContrastIssueCap: Int = 10
 
+    /// Outcome of the bundle-private STATE channel probe. The smoke
+    /// tester drives the JS bridge surface (`ConjureDSP.state.*`) only —
+    /// there's no live kernel here, so we can't verify the audio side.
+    /// What we CAN verify is:
+    ///   - `state.get` returns something for the first declared key
+    ///   - `state.set` returns true (sync size check passed)
+    ///   - an `onChange` handler installed before the set fires once
+    /// Skipped (`ran = false`) when the caller didn't supply any
+    /// declared keys — there's nothing to probe.
+    struct StateProbeResult: Encodable, Equatable {
+        let ran: Bool
+        let key: String?
+        /// JSON-encoded value returned by `state.get(key)`. Stringified
+        /// because the bridge may return objects/arrays/primitives — a
+        /// JSON string is the most portable form for the Swift report.
+        let getReturned: String?
+        let setReturned: Bool?
+        let onChangeFiredCount: Int
+        let error: String?
+
+        enum CodingKeys: String, CodingKey {
+            case ran, key
+            case getReturned = "get_returned"
+            case setReturned = "set_returned"
+            case onChangeFiredCount = "on_change_fired_count"
+            case error
+        }
+    }
+
+    struct SmallControl: Encodable, Equatable {
+        let tag: String
+        let param: String?
+        let width: Double
+        let height: Double
+        let reason: String?
+        let detail: String?
+
+        enum CodingKeys: String, CodingKey {
+            case tag, param, width, height, reason, detail
+        }
+    }
+
+    struct CanvasIssue: Encodable, Equatable {
+        let id: String
+        let layout: [Double]
+        let buffer: [Double]
+        let reason: String
+        let hint: String
+
+        enum CodingKeys: String, CodingKey {
+            case id, layout, buffer, reason, hint
+        }
+    }
+
     struct Report: Encodable {
         let status: ReportStatus
         let readyFired: Bool
         let readyTimeMs: Double?          // time from load to `ready`, nil if it didn't fire
         let loadError: String?            // WKNavigationDelegate didFail*
         let jsErrors: [JSLogEntry]
+        let consoleLogs: [String]
         let components: [ComponentReport]
         let params: [ParamCoverage]
         let contentOverflow: ContentOverflow?
         let lowContrastTexts: [TextContrastIssue]
+        let stateProbe: StateProbeResult?
+        let smallControls: [SmallControl]
+        let coverageRatio: Double
+        let bboxRatio: Double
+        let layoutFlags: [String]
+        let cellCoverage: [[Double]]
+        let canvasIssues: [CanvasIssue]
 
         enum CodingKeys: String, CodingKey {
             case status
@@ -190,10 +254,18 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             case readyTimeMs = "ready_time_ms"
             case loadError = "load_error"
             case jsErrors = "js_errors"
+            case consoleLogs = "console_logs"
             case components
             case params
             case contentOverflow = "content_overflow"
             case lowContrastTexts = "low_contrast_texts"
+            case stateProbe = "state_probe"
+            case smallControls = "small_controls"
+            case coverageRatio = "coverage_ratio"
+            case bboxRatio = "bbox_ratio"
+            case layoutFlags = "layout_flags"
+            case cellCoverage = "cell_coverage"
+            case canvasIssues = "canvas_issues"
         }
     }
 
@@ -223,11 +295,17 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
     /// so anything landing in this list is either author debug output
     /// or a caught-and-reformatted error.
     private var bridgeLogs: [(String, Double)] = []
+    private var consoleLogs: [String] = []
     /// Where to look for `customui-bridge.js` + `cdp-ui.js`. In
     /// production this is the extension's own bundle (via
     /// `Bundle(for: Self.self)`). Tests override with the appex's
     /// Resources bundle since the test target doesn't include them.
     fileprivate var resourceBundle: Bundle = Bundle(for: BundleUISmokeTester.self)
+    /// STATE keys the caller knows the script declares. The smoke
+    /// tester doesn't parse scripts itself — the validator does that
+    /// already and the MCP layer can hand them in. Empty array skips
+    /// the state probe entirely.
+    fileprivate var declaredStateKeys: [String] = []
 
     fileprivate static let bundleScheme = "conjuredsp-preset"
 
@@ -307,6 +385,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         // can surface those errors too — otherwise a throw inside
         // `ConjureDSP.ready(cb)` silently vanishes.
         config.userContentController.add(self, name: "log")
+        config.userContentController.add(self, name: "consoleLog")
 
         let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: w, height: h), configuration: config)
         wv.navigationDelegate = self
@@ -366,6 +445,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             wv.configuration.userContentController.removeAllUserScripts()
             wv.configuration.userContentController.removeScriptMessageHandler(forName: "smokeReady")
             wv.configuration.userContentController.removeScriptMessageHandler(forName: "log")
+            wv.configuration.userContentController.removeScriptMessageHandler(forName: "consoleLog")
             wv.navigationDelegate = nil
         }
         webView = nil
@@ -469,6 +549,112 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             )
         }
 
+        // Layout probe — runs only after ready fires so layout has
+        // settled. Captures every interactive control's rect, flags
+        // ones below per-tag minimums, and computes coverage / bbox
+        // density against the manifest's declared canvas.
+        var smallControls: [SmallControl] = []
+        var coverageRatio: Double = 0
+        var bboxRatio: Double = 0
+        var layoutFlags: [String] = []
+        var cellCoverage: [[Double]] = []
+        var canvasIssues: [CanvasIssue] = []
+        if readyAtMs != nil, let wv = webView {
+            let probeJS = Self.layoutProbeScript(manifestW: declaredWidth, manifestH: declaredHeight)
+            let raw: String = await withCheckedContinuation { cont in
+                wv.evaluateJavaScript(probeJS) { result, _ in
+                    cont.resume(returning: (result as? String) ?? "{}")
+                }
+            }
+            if let data = raw.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let controls = obj["controls"] as? [[String: Any]] ?? []
+                for c in controls {
+                    let tag = (c["tag"] as? String) ?? ""
+                    let w = (c["width"] as? Double) ?? 0
+                    let h = (c["height"] as? Double) ?? 0
+                    if Self.isControlTooSmall(tag: tag, w: w, h: h) {
+                        smallControls.append(SmallControl(
+                            tag: tag,
+                            param: c["param"] as? String,
+                            width: w,
+                            height: h,
+                            reason: nil,
+                            detail: nil
+                        ))
+                    }
+                }
+                let squeezed = obj["squeezed"] as? [[String: Any]] ?? []
+                for s in squeezed {
+                    smallControls.append(SmallControl(
+                        tag: (s["tag"] as? String) ?? "",
+                        param: s["param"] as? String,
+                        width: (s["width"] as? Double) ?? 0,
+                        height: (s["height"] as? Double) ?? 0,
+                        reason: s["reason"] as? String,
+                        detail: s["detail"] as? String
+                    ))
+                }
+                let canvasArea = Double(declaredWidth) * Double(declaredHeight)
+                if canvasArea > 0 {
+                    let coverage = (obj["coverage"] as? Double) ?? 0
+                    let bboxW = (obj["bboxW"] as? Double) ?? 0
+                    let bboxH = (obj["bboxH"] as? Double) ?? 0
+                    coverageRatio = (coverage / canvasArea * 1000).rounded() / 1000
+                    bboxRatio = (bboxW * bboxH / canvasArea * 1000).rounded() / 1000
+                    let hasInteractive = !controls.isEmpty
+                    if hasInteractive && coverageRatio < 0.20 {
+                        layoutFlags.append("sparse")
+                    }
+                    if hasInteractive && bboxRatio < 0.40 {
+                        layoutFlags.append("clustered")
+                    }
+                }
+                if let raw2D = obj["cellCoverage"] as? [[Any]] {
+                    cellCoverage = raw2D.map { row in
+                        row.compactMap { v -> Double? in
+                            if let d = v as? Double { return d }
+                            if let n = v as? NSNumber { return n.doubleValue }
+                            return nil
+                        }
+                    }
+                }
+                if let extraFlags = obj["layoutFlags"] as? [String] {
+                    for f in extraFlags where !layoutFlags.contains(f) {
+                        layoutFlags.append(f)
+                    }
+                }
+                if let issues = obj["canvasIssues"] as? [[String: Any]] {
+                    for i in issues {
+                        let layoutArr = (i["layout"] as? [Any])?.compactMap { v -> Double? in
+                            if let d = v as? Double { return d }
+                            if let n = v as? NSNumber { return n.doubleValue }
+                            return nil
+                        } ?? []
+                        let bufferArr = (i["buffer"] as? [Any])?.compactMap { v -> Double? in
+                            if let d = v as? Double { return d }
+                            if let n = v as? NSNumber { return n.doubleValue }
+                            return nil
+                        } ?? []
+                        canvasIssues.append(CanvasIssue(
+                            id: (i["id"] as? String) ?? "",
+                            layout: layoutArr,
+                            buffer: bufferArr,
+                            reason: (i["reason"] as? String) ?? "",
+                            hint: (i["hint"] as? String) ?? ""
+                        ))
+                    }
+                }
+            }
+        }
+
+        // STATE probe — only when the caller supplied declared keys
+        // and ready actually fired (probing a UI that never reached
+        // ready means the bridge state surface might not exist yet).
+        // Picks the first declared key, captures it, writes it back,
+        // and verifies the onChange + set return.
+        let stateProbe: StateProbeResult? = await runStateProbeIfPossible()
+
         // Build the content_overflow block when the rendered extent
         // exceeds declared on either axis by more than the tolerance.
         // Skipped entirely (nil) when ready didn't fire — the rendered
@@ -547,10 +733,112 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             readyTimeMs: readyAtMs,
             loadError: loadError,
             jsErrors: combinedErrors,
+            consoleLogs: consoleLogs,
             components: componentsRaw,
             params: paramCoverage,
             contentOverflow: contentOverflow,
-            lowContrastTexts: lowContrastTexts
+            lowContrastTexts: lowContrastTexts,
+            stateProbe: stateProbe,
+            smallControls: smallControls,
+            coverageRatio: coverageRatio,
+            bboxRatio: bboxRatio,
+            layoutFlags: layoutFlags,
+            cellCoverage: cellCoverage,
+            canvasIssues: canvasIssues
+        )
+    }
+
+    /// Drive the JS bridge's `ConjureDSP.state.*` surface using the
+    /// first declared key. Returns nil when the caller didn't supply
+    /// any keys; otherwise returns a `StateProbeResult` reflecting
+    /// what the JS surface answered. Errors during the probe (e.g.
+    /// `state` API not present, throw inside set) collapse to the
+    /// `error` field rather than failing the whole smoke test — the
+    /// surface that's broken is still useful diagnostic info.
+    private func runStateProbeIfPossible() async -> StateProbeResult? {
+        guard let first = declaredStateKeys.first else { return nil }
+        guard readyAtMs != nil else {
+            return StateProbeResult(
+                ran: false,
+                key: first,
+                getReturned: nil,
+                setReturned: nil,
+                onChangeFiredCount: 0,
+                error: "ready did not fire — skipped state probe"
+            )
+        }
+        guard let wv = webView else { return nil }
+
+        // Embed the literal key into the JS — JSON-stringify it so that
+        // any quote / backslash characters in the (admittedly unusual)
+        // key are escaped properly. The probe runs synchronously: the
+        // bridge dispatches `onChange` from inside `state.set` (same
+        // contract as `parameters.set`), so we don't need a microtask
+        // settle. Sync also dodges WKWebView's quirk of not unwrapping
+        // returned Promises in the closure-style evaluateJavaScript.
+        let keyJSON = (try? String(data: JSONSerialization.data(
+            withJSONObject: first, options: [.fragmentsAllowed]
+        ), encoding: .utf8)) ?? "\"\(first)\""
+        let probe = """
+        (function () {
+            try {
+                var CDP = window.ConjureDSP;
+                if (!CDP || !CDP.state) {
+                    return JSON.stringify({error: 'ConjureDSP.state surface missing'});
+                }
+                var fired = 0;
+                var initial;
+                try { initial = CDP.state.get(\(keyJSON)); } catch (e) {}
+                try { CDP.state.onChange(\(keyJSON), function () { fired++; }); } catch (e) {}
+                var ok;
+                try { ok = CDP.state.set(\(keyJSON), initial); } catch (e) {
+                    return JSON.stringify({error: 'state.set threw: ' + (e && e.message ? e.message : String(e))});
+                }
+                var returnedJSON;
+                try { returnedJSON = JSON.stringify(initial); } catch (_) { returnedJSON = String(initial); }
+                return JSON.stringify({
+                    ok: ok === true,
+                    fired: fired,
+                    initial: returnedJSON
+                });
+            } catch (e) {
+                return JSON.stringify({error: 'probe threw: ' + (e && e.message ? e.message : String(e))});
+            }
+        })()
+        """
+        let raw: String = await withCheckedContinuation { cont in
+            wv.evaluateJavaScript(probe) { result, _ in
+                cont.resume(returning: (result as? String) ?? "{}")
+            }
+        }
+        guard let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return StateProbeResult(
+                ran: true,
+                key: first,
+                getReturned: nil,
+                setReturned: nil,
+                onChangeFiredCount: 0,
+                error: "probe returned unparseable JSON"
+            )
+        }
+        if let err = obj["error"] as? String {
+            return StateProbeResult(
+                ran: true,
+                key: first,
+                getReturned: nil,
+                setReturned: nil,
+                onChangeFiredCount: 0,
+                error: err
+            )
+        }
+        return StateProbeResult(
+            ran: true,
+            key: first,
+            getReturned: obj["initial"] as? String,
+            setReturned: obj["ok"] as? Bool,
+            onChangeFiredCount: (obj["fired"] as? Int) ?? 0,
+            error: nil
         )
     }
 
@@ -572,6 +860,9 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             let text = (message.body as? String) ?? String(describing: message.body)
             let t = (CFAbsoluteTimeGetCurrent() - loadStart) * 1000.0
             bridgeLogs.append((text, t))
+        case "consoleLog":
+            let text = (message.body as? String) ?? String(describing: message.body)
+            consoleLogs.append(text)
         default:
             break
         }
@@ -693,15 +984,44 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             var msg = reason && (reason.message || reason.toString) ? (reason.message || reason.toString()) : String(reason);
             capture('unhandledrejection', msg);
         });
+        function stringifyArg(a) {
+            if (a === null) return 'null';
+            if (a === undefined) return 'undefined';
+            if (typeof a === 'string') return a;
+            if (typeof a !== 'object') return String(a);
+            try {
+                var seen = new WeakSet();
+                return JSON.stringify(a, function (k, v) {
+                    if (typeof v === 'object' && v !== null) {
+                        if (seen.has(v)) return '[Circular]';
+                        seen.add(v);
+                    }
+                    return v;
+                });
+            } catch (_) {
+                try { return String(a); } catch (_e) { return '[Unstringifiable]'; }
+            }
+        }
+        function joinArgs(args) {
+            return Array.prototype.slice.call(args).map(stringifyArg).join(' ');
+        }
         var origErr = console.error;
         console.error = function () {
-            capture('console.error', Array.prototype.slice.call(arguments).map(String).join(' '));
+            capture('console.error', joinArgs(arguments));
             if (origErr) { origErr.apply(console, arguments); }
         };
         var origWarn = console.warn;
         console.warn = function () {
-            capture('console.warn', Array.prototype.slice.call(arguments).map(String).join(' '));
+            capture('console.warn', joinArgs(arguments));
             if (origWarn) { origWarn.apply(console, arguments); }
+        };
+        var origLog = console.log;
+        console.log = function () {
+            var msg = joinArgs(arguments);
+            try {
+                window.webkit.messageHandlers.consoleLog.postMessage(msg);
+            } catch (_) { /* harness may have torn down */ }
+            if (origLog) { origLog.apply(console, arguments); }
         };
 
         // Poll for the bridge's ready contract, then notify Swift.
@@ -718,6 +1038,171 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         waitReady();
     })();
     """
+
+    /// Measures every interactive control's rendered rect post-layout.
+    /// The smoke tester defers this probe behind the 150ms post-ready
+    /// settle window and triggers a forced reflow via offsetHeight read,
+    /// so flex / grid layout has already settled by the time this runs.
+    /// Returns a JSON string with per-control dimensions plus aggregate
+    /// density metrics — the Swift side compares against per-tag
+    /// minimums and the manifest's declared canvas to decide which are
+    /// too small or laid out too sparsely.
+    private static func layoutProbeScript(manifestW: Int, manifestH: Int) -> String {
+        return """
+    (function () {
+        try {
+            void document.body.offsetHeight;
+            var manifestW = \(manifestW);
+            var manifestH = \(manifestH);
+            var sels = ['cdp-slider', 'cdp-knob', 'cdp-toggle', 'cdp-choice', 'cdp-xy', 'button', 'input'];
+            var nodes = document.querySelectorAll(sels.join(','));
+            var controls = [];
+            var interactiveRects = [];
+            var squeezed = [];
+            var layoutFlags = [];
+            var minLeft = Infinity, minTop = Infinity, maxRight = -Infinity, maxBottom = -Infinity;
+            var coverage = 0;
+            for (var i = 0; i < nodes.length; i++) {
+                var el = nodes[i];
+                var r = el.getBoundingClientRect();
+                var tag = el.tagName ? el.tagName.toLowerCase() : '';
+                var paramAttr = el.getAttribute ? el.getAttribute('param') : null;
+                controls.push({
+                    tag: tag,
+                    param: paramAttr,
+                    width: r.width,
+                    height: r.height
+                });
+                if (r.width > 0 && r.height > 0) {
+                    coverage += r.width * r.height;
+                    if (r.left < minLeft) minLeft = r.left;
+                    if (r.top < minTop) minTop = r.top;
+                    if (r.right > maxRight) maxRight = r.right;
+                    if (r.bottom > maxBottom) maxBottom = r.bottom;
+                    interactiveRects.push({
+                        left: r.left, top: r.top, right: r.right, bottom: r.bottom
+                    });
+                }
+            }
+            var sliders = document.querySelectorAll('cdp-slider');
+            for (var j = 0; j < sliders.length; j++) {
+                var s = sliders[j];
+                if (s.getAttribute('orientation') === 'vertical') continue;
+                if (s.clientWidth === 0) continue;
+                var cs = getComputedStyle(s);
+                var labelW = parseFloat(cs.getPropertyValue('--cdp-label-width')) || 120;
+                var valueW = parseFloat(cs.getPropertyValue('--cdp-value-width')) || 76;
+                var trackW = s.clientWidth - labelW - valueW - 24;
+                if (trackW < 30) {
+                    squeezed.push({
+                        tag: 'cdp-slider',
+                        param: s.getAttribute('param') || null,
+                        width: s.clientWidth,
+                        height: s.clientHeight,
+                        reason: 'track_squeezed',
+                        detail: 'track ~' + Math.round(trackW) + 'px after label ' + labelW + ' + value ' + valueW + ' + gaps'
+                    });
+                }
+            }
+            var canvasIssues = [];
+            var canvases = document.querySelectorAll('canvas');
+            for (var ci = 0; ci < canvases.length; ci++) {
+                var cv = canvases[ci];
+                var cvRect = cv.getBoundingClientRect();
+                if (cvRect.width <= 0 || cvRect.height <= 0) continue;
+                var bufW = cv.width, bufH = cv.height;
+                if (bufW === 0 || bufH === 0) {
+                    canvasIssues.push({
+                        id: cv.id || cv.className || '<anonymous>',
+                        layout: [cvRect.width, cvRect.height],
+                        buffer: [bufW, bufH],
+                        reason: 'zero_buffer',
+                        hint: 'Canvas has CSS size but a 0\\u00d70 drawing buffer. Author probably set cv.width/height before layout settled. Try requestAnimationFrame or a ResizeObserver before the first resize() call.'
+                    });
+                } else if (bufW === 300 && bufH === 150 && (Math.abs(cvRect.width - 300) > 1 || Math.abs(cvRect.height - 150) > 1)) {
+                    canvasIssues.push({
+                        id: cv.id || cv.className || '<anonymous>',
+                        layout: [cvRect.width, cvRect.height],
+                        buffer: [bufW, bufH],
+                        reason: 'default_buffer_unset',
+                        hint: 'Canvas drawing buffer is the HTML default 300\\u00d7150 but layout is different. Drawing will be stretched. Set cv.width = rect.width * devicePixelRatio (and likewise for height).'
+                    });
+                }
+            }
+            if (canvasIssues.some(function (c) { return c.reason === 'zero_buffer'; })) {
+                layoutFlags.push('canvas_zero_buffer');
+            }
+            var cellCoverage = [];
+            if (manifestW >= 100 && manifestH >= 100) {
+                var COLS = 3, ROWS = 3;
+                var cellW = manifestW / COLS;
+                var cellH = manifestH / ROWS;
+                var cells = new Array(ROWS * COLS).fill(0);
+                for (var ri = 0; ri < interactiveRects.length; ri++) {
+                    var rect = interactiveRects[ri];
+                    for (var cy = 0; cy < ROWS; cy++) {
+                        for (var cx = 0; cx < COLS; cx++) {
+                            var cellL = cx * cellW, cellT = cy * cellH;
+                            var cellR = cellL + cellW, cellB = cellT + cellH;
+                            var ox = Math.max(0, Math.min(rect.right, cellR) - Math.max(rect.left, cellL));
+                            var oy = Math.max(0, Math.min(rect.bottom, cellB) - Math.max(rect.top, cellT));
+                            cells[cy * COLS + cx] += ox * oy;
+                        }
+                    }
+                }
+                var cellArea = cellW * cellH;
+                var flat = cells.map(function (a) { return a / cellArea; });
+                cellCoverage = [
+                    flat.slice(0, 3),
+                    flat.slice(3, 6),
+                    flat.slice(6, 9)
+                ];
+                var sparseCount = flat.filter(function (c) { return c < 0.05; }).length;
+                var denseCount = flat.filter(function (c) { return c > 0.20; }).length;
+                if (sparseCount >= 3 && denseCount >= 1) {
+                    layoutFlags.push('empty_region');
+                }
+            }
+            var hasAny = controls.some(function (c) { return c.width > 0 && c.height > 0; });
+            var bboxW = hasAny ? (maxRight - minLeft) : 0;
+            var bboxH = hasAny ? (maxBottom - minTop) : 0;
+            return JSON.stringify({
+                controls: controls,
+                squeezed: squeezed,
+                coverage: coverage,
+                bboxW: bboxW,
+                bboxH: bboxH,
+                cellCoverage: cellCoverage,
+                layoutFlags: layoutFlags,
+                canvasIssues: canvasIssues
+            });
+        } catch (e) {
+            return JSON.stringify({error: 'layout probe threw: ' + (e && e.message ? e.message : String(e))});
+        }
+    })()
+    """
+    }
+
+    /// Per-tag minimum sizes (width, height) used by the layout probe
+    /// to flag controls too small to grab. The slider's long-axis check
+    /// uses `max(w, h) >= 60` so vertical sliders aren't false-flagged.
+    private static let smallControlMinima: [String: (Double, Double)] = [
+        "cdp-slider": (60, 16),
+        "cdp-knob": (24, 24),
+        "cdp-xy": (60, 60),
+        "cdp-toggle": (28, 16),
+        "cdp-choice": (60, 24),
+        "button": (60, 24),
+        "input": (60, 24),
+    ]
+
+    private static func isControlTooSmall(tag: String, w: Double, h: Double) -> Bool {
+        guard let (minW, minH) = smallControlMinima[tag] else { return false }
+        if tag == "cdp-slider" {
+            return max(w, h) < minW || min(w, h) < minH
+        }
+        return w < minW || h < minH
+    }
 
     /// Measures the rendered content extent on both the body and the
     /// document element (some pages put their main content on body,

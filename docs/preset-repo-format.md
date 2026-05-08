@@ -122,8 +122,8 @@ import numpy as np
 # Parameters:
 GAIN = 0
 
-def process(inputs, outputs, frame_count, sample_rate, params):
-    gain = params[GAIN] * 2.0
-    for ch in range(len(inputs)):
-        np.multiply(inputs[ch][:frame_count], gain, out=outputs[ch][:frame_count])
+def process(ctx):
+    gain = ctx.params[GAIN] * 2.0
+    for ch_in, ch_out in zip(ctx.inputs, ctx.outputs):
+        np.multiply(ch_in[:ctx.frame_count], gain, out=ch_out[:ctx.frame_count])
 ```

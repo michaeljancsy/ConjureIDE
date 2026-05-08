@@ -281,30 +281,36 @@ extension PresetBundle {
               font: 13px -apple-system, system-ui, sans-serif;
               background: Canvas; color: CanvasText;
             }
-            body {
+            .conjure-ui {
               display: flex; flex-direction: column;
-              justify-content: center;
-              padding: 20px 24px;
+              gap: 12px;
+              padding: 12px;
             }
-            /* Theme the cdp-ui components via CSS custom properties. */
+            cdp-slider { min-height: 24px; min-width: 100px; }
+            cdp-knob   { min-width: 40px; min-height: 40px; }
+            cdp-xy     { min-width: 80px; min-height: 80px; }
+            cdp-toggle { min-height: 24px; min-width: 32px; }
+            cdp-choice { min-height: 28px; min-width: 80px; }
             cdp-panel, cdp-slider, cdp-toggle, cdp-choice, cdp-xy, cdp-knob {
               --cdp-accent: currentColor;
             }
           </style>
         </head>
         <body>
-          <cdp-panel auto></cdp-panel>
-          <!--
-            Swap the line above for anything you want. Examples:
-              <cdp-slider param="0"></cdp-slider>
-              <cdp-toggle param="Bypass"></cdp-toggle>
-              <cdp-choice param="Mode"></cdp-choice>
-              <cdp-xy param-x="0" param-y="1"></cdp-xy>
-              <cdp-knob param="cutoff"></cdp-knob>
-            The library is documented at `window.ConjureDSP.ui` —
-            primitives (ConjureDSP.ui.control(i), formatValue, ...) are
-            available when you want to render your own widgets.
-          -->
+          <main class="conjure-ui">
+            <cdp-panel auto></cdp-panel>
+            <!--
+              Swap the line above for anything you want. Examples:
+                <cdp-slider param="0"></cdp-slider>
+                <cdp-toggle param="Bypass"></cdp-toggle>
+                <cdp-choice param="Mode"></cdp-choice>
+                <cdp-xy param-x="0" param-y="1"></cdp-xy>
+                <cdp-knob param="cutoff"></cdp-knob>
+              The library is documented at `window.ConjureDSP.ui` —
+              primitives (ConjureDSP.ui.control(i), formatValue, ...) are
+              available when you want to render your own widgets.
+            -->
+          </main>
         </body>
         </html>
         """

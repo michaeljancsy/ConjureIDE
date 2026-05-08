@@ -1,3 +1,3 @@
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-    for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = inputs[ch][:frame_count]
+def process(ctx):
+    for ch in range(len(ctx.inputs)):
+        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count]

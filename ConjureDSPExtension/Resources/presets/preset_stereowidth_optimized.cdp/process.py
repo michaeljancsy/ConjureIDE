@@ -10,7 +10,7 @@ _scratch_mid = None
 _scratch_side = None
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Stereo Width — mid/side stereo width control.
 
@@ -25,24 +25,24 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _scratch_mid, _scratch_side
 
-    width = params["width"]
+    width = ctx.params["width"]
 
-    n_ch = len(inputs)
+    n_ch = len(ctx.inputs)
 
     if n_ch < 2:
         # Mono: passthrough
-        outputs[0][:frame_count] = inputs[0][:frame_count]
+        ctx.outputs[0][:ctx.frame_count] = ctx.inputs[0][:ctx.frame_count]
         return
 
     # Ensure scratch buffers are large enough
-    if _scratch_mid is None or len(_scratch_mid) < frame_count:
-        _scratch_mid = np.empty(frame_count, dtype=np.float32)
-        _scratch_side = np.empty(frame_count, dtype=np.float32)
+    if _scratch_mid is None or len(_scratch_mid) < ctx.frame_count:
+        _scratch_mid = np.empty(ctx.frame_count, dtype=np.float32)
+        _scratch_side = np.empty(ctx.frame_count, dtype=np.float32)
 
-    left = inputs[0][:frame_count]
-    right = inputs[1][:frame_count]
-    mid = _scratch_mid[:frame_count]
-    side = _scratch_side[:frame_count]
+    left = ctx.inputs[0][:ctx.frame_count]
+    right = ctx.inputs[1][:ctx.frame_count]
+    mid = _scratch_mid[:ctx.frame_count]
+    side = _scratch_side[:ctx.frame_count]
 
     # Encode to mid/side
     np.add(left, right, out=mid)
@@ -54,5 +54,5 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     np.multiply(side, width, out=side)
 
     # Decode back to L/R
-    np.add(mid, side, out=outputs[0][:frame_count])
-    np.subtract(mid, side, out=outputs[1][:frame_count])
+    np.add(mid, side, out=ctx.outputs[0][:ctx.frame_count])
+    np.subtract(mid, side, out=ctx.outputs[1][:ctx.frame_count])

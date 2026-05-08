@@ -22,7 +22,7 @@ struct BundleUIValidatorTests {
         manifest: String,
         uiHTML: String? = nil,
         entryScriptName: String = "process.py",
-        entryScriptBody: String = "def process(i,o,f,s,p): pass\n"
+        entryScriptBody: String = "def process(ctx): pass\n"
     ) throws -> PresetBundle {
         let tempRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("BundleUIValidatorTests-\(UUID().uuidString).cdp")
@@ -597,6 +597,66 @@ struct BundleUIValidatorTests {
         let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
         let report = BundleUIValidator.validate(bundle)
         #expect(!report.issues.contains { $0.check == "no_interactive_surface" })
+    }
+
+    // MARK: - control_explicit_size_too_small
+
+    @Test func inlineStyleTooSmallSliderWarns() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff" style="width:30px;height:8px"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let issue = report.issues.first { $0.check == "control_explicit_size_too_small" }
+        #expect(issue != nil, "30x8 inline cdp-slider should warn; issues: \(report.issues)")
+        #expect(issue?.severity == .warn)
+    }
+
+    @Test func styleBlockTooSmallSliderWarns() throws {
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-slider { width: 30px; height: 8px; }
+        </style></head><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "control_explicit_size_too_small" },
+                "<style> cdp-slider { width:30px; height:8px } should warn; issues: \(report.issues)")
+    }
+
+    @Test func percentSizeNotFlagged() throws {
+        // Relative units are out of scope — runtime smoke test handles them.
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-slider { width: 100%; }
+        </style></head><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "control_explicit_size_too_small" },
+                "% width must not trigger; issues: \(report.issues)")
+    }
+
+    @Test func verticalSliderShapeNotFlagged() throws {
+        // 16x140 is a deliberate vertical slider — long axis >= 60, short
+        // axis at the threshold. Should not warn.
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-slider { width: 16px; height: 140px; }
+        </style></head><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "control_explicit_size_too_small" },
+                "vertical 16x140 slider must not trigger; issues: \(report.issues)")
     }
 
     // MARK: - param_no_ui_binding (inverse coverage check)
@@ -1206,5 +1266,261 @@ struct BundleUIValidatorTests {
         let report = BundleUIValidator.validate(bundle)
         #expect(report.status == .warn)
         #expect(report.issues.allSatisfy { $0.severity == .warn })
+    }
+
+    // MARK: - state_key_referenced_in_ui
+
+    /// Baseline: HTML refers to a STATE key declared in the script's
+    /// `STATE = {…}` dict — no issue is emitted.
+    @Test func declaredStateKeyResolves() throws {
+        let scriptBody = """
+        STATE = {"declared_key": 0}
+
+        def process(ctx):
+            pass
+        """
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          ConjureDSP.ready(() => {
+            const v = ConjureDSP.state.get('declared_key');
+            ConjureDSP.state.set('declared_key', v);
+          });
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: baselineManifest,
+            uiHTML: ui,
+            entryScriptName: "process.py",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
+                "declared key 'declared_key' must resolve cleanly; issues: \(report.issues)")
+    }
+
+    /// Typo case: the UI references a key that doesn't exist in the
+    /// script's STATE dict. Validator must fail and offer the nearest
+    /// declared name as a "did you mean" hint.
+    @Test func unresolvedStateKeyFlaggedWithSuggestion() throws {
+        let scriptBody = """
+        STATE = {"declared_key": 0}
+
+        def process(ctx):
+            pass
+        """
+        // Typo: declared_kye. Levenshtein distance 1 from declared_key.
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          ConjureDSP.state.set('declared_kye', 1);
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: baselineManifest,
+            uiHTML: ui,
+            entryScriptName: "process.py",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        let issue = report.issues.first { $0.check == "state_key_referenced_in_ui" }
+        #expect(issue != nil, "typo 'declared_kye' must be flagged; got \(report.issues)")
+        #expect(issue?.severity == .fail)
+        #expect(issue?.suggestion?.contains("declared_key") == true,
+                "suggestion must point at the nearest declared name; got \(issue?.suggestion ?? "<nil>")")
+    }
+
+    /// Dynamic-key references — first arg isn't a literal — are
+    /// silently skipped because we can't statically resolve the key.
+    @Test func dynamicStateKeyReferenceSkipped() throws {
+        let scriptBody = """
+        STATE = {"declared_key": 0}
+
+        def process(ctx):
+            pass
+        """
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          var myVar = 'whatever';
+          ConjureDSP.state.set(myVar, 1);
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: baselineManifest,
+            uiHTML: ui,
+            entryScriptName: "process.py",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
+                "dynamic-key references (non-literal first arg) must be silently skipped")
+    }
+
+    /// Backtick template-literal quoting must resolve the same way as
+    /// single / double quotes. People template-literal these "for no
+    /// real reason" all the time.
+    @Test func backtickQuotedStateKeyResolves() throws {
+        let scriptBody = """
+        STATE = {"backtick_key": 0}
+
+        def process(ctx):
+            pass
+        """
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          const v = ConjureDSP.state.get(`backtick_key`);
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: baselineManifest,
+            uiHTML: ui,
+            entryScriptName: "process.py",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
+                "backtick-quoted state key must resolve; issues: \(report.issues)")
+    }
+
+    /// Both single-quote and double-quote forms must work. (The
+    /// regex shouldn't be biased toward one quote style.)
+    @Test func bothQuoteStylesResolveStateKeys() throws {
+        let scriptBody = """
+        STATE = {"foo": 0, "bar": 0}
+
+        def process(ctx):
+            pass
+        """
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          ConjureDSP.state.set("foo", 1);
+          ConjureDSP.state.set('bar', 2);
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: baselineManifest,
+            uiHTML: ui,
+            entryScriptName: "process.py",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
+                "both quote styles must resolve declared state keys; issues: \(report.issues)")
+    }
+
+    /// Bug-report shape: STATE dict with list values + a scalar value.
+    /// The Python parser must extract top-level keys without choking on
+    /// list / dict literals in the value position, and must not emit
+    /// `state_keys_unparseable` for this textbook shape.
+    @Test func listAndScalarStateValuesResolve() throws {
+        let scriptBody = """
+        STATE = {
+            "snap_cutoff":    [1000.0, 1000.0, 1000.0, 1000.0],
+            "snap_resonance": [0.707,  0.707,  0.707,  0.707],
+            "active":         0,
+        }
+
+        def process(ctx):
+            pass
+        """
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          ConjureDSP.ready(() => {
+            const c = ConjureDSP.state.get('snap_cutoff') || [];
+            const r = ConjureDSP.state.get('snap_resonance') || [];
+            const a = ConjureDSP.state.get('active');
+            ConjureDSP.state.set('snap_cutoff', c);
+            ConjureDSP.state.set('snap_resonance', r);
+            ConjureDSP.state.set('active', a);
+          });
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: baselineManifest,
+            uiHTML: ui,
+            entryScriptName: "process.py",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "state_keys_unparseable" },
+                "list/dict-valued STATE keys must parse cleanly; issues: \(report.issues)")
+        #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
+                "all referenced keys are declared and must resolve; issues: \(report.issues)")
+    }
+
+    /// Rust scripts use a dynamic raw-bytes STATE channel — there are no
+    /// statically-declared keys for the validator to compare UI
+    /// references against. The validator must not emit
+    /// `state_keys_unparseable` (false-positive warn) or
+    /// `state_key_referenced_in_ui` (false-positive fail) for any UI
+    /// `ConjureDSP.state.*` reference paired with a `state!()` Rust
+    /// script.
+    @Test func rustStateMacroSkipsLint() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.rs",
+          "language": "rust",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 400,
+            "height": 240,
+            "fps": 30,
+            "audioFrames": false
+          }
+        }
+        """
+        let scriptBody = """
+        use conjuredsp::*;
+        setup!();
+        params! { CUTOFF = freq() }
+        state!();
+
+        #[no_mangle]
+        pub extern "C" fn process(frame_count: u32, sample_rate: f32) {
+            let _cx = ctx(frame_count, sample_rate);
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          ConjureDSP.ready(() => {
+            const v = ConjureDSP.state.get('whatever_key');
+            ConjureDSP.state.set('whatever_key', v);
+          });
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: manifest,
+            uiHTML: ui,
+            entryScriptName: "process.rs",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "state_keys_unparseable" },
+                "Rust scripts must not trigger state_keys_unparseable; issues: \(report.issues)")
+        #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
+                "Rust scripts use a dynamic byte API; UI state.* references must not be flagged; issues: \(report.issues)")
     }
 }

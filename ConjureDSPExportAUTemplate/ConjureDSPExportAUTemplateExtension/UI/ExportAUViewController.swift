@@ -171,6 +171,7 @@ public class ExportAUViewController: AUViewController, AUAudioUnitFactory {
             config: config,
             customUIEntryURL: self.customUIEntryURL,
             captureManager: self.captureManager,
+            stateManager: self.customUIEntryURL != nil ? au.presetStateManager : nil,
             pythonRuntimeMissing: au.pythonRuntimeMissing,
             loadError: au.loadError,
             onLayoutChange: { [weak self] showDebug, showError in

@@ -2,6 +2,32 @@ use crate::kernel::TransportState;
 use crate::params::{ParamMetadata, TelemetryMetadata, PARAM_COUNT, TELEMETRY_LEN};
 use std::any::Any;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+/// State snapshot passed to [`Backend::process`].
+///
+/// The kernel calls `kernel.snapshot_state()` once per render block and
+/// hands the result to the backend. Backends compare `generation` against
+/// their cached gen on every call; on mismatch they re-deserialize from
+/// `bytes` and update their cache. In the steady state (no UI / MCP
+/// writes since the last block), the comparison is a single Acquire load
+/// and the backend short-circuits to its cached parsed value.
+#[derive(Clone)]
+pub struct StateSnapshot {
+    pub generation: u64,
+    pub bytes: Arc<Vec<u8>>,
+}
+
+impl StateSnapshot {
+    /// Sentinel "no state writer" value for code paths that don't have a
+    /// kernel handy (benchmarks, tests). Empty `{}` body, generation 0.
+    pub fn empty() -> Self {
+        StateSnapshot {
+            generation: 0,
+            bytes: Arc::new(b"{}".to_vec()),
+        }
+    }
+}
 
 /// Optional sidechain input bus passed to [`Backend::process`].
 ///
@@ -73,6 +99,7 @@ pub trait Backend: Any {
         params: &[f32; PARAM_COUNT],
         transport: &TransportState,
         sidechain: SidechainInput<'_>,
+        state: &StateSnapshot,
     ) -> bool;
 
     /// Returns the last error message, if any.
@@ -144,5 +171,22 @@ pub trait Backend: Any {
         _frame_count: usize,
         _out: &mut [f32],
     ) {
+    }
+
+    /// Returns the script-declared state defaults as a JSON string, or
+    /// `None` when the script declared none. Python's `STATE = {…}`
+    /// produces `Some(json)`; WASM scripts return `None` (their
+    /// defaults are baked into the type's `Default` impl and are
+    /// applied transparently by the deserializer).
+    fn state_defaults_json(&self) -> Option<&str> {
+        None
+    }
+
+    /// Returns the script-declared cap on the state buffer in bytes,
+    /// or `None` to fall back to the kernel's default. WASM scripts
+    /// declare this via `state!(T, max_bytes = N)`; Python presets
+    /// can opt in via `STATE_MAX_BYTES = N`.
+    fn state_max_bytes(&self) -> Option<usize> {
+        None
     }
 }

@@ -6,7 +6,7 @@ PARAMS = {
 }
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Wavefolder — folds the waveform back when it exceeds +/-1.
 
@@ -19,12 +19,12 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     Params:
         drive: Fold intensity (1–20x)
     """
-    drive = params["drive"]
+    drive = ctx.params["drive"]
 
-    for ch in range(len(inputs)):
-        x = outputs[ch][:frame_count]
-        np.multiply(inputs[ch][:frame_count], drive, out=x)
+    for ch in range(len(ctx.inputs)):
+        x = ctx.outputs[ch][:ctx.frame_count]
+        np.multiply(ctx.inputs[ch][:ctx.frame_count], drive, out=x)
         # Triangle-wave fold: maps any value into [-1, 1]
         t = (x + 1.0) * 0.25
         t = t - np.floor(t)
-        outputs[ch][:frame_count] = 1.0 - np.abs(t * 4.0 - 2.0)
+        ctx.outputs[ch][:ctx.frame_count] = 1.0 - np.abs(t * 4.0 - 2.0)

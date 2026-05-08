@@ -55,25 +55,25 @@ class _S:
         self.comb_fb = [[0.0 for _ in range(2)] for _ in range(nch)]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    pipes = params["pipes"] / 100.0
-    breath = params["breath"] / 100.0
-    sub = params["sub"] / 100.0
-    air = params["air"] / 100.0
-    mx = params["mix"]
+    pipes = ctx.params["pipes"] / 100.0
+    breath = ctx.params["breath"] / 100.0
+    sub = ctx.params["sub"] / 100.0
+    air = ctx.params["air"] / 100.0
+    mx = ctx.params["mix"]
 
     pipe_q = 12.0 + 28.0 * pipes
-    pipe_c = [BiquadCoeffs.bandpass(PIPE_HZ[k], pipe_q, sample_rate)
+    pipe_c = [BiquadCoeffs.bandpass(PIPE_HZ[k], pipe_q, ctx.sample_rate)
               for k in range(8)]
-    sub_lpc = BiquadCoeffs.lowpass(70.0, 0.707, sample_rate)
-    comb_lpc = BiquadCoeffs.lowpass(2200.0, 0.707, sample_rate)
+    sub_lpc = BiquadCoeffs.lowpass(70.0, 0.707, ctx.sample_rate)
+    comb_lpc = BiquadCoeffs.lowpass(2200.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         s.sub_lp[ch].set_coeffs(sub_lpc)
         for k in range(8):
@@ -81,19 +81,19 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         for k in range(2):
             s.comb_lp[ch][k].set_coeffs(comb_lpc)
 
-    ap_d = [max(AP_MS[k] * 0.001 * sample_rate, 1.0) for k in range(2)]
-    comb_d = [COMB_MS[k] * 0.001 * sample_rate for k in range(2)]
+    ap_d = [max(AP_MS[k] * 0.001 * ctx.sample_rate, 1.0) for k in range(2)]
+    comb_d = [COMB_MS[k] * 0.001 * ctx.sample_rate for k in range(2)]
     comb_fb_amt = 0.50 + 0.35 * air
 
     sub_gain = 0.4 + 0.8 * sub
     pipe_base_gain = 1.0 / 8.0
     breath_depth = 0.50 * breath
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         bm = [s.breath_lfo[k].tick() for k in range(8)]
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: sub-octave from rectified envelope
             sub_voice = s.sub_lp[ch].process_sample(abs(dry)) * sub_gain
@@ -125,4 +125,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             tail_sum = tail_sum * 0.5
 
             wet = pipe_sum + sub_voice + sig * 0.3 + tail_sum
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

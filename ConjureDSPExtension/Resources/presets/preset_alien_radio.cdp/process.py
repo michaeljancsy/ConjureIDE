@@ -60,32 +60,32 @@ class _S:
         self.lfo_interfere_tone = LFO(sr, freq=INTERFERE_TONE_HZ, waveform="sine")
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    drift = params["drift"] / 100.0
-    interference = params["interference"] / 100.0
-    static = params["static"] / 100.0
-    crush = params["crush"] / 100.0
-    mx = params["mix"]
+    drift = ctx.params["drift"] / 100.0
+    interference = ctx.params["interference"] / 100.0
+    static = ctx.params["static"] / 100.0
+    crush = ctx.params["crush"] / 100.0
+    mx = ctx.params["mix"]
 
     # Per-channel bandpass coefficients
     for ch in range(nch):
-        bpc = BiquadCoeffs.bandpass(BP_HZ[ch], BP_Q, sample_rate)
+        bpc = BiquadCoeffs.bandpass(BP_HZ[ch], BP_Q, ctx.sample_rate)
         s.bp[ch].set_coeffs(bpc)
 
     # Final highpass at 250 Hz (per-channel state, same coeffs)
-    hpc = BiquadCoeffs.highpass(250.0, 0.707, sample_rate)
+    hpc = BiquadCoeffs.highpass(250.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         s.hp[ch].set_coeffs(hpc)
 
     # Heterodyne squeal: delay = period of carrier frequency (per channel)
-    squeal_d = [max(sample_rate / CARRIER_HZ[ch], 1.0) for ch in range(nch)]
+    squeal_d = [max(ctx.sample_rate / CARRIER_HZ[ch], 1.0) for ch in range(nch)]
 
     # Bit-crush levels: 3 bits at crush=1, 12 bits at crush=0
     bits = 12.0 - 9.0 * crush
@@ -96,7 +96,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     sh_period = max(int(1.0 + 5.0 * crush), 1)
 
     # Squelch tremolo smoothing (12 ms one-pole)
-    trem_alpha = math.exp(-1.0 / (0.012 * sample_rate))
+    trem_alpha = math.exp(-1.0 / (0.012 * ctx.sample_rate))
     one_minus_alpha = 1.0 - trem_alpha
     trem_depth = interference * 0.6
 
@@ -108,7 +108,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
 
     wet = [0.0 for _ in range(nch)]
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # Tick all LFOs once per sample
         d_lfo = s.lfo_drift.tick()
         car0 = s.lfo_carriers[0].tick()
@@ -134,7 +134,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         car = [car_mod0, car_mod1]
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: per-channel bandpass
             x = s.bp[ch].process_sample(dry)
@@ -172,6 +172,6 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
 
         # Stage I: final highpass + wet/dry mix
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
             sig = s.hp[ch].process_sample(wet[ch])
-            outputs[ch][i] = dry * (1.0 - mx) + sig * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + sig * mx

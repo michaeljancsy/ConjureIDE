@@ -52,36 +52,36 @@ class _S:
         self.comb_lp = [Biquad() for _ in range(nch)]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    radio = params["radio"] / 100.0
-    dropout = params["dropout"] / 100.0
-    fuzz = params["fuzz"] / 100.0
-    distance = params["distance"] / 100.0
-    mx = params["mix"]
+    radio = ctx.params["radio"] / 100.0
+    dropout = ctx.params["dropout"] / 100.0
+    fuzz = ctx.params["fuzz"] / 100.0
+    distance = ctx.params["distance"] / 100.0
+    mx = ctx.params["mix"]
 
     bp_q = 4.0 + 12.0 * radio
-    bp_c = BiquadCoeffs.bandpass(BP_HZ, bp_q, sample_rate)
-    comb_lpc = BiquadCoeffs.lowpass(1600.0, 0.707, sample_rate)
+    bp_c = BiquadCoeffs.bandpass(BP_HZ, bp_q, ctx.sample_rate)
+    comb_lpc = BiquadCoeffs.lowpass(1600.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         s.bp[ch].set_coeffs(bp_c)
         s.comb_lp[ch].set_coeffs(comb_lpc)
 
-    ap_d = [max(AP_MS[k] * 0.001 * sample_rate, 1.0) for k in range(2)]
-    comb_d = COMB_MS * 0.001 * sample_rate
+    ap_d = [max(AP_MS[k] * 0.001 * ctx.sample_rate, 1.0) for k in range(2)]
+    comb_d = COMB_MS * 0.001 * ctx.sample_rate
     comb_fb_amt = 0.45 + 0.40 * distance
 
     drive = 1.0 + 5.0 * fuzz
     # Dropout threshold: higher dropout → higher threshold → more silence
     drop_thresh = -0.4 + 1.2 * dropout
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         d0 = s.dropout_lfo[0].tick()
         d1 = s.dropout_lfo[1].tick()
         d2 = s.dropout_lfo[2].tick()
@@ -97,7 +97,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             gate_val = gate / 0.3
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: narrow telegraph bandpass
             filtered = s.bp[ch].process_sample(dry)
@@ -123,4 +123,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             s.comb_fb[ch] = s.comb[ch].read(comb_d)
 
             wet = fuzzed + sig * 0.4 + s.comb_fb[ch] * 0.5
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

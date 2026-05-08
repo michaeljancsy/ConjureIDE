@@ -41,21 +41,25 @@ Edit `ConjureDSPExtension/Resources/process.py`. The `process()` function is cal
 ```python
 import numpy as np
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-    for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5
+def process(ctx):
+    for ch_in, ch_out in zip(ctx.inputs, ctx.outputs):
+        ch_out[:ctx.frame_count] = ch_in[:ctx.frame_count] * 0.5
 ```
 
-The 7-arg signature is the canonical convention. `params` is a dict
-keyed by parameter name (when a `PARAMS` dict is declared); `_transport`
-and `_telemetry` carry the host's transport state and the per-block
-telemetry dict. Use the underscore prefix when you don't read them.
+The single accepted signature is `def process(ctx):`. The host calls
+`process()` once per render callback with a `ctx` namespace exposing the
+audio buffers and host state.
 
-**Parameters:**
-- `inputs` — list of numpy float32 arrays (one per channel, pre-allocated to `max_frames`)
-- `outputs` — list of numpy float32 arrays (one per channel, pre-allocated to `max_frames`)
-- `frame_count` — number of valid samples this callback (may be less than array length)
-- `sample_rate` — current sample rate (e.g. 44100.0)
+**`ctx` fields:**
+- `ctx.inputs` — list of numpy float32 arrays (one per channel, pre-allocated to `max_frames`)
+- `ctx.outputs` — list of numpy float32 arrays (one per channel, pre-allocated to `max_frames`)
+- `ctx.frame_count` — number of valid samples this callback (may be less than array length)
+- `ctx.sample_rate` — current sample rate (e.g. 44100.0)
+- `ctx.params` — dict keyed by parameter name (when a `PARAMS` dict is declared)
+- `ctx.transport` — read-only mapping with `bpm`, `beat`, `is_playing`, `time_sig_numerator`, `time_sig_denominator`, `sample_position`
+- `ctx.telemetry` — write per-block scalar readouts (when a `TELEMETRY` dict is declared)
+- `ctx.state` — read-only mapping over the bundle-private STATE channel
+- `ctx.sidechain` — sidechain input arrays (when a sidechain bus is connected)
 
 ## Project structure
 

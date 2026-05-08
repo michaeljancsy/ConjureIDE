@@ -100,9 +100,11 @@ enum BundleUIValidator {
             issues.append(contentsOf: checkParamReferences(html: html, bundle: bundle))
             issues.append(contentsOf: checkUnboundDeclaredParams(html: html, bundle: bundle))
             issues.append(contentsOf: checkTelemetryReferences(html: html, bundle: bundle))
+            issues.append(contentsOf: checkStateReferences(html: html, bundle: bundle))
             issues.append(contentsOf: checkNoExternalNetwork(html: html))
             issues.append(contentsOf: checkNoSystemColorInCanvas(html: html))
             issues.append(contentsOf: checkHasInteractiveSurface(html: html, bundle: bundle))
+            issues.append(contentsOf: checkExplicitControlSizes(html: html))
             issues.append(contentsOf: checkTextContrast(html: html))
             issues.append(contentsOf: checkColorSchemeDeclared(html: html))
         }
@@ -521,6 +523,193 @@ enum BundleUIValidator {
                 suggestion: "Add per-param controls, or drop in <cdp-panel auto></cdp-panel> as a catch-all. Every declared parameter must be reachable from the UI."
             )
         ]
+    }
+
+    /// Per-tag minimum sizes (px) used by `checkExplicitControlSizes`.
+    /// Must match the runtime smoke test's thresholds.
+    private struct ControlSizeMin {
+        let width: Double
+        let height: Double
+    }
+
+    private static let controlSizeMinimums: [String: ControlSizeMin] = [
+        "cdp-slider": ControlSizeMin(width: 60, height: 16),
+        "cdp-knob":   ControlSizeMin(width: 24, height: 24),
+        "cdp-xy":     ControlSizeMin(width: 60, height: 60),
+        "cdp-toggle": ControlSizeMin(width: 28, height: 16),
+        "cdp-choice": ControlSizeMin(width: 60, height: 24),
+    ]
+
+    /// Lint that flags `cdp-*` controls explicitly sized below per-tag
+    /// minimums via `<style>` rules or inline `style=` attrs. Catches
+    /// scaffolds like `cdp-slider { width: 30px }` or
+    /// `<cdp-knob style="width:18px;height:18px">` that ship with controls
+    /// too small to grab. Only `px` values are considered — `%`, `em`, and
+    /// other relative units are deferred to the runtime smoke test.
+    private static func checkExplicitControlSizes(html: String) -> [Issue] {
+        var issues: [Issue] = []
+
+        // Style block rules: walk every `selector { decls }` from <style>
+        // and resolve which cdp-* tag(s) the rule targets.
+        for rule in extractCSSRules(from: html) {
+            let tags = cdpTagsInSelector(rule.selector)
+            guard !tags.isEmpty else { continue }
+            let decls = parseDeclarations(rule.declarations)
+            let widthPx = pxValue(decls["width"])
+            let heightPx = pxValue(decls["height"])
+            for tag in tags {
+                issues.append(contentsOf: explicitSizeIssues(
+                    tag: tag,
+                    widthPx: widthPx,
+                    heightPx: heightPx,
+                    sourceLabel: "<style> rule \(rule.selector.trimmingCharacters(in: .whitespacesAndNewlines))"
+                ))
+            }
+        }
+
+        // Inline `style=` attrs on cdp-* tags.
+        let tagPattern = #"<(cdp-(?:slider|knob|xy|toggle|choice))\b([^>]*)>"#
+        if let tagRegex = try? NSRegularExpression(pattern: tagPattern, options: [.caseInsensitive]) {
+            let ns = html as NSString
+            let matches = tagRegex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+            for match in matches where match.numberOfRanges >= 3 {
+                let tag = ns.substring(with: match.range(at: 1)).lowercased()
+                let attrs = ns.substring(with: match.range(at: 2))
+                guard let styleVal = inlineStyleAttr(attrs) else { continue }
+                let decls = parseDeclarations(styleVal)
+                let widthPx = pxValue(decls["width"])
+                let heightPx = pxValue(decls["height"])
+                issues.append(contentsOf: explicitSizeIssues(
+                    tag: tag,
+                    widthPx: widthPx,
+                    heightPx: heightPx,
+                    sourceLabel: "<\(tag) style=\"…\">"
+                ))
+            }
+        }
+
+        return issues
+    }
+
+    /// Extract the value of `style="…"` (or `'…'`) from a tag's attribute
+    /// segment. Returns nil if no style attr present.
+    private static func inlineStyleAttr(_ attrs: String) -> String? {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"\bstyle\s*=\s*["']([^"']*)["']"#,
+            options: [.caseInsensitive]
+        ) else { return nil }
+        let ns = attrs as NSString
+        guard let match = regex.firstMatch(
+            in: attrs, range: NSRange(location: 0, length: ns.length)
+        ), match.numberOfRanges >= 2 else { return nil }
+        return ns.substring(with: match.range(at: 1))
+    }
+
+    /// Find every `cdp-(slider|knob|xy|toggle|choice)` tag referenced as
+    /// a type selector in `selector`. Splits on commas first so
+    /// `cdp-slider, cdp-knob` resolves to both. Within each subselector,
+    /// returns every cdp-* token found (covers `body cdp-slider` and
+    /// `cdp-slider.foo`). Tag names are lowercased for the keys in
+    /// `controlSizeMinimums`.
+    private static func cdpTagsInSelector(_ selector: String) -> [String] {
+        let parts = selector.split(separator: ",")
+        var tags: Set<String> = []
+        guard let regex = try? NSRegularExpression(
+            pattern: #"\bcdp-(slider|knob|xy|toggle|choice)\b"#,
+            options: [.caseInsensitive]
+        ) else { return [] }
+        for sub in parts {
+            let s = String(sub)
+            let ns = s as NSString
+            for m in regex.matches(in: s, range: NSRange(location: 0, length: ns.length)) where m.numberOfRanges >= 2 {
+                tags.insert("cdp-" + ns.substring(with: m.range(at: 1)).lowercased())
+            }
+        }
+        return Array(tags).sorted()
+    }
+
+    /// Parse a CSS length value as `px`. Returns the numeric magnitude
+    /// only when the unit is literally `px` (case-insensitive). Any other
+    /// unit (`%`, `em`, `rem`, `vw`, `vh`, `auto`, `fit-content`, etc.) or
+    /// unparseable value returns nil — those are out of scope for this
+    /// static lint and deferred to the runtime smoke test.
+    private static func pxValue(_ raw: String?) -> Double? {
+        guard let raw = raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let regex = try? NSRegularExpression(
+            pattern: #"^([0-9]+(?:\.[0-9]+)?)\s*px$"#,
+            options: [.caseInsensitive]
+        ) else { return nil }
+        let ns = trimmed as NSString
+        guard let m = regex.firstMatch(
+            in: trimmed, range: NSRange(location: 0, length: ns.length)
+        ), m.numberOfRanges >= 2 else { return nil }
+        return Double(ns.substring(with: m.range(at: 1)))
+    }
+
+    /// Decide whether a (widthPx, heightPx) pair on `tag` falls below
+    /// the per-tag minimum and produce one issue per offending dimension.
+    /// `cdp-slider` has the special vertical-slider exception:
+    /// `min(w, h) < 16` is fine if `max(w, h) >= 60` (deliberate vertical
+    /// orientation). Both nil (no px width or height declared) returns
+    /// the empty list.
+    private static func explicitSizeIssues(
+        tag: String,
+        widthPx: Double?,
+        heightPx: Double?,
+        sourceLabel: String
+    ) -> [Issue] {
+        guard let mins = controlSizeMinimums[tag] else { return [] }
+
+        if tag == "cdp-slider" {
+            // Slider can be vertical; only flag when both axes are too
+            // small to be either orientation. Skip when neither dim is
+            // explicitly set, or when only one is set (the other can
+            // default to a usable size).
+            guard let w = widthPx, let h = heightPx else { return [] }
+            let shortAxis = min(w, h)
+            let longAxis = max(w, h)
+            guard shortAxis < mins.height, longAxis < mins.width else { return [] }
+            return [
+                Issue(
+                    severity: .warn,
+                    check: "control_explicit_size_too_small",
+                    file: "ui/index.html",
+                    message: "\(sourceLabel) sets \(tag) to \(formatPx(w))×\(formatPx(h)), below the recommended minimum (\(Int(mins.width))×\(Int(mins.height))). Users may not be able to grab this control.",
+                    suggestion: "Consider removing the explicit dimension and letting the component's default size take over. For a vertical slider, keep one axis at or above \(Int(mins.width))px."
+                )
+            ]
+        }
+
+        var issues: [Issue] = []
+        if let w = widthPx, w < mins.width {
+            issues.append(Issue(
+                severity: .warn,
+                check: "control_explicit_size_too_small",
+                file: "ui/index.html",
+                message: "\(sourceLabel) with explicit width:\(formatPx(w))px is below the recommended minimum (\(Int(mins.width))px). Users may not be able to grab this control.",
+                suggestion: "Consider removing the explicit dimension and letting the component's default size take over."
+            ))
+        }
+        if let h = heightPx, h < mins.height {
+            issues.append(Issue(
+                severity: .warn,
+                check: "control_explicit_size_too_small",
+                file: "ui/index.html",
+                message: "\(sourceLabel) with explicit height:\(formatPx(h))px is below the recommended minimum (\(Int(mins.height))px). Users may not be able to grab this control.",
+                suggestion: "Consider removing the explicit dimension and letting the component's default size take over."
+            ))
+        }
+        return issues
+    }
+
+    /// Format a px magnitude without trailing `.0` so `30.0` renders as
+    /// `30` while `30.5` keeps its decimal.
+    private static func formatPx(_ v: Double) -> String {
+        if v.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(Int(v))
+        }
+        return String(v)
     }
 
     /// Scan the UI for text whose color and background are both dark
@@ -1147,6 +1336,199 @@ enum BundleUIValidator {
             range: NSRange(location: 0, length: ns.length),
             withTemplate: ""
         )
+    }
+
+    /// Every `ConjureDSP.state.{get,set,onChange,onAnyChange}('K', ...)`
+    /// reference in the UI must resolve to a key declared in the script's
+    /// `STATE` block (Python) / `state_struct!` block (Rust). The bundle
+    /// STATE channel is bundle-private and not part of the AU parameter
+    /// tree, so a typo here silently fails — `set` is a no-op, `get`
+    /// returns the default, `onChange` never fires.
+    ///
+    /// Dynamic-key references (non-literal first arg, e.g.
+    /// `state.set(myVar, ...)`) are silently skipped — they can't be
+    /// statically resolved. Same for cases where we can't parse the
+    /// script (we emit a `warn` so the author isn't blocked, but each
+    /// individual key reference is otherwise allowed through).
+    ///
+    /// TODO: STATE-defaults-over-cap warning. Need to compare the literal
+    /// `STATE = {...}` / `state_struct!` defaults against a declared
+    /// `STATE_MAX_BYTES = N` / `state!(T, max_bytes = N)`. Both are
+    /// heuristic and the runtime smoke test catches this anyway when the
+    /// kernel rejects on apply, so leaving as a follow-up.
+    private static func checkStateReferences(html: String, bundle: PresetBundle) -> [Issue] {
+        // Rust scripts use a dynamic raw-bytes STATE channel — there are
+        // no statically-declared keys for the validator to compare UI
+        // references against. Skip the lint entirely.
+        if bundle.entryScriptURL.pathExtension.lowercased() == "rs" {
+            return []
+        }
+
+        // Pull every literal-key `state.<api>('KEY', ...)` reference out
+        // of the UI HTML / inline JS. Multi-quote-style support so we
+        // pick up both single- and double-quoted, plus backticks (people
+        // template-literal these for "no real reason" all the time).
+        let refRegex = try? NSRegularExpression(
+            pattern: #"ConjureDSP\.state\.(?:get|set|onChange|onAnyChange)\s*\(\s*(['"`])([^'"`]+)\1"#,
+            options: []
+        )
+        guard let regex = refRegex else { return [] }
+
+        let scanned = stripHTMLComments(html)
+        let ns = scanned as NSString
+        let matches = regex.matches(in: scanned, range: NSRange(location: 0, length: ns.length))
+
+        // No literal references — nothing to validate.
+        if matches.isEmpty { return [] }
+
+        // Try to parse declared STATE keys from the bundle's script
+        // source. Imperfect (regex over Python / Rust source, not a
+        // real parser) so a parse failure falls back to a warn instead
+        // of blocking the author.
+        let scriptKeysOpt = declaredStateKeys(forBundle: bundle)
+
+        var issues: [Issue] = []
+        guard let declared = scriptKeysOpt else {
+            issues.append(
+                Issue(
+                    severity: .warn,
+                    check: "state_keys_unparseable",
+                    file: "ui/index.html",
+                    message: "UI references ConjureDSP.state.* but the validator could not parse STATE keys from the script for verification.",
+                    suggestion: "If the keys are correct at runtime you can ignore this; otherwise simplify the STATE declaration so the static lint can read it (top-level `STATE = {\"key\": default, ...}` for Python). Rust scripts use `state!()` and parse raw bytes themselves, so the validator can't introspect declared keys — runtime behavior is the source of truth."
+                )
+            )
+            return issues
+        }
+
+        let declaredNorms = Set(declared.map { looseNormalize($0) })
+        let declaredDecls = declared.map { name in
+            PresetManifest.ParamDecl(
+                name: name, key: nil, min: 0, max: 0, default: 0,
+                unit: nil, curve: nil, style: nil, options: nil
+            )
+        }
+
+        var seenUnresolved: Set<String> = []
+        for match in matches where match.numberOfRanges >= 3 {
+            let value = ns.substring(with: match.range(at: 2))
+            if declaredNorms.contains(looseNormalize(value)) { continue }
+            if seenUnresolved.contains(value) { continue }
+            seenUnresolved.insert(value)
+            let nearest = nearestDeclaredName(to: value, declared: declaredDecls)
+            issues.append(
+                Issue(
+                    severity: .fail,
+                    check: "state_key_referenced_in_ui",
+                    file: "ui/index.html",
+                    message: "ConjureDSP.state reference uses key \"\(value)\" but the script declares no such STATE key.",
+                    suggestion: nearest.map { "Did you mean \"\($0)\"?" } ?? "Add \"\(value)\" to the script's STATE declaration, or update the UI to use an existing key."
+                )
+            )
+        }
+        return issues
+    }
+
+    /// Best-effort extraction of declared STATE keys from the bundle's
+    /// entry script. Returns nil when we can't parse (caller decides
+    /// whether to warn or proceed).
+    ///
+    /// Python: scan for top-level `STATE = {...}` and pull string keys
+    /// out of the literal dict. Won't catch dynamically-built dicts.
+    /// Rust: scan for `state_struct! { pub struct <Name> { ... } }` and
+    /// pull field names out of the struct body. Won't catch types
+    /// declared outside the macro.
+    private static func declaredStateKeys(forBundle bundle: PresetBundle) -> [String]? {
+        guard let source = try? String(contentsOf: bundle.entryScriptURL, encoding: .utf8) else {
+            return nil
+        }
+        let ext = bundle.entryScriptURL.pathExtension.lowercased()
+        switch ext {
+        case "py":
+            return parsePythonStateKeys(source: source)
+        case "rs":
+            return parseRustStateKeys(source: source)
+        default:
+            return nil
+        }
+    }
+
+    private static func parsePythonStateKeys(source: String) -> [String]? {
+        guard let startRegex = try? NSRegularExpression(
+            pattern: #"(?m)^\s*STATE\s*(?::[^=]+)?=\s*\{"#,
+            options: []
+        ) else { return nil }
+        let ns = source as NSString
+        guard let match = startRegex.firstMatch(
+            in: source, range: NSRange(location: 0, length: ns.length)
+        ) else { return nil }
+        let openIdx = match.range.location + match.range.length - 1  // points at `{`
+
+        var keys: [String] = []
+        var depth = 1
+        var i = openIdx + 1
+        var awaitingKey = true
+
+        while i < ns.length && depth > 0 {
+            let ch = ns.character(at: i)
+
+            // Skip line comments through end of line.
+            if ch == 0x23 /* # */ {
+                while i < ns.length && ns.character(at: i) != 0x0A { i += 1 }
+                continue
+            }
+
+            // Quoted string: capture as a key only if we're at top-level
+            // and awaiting one. Otherwise just skip past it (handles
+            // string values, including ones containing `{`/`}`/`[`/`]`).
+            if ch == 0x22 /* " */ || ch == 0x27 /* ' */ {
+                let quote = ch
+                let strStart = i + 1
+                var j = strStart
+                while j < ns.length {
+                    let c = ns.character(at: j)
+                    if c == 0x5C /* \ */ { j += 2; continue }
+                    if c == quote { break }
+                    j += 1
+                }
+                if depth == 1 && awaitingKey {
+                    let raw = ns.substring(with: NSRange(location: strStart, length: j - strStart))
+                    var k = j + 1
+                    while k < ns.length {
+                        let c = ns.character(at: k)
+                        if c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D { k += 1; continue }
+                        break
+                    }
+                    if k < ns.length && ns.character(at: k) == 0x3A /* : */ {
+                        keys.append(raw)
+                        awaitingKey = false
+                        i = k + 1
+                        continue
+                    }
+                }
+                i = j + 1
+                continue
+            }
+
+            switch ch {
+            case 0x7B /* { */, 0x5B /* [ */, 0x28 /* ( */:
+                depth += 1
+            case 0x7D /* } */, 0x5D /* ] */, 0x29 /* ) */:
+                depth -= 1
+            case 0x2C /* , */:
+                if depth == 1 { awaitingKey = true }
+            default:
+                break
+            }
+            i += 1
+        }
+        guard depth == 0 else { return nil }
+        return keys
+    }
+
+    private static func parseRustStateKeys(source: String) -> [String]? {
+        _ = source
+        return []
     }
 
     /// Every `<cdp-scope telemetry="X">` reference must resolve to a slot

@@ -9,7 +9,7 @@ PARAMS = {
 }
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Gain + Pan — volume control with stereo panning.
 
@@ -19,18 +19,18 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         gain: Volume (-24 to +12 dB)
         pan:  Stereo position (0.0 = hard left, 0.5 = center, 1.0 = hard right)
     """
-    gain_db = params["gain"]
-    pan = params["pan"]
+    gain_db = ctx.params["gain"]
+    pan = ctx.params["pan"]
 
     gain = db_to_gain(gain_db)
-    n_ch = len(inputs)
+    n_ch = len(ctx.inputs)
 
     if n_ch == 1:
         # Mono: just apply gain
-        np.multiply(inputs[0][:frame_count], gain, out=outputs[0][:frame_count])
+        np.multiply(ctx.inputs[0][:ctx.frame_count], gain, out=ctx.outputs[0][:ctx.frame_count])
     else:
         # Stereo: constant-power pan
         left_gain = gain * math.cos(pan * math.pi * 0.5)
         right_gain = gain * math.sin(pan * math.pi * 0.5)
-        np.multiply(inputs[0][:frame_count], left_gain, out=outputs[0][:frame_count])
-        np.multiply(inputs[1][:frame_count], right_gain, out=outputs[1][:frame_count])
+        np.multiply(ctx.inputs[0][:ctx.frame_count], left_gain, out=ctx.outputs[0][:ctx.frame_count])
+        np.multiply(ctx.inputs[1][:ctx.frame_count], right_gain, out=ctx.outputs[1][:ctx.frame_count])

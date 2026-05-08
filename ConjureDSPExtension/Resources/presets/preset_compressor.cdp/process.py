@@ -14,7 +14,7 @@ PARAMS = {
 _envelope = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Compressor — dynamic range compression with envelope follower.
 
@@ -36,26 +36,26 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _envelope
 
-    threshold_db = params["threshold"]
-    ratio = params["ratio"]
-    attack_ms = params["attack"]
-    release_ms = params["release"]
-    makeup_db = params["makeup"]
+    threshold_db = ctx.params["threshold"]
+    ratio = ctx.params["ratio"]
+    attack_ms = ctx.params["attack"]
+    release_ms = ctx.params["release"]
+    makeup_db = ctx.params["makeup"]
 
     threshold = db_to_gain(threshold_db)
     makeup = db_to_gain(makeup_db)
-    attack_coeff = smooth_coeff(attack_ms, sample_rate)
-    release_coeff = smooth_coeff(release_ms, sample_rate)
+    attack_coeff = smooth_coeff(attack_ms, ctx.sample_rate)
+    release_coeff = smooth_coeff(release_ms, ctx.sample_rate)
 
     # Compute gain reduction per sample using peak envelope across channels
-    gain = np.ones(frame_count, dtype=np.float32)
+    gain = np.ones(ctx.frame_count, dtype=np.float32)
     env = _envelope
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # Peak detect across all channels
         peak = 0.0
-        for ch in range(len(inputs)):
-            peak = max(peak, abs(inputs[ch][i]))
+        for ch in range(len(ctx.inputs)):
+            peak = max(peak, abs(ctx.inputs[ch][i]))
 
         # Envelope follower
         if peak > env:
@@ -71,5 +71,5 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
 
     _envelope = env
 
-    for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = inputs[ch][:frame_count] * gain * makeup
+    for ch in range(len(ctx.inputs)):
+        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count] * gain * makeup

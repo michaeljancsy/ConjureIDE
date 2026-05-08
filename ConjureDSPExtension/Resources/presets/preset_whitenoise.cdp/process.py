@@ -16,7 +16,7 @@ def _next_f32():
     return float(_rng_state) / 4294967296.0 * 2.0 - 1.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     White Noise Generator — generates uniform white noise.
 
@@ -28,9 +28,9 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     Params:
         level: Output level (0.0 = silence, 1.0 = full level)
     """
-    amplitude = params["level"]
+    amplitude = ctx.params["level"]
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         sample = _next_f32() * amplitude
-        for ch in range(len(outputs)):
-            outputs[ch][i] = sample
+        for ch in range(len(ctx.outputs)):
+            ctx.outputs[ch][i] = sample

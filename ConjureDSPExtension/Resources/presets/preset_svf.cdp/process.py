@@ -14,7 +14,7 @@ MODE = "low"
 _state = [[0.0, 0.0], [0.0, 0.0]]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Resonant State Variable Filter — multi-mode TPT SVF (LP/HP/BP/Notch).
 
@@ -29,21 +29,21 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _state
 
-    cutoff_hz = min(params["cutoff"], sample_rate * 0.49)
-    resonance = params["resonance"]
+    cutoff_hz = min(ctx.params["cutoff"], ctx.sample_rate * 0.49)
+    resonance = ctx.params["resonance"]
 
-    g = math.tan(math.pi * cutoff_hz / sample_rate)
+    g = math.tan(math.pi * cutoff_hz / ctx.sample_rate)
     k = 1.0 / resonance
     a1 = 1.0 / (1.0 + g * (g + k))
     a2 = g * a1
     a3 = g * a2
 
-    for ch in range(len(inputs)):
+    for ch in range(len(ctx.inputs)):
         ic1eq = _state[ch][0] if ch < len(_state) else 0.0
         ic2eq = _state[ch][1] if ch < len(_state) else 0.0
 
-        for i in range(frame_count):
-            x = inputs[ch][i]
+        for i in range(ctx.frame_count):
+            x = ctx.inputs[ch][i]
             v3 = x - ic2eq
             v1 = a1 * ic1eq + a2 * v3
             v2 = ic2eq + a2 * ic1eq + a3 * v3
@@ -55,13 +55,13 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             high = x - k * v1 - v2
 
             if MODE == "low":
-                outputs[ch][i] = low
+                ctx.outputs[ch][i] = low
             elif MODE == "high":
-                outputs[ch][i] = high
+                ctx.outputs[ch][i] = high
             elif MODE == "band":
-                outputs[ch][i] = band
+                ctx.outputs[ch][i] = band
             else:  # notch
-                outputs[ch][i] = low + high
+                ctx.outputs[ch][i] = low + high
 
         if ch < len(_state):
             _state[ch][0] = ic1eq

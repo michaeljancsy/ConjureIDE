@@ -55,29 +55,29 @@ class _S:
         self.lfo_flutter = LFO(sr, freq=7.0, waveform="sine")
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    wow_ms = params["wow"]
-    flutter_ms = params["flutter"]
-    wear = params["wear"] / 100.0
-    tone = params["tone"] / 100.0
-    mx = params["mix"]
+    wow_ms = ctx.params["wow"]
+    flutter_ms = ctx.params["flutter"]
+    wear = ctx.params["wear"] / 100.0
+    tone = ctx.params["tone"] / 100.0
+    mx = ctx.params["mix"]
 
     # Pre/de-emphasis (frequency-dependent saturation envelope)
-    pre_hsc = BiquadCoeffs.highshelf(5000.0, 0.707, 6.0, sample_rate)
-    de_hsc = BiquadCoeffs.highshelf(5000.0, 0.707, -9.0, sample_rate)
+    pre_hsc = BiquadCoeffs.highshelf(5000.0, 0.707, 6.0, ctx.sample_rate)
+    de_hsc = BiquadCoeffs.highshelf(5000.0, 0.707, -9.0, ctx.sample_rate)
     # Tone shaping
-    lo_shc = BiquadCoeffs.lowshelf(120.0, 0.707, 3.0, sample_rate)
-    hi_shc = BiquadCoeffs.highshelf(8000.0, 0.707, -12.0 * tone, sample_rate)
+    lo_shc = BiquadCoeffs.lowshelf(120.0, 0.707, 3.0, ctx.sample_rate)
+    hi_shc = BiquadCoeffs.highshelf(8000.0, 0.707, -12.0 * tone, ctx.sample_rate)
     # Print-through and feedback lowpasses
-    print_lpc = BiquadCoeffs.lowpass(1500.0, 0.707, sample_rate)
-    echo_lpc = BiquadCoeffs.lowpass(3000.0, 0.707, sample_rate)
+    print_lpc = BiquadCoeffs.lowpass(1500.0, 0.707, ctx.sample_rate)
+    echo_lpc = BiquadCoeffs.lowpass(3000.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         s.pre_hs[ch].set_coeffs(pre_hsc)
         s.de_hs[ch].set_coeffs(de_hsc)
@@ -91,24 +91,24 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     drive_neg = 1.0 + wear * 1.6
 
     # Delay times (samples)
-    base_d = WF_BASE_MS * 0.001 * sample_rate
-    wow_depth = wow_ms * 0.001 * sample_rate
-    flutter_depth = flutter_ms * 0.001 * sample_rate
-    print_d = PRINT_MS * 0.001 * sample_rate
-    echo_d = ECHO_MS * 0.001 * sample_rate
-    comb_d = max(COMB_MS * 0.001 * sample_rate, 1.0)
+    base_d = WF_BASE_MS * 0.001 * ctx.sample_rate
+    wow_depth = wow_ms * 0.001 * ctx.sample_rate
+    flutter_depth = flutter_ms * 0.001 * ctx.sample_rate
+    print_d = PRINT_MS * 0.001 * ctx.sample_rate
+    echo_d = ECHO_MS * 0.001 * ctx.sample_rate
+    comb_d = max(COMB_MS * 0.001 * ctx.sample_rate, 1.0)
 
     print_gain = 0.04  # ≈ −28 dB
     echo_fb_amt = 0.4
     comb_fb_amt = 0.35
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         wlfo = s.lfo_wow.tick()
         flfo = s.lfo_flutter.tick()
         d = max(base_d + wlfo * wow_depth + flfo * flutter_depth, 1.0)
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: wow + flutter modulated delay
             s.wf[ch].write(dry)
@@ -147,4 +147,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             s.comb_fb[ch] = s.comb_dl[ch].read(comb_d)
             x = x + 0.3 * s.comb_fb[ch]
 
-            outputs[ch][i] = dry * (1.0 - mx) + x * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + x * mx

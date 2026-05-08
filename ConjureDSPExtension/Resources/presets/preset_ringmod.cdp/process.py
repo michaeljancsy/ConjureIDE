@@ -10,7 +10,7 @@ PARAMS = {
 _lfo = None
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Ring Modulator — multiplies the signal by a sine-wave carrier.
 
@@ -25,13 +25,13 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _lfo
 
-    carrier_hz = params["frequency"]
+    carrier_hz = ctx.params["frequency"]
 
     if _lfo is None:
-        _lfo = LFO(sample_rate, freq=carrier_hz)
+        _lfo = LFO(ctx.sample_rate, freq=carrier_hz)
     _lfo.set_freq(carrier_hz)
 
-    carrier = _lfo.tick_n(frame_count)
+    carrier = _lfo.tick_n(ctx.frame_count)
 
-    for ch in range(len(inputs)):
-        np.multiply(inputs[ch][:frame_count], carrier, out=outputs[ch][:frame_count])
+    for ch in range(len(ctx.inputs)):
+        np.multiply(ctx.inputs[ch][:ctx.frame_count], carrier, out=ctx.outputs[ch][:ctx.frame_count])

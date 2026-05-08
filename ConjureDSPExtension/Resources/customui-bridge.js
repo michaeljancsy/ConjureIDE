@@ -30,13 +30,13 @@
  *                                       // offFrame() deactivates it.
  *   ConjureDSP.audio.offFrame(cb)       // remove a previously-registered cb
  *
- *   ConjureDSP.transport.tempo               // BPM (read-only snapshot)
+ *   ConjureDSP.transport.bpm                 // tempo in BPM (read-only snapshot)
  *   ConjureDSP.transport.isPlaying           // bool
- *   ConjureDSP.transport.beatPosition        // current beat
+ *   ConjureDSP.transport.beat                // current beat
  *   ConjureDSP.transport.samplePosition      // current sample frame
  *   ConjureDSP.transport.timeSigNumerator    // int (e.g. 4)
  *   ConjureDSP.transport.timeSigDenominator  // int (e.g. 4)
- *   ConjureDSP.transport.onChange(cb)        // cb({tempo, isPlaying, ...})
+ *   ConjureDSP.transport.onChange(cb)        // cb({bpm, isPlaying, beat, ...})
  *                                            // fires only when something
  *                                            // changes; ~30 Hz max. First
  *                                            // subscriber activates the
@@ -45,12 +45,35 @@
  *                                            // Independent of audio.onFrame.
  *   ConjureDSP.transport.offChange(cb)
  *
+ *   ConjureDSP.state.get(key)                // current value for key
+ *   ConjureDSP.state.set(key, value)         // write JSON-serializable value;
+ *                                            // returns true on success, false
+ *                                            // if the resulting mirror would
+ *                                            // exceed MAX_STATE_BYTES (state
+ *                                            // is then NOT mutated).
+ *                                            // Sync-only; no async failure.
+ *   ConjureDSP.state.onChange(key, cb)       // fires whenever state[key] changes
+ *   ConjureDSP.state.onAnyChange(cb)         // fires with (key, value) on any change
+ *   ConjureDSP.state.reset(key)              // restore one key to script default
+ *   ConjureDSP.state.resetAll()              // restore all keys to script defaults
+ *
+ *   IMPORTANT: state values are captured at the moment of `set(key, value)`
+ *   by JSON serialization. Mutating `value` (e.g. pushing to an array) AFTER
+ *   the call does NOT propagate the mutation — the kernel only sees what was
+ *   serialized. Re-call `set(key, value)` to push subsequent changes.
+ *
  * Internal (Swift-facing; do not call from preset code):
- *   ConjureDSP._init(state)             // initial {metadata, values, theme}
+ *   ConjureDSP._init(state)             // initial {metadata, values, theme,
+ *                                       //          state, declaredStateKeys,
+ *                                       //          maxStateBytes}
  *   ConjureDSP._paramUpdate(i, v)       // DAW automation / MIDI / host change
  *   ConjureDSP._setTheme(theme)         // theme flip from OS/app
  *   ConjureDSP._audioFrame(frame)       // audio tick from capture manager
  *   ConjureDSP._transportUpdate(snap)   // host transport change
+ *   ConjureDSP._stateUpdate(key, value) // external state mutation (DAW load,
+ *                                       // MCP, preset switch). key === null &&
+ *                                       // value === null means "everything
+ *                                       // reset" — re-fire onAnyChange.
  */
 
 (function() {
@@ -86,15 +109,28 @@
     // dispatch loop is needed; handlers run synchronously inside
     // _transportUpdate.
     var _transport = {
-        tempo: 0,
+        bpm: 0,
         isPlaying: false,
-        beatPosition: 0,
+        beat: 0,
         samplePosition: 0,
         timeSigNumerator: 4,
         timeSigDenominator: 4,
     };
     var _transportHandlers = [];
     var _transportSubscribed = false;
+
+    // State channel — bundle-private, UI-writable, audio-readable JSON.
+    // The kernel atomically swaps the JSON byte buffer; the audio thread
+    // reads it once per render block; backends (Python/WASM) deserialize
+    // lazily on generation bumps. Used for things like step-sequencer slot
+    // positions that aren't host-automatable parameters but are per-instance
+    // user data.
+    var _state = {};
+    var _declaredStateKeys = [];
+    var MAX_STATE_BYTES = 65536;
+    var _stateHandlers = {};       // key -> [callback]
+    var _anyStateHandlers = [];    // [callback(key, value)]
+    var _warnedKeys = new Set();   // Set of keys we've already warned about; initialized upfront so a state.set() that races _init doesn't crash
 
     // `parameters.set(...)` fires onChange/onAnyChange handlers
     // synchronously, exactly like an external `_paramUpdate` callback
@@ -278,9 +314,9 @@
         },
 
         transport: {
-            get tempo()              { return _transport.tempo; },
+            get bpm()                { return _transport.bpm; },
             get isPlaying()          { return _transport.isPlaying; },
-            get beatPosition()       { return _transport.beatPosition; },
+            get beat()               { return _transport.beat; },
             get samplePosition()     { return _transport.samplePosition; },
             get timeSigNumerator()   { return _transport.timeSigNumerator; },
             get timeSigDenominator() { return _transport.timeSigDenominator; },
@@ -297,6 +333,63 @@
                         return;
                     }
                 }
+            },
+        },
+
+        // State: bundle-private, UI-writable, audio-readable JSON. See
+        // header comment for the mutation footgun (values are captured
+        // by serialization at the moment of `set`; later mutations to
+        // the same object reference are NOT visible to the kernel).
+        state: {
+            get: function(key) { return _state[key]; },
+            set: function(key, value) {
+                // Build a hypothetical new mirror, serialize once, and
+                // size-check before committing. If we'd blow MAX_STATE_BYTES,
+                // bail BEFORE mutating _state, posting to Swift, or firing
+                // listeners — the write is fully rejected.
+                var hypothetical = {};
+                for (var k in _state) {
+                    if (Object.prototype.hasOwnProperty.call(_state, k)) {
+                        hypothetical[k] = _state[k];
+                    }
+                }
+                hypothetical[key] = value;
+                var serialized;
+                try { serialized = JSON.stringify(hypothetical); }
+                catch (_) { return false; }
+                if (!serialized || serialized.length > MAX_STATE_BYTES) return false;
+
+                // One-time-per-session warning for undeclared keys. The
+                // bridge stays permissive (the write succeeds), but the
+                // author needs to know the script's ctx.state can't read
+                // a key that isn't in the STATE dict.
+                if (_declaredStateKeys.indexOf(key) === -1 && !_warnedKeys.has(key)) {
+                    _warnedKeys.add(key);
+                    postTo('log', "UI wrote state key '" + key + "' which is not declared in the preset's STATE dict. The kernel persists it, but the script's ctx.state cannot read it. Add it to STATE or remove the UI write.");
+                }
+
+                _state[key] = value;
+                postTo('stateSet', { key: key, value: value });
+                // Fire onChange/onAnyChange synchronously; no dedupe-on-equal
+                // (deep-equal cost on arrays/objects would dominate). Author
+                // is responsible for not re-setting identical values at high rate.
+                var handlers = _stateHandlers[key] || [];
+                for (var i = 0; i < handlers.length; i++) safeInvoke(handlers[i], [value], 'state.onChange');
+                for (var j = 0; j < _anyStateHandlers.length; j++) safeInvoke(_anyStateHandlers[j], [key, value], 'state.onAnyChange');
+                return true;
+            },
+            onChange: function(key, cb) {
+                if (typeof cb !== 'function') return;
+                (_stateHandlers[key] = _stateHandlers[key] || []).push(cb);
+            },
+            onAnyChange: function(cb) {
+                if (typeof cb === 'function') _anyStateHandlers.push(cb);
+            },
+            reset: function(key) {
+                postTo('stateReset', { key: key });
+            },
+            resetAll: function() {
+                postTo('stateResetAll', {});
             },
         },
 
@@ -326,6 +419,12 @@
         _metadata = (state && state.metadata) ? state.metadata.slice() : [];
         _values = (state && state.values) ? state.values.slice() : [];
         _theme = (state && state.theme) || 'light';
+        _state = (state && state.state) ? state.state : {};
+        _declaredStateKeys = (state && state.declaredStateKeys) ? state.declaredStateKeys.slice() : [];
+        MAX_STATE_BYTES = (state && typeof state.maxStateBytes === 'number') ? state.maxStateBytes : 65536;
+        // Reset undeclared-key warning tracker on every _init so re-load
+        // sessions don't carry stale warnings from the previous bundle.
+        _warnedKeys = new Set();
         _ready = true;
 
         var handlers = _readyHandlers.slice();
@@ -368,13 +467,47 @@
     // suppressed at the source). Update the live snapshot then dispatch
     // to subscribers synchronously — there's no display-rate decoupling
     // to do (the dam is on the Swift side).
+    //
+    // Backwards-compat: the canonical keys are `bpm` and `beat`, but
+    // older Swift builds may still send `tempo` and `beatPosition`.
+    // Accept either; canonicalize on the way in so getters always read
+    // _transport.bpm / _transport.beat.
     ConjureDSP._transportUpdate = function(snapshot) {
         if (!snapshot) return;
-        _transport = snapshot;
+        var snap = snapshot;
+        _transport = {
+            bpm: snap.bpm !== undefined ? snap.bpm : (snap.tempo !== undefined ? snap.tempo : 0),
+            beat: snap.beat !== undefined ? snap.beat : (snap.beatPosition !== undefined ? snap.beatPosition : 0),
+            isPlaying: !!snap.isPlaying,
+            samplePosition: snap.samplePosition || 0,
+            timeSigNumerator: snap.timeSigNumerator || 4,
+            timeSigDenominator: snap.timeSigDenominator || 4,
+        };
         var handlers = _transportHandlers.slice();
         for (var i = 0; i < handlers.length; i++) {
-            safeInvoke(handlers[i], [snapshot], 'transport.onChange');
+            safeInvoke(handlers[i], [_transport], 'transport.onChange');
         }
+    };
+
+    // External state mutation path — mirrors _paramUpdate. Swift fires
+    // this for DAW load, MCP writes, preset switch, or kernel-side reset.
+    //   key !== null:                update _state[key], fire listeners
+    //   key === null && value === null:  full reset signal — defaults
+    //                                    will arrive via the next _init
+    //                                    payload, so just fire onAnyChange
+    //                                    with (null, null) so consumers can
+    //                                    re-read everything when ready.
+    ConjureDSP._stateUpdate = function(key, value) {
+        if (key === null && value === null) {
+            for (var a = 0; a < _anyStateHandlers.length; a++) {
+                safeInvoke(_anyStateHandlers[a], [null, null], 'state.onAnyChange');
+            }
+            return;
+        }
+        _state[key] = value;
+        var handlers = _stateHandlers[key] || [];
+        for (var i = 0; i < handlers.length; i++) safeInvoke(handlers[i], [value], 'state.onChange');
+        for (var j = 0; j < _anyStateHandlers.length; j++) safeInvoke(_anyStateHandlers[j], [key, value], 'state.onAnyChange');
     };
 
     // Forward uncaught JS errors to the plugin log so author-side bugs are

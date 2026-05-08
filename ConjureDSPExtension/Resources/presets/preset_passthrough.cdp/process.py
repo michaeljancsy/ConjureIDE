@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Passthrough — copies input audio to output unchanged.
 
@@ -15,5 +15,5 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         sample_rate: current sample rate in Hz
         params:      dict of parameter values keyed by PARAMS name (empty — no PARAMS defined)
     """
-    for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = inputs[ch][:frame_count]
+    for ch in range(len(ctx.inputs)):
+        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count]

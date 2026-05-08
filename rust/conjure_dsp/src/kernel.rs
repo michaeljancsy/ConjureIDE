@@ -1,11 +1,23 @@
-use crate::backend::{Backend, SidechainInput};
+use crate::backend::{Backend, SidechainInput, StateSnapshot};
 use crate::params::{PARAM_COUNT, TelemetryMetadata};
 use crate::python_backend::PythonBackend;
 use crate::ring_buffer::AudioRingBuffer;
 use crate::wasm_backend::WasmBackend;
 use crate::license::SubscriptionStatus;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
-use std::sync::Mutex;
+use arc_swap::ArcSwap;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// Default per-script cap for the JSON state buffer (64 KiB). Scripts can
+/// raise this via `state!(T, max_bytes = N)` (Rust) — Python presets pin
+/// the same default but currently have no opt-in syntax. Audio-thread
+/// deserialize cost scales linearly with buffer size, so the default keeps
+/// per-block parse time well under 100 µs even on slower hardware.
+pub const DEFAULT_STATE_CAP_BYTES: usize = 65_536;
+
+/// Hard upper bound on the per-script cap. Going past 1 MiB risks
+/// non-trivial audio-thread parse latency on every state mutation.
+pub const MAX_STATE_CAP_BYTES: usize = 1_048_576;
 
 /// Demo limit in seconds. The actual sample count is computed from the host sample rate
 /// at `initialize()` time so the demo period is consistent regardless of sample rate.
@@ -47,10 +59,18 @@ const SWAP_PHASE_FADE_IN: u8 = 2;
 /// Host DAW transport state, updated once per render callback via `set_transport()`.
 /// All fields default to zero/false, meaning "no transport data available."
 /// Written and read on the render thread only — no synchronization needed.
+///
+/// Field names are the **canonical** ConjureDSP transport names — every
+/// language layer (Python `ctx.transport.*`, Rust `setup!()` indices, JS
+/// `ConjureDSP.transport.*`) uses the same set so authors don't have to
+/// translate between them. `bpm` (not "tempo") matches JUCE precedent and
+/// avoids the ambiguity of "tempo" (rate vs. position vs. metronome
+/// ticks). `sample_position` is in **samples**, not seconds — convert via
+/// `sample_position / sample_rate` if you want seconds.
 #[derive(Clone, Copy, Default)]
 pub struct TransportState {
-    pub tempo: f64,
-    pub beat_position: f64,
+    pub bpm: f64,
+    pub beat: f64,
     pub is_playing: bool,
     pub time_sig_numerator: i32,
     pub time_sig_denominator: i32,
@@ -274,6 +294,36 @@ pub struct DSPKernel {
     /// no progress for >2 s), the audio thread force-resets `transition_depth`
     /// to 0 to recover from a buggy Swift caller that forgot a matching `end`.
     transition_watchdog_samples: AtomicU32,
+    /// Cached state defaults from the most recent script load. Python
+    /// presets declare `STATE = {…}` at module level; the Python backend
+    /// extracts and serializes it here at load time. WASM presets get
+    /// `None` — their defaults are baked into the `T::default()` impl
+    /// of the script's State struct and are populated transparently
+    /// when the kernel's empty-`{}` buffer is deserialized. Pointer is
+    /// valid until the next script load.
+    state_defaults_json: Option<std::ffi::CString>,
+    /// Bundle-private JSON state buffer. Single canonical source of truth
+    /// for per-instance UI-private persisted data (slice marker positions,
+    /// step sequencer slot values, anything that isn't a host-automatable
+    /// parameter).
+    ///
+    /// **Memory ordering**: writers store the new buffer (Release-internal
+    /// to ArcSwap), then bump `state_generation` with `Ordering::Release`.
+    /// Readers load `state_generation` with `Ordering::Acquire` first; only
+    /// if it changed do they load the buffer (`Arc::clone`). The
+    /// bump-after-swap ordering ensures any reader observing a new
+    /// generation also observes the matching buffer.
+    state_buffer: ArcSwap<Vec<u8>>,
+    /// Monotonically increasing on every accepted state mutation. Backends
+    /// cache their parsed state alongside the gen they parsed; equal gen
+    /// = re-use cache, different gen = re-deserialize. Acquire/Release
+    /// pairs with `state_buffer` updates.
+    state_generation: AtomicU64,
+    /// Per-script cap on the JSON state buffer. Writes over this size are
+    /// rejected by `set_state_json_bytes` (returns false; existing buffer
+    /// + generation unchanged). Set at script load via `set_state_cap`;
+    /// defaults to `DEFAULT_STATE_CAP_BYTES` for fresh kernels.
+    state_cap_bytes: AtomicUsize,
 }
 
 /// Get the current process resident memory in bytes via mach task_info.
@@ -385,7 +435,33 @@ impl DSPKernel {
             pending_backend_fresh: AtomicBool::new(false),
             transition_depth: AtomicI32::new(0),
             transition_watchdog_samples: AtomicU32::new(0),
+            // Empty JSON object as the initial buffer — signals "no state
+            // yet" without needing an Option wrapper. Backends that cache
+            // a parsed state at gen=0 against the empty buffer behave
+            // identically to "default state" since `serde_json::from_slice`
+            // on `{}` populates struct defaults.
+            state_buffer: ArcSwap::from_pointee(b"{}".to_vec()),
+            state_generation: AtomicU64::new(0),
+            state_cap_bytes: AtomicUsize::new(DEFAULT_STATE_CAP_BYTES),
+            state_defaults_json: None,
         }
+    }
+
+    /// Returns a pointer to the cached state-defaults JSON for the
+    /// most recently loaded backend (Python only — WASM presets'
+    /// defaults come from the deserializer's struct defaults). Null
+    /// when the script declared no STATE dict.
+    pub fn state_defaults_json_ptr(&self) -> *const std::os::raw::c_char {
+        match &self.state_defaults_json {
+            Some(c) => c.as_ptr(),
+            None => std::ptr::null(),
+        }
+    }
+
+    fn update_state_defaults_cache(&mut self, defaults: Option<&str>) {
+        self.state_defaults_json = defaults
+            .filter(|s| !s.is_empty())
+            .and_then(|s| std::ffi::CString::new(s).ok());
     }
 
     /// Returns the NAM model paths declared by the loaded WASM module, in slot order.
@@ -543,6 +619,46 @@ impl DSPKernel {
     /// directly with no fade. On subsequent loads it is staged into
     /// `pending_backend` and the audio thread performs a fade-out → swap →
     /// fade-in declick envelope so users don't hear a pop on preset switch.
+    /// Install a bit-exact passthrough backend in response to a failed
+    /// script/wasm load. The previous backend is dropped so the user
+    /// hears something obviously different (dry signal) instead of the
+    /// stale backend continuing to render with the new preset's UI
+    /// driving its kernel param slots — which used to feel like the new
+    /// preset worked when actually it was the old script being modulated
+    /// through new knob ranges.
+    ///
+    /// Clears every script-derived cache (param metadata, names,
+    /// telemetry, state defaults) and resets the state buffer to `{}` so
+    /// a subsequent successful load doesn't blend with stale data from
+    /// the rejected script. Latency goes back to zero.
+    fn install_passthrough_after_failed_load(&mut self) {
+        let mut pb = crate::passthrough_backend::PassthroughBackend::new();
+        if self.channel_count > 0 {
+            pb.initialize(self.channel_count, self.sample_rate, self.max_frames_to_render);
+        }
+        let boxed: Box<dyn Backend> = Box::new(pb);
+
+        self.update_param_names_cache(std::collections::HashMap::new());
+        self.update_param_metadata_cache(None);
+        self.update_telemetry_metadata_cache(None);
+        self.update_state_defaults_cache(None);
+        self.set_state_cap(DEFAULT_STATE_CAP_BYTES);
+        let _ = self.set_state_json_bytes(b"{}");
+        self.latency_samples = 0;
+        self.reset_profiler();
+        self.wasm_memory_bytes.store(0, Ordering::Relaxed);
+        self.nam_paths = Vec::new();
+
+        // Use the same install path the success branches use. With a
+        // live backend present we ride the existing 5 ms declick
+        // envelope; on a fresh kernel we install immediately.
+        if self.has_live_backend() {
+            self.stage_backend_for_swap(boxed, None);
+        } else {
+            self.install_backend_immediate(boxed, None);
+        }
+    }
+
     pub fn load_script(&mut self, python_home: &str, script_path: &str) -> bool {
         match PythonBackend::load(python_home, script_path) {
             Ok(mut pb) => {
@@ -555,6 +671,11 @@ impl DSPKernel {
                 let telemetry_meta = pb.telemetry_metadata().map(|m| m.to_vec());
                 let latency = pb.latency_samples();
                 let defaults = Self::defaults_from_metadata(metadata.as_deref());
+                // Capture state defaults + cap from the Python backend
+                // before we hand it to the staging path (lifetime
+                // requires the read happen before the move).
+                let state_defaults = pb.state_defaults_json().map(|s| s.to_string());
+                let state_cap = pb.state_max_bytes().unwrap_or(DEFAULT_STATE_CAP_BYTES);
                 let boxed: Box<dyn Backend> = Box::new(pb);
 
                 // Update caches and reset stats. These are read by Swift via FFI on
@@ -564,6 +685,16 @@ impl DSPKernel {
                 self.update_param_names_cache(names);
                 self.update_param_metadata_cache(metadata);
                 self.update_telemetry_metadata_cache(telemetry_meta);
+                self.update_state_defaults_cache(state_defaults.as_deref());
+                self.set_state_cap(state_cap);
+                // Reset state buffer to defaults (Python) or empty (WASM).
+                // Always-applied — preset switches start from script
+                // defaults, not whatever the previous preset's UI wrote.
+                let initial_bytes: &[u8] = match state_defaults.as_deref() {
+                    Some(s) if !s.is_empty() => s.as_bytes(),
+                    _ => b"{}",
+                };
+                let _ = self.set_state_json_bytes(initial_bytes);
                 self.latency_samples = latency;
                 self.reset_profiler();
                 self.memory_baseline_bytes
@@ -580,6 +711,7 @@ impl DSPKernel {
                 true
             }
             Err(err_msg) => {
+                self.install_passthrough_after_failed_load();
                 if let Ok(mut guard) = self.last_error.lock() { *guard = Some(err_msg); }
                 false
             }
@@ -605,11 +737,20 @@ impl DSPKernel {
                 self.nam_paths = wb.nam_paths().to_vec();
                 let initial_mem = wb.memory_bytes();
                 let defaults = Self::defaults_from_metadata(metadata.as_deref());
+                let state_cap = wb.state_max_bytes().unwrap_or(DEFAULT_STATE_CAP_BYTES);
                 let boxed: Box<dyn Backend> = Box::new(wb);
 
                 self.update_param_names_cache(names);
                 self.update_param_metadata_cache(metadata);
                 self.update_telemetry_metadata_cache(telemetry_meta);
+                // WASM scripts have no module-level STATE dict — their
+                // defaults come from the script's `Default` impl when
+                // `serde_json::from_slice` is called on the empty `{}`
+                // buffer. So we clear any cached defaults from a prior
+                // load and reset the kernel buffer to `{}`.
+                self.update_state_defaults_cache(None);
+                self.set_state_cap(state_cap);
+                let _ = self.set_state_json_bytes(b"{}");
                 self.latency_samples = latency;
                 self.reset_profiler();
                 self.memory_baseline_bytes
@@ -626,6 +767,7 @@ impl DSPKernel {
                 true
             }
             Err(err_msg) => {
+                self.install_passthrough_after_failed_load();
                 if let Ok(mut guard) = self.last_error.lock() { *guard = Some(err_msg); }
                 false
             }
@@ -644,21 +786,94 @@ impl DSPKernel {
     /// once per callback, before the process loop.
     pub fn set_transport(
         &mut self,
-        tempo: f64,
-        beat_position: f64,
+        bpm: f64,
+        beat: f64,
         is_playing: bool,
         time_sig_numerator: i32,
         time_sig_denominator: i32,
         sample_position: f64,
     ) {
         self.transport = TransportState {
-            tempo,
-            beat_position,
+            bpm,
+            beat,
             is_playing,
             time_sig_numerator,
             time_sig_denominator,
             sample_position,
         };
+    }
+
+    // ─── State channel ──────────────────────────────────────────────
+
+    /// Set the per-script size cap on the state buffer. Called by Swift
+    /// at script load. Subsequent `set_state_json_bytes` calls reject
+    /// inputs over this size. Clamped to `MAX_STATE_CAP_BYTES`.
+    pub fn set_state_cap(&self, max_bytes: usize) {
+        let clamped = max_bytes.min(MAX_STATE_CAP_BYTES);
+        self.state_cap_bytes.store(clamped, Ordering::Relaxed);
+    }
+
+    /// Return the per-script size cap on the state buffer.
+    pub fn state_cap(&self) -> usize {
+        self.state_cap_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Try to install a new state buffer.
+    ///
+    /// Validates that `bytes` is well-formed JSON and is no larger than
+    /// the per-script cap. On success, atomically swaps the buffer and
+    /// bumps the generation counter (Release-ordered) so audio-thread
+    /// readers re-parse on their next callback. On failure the existing
+    /// buffer + generation are unchanged.
+    ///
+    /// Returns `true` on success, `false` on any rejection (over cap or
+    /// invalid JSON).
+    pub fn set_state_json_bytes(&self, bytes: &[u8]) -> bool {
+        let cap = self.state_cap_bytes.load(Ordering::Relaxed);
+        if bytes.len() > cap {
+            return false;
+        }
+        // Cheap structural validation — a malformed payload from JS / MCP
+        // would otherwise blow up backend deserialize on every render
+        // until the next set. `from_slice` on a 64 KiB buffer is well
+        // under a millisecond.
+        if serde_json::from_slice::<serde_json::Value>(bytes).is_err() {
+            return false;
+        }
+        let new_buf = Arc::new(bytes.to_vec());
+        // Order matters: store buffer first, then bump gen. Readers loading
+        // gen with Acquire that observe the new value are guaranteed to
+        // also observe the new buffer (paired with ArcSwap::store, which
+        // has Release semantics on the pointer write).
+        self.state_buffer.store(new_buf);
+        self.state_generation.fetch_add(1, Ordering::Release);
+        true
+    }
+
+    /// Snapshot the current state buffer for the audio thread.
+    ///
+    /// Returns `(generation, buffer_arc)`. Backends compare the gen
+    /// against their cached gen; on mismatch they re-deserialize and
+    /// update the cache. Cheap in the steady state — one Acquire load +
+    /// one Arc::clone on miss.
+    pub fn snapshot_state(&self) -> (u64, Arc<Vec<u8>>) {
+        let gen = self.state_generation.load(Ordering::Acquire);
+        let buf = self.state_buffer.load_full();
+        (gen, buf)
+    }
+
+    /// Read the current generation counter without taking the buffer.
+    /// Used by the smoke tester to verify a write actually landed.
+    pub fn state_generation(&self) -> u64 {
+        self.state_generation.load(Ordering::Acquire)
+    }
+
+    /// Read the current state buffer as a fresh `Vec<u8>` copy. Used by
+    /// the AU's `fullState` / `fullStateForDocument` getters which need
+    /// owned bytes for the dictionary.
+    pub fn state_json_bytes_copy(&self) -> Vec<u8> {
+        let buf = self.state_buffer.load_full();
+        (*buf).clone()
     }
 
     /// Set a parameter value. Addresses are 0-based (0–7).
@@ -1373,6 +1588,7 @@ impl DSPKernel {
                     &params,
                     &transport,
                     SidechainInput::NONE,
+                    &StateSnapshot::empty(),
                 );
             }
             let mut max_time = 0.0f64;
@@ -1388,6 +1604,7 @@ impl DSPKernel {
                         &params,
                         &transport,
                         SidechainInput::NONE,
+                        &StateSnapshot::empty(),
                     );
                 }
                 let elapsed = start.elapsed().as_secs_f64();
@@ -1577,6 +1794,15 @@ impl DSPKernel {
 
         // Snapshot parameters once per callback (lock-free atomic reads)
         let params = self.snapshot_params();
+        // Snapshot bundle-private state (one Acquire load + Arc::clone).
+        // Backends short-circuit re-deserialization when the generation
+        // matches their cached one, so the steady-state cost is a single
+        // atomic compare.
+        let (state_gen, state_buf) = self.snapshot_state();
+        let state = StateSnapshot {
+            generation: state_gen,
+            bytes: state_buf,
+        };
 
         // Consume any pending stage request from the main thread before we
         // latch the phase for this callback. This is where FADE_IN → FADE_OUT
@@ -1598,7 +1824,7 @@ impl DSPKernel {
 
             if let Some(ref mut backend) = *guard {
                 let t0 = std::time::Instant::now();
-                let ok = backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate, &params, &self.transport, sidechain);
+                let ok = backend.process(inputs, outputs, channel_count, frame_count, self.sample_rate, &params, &self.transport, sidechain, &state);
                 // Ensure at least 1µs so sub-microsecond calls are still visible
                 let elapsed_us = (t0.elapsed().as_micros() as u32).max(1);
                 self.update_profiler(elapsed_us);
@@ -2366,7 +2592,7 @@ mod tests {
             }
         };
         let script = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    raise RuntimeError('intentional error')\n",
+            "import numpy as np\ndef process(ctx):\n    raise RuntimeError('intentional error')\n",
         );
         let mut kernel = DSPKernel::new();
         assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
@@ -2393,7 +2619,7 @@ mod tests {
             }
         };
         let script = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sr, _params, _transport, _telemetry):\n    raise ValueError('boom')\n",
+            "import numpy as np\ndef process(ctx):\n    raise ValueError('boom')\n",
         );
         let mut kernel = DSPKernel::new();
         assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
@@ -2424,7 +2650,7 @@ mod tests {
             }
         };
         let script_half = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sr, _params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.5\n",
+            "import numpy as np\ndef process(ctx):\n    for ch in range(len(ctx.inputs)):\n        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count] * 0.5\n",
         );
         let mut kernel = DSPKernel::new();
         assert!(kernel.load_script(&python_home, script_half.to_str().unwrap()));
@@ -2441,7 +2667,7 @@ mod tests {
 
         // Hot-reload with a different gain
         let script_quarter = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sr, _params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 0.25\n",
+            "import numpy as np\ndef process(ctx):\n    for ch in range(len(ctx.inputs)):\n        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count] * 0.25\n",
         );
         assert!(kernel.load_script(&python_home, script_quarter.to_str().unwrap()));
         kernel.initialize(1, 1, 44100.0);
@@ -2518,9 +2744,9 @@ mod tests {
         std::fs::remove_file(script).ok();
     }
 
-    /// Pin the arity policy: 7-arg (canonical) and 8-arg (sidechain
-    /// opt-in) are accepted; everything else fails at load time with a
-    /// clear, actionable error.
+    /// Pin the arity policy: only `def process(ctx):` (1-arg) is
+    /// accepted. Everything else fails at load time with a clear,
+    /// actionable error pointing to the new shape.
     #[test]
     fn test_load_script_rejects_invalid_arity_signatures() {
         let (python_home, _) = match test_python_paths() {
@@ -2532,32 +2758,106 @@ mod tests {
         };
 
         let cases: &[(&str, &str)] = &[
+            ("0-arg",         "def process(): pass\n"),
             ("4-arg legacy", "def process(i, o, f, s): pass\n"),
             ("5-arg",         "def process(i, o, f, s, p): pass\n"),
             ("6-arg",         "def process(i, o, f, s, p, t): pass\n"),
-            ("9-arg",         "def process(i, o, f, s, p, t, tel, sc, x): pass\n"),
+            ("7-arg legacy", "def process(i, o, f, s, p, t, tel): pass\n"),
+            ("8-arg legacy", "def process(i, o, f, s, p, t, tel, sc): pass\n"),
         ];
 
         for (label, src) in cases {
             let script = write_temp_script(src);
             let mut kernel = DSPKernel::new();
+            kernel.initialize(1, 1, 48000.0);
             let loaded = kernel.load_script(&python_home, script.to_str().unwrap());
             assert!(
                 !loaded,
-                "{label}: expected load to fail for non-7/8-arg process()"
+                "{label}: expected load to fail for non-1-arg process()"
             );
             let err = kernel.last_error().expect("last_error should be set");
             assert!(
-                err.contains("must take 7 or 8 arguments"),
-                "{label}: error should mention the 7/8-arg requirement, got: {err}"
+                err.contains("must take exactly one argument"),
+                "{label}: error should mention the 1-arg ctx requirement, got: {err}"
             );
+
+            // Pin the passthrough-on-failure contract: after a rejected
+            // load, the kernel must render input bit-exactly. The previous
+            // bug was that the prior backend kept running, with the new
+            // preset's UI driving its kernel param slots — felt like the
+            // new preset worked but actually wasn't.
+            let input: [f32; 4] = [0.1, -0.2, 0.7, -0.9];
+            let mut output: [f32; 4] = [0.0; 4];
+            let input_ptr: *const f32 = input.as_ptr();
+            let output_ptr: *mut f32 = output.as_mut_ptr();
+            unsafe {
+                kernel.process(&input_ptr, &output_ptr, 1, 4);
+            }
+            assert_eq!(
+                output, input,
+                "{label}: rejected load must drop kernel into passthrough, got {output:?}"
+            );
+
             std::fs::remove_file(script).ok();
         }
     }
 
-    /// 8-arg (sidechain opt-in) scripts must load successfully — same
-    /// path as the 7-arg form, with an extra positional `sidechain`
-    /// numpy list at the end of the call.
+    /// After a rejected load, kernel-side param + telemetry metadata
+    /// must clear. Otherwise a subsequent successful load could blend
+    /// the rejected script's stale metadata into the new run, and the
+    /// audio thread would denormalize new param writes through the old
+    /// (now meaningless) ranges.
+    #[test]
+    fn test_load_script_failure_clears_metadata_caches() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+
+        // Step 1: load a healthy ctx-form script that declares PARAMS +
+        // TELEMETRY so both metadata caches get populated.
+        let healthy = write_temp_script(
+            "PARAMS = {'cutoff': {'min': 20.0, 'max': 20000.0, 'default': 1000.0, 'unit': 'Hz', 'curve': 'log'}}\n\
+             TELEMETRY = {'rms': {'unit': ''}}\n\
+             def process(ctx):\n    pass\n",
+        );
+        let mut kernel = DSPKernel::new();
+        kernel.initialize(1, 1, 48000.0);
+        assert!(
+            kernel.load_script(&python_home, healthy.to_str().unwrap()),
+            "healthy script should load: {:?}",
+            kernel.last_error()
+        );
+        assert!(
+            !kernel.param_metadata_json_ptr().is_null(),
+            "param metadata should be populated after a successful load"
+        );
+        assert!(
+            !kernel.telemetry_metadata_json_ptr().is_null(),
+            "telemetry metadata should be populated after a successful load"
+        );
+
+        // Step 2: load a rejected script. Caches must clear.
+        let rejected = write_temp_script("def process(i, o, f, s, p, t, tel): pass\n");
+        let loaded = kernel.load_script(&python_home, rejected.to_str().unwrap());
+        assert!(!loaded, "7-arg script should be rejected");
+        assert!(
+            kernel.param_metadata_json_ptr().is_null(),
+            "rejected load must clear param metadata cache"
+        );
+        assert!(
+            kernel.telemetry_metadata_json_ptr().is_null(),
+            "rejected load must clear telemetry metadata cache"
+        );
+
+        std::fs::remove_file(healthy).ok();
+        std::fs::remove_file(rejected).ok();
+    }
+
+    /// Single-arg `def process(ctx):` is the only accepted shape.
     #[test]
     fn test_load_script_accepts_8_arg_sidechain_signature() {
         let (python_home, _) = match test_python_paths() {
@@ -2568,7 +2868,7 @@ mod tests {
             }
         };
         let script = write_temp_script(
-            "def process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry, sidechain):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n",
+            "def process(ctx):\n    for ch in range(len(ctx.inputs)):\n        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count]\n",
         );
         let mut kernel = DSPKernel::new();
         let loaded = kernel.load_script(&python_home, script.to_str().unwrap());
@@ -2855,7 +3155,7 @@ mod tests {
             }
         };
         let script = write_temp_script(
-            "import numpy as np\ndef process(inputs, outputs, frame_count, sr, _params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count] * 10.0\n",
+            "import numpy as np\ndef process(ctx):\n    for ch in range(len(ctx.inputs)):\n        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count] * 10.0\n",
         );
         let mut kernel = DSPKernel::new();
         assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
@@ -4349,7 +4649,7 @@ mod tests {
             }
         };
 
-        let script = "PARAM_NAMES = {0: \"Cutoff\", 1: \"Resonance\"}\n\ndef process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
+        let script = "PARAM_NAMES = {0: \"Cutoff\", 1: \"Resonance\"}\n\ndef process(ctx):\n    for ch in range(len(ctx.inputs)):\n        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count]\n";
         let temp_dir = std::env::temp_dir();
         let temp_file = temp_dir.join("test_param_names.py");
         std::fs::write(&temp_file, script).unwrap();
@@ -4379,7 +4679,7 @@ mod tests {
             }
         };
 
-        let script = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
+        let script = "def process(ctx):\n    for ch in range(len(ctx.inputs)):\n        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count]\n";
         let temp_dir = std::env::temp_dir();
         let temp_file = temp_dir.join("test_no_param_names.py");
         std::fs::write(&temp_file, script).unwrap();
@@ -4407,7 +4707,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
 
         // First: script WITH param names
-        let script1 = "PARAM_NAMES = {0: \"Rate\"}\n\ndef process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
+        let script1 = "PARAM_NAMES = {0: \"Rate\"}\n\ndef process(ctx):\n    for ch in range(len(ctx.inputs)):\n        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count]\n";
         let temp1 = temp_dir.join("test_param_names_1.py");
         std::fs::write(&temp1, script1).unwrap();
 
@@ -4416,7 +4716,7 @@ mod tests {
         assert!(!kernel.param_names_json_ptr().is_null());
 
         // Second: script WITHOUT param names — should clear
-        let script2 = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    for ch in range(len(inputs)):\n        outputs[ch][:frame_count] = inputs[ch][:frame_count]\n";
+        let script2 = "def process(ctx):\n    for ch in range(len(ctx.inputs)):\n        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count]\n";
         let temp2 = temp_dir.join("test_param_names_2.py");
         std::fs::write(&temp2, script2).unwrap();
 

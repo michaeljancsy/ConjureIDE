@@ -57,43 +57,43 @@ class _S:
         self.grain_phase = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    dilation = params["dilation"] / 100.0
-    chant = params["chant"] / 100.0
-    drone = params["drone"] / 100.0
-    space = params["space"] / 100.0
-    mx = params["mix"]
+    dilation = ctx.params["dilation"] / 100.0
+    chant = ctx.params["chant"] / 100.0
+    drone = ctx.params["drone"] / 100.0
+    space = ctx.params["space"] / 100.0
+    mx = ctx.params["mix"]
 
-    drone_lpc = BiquadCoeffs.lowpass(60.0, 0.707, sample_rate)
-    formant_c = [BiquadCoeffs.peak(FORMANT_HZ[k], 5.0, 8.0, sample_rate)
+    drone_lpc = BiquadCoeffs.lowpass(60.0, 0.707, ctx.sample_rate)
+    formant_c = [BiquadCoeffs.peak(FORMANT_HZ[k], 5.0, 8.0, ctx.sample_rate)
                  for k in range(3)]
-    tail_lpc = BiquadCoeffs.lowpass(2200.0, 0.707, sample_rate)
+    tail_lpc = BiquadCoeffs.lowpass(2200.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         s.drone_lp[ch].set_coeffs(drone_lpc)
         for k in range(3):
             s.formant[ch][k].set_coeffs(formant_c[k])
         s.tail_lp[ch].set_coeffs(tail_lpc)
 
-    base_d = SHIFT_BASE_MS * 0.001 * sample_rate
-    grain_samples = GRAIN_MS * 0.001 * sample_rate
+    base_d = SHIFT_BASE_MS * 0.001 * ctx.sample_rate
+    grain_samples = GRAIN_MS * 0.001 * ctx.sample_rate
     # Slower than Burial at Sea — time dilation
     grain_rate = (0.15 + 0.55 * dilation) / grain_samples
 
-    ap_d = [max(AP_MS[k] * 0.001 * sample_rate, 1.0) for k in range(6)]
-    tail_d = TAIL_MS * 0.001 * sample_rate
+    ap_d = [max(AP_MS[k] * 0.001 * ctx.sample_rate, 1.0) for k in range(6)]
+    tail_d = TAIL_MS * 0.001 * ctx.sample_rate
     tail_fb_amt = 0.60 + 0.25 * space
 
     drone_gain = drone * 1.4
     chant_gain = 0.18 + 0.32 * chant
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         ph0 = s.grain_phase
         ph1 = (s.grain_phase + 0.5) % 1.0
         w0 = math.sin(math.pi * ph0)
@@ -105,7 +105,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         s.grain_phase = (s.grain_phase + grain_rate) % 1.0
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: sub drone bus
             drone_voice = s.drone_lp[ch].process_sample(abs(dry)) * drone_gain
@@ -138,4 +138,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             s.tail_fb[ch] = s.tail_dl[ch].read(tail_d)
 
             wet = drone_voice + voiced + s.tail_fb[ch] * 0.6
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

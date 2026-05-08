@@ -17,7 +17,7 @@ DIVISIONS = [4.0, 2.0, 1.0, 0.5, 0.25, 2.0 / 3.0, 1.0 / 3.0]
 _lfo = None
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, transport, _telemetry):
+def process(ctx):
     """
     Tremolo — sine-based amplitude modulation.
 
@@ -32,26 +32,26 @@ def process(inputs, outputs, frame_count, sample_rate, params, transport, _telem
     """
     global _lfo
 
-    depth = params["depth"]
-    tempo = transport["tempo"]
+    depth = ctx.params["depth"]
+    tempo = ctx.transport.bpm
 
     # Determine LFO rate
-    if params["sync"] > 0.5 and tempo > 0:
-        div_idx = int(round(params["division"]))
+    if ctx.params["sync"] > 0.5 and tempo > 0:
+        div_idx = int(round(ctx.params["division"]))
         div_idx = max(0, min(div_idx, len(DIVISIONS) - 1))
         beats = DIVISIONS[div_idx]
         rate_hz = tempo / 60.0 / beats
     else:
-        rate_hz = params["rate"]
+        rate_hz = ctx.params["rate"]
 
     if _lfo is None:
-        _lfo = LFO(sample_rate, freq=rate_hz)
+        _lfo = LFO(ctx.sample_rate, freq=rate_hz)
     _lfo.set_freq(rate_hz)
 
     # Generate sine LFO values for the whole buffer
-    lfo = _lfo.tick_n(frame_count)
+    lfo = _lfo.tick_n(ctx.frame_count)
     # Convert bipolar [-1, 1] to unipolar amplitude modulation
     mod = 1.0 - depth * 0.5 * (1.0 + lfo)
 
-    for ch in range(len(inputs)):
-        np.multiply(inputs[ch][:frame_count], mod, out=outputs[ch][:frame_count])
+    for ch in range(len(ctx.inputs)):
+        np.multiply(ctx.inputs[ch][:ctx.frame_count], mod, out=ctx.outputs[ch][:ctx.frame_count])

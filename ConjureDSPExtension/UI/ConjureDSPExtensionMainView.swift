@@ -30,6 +30,11 @@ struct ConjureDSPExtensionMainView: View {
     var defaultLanguage: ScriptLanguage = .python
     var extensionBundle: Bundle
     var scriptSourcePublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.ScriptSourceChange, Never>?
+    /// Fires when a script load fails on a non-SwiftUI-driven path
+    /// (DAW preset menu, extension boot, NAM-retry). Surfaced to the same
+    /// StatusBarView as Run/in-plugin-browser failures so the user always
+    /// sees the error.
+    var scriptLoadFailurePublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.ScriptLoadFailure, Never>?
     // captureManager / processProfiler / memoryMonitor are NOT observed
     // here — they fire at 4Hz+ and re-evaluating this whole body on every
     // publish caused ~12MB/min growth. Child views that actually render
@@ -48,6 +53,10 @@ struct ConjureDSPExtensionMainView: View {
     var processProfiler: ProcessProfiler
     var memoryMonitor: MemoryMonitor
     var parameterState: ParameterState
+    /// Coordinator for the bundle-private STATE channel — passed to
+    /// CustomUIWebView so the JS bridge's `state.set` / `state.reset`
+    /// calls route through the same actor as MCP and DAW persistence.
+    var stateManager: PresetStateManager
     // subscriptionManager MUST be @ObservedObject — the demo expired overlay
     // reads isLicensed and demoSecondsRemaining directly in this view's body.
     @ObservedObject var subscriptionManager: SubscriptionManager
@@ -367,7 +376,8 @@ struct ConjureDSPExtensionMainView: View {
                                 bundle: bundle,
                                 theme: colorScheme,
                                 captureManager: captureManager,
-                                transportManager: transportManager
+                                transportManager: transportManager,
+                                stateManager: stateManager
                             )
                             .frame(width: uiW, height: uiH)
                             .id(bundle.uiIndexURL)
@@ -803,18 +813,41 @@ struct ConjureDSPExtensionMainView: View {
             scriptSource = change.source
             lastRunSource = change.source
             selectedLanguage = ScriptLanguage.detect(from: change.source)
+            // Only MCP-driven source changes clear the error here, because the
+            // MCP compile_and_run success path doesn't go through `handleResult`
+            // (it's a JSON-RPC handler, not a SwiftUI callback). Every other
+            // source change either:
+            //   - Goes through `handleResult` (Run, in-plugin browser, Save) —
+            //     which clears errors on success and sets them on failure.
+            //   - Fires `scriptSourceDidChange` BEFORE the compile result is
+            //     known (e.g. `selectPreset` so the editor shows the new
+            //     source immediately). For that case, clearing errors here
+            //     races with `handleResult` because the sink is dispatched
+            //     async on main and lands AFTER the Task continuation that
+            //     ran `handleResult` — the user would see the red error flash
+            //     for one frame and then disappear.
             if change.origin == .mcp {
                 mcpFlashToken = UUID()
+                errorMessage = nil
+                errorDetails = nil
+                editorMarkers = []
             }
-            // Clear error — this fires after successful compile (preset select, AI fix, fullState restore).
-            // warningMessage is NOT cleared here: handleResult manages it, and clearing here
-            // would race with handleResult during preset selection, making warnings invisible.
-            errorMessage = nil
-            errorDetails = nil
-            editorMarkers = []
             if let processTimeMs = change.processTimeMs, let budgetMs = change.budgetMs {
                 lastBenchmark = (processTimeMs, budgetMs)
             }
+        }
+        .onReceive(scriptLoadFailurePublisher ?? Empty().eraseToAnyPublisher()) { failure in
+            // Route DAW-preset-menu and extension-boot load failures
+            // through the same red-banner path as Run / in-plugin browser
+            // failures. Synthesizing a `ScriptSaveResult` keeps every
+            // load-failure surface inside `handleResult` (single source
+            // of truth for the StatusBarView / editor markers).
+            handleResult(ScriptSaveResult(
+                success: false,
+                error: failure.error,
+                processTimeMs: nil,
+                budgetMs: nil
+            ))
         }
         .onChange(of: scriptSource) { _, newValue in
             presetManager.scriptDidChange(to: newValue)

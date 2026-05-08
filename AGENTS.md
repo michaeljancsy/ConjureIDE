@@ -103,7 +103,7 @@ Scripts can be written in Python (instant load) or Rust (compiled to WASM). `Scr
 1. On AU init, Swift calls `dsp_kernel_load_script()` with the default preset path and Python home (resolved from the App Group container, provisioned by ConjureDSPTerminal)
 2. Rust sets `PYTHONHOME`, initializes the free-threaded Python 3.14 interpreter via pyo3, and caches the script's `process()` function
 3. On `allocateRenderResources()`, Rust pre-allocates numpy float32 arrays (one per channel, sized to `maximumFramesToRender`)
-4. Each render callback: Rust copies input audio into numpy arrays, calls `process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry)` (canonical 7-arg form; legacy 4/5/6-arg forms are still dispatched for back-compat), copies output back. If PARAMS metadata exists, params is a dict of denormalized values; otherwise a list of 0–1 floats.
+4. Each render callback: Rust copies input audio into numpy arrays, calls `process(ctx)` (the only accepted signature — legacy positional forms now fail at script load), copies output back. The `ctx` object exposes `inputs`, `outputs`, `frame_count`, `sample_rate`, `params` (dict keyed by name when PARAMS metadata exists), `transport`, `telemetry`, `sidechain`, and `state` (read-only mapping over the bundle-private STATE channel).
 5. If Python fails to load or errors at runtime, Rust falls back to passthrough (copies input to output)
 
 ### WASM DSP pipeline
@@ -331,11 +331,11 @@ PARAMS = {
     "bypass_eq": toggle(),                               # switch UI, 0.0 or 1.0
     "mode": choice("Low", "Mid", "High", default="Mid"), # dropdown, index as float
 }
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-    cutoff_hz = params["cutoff"]      # already 20–20000, log-mapped
-    if params["bypass_eq"] >= 0.5:    # toggle is 0.0 or 1.0
+def process(ctx):
+    cutoff_hz = ctx.params["cutoff"]      # already 20–20000, log-mapped
+    if ctx.params["bypass_eq"] >= 0.5:    # toggle is 0.0 or 1.0
         ...
-    mode = int(params["mode"])        # 0, 1, or 2
+    mode = int(ctx.params["mode"])        # 0, 1, or 2
 ```
 
 Rust/WASM:
@@ -366,14 +366,14 @@ Implementation across layers:
 5. **Swift** (`ConjureDSPExtensionAudioUnit.swift`) — `rebuildParameterTree(metadata:)` creates `AUParameter`s with real ranges. `implementorValueObserver` normalizes actual → 0–1 for kernel. `implementorValueProvider` denormalizes 0–1 → actual for DAW. `formatParamValue` displays values with units.
 6. **WASM** (`wasm_backend.rs`) — Extracts metadata from `get_param_metadata_ptr`/`get_param_metadata_len` WASM exports. When metadata exists, WASM scripts receive denormalized actual values in `PARAMS_BUF` (same as Python). Two separate exports are used instead of a tuple return to avoid WASM multi-value return ABI issues with Rust's `extern "C"`.
 
-Parameters are passed to Python scripts as a 5th argument (dict or list) and to WASM modules via `get_params_ptr()`.
+Parameters are exposed to Python scripts as `ctx.params` (dict keyed by name when `PARAMS` metadata exists, list of normalized floats otherwise) and to WASM modules via `get_params_ptr()`.
 
 **Known Logic Pro quirk:** On the master channel strip, Logic's "Automatic Smart Controls" layout has fewer knob slots than on regular channel strips, so some parameters may not get mapped to knobs. All parameters are still registered and automatable — this is a Logic Smart Controls grid limitation, not an AU bug.
 
 ## DSP Conventions
 
 - The Rust kernel embeds free-threaded Python 3.14 (no GIL) via pyo3 and numpy
-- Python `process()` is called each render callback with pre-allocated numpy arrays (no per-callback allocations)
+- Python `process(ctx)` is called each render callback with a pre-built `ctx` namespace whose numpy arrays are pre-allocated (no per-callback allocations). The single-arg form is the only accepted signature.
 - When no Python script is loaded or Python errors at runtime, Rust falls back to passthrough (copies input to output)
 - Swift calls Rust via C FFI: `dsp_kernel_create()`, `dsp_kernel_process()`, `dsp_kernel_load_script()`, etc.
 - Bypass copies input to output unchanged

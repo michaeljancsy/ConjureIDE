@@ -37,6 +37,7 @@ pub mod json;
 pub mod nam;
 pub mod osc;
 pub mod params;
+pub mod state_json;
 
 // Re-export everything at crate root for `use conjuredsp::*;`
 pub use buffers::DelayLine;
@@ -294,7 +295,9 @@ macro_rules! params {
 /// ```
 #[macro_export]
 macro_rules! telemetry {
-    ( $( $NAME:ident = $spec:expr ),* $(,)? ) => {
+    () => {};
+    ( $(,)? ) => {};
+    ( $( $NAME:ident = $spec:expr ),+ $(,)? ) => {
         // Generate sequential index constants (independent of params).
         conjuredsp::_params_indices!(0usize; $( $NAME ),*);
 
@@ -630,5 +633,280 @@ macro_rules! _params_indices {
         #[allow(dead_code)]
         const $NAME: usize = $idx;
         conjuredsp::_params_indices!($idx + 1usize; $( $REST ),*);
+    };
+}
+
+/// Default per-script cap for the state buffer in bytes (matches the
+/// host's `DEFAULT_STATE_CAP_BYTES`). Scripts can override via
+/// `state!(T, max_bytes = N)`.
+pub const DEFAULT_STATE_CAP_BYTES: usize = 65_536;
+
+/// Header size at the start of `STATE_BUF`. Layout:
+///   bytes [0..8]   — current state generation, little-endian u64
+///   bytes [8..12]  — used length of the JSON content, little-endian u32
+///   bytes [12..]   — JSON content (UTF-8 bytes)
+///
+/// Read by the script-side `state!()` macro to decide whether to
+/// re-deserialize. Written by the host on every render block before
+/// calling `process()`.
+pub const STATE_HEADER_BYTES: usize = 12;
+
+/// Declares the bundle-private state buffer for this preset and emits
+/// the host-facing exports plus script-facing `cx.state_bytes()` /
+/// `cx.state_generation()` accessors.
+///
+/// Forms:
+/// - `state!();` — uses `DEFAULT_STATE_CAP_BYTES` (64 KiB) max content size.
+/// - `state!(max_bytes = N);` — explicit cap up to 1 MiB. Script
+///   author trades audio-thread parse latency for headroom.
+///
+/// Unlike Python's `STATE = {…}` (which is automatically parsed into a
+/// `MappingProxyType` by the kernel), the Rust side hands the script
+/// raw JSON bytes from `STATE_BUF`. The script chooses how to parse
+/// them — either install a JSON crate via the crate package manager,
+/// hand-roll a tiny parser for a known shape, or use a fixed-layout
+/// binary format the script's UI agrees to write. The generation
+/// counter lets the script cache its own parsed value across blocks
+/// and only re-parse when the host has accepted a UI / MCP write.
+///
+/// Generates:
+/// - `STATE_BUF: [u8; max_bytes + STATE_HEADER_BYTES]` static — the
+///   shared buffer the host writes into.
+/// - `get_state_buf_ptr()`, `get_state_buf_capacity()` exports — the
+///   host's discovery handles for the buffer.
+/// - Extension trait methods `Context::state_bytes() -> &[u8]` and
+///   `Context::state_generation() -> u64` for reading the live content.
+///
+/// # Example
+///
+/// ```ignore
+/// use conjuredsp::*;
+/// setup!();
+/// params! { /* ... */ }
+/// state!();
+///
+/// #[no_mangle]
+/// pub extern "C" fn process(/* … */) {
+///     let cx = ctx(/* … */);
+///     let bytes: &[u8] = cx.state_bytes();
+///     let gen: u64 = cx.state_generation();
+///     // Cache parsed value yourself; re-parse only when gen changes.
+/// }
+/// ```
+#[macro_export]
+macro_rules! state {
+    () => {
+        $crate::state!(max_bytes = $crate::DEFAULT_STATE_CAP_BYTES);
+    };
+    (max_bytes = $cap:expr) => {
+        const STATE_MAX_BYTES: usize = $cap;
+        const STATE_BUF_TOTAL: usize = STATE_MAX_BYTES + $crate::STATE_HEADER_BYTES;
+
+        static mut STATE_BUF: [u8; STATE_BUF_TOTAL] = {
+            let mut buf = [0u8; STATE_BUF_TOTAL];
+            buf[0] = 0xff;
+            buf[1] = 0xff;
+            buf[2] = 0xff;
+            buf[3] = 0xff;
+            buf[4] = 0xff;
+            buf[5] = 0xff;
+            buf[6] = 0xff;
+            buf[7] = 0xff;
+            buf
+        };
+
+        #[no_mangle]
+        pub extern "C" fn get_state_buf_ptr() -> i32 {
+            unsafe { STATE_BUF.as_ptr() as i32 }
+        }
+
+        #[no_mangle]
+        pub extern "C" fn get_state_buf_capacity() -> i32 {
+            STATE_BUF_TOTAL as i32
+        }
+
+        trait __CdpStateExt {
+            fn state_bytes(&self) -> &'static [u8];
+            fn state_generation(&self) -> u64;
+            fn state_int(&self, key: &str) -> Option<i32>;
+            fn state_int_or(&self, key: &str, default: i32) -> i32;
+            fn state_bool(&self, key: &str) -> Option<bool>;
+            fn state_bool_or(&self, key: &str, default: bool) -> bool;
+            fn state_f32(&self, key: &str) -> Option<f32>;
+            fn state_f32_or(&self, key: &str, default: f32) -> f32;
+            fn state_array_u8<const N: usize>(&self, key: &str) -> Option<[u8; N]>;
+            fn state_array_u8_or<const N: usize>(
+                &self,
+                key: &str,
+                default: [u8; N],
+            ) -> [u8; N];
+            fn state_array_i32<const N: usize>(&self, key: &str) -> Option<[i32; N]>;
+            fn state_array_i32_or<const N: usize>(
+                &self,
+                key: &str,
+                default: [i32; N],
+            ) -> [i32; N];
+            fn state_array_f32<const N: usize>(&self, key: &str) -> Option<[f32; N]>;
+            fn state_array_f32_or<const N: usize>(
+                &self,
+                key: &str,
+                default: [f32; N],
+            ) -> [f32; N];
+        }
+
+        impl __CdpStateExt for conjuredsp::Context {
+            #[inline]
+            fn state_bytes(&self) -> &'static [u8] {
+                unsafe {
+                    let buf_ptr = STATE_BUF.as_ptr();
+                    let mut len_bytes = [0u8; 4];
+                    core::ptr::copy_nonoverlapping(
+                        buf_ptr.add(8),
+                        len_bytes.as_mut_ptr(),
+                        4,
+                    );
+                    let used_len = u32::from_le_bytes(len_bytes) as usize;
+                    let max_content =
+                        STATE_BUF_TOTAL - $crate::STATE_HEADER_BYTES;
+                    let n = used_len.min(max_content);
+                    core::slice::from_raw_parts(
+                        buf_ptr.add($crate::STATE_HEADER_BYTES),
+                        n,
+                    )
+                }
+            }
+
+            #[inline]
+            fn state_generation(&self) -> u64 {
+                unsafe {
+                    let buf_ptr = STATE_BUF.as_ptr();
+                    let mut gen_bytes = [0u8; 8];
+                    core::ptr::copy_nonoverlapping(
+                        buf_ptr,
+                        gen_bytes.as_mut_ptr(),
+                        8,
+                    );
+                    u64::from_le_bytes(gen_bytes)
+                }
+            }
+
+            #[inline]
+            fn state_int(&self, key: &str) -> Option<i32> {
+                let bytes = self.state_bytes();
+                let v = $crate::state_json::find_value(bytes, key)?;
+                let n = $crate::state_json::parse_i64(v)?;
+                i32::try_from(n).ok()
+            }
+
+            #[inline]
+            fn state_int_or(&self, key: &str, default: i32) -> i32 {
+                self.state_int(key).unwrap_or(default)
+            }
+
+            #[inline]
+            fn state_bool(&self, key: &str) -> Option<bool> {
+                let bytes = self.state_bytes();
+                let v = $crate::state_json::find_value(bytes, key)?;
+                $crate::state_json::parse_bool(v)
+            }
+
+            #[inline]
+            fn state_bool_or(&self, key: &str, default: bool) -> bool {
+                self.state_bool(key).unwrap_or(default)
+            }
+
+            #[inline]
+            fn state_f32(&self, key: &str) -> Option<f32> {
+                let bytes = self.state_bytes();
+                let v = $crate::state_json::find_value(bytes, key)?;
+                let n = $crate::state_json::parse_f64(v)?;
+                let f = n as f32;
+                if f.is_finite() {
+                    Some(f)
+                } else {
+                    None
+                }
+            }
+
+            #[inline]
+            fn state_f32_or(&self, key: &str, default: f32) -> f32 {
+                self.state_f32(key).unwrap_or(default)
+            }
+
+            #[inline]
+            fn state_array_u8<const N: usize>(&self, key: &str) -> Option<[u8; N]> {
+                let bytes = self.state_bytes();
+                let v = $crate::state_json::find_value(bytes, key)?;
+                let mut out = [0u8; N];
+                let written = $crate::state_json::parse_array_into(
+                    v,
+                    &mut out,
+                    $crate::state_json::decode_u8,
+                )?;
+                if written < N {
+                    return None;
+                }
+                Some(out)
+            }
+
+            #[inline]
+            fn state_array_u8_or<const N: usize>(
+                &self,
+                key: &str,
+                default: [u8; N],
+            ) -> [u8; N] {
+                self.state_array_u8::<N>(key).unwrap_or(default)
+            }
+
+            #[inline]
+            fn state_array_i32<const N: usize>(&self, key: &str) -> Option<[i32; N]> {
+                let bytes = self.state_bytes();
+                let v = $crate::state_json::find_value(bytes, key)?;
+                let mut out = [0i32; N];
+                let written = $crate::state_json::parse_array_into(
+                    v,
+                    &mut out,
+                    $crate::state_json::decode_i32,
+                )?;
+                if written < N {
+                    return None;
+                }
+                Some(out)
+            }
+
+            #[inline]
+            fn state_array_i32_or<const N: usize>(
+                &self,
+                key: &str,
+                default: [i32; N],
+            ) -> [i32; N] {
+                self.state_array_i32::<N>(key).unwrap_or(default)
+            }
+
+            #[inline]
+            fn state_array_f32<const N: usize>(&self, key: &str) -> Option<[f32; N]> {
+                let bytes = self.state_bytes();
+                let v = $crate::state_json::find_value(bytes, key)?;
+                let mut out = [0f32; N];
+                let written = $crate::state_json::parse_array_into(
+                    v,
+                    &mut out,
+                    $crate::state_json::decode_f32,
+                )?;
+                if written < N {
+                    return None;
+                }
+                Some(out)
+            }
+
+            #[inline]
+            fn state_array_f32_or<const N: usize>(
+                &self,
+                key: &str,
+                default: [f32; N],
+            ) -> [f32; N] {
+                self.state_array_f32::<N>(key).unwrap_or(default)
+            }
+        }
     };
 }

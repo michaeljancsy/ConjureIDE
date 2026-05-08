@@ -50,44 +50,44 @@ class _S:
         self.hp = [Biquad() for _ in range(nch)]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    density = params["density"] / 100.0
-    clatter = params["clatter"] / 100.0
-    hall = params["hall"] / 100.0
-    sheen = params["sheen"] / 100.0
-    mx = params["mix"]
+    density = ctx.params["density"] / 100.0
+    clatter = ctx.params["clatter"] / 100.0
+    hall = ctx.params["hall"] / 100.0
+    sheen = ctx.params["sheen"] / 100.0
+    mx = ctx.params["mix"]
 
     res_q = 6.0 + 22.0 * clatter
-    res_c = [BiquadCoeffs.bandpass(RES_HZ[k], res_q, sample_rate)
+    res_c = [BiquadCoeffs.bandpass(RES_HZ[k], res_q, ctx.sample_rate)
              for k in range(4)]
-    comb_lpc = BiquadCoeffs.lowpass(3200.0, 0.707, sample_rate)
+    comb_lpc = BiquadCoeffs.lowpass(3200.0, 0.707, ctx.sample_rate)
     hp_fc = 200.0 + 1800.0 * sheen
-    hpc = BiquadCoeffs.highpass(hp_fc, 0.707, sample_rate)
+    hpc = BiquadCoeffs.highpass(hp_fc, 0.707, ctx.sample_rate)
     for ch in range(nch):
         for k in range(4):
             s.res[ch][k].set_coeffs(res_c[k])
             s.comb_lp[ch][k].set_coeffs(comb_lpc)
         s.hp[ch].set_coeffs(hpc)
 
-    tap_base = [TAP_MS[k] * 0.001 * sample_rate for k in range(8)]
-    tap_depth = (0.5 + 1.5 * density) * 0.001 * sample_rate
-    comb_d = [COMB_MS[k] * 0.001 * sample_rate for k in range(4)]
+    tap_base = [TAP_MS[k] * 0.001 * ctx.sample_rate for k in range(8)]
+    tap_depth = (0.5 + 1.5 * density) * 0.001 * ctx.sample_rate
+    comb_d = [COMB_MS[k] * 0.001 * ctx.sample_rate for k in range(4)]
     comb_fb_amt = 0.60 + 0.30 * hall
 
     tap_gain = (0.4 + 0.6 * density) / 8.0
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         lm = [s.tap_lfo[k].tick() for k in range(8)]
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: write dry into shared grain delay
             s.grain_dl[ch].write(dry)
@@ -120,4 +120,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             # Stage E: highpass for insect-chatter sheen
             wet = s.hp[ch].process_sample(cloud + res_sum + tail_sum)
 
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

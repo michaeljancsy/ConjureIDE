@@ -41,6 +41,18 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// open/close cycles, no per-VC churn.
 	let transportPushManager = TransportPushManager()
 
+	/// Coordinator for the bundle-private STATE channel — UI-writable,
+	/// audio-readable JSON that is NOT in the AU parameter tree. Lifetime
+	/// matches the AU instance. The kernel pointer is captured at init;
+	/// `applyDefaults` is called after every successful script/WASM load
+	/// to reset to the new preset's STATE defaults. `@MainActor` so the
+	/// Swift mirror stays coherent across UI / MCP / fullState writes —
+	/// the underlying kernel FFI is itself thread-safe by atomic-swap.
+	@MainActor
+	private(set) lazy var presetStateManager: PresetStateManager = {
+		PresetStateManager(kernel: self.kernelReference)
+	}()
+
 	// MARK: - Shared Python Runtime
 
 	/// App Group container URL for cross-app data sharing.
@@ -696,6 +708,24 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Publishes script source when it changes externally (preset selection, fullState restore, AI compile).
 	public let scriptSourceDidChange = PassthroughSubject<ScriptSourceChange, Never>()
 
+	/// Payload for a silent script-load failure (host-driven preset switch
+	/// or extension boot). Surfaced to the SwiftUI layer so the user sees
+	/// the error even when they didn't drive the load via the in-plugin
+	/// browser (which already routes failures through `handleResult`).
+	public struct ScriptLoadFailure {
+		public let preset: String?
+		public let error: String
+		public init(preset: String?, error: String) {
+			self.preset = preset
+			self.error = error
+		}
+	}
+
+	/// Fires when a script load fails on a path that doesn't return its
+	/// error to a SwiftUI caller — currently `currentPreset.set` (DAW
+	/// preset menu) and `loadPythonScript` (extension boot, NAM-retry).
+	public let scriptLoadFailure = PassthroughSubject<ScriptLoadFailure, Never>()
+
 	/// Script-declared parameter names, keyed by address (0–7).
 	/// nil = no names declared (backward compatible, show all 8 with default labels).
 	private(set) var currentParamNames: [Int: String]? = nil
@@ -849,6 +879,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				readParamNames()
 			}
 
+			// Snapshot the new script's STATE defaults into the
+			// PresetStateManager. fullState restore (if a host saved
+			// per-instance state) runs AFTER this and overwrites.
+			applyPresetStateDefaults()
+
 			// Warm-start: run process() a few times so any first-call allocations
 			// (e.g. global buffer creation) happen before real audio arrives.
 			// benchmark_process does 1 warm-up + 5 timed calls; it handles
@@ -862,9 +897,17 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				let errMsg = String(cString: errPtr)
 				pluginLog.error("Failed to load Python DSP script: \(errMsg, privacy: .public)")
 				SentryHelper.capture("Failed to load Python DSP script", level: .error, category: "dsp.python", extra: ["error": errMsg])
+				scriptLoadFailure.send(ScriptLoadFailure(preset: nil, error: errMsg))
 			} else {
 				pluginLog.error("Failed to load Python DSP script (no error details), using Rust fallback DSP")
 				SentryHelper.capture("Failed to load Python DSP script (no error details)", level: .error, category: "dsp.python")
+				scriptLoadFailure.send(ScriptLoadFailure(preset: nil, error: "Failed to load Python DSP script"))
+			}
+			// Make the failed source available to MCP / fullState too —
+			// otherwise `get_script` returns nil at boot and the agent
+			// can't help the user fix the broken default.
+			if let source = try? String(contentsOfFile: scriptPath, encoding: .utf8) {
+				currentScriptSource = source
 			}
 		}
 	}
@@ -1086,6 +1129,64 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		paramNamesDidChange.send(currentParamNames)
 	}
 
+	/// After a successful script/WASM load, snapshot the kernel's
+	/// declared STATE defaults + cap and push them into
+	/// `presetStateManager`. This resets the Swift mirror, bumps the
+	/// kernel's state generation, and broadcasts a `.presetLoad`
+	/// stateChange so any live custom UI re-pulls. fullState restore (in
+	/// the setter above) runs AFTER this and overwrites the defaults
+	/// when the DAW saved per-instance state — that's the right
+	/// ordering: defaults are the floor, restore is the override.
+	///
+	/// Nonisolated so it's safe to call from `reloadScript` /
+	/// `loadWasm`, which can run on the AU's XPC thread (host preset
+	/// pickers, auval, the test harness's async context). The kernel
+	/// FFI is thread-safe by atomic-swap; the @MainActor
+	/// `presetStateManager.applyDefaults` mirror update is dispatched
+	/// asynchronously to main so this method itself never blocks.
+	private func applyPresetStateDefaults() {
+		var defaultsJSON = "{}"
+		if let cstr = dsp_kernel_state_defaults_json(kernel) {
+			defaultsJSON = String(cString: cstr)
+		}
+		let cap = Int(dsp_kernel_state_cap(kernel))
+		// Push cap + initial buffer to the kernel synchronously
+		// (thread-safe). The audio thread's snapshot_state on its
+		// next callback will observe these bytes.
+		dsp_kernel_set_state_cap(kernel, UInt(cap))
+		let bytes = Data(defaultsJSON.utf8)
+		if !bytes.isEmpty {
+			_ = bytes.withUnsafeBytes { raw -> Bool in
+				guard let base = raw.baseAddress else { return false }
+				return dsp_kernel_set_state_json(
+					kernel,
+					base.assumingMemoryBound(to: UInt8.self),
+					UInt(bytes.count)
+				)
+			}
+		}
+		// declaredKeys: until we surface them via FFI, parse the
+		// top-level keys of the defaults JSON. Good enough for v1 —
+		// every key the script declared has a default entry, so the
+		// strict-mode `set_state` check has the right vocabulary.
+		var declaredKeys: [String] = []
+		if let data = defaultsJSON.data(using: .utf8),
+		   let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+			declaredKeys = Array(dict.keys)
+		}
+		// Hop to main to update the Swift mirror — never block.
+		let capturedJSON = defaultsJSON
+		let capturedKeys = declaredKeys
+		let capturedCap = cap
+		Task { @MainActor [weak self] in
+			self?.presetStateManager.applyDefaults(
+				defaultsJSON: capturedJSON,
+				declaredKeys: capturedKeys,
+				maxBytes: capturedCap
+			)
+		}
+	}
+
 	/// Mark the start of a preset-load window. The audio thread ramps the
 	/// output to silence and *holds* silence — even after a backend swap —
 	/// until `endPresetTransition` is called. Idempotent.
@@ -1149,6 +1250,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				paramNamesDidChange.send(names)
 			}
 
+			// Snapshot the new script's STATE defaults — same handoff
+			// as `loadPythonScript`. fullState setter / DAW restore
+			// (when present) overwrites afterward.
+			applyPresetStateDefaults()
+
 			if persistManifest {
 				performManifestSyncIfNeeded()
 			}
@@ -1174,6 +1280,14 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			}
 			pluginLog.error("Failed to reload Python DSP script: \(errorMsg, privacy: .public)")
 			SentryHelper.capture("Failed to reload Python DSP script", level: .error, category: "dsp.python", extra: ["error": errorMsg])
+			// Update `currentScriptSource` even on failure so the editor,
+			// MCP `get_script`, and `fullState` save all reflect the script
+			// the user is trying to fix — not the previous, unrelated
+			// successful preset that's no longer running (the kernel is
+			// in passthrough now). Without this, the embedded Claude Code
+			// agent's `get_script` returns the previous preset and tries
+			// to "fix" code that wasn't broken.
+			currentScriptSource = source
 			return (false, errorMsg, nil, nil)
 		}
 	}
@@ -1206,6 +1320,13 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			if let namError = injectNamModelIfNeeded() {
 				return (false, namError, nil, nil)
 			}
+
+			// Snapshot the new module's STATE defaults. WASM presets
+			// generally return "{}" via `dsp_kernel_state_defaults_json`
+			// (their defaults flow through Rust's `T::default()`), but
+			// we still apply so the cap is synced and the
+			// `presetStateManager` mirror is reset to a known state.
+			applyPresetStateDefaults()
 
 			let benchmarkSecs = dsp_kernel_benchmark_process(kernel)
 			var processTimeMs: Double? = nil
@@ -1391,12 +1512,13 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			// When a Python script fails because a NAM tone hasn't been
 			// downloaded yet, report it as a warning (passthrough) rather
 			// than a hard error so the status bar shows an amber hint
-			// instead of a red error. Load a passthrough script into the
-			// kernel so the old preset doesn't keep running.
+			// instead of a red error. The kernel already installed
+			// `PassthroughBackend` inside `dsp_kernel_load_script`'s Err
+			// branch when reloadScript returned false, so audio is
+			// already dry — no extra Swift-side hop needed.
 			if !result.success,
 			   let err = result.error,
 			   err.contains(Self.namNotDownloadedMarker) {
-				loadPassthroughScript()
 				return (true, nil, Self.namNotDownloadedMessage, nil, nil)
 			}
 
@@ -1420,6 +1542,12 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						currentParamNames = names
 						paramNamesDidChange.send(names)
 					}
+				} else {
+					// See `reloadScript` (Python) failure branch — track the
+					// in-flight source so MCP `get_script` and the editor
+					// reflect what the user is trying to fix.
+					currentScriptSource = source
+					currentScriptLanguage = .rust
 				}
 				return Self.wasmResultWithWarning(result)
 			}
@@ -1439,31 +1567,22 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						currentParamNames = names
 						paramNamesDidChange.send(names)
 					}
+				} else {
+					currentScriptSource = source
+					currentScriptLanguage = .rust
 				}
 				return Self.wasmResultWithWarning(result)
 			} catch {
+				// rustc errored — still surface the source the user wrote
+				// so they can fix it via MCP / the editor.
+				currentScriptSource = source
+				currentScriptLanguage = .rust
 				return (false, error.localizedDescription, nil, nil, nil)
 			}
 		}
 	}
 
 	private static let namNotDownloadedMessage = "This preset uses a NAM tone that hasn't been downloaded yet. Open the Tones panel from the toolbar to search and download it."
-
-	/// Replace the current kernel backend with a minimal passthrough script
-	/// so the previously loaded preset doesn't keep running.
-	private func loadPassthroughScript() {
-		guard let pythonHome = self.pythonHome else { return }
-		let passthrough = """
-		def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-		    for ch in range(len(inputs)):
-		        outputs[ch][:frame_count] = inputs[ch][:frame_count]
-		"""
-		let tempDir = FileManager.default.temporaryDirectory
-		let tempFile = tempDir.appendingPathComponent("passthrough_\(UUID().uuidString).py")
-		guard let _ = try? passthrough.write(to: tempFile, atomically: true, encoding: .utf8) else { return }
-		defer { try? FileManager.default.removeItem(at: tempFile) }
-		dsp_kernel_load_script(kernel, pythonHome, tempFile.path)
-	}
 
 	/// Convert a WASM load result to a compile result, promoting NAM-not-downloaded errors to warnings.
 	private static func wasmResultWithWarning(
@@ -1584,6 +1703,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	private static let scriptSourceKey = "pythonScriptSource"
 	private static let scriptLanguageKey = "scriptLanguage"
 	private static let wasmBytesKey = "wasmBytes"
+	/// Bundle-private STATE channel bytes (JSON UTF-8). UI-writable,
+	/// audio-readable, NOT in the AU parameter tree. Persisted into
+	/// DAW project state so per-instance UI scribbles (XY pad
+	/// positions, sequencer steps, etc.) survive session reopen.
+	private static let stateKey = "conjuredsp_state"
 
 	public override var fullState: [String : Any]? {
 		get {
@@ -1595,6 +1719,31 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			state[Self.scriptLanguageKey] = currentScriptLanguage.rawValue
 			if let wasmBytes = currentWasmBytes {
 				state[Self.wasmBytesKey] = wasmBytes
+			}
+			// Embed the bundle-private STATE blob so DAW project saves
+			// round-trip per-instance UI state alongside the script
+			// source. Always written — empty `{}` is harmless and keeps
+			// the schema stable across presets that may flip from "no
+			// STATE" to "has STATE" mid-project.
+			//
+			// fullState may be read from XPC threads (auval, host preset
+			// pickers), so we go directly to the kernel's atomic-swap
+			// JSON buffer rather than through the @MainActor
+			// PresetStateManager. The kernel guarantees thread-safety on
+			// `dsp_kernel_get_state_json`.
+			let needed = Int(dsp_kernel_get_state_json(kernel, nil, 0))
+			if needed > 0 {
+				var bytes = Data(count: needed)
+				let written = bytes.withUnsafeMutableBytes { raw -> Int in
+					guard let base = raw.baseAddress else { return 0 }
+					return Int(dsp_kernel_get_state_json(
+						kernel,
+						base.assumingMemoryBound(to: UInt8.self),
+						UInt(needed)
+					))
+				}
+				if written < bytes.count { bytes = bytes.prefix(written) }
+				state[Self.stateKey] = bytes
 			}
 			return state
 		}
@@ -1645,8 +1794,50 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				}
 			}
 
+			// Restore the STATE blob AFTER the script load finishes so it
+			// overwrites the script-load-time defaults that
+			// `applyPresetStateDefaults` just pushed. The script-load path
+			// always runs first (resetting to defaults) so legacy sessions
+			// with no `conjuredsp_state` key keep the defaults — we only
+			// override when the host actually saved one.
+			//
+			// Two writes for two readers: the kernel sync write makes the
+			// saved bytes visible to the audio thread before
+			// `end_preset_transition` fires, and the @MainActor task hop
+			// to `presetStateManager.restore` updates the Swift mirror
+			// (which `applyPresetStateDefaults`'s queued task would
+			// otherwise leave at script defaults — desyncing the custom
+			// UI from the kernel for the rest of the session). The two
+			// MainActor tasks run in FIFO order, so the restore lands
+			// after the defaults push.
+			if let stateBytes = state[Self.stateKey] as? Data, !stateBytes.isEmpty {
+				_ = stateBytes.withUnsafeBytes { raw -> Bool in
+					guard let base = raw.baseAddress else { return false }
+					return dsp_kernel_set_state_json(
+						kernel,
+						base.assumingMemoryBound(to: UInt8.self),
+						UInt(stateBytes.count)
+					)
+				}
+				let capturedBytes = stateBytes
+				Task { @MainActor [weak self] in
+					self?.presetStateManager.restore(from: capturedBytes)
+				}
+			}
+
 			pluginLog.info("Restored \(language.rawValue) script from fullState (\(source.count) chars)")
 		}
+	}
+
+	/// Dual override of `fullStateForDocument`. Some hosts (Logic for
+	/// project saves) read this property; others (auval, AU testing
+	/// hosts) only call `fullState`. Mirroring both with identical
+	/// content guarantees the bundle-private STATE blob survives in
+	/// every host path, so per-instance UI state isn't silently
+	/// dropped at project save / reopen.
+	public override var fullStateForDocument: [String : Any]? {
+		get { return self.fullState }
+		set { self.fullState = newValue }
 	}
 
 	// MARK: - Preset Manager
@@ -1800,6 +1991,15 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					currentWasmBytes = nil
 					scriptSourceDidChange.send(ScriptSourceChange(source: source))
 					pluginLog.info("Loaded factory preset: \(entry.name, privacy: .public)")
+				} else {
+					// Host-driven failures don't return to a SwiftUI caller —
+					// surface them via the publisher so the StatusBarView still
+					// shows the error instead of silently leaving the kernel in
+					// passthrough.
+					scriptLoadFailure.send(ScriptLoadFailure(
+						preset: entry.name,
+						error: result.error ?? "Failed to load preset"
+					))
 				}
 				dsp_kernel_end_preset_transition(kernel)
 			case .rust:
@@ -1809,10 +2009,15 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				scriptSourceDidChange.send(ScriptSourceChange(source: source))
 				pluginLog.info("Loaded Rust factory preset: \(entry.name, privacy: .public)")
 				let kernelRef = kernel
+				let presetName = entry.name
 				Task {
 					let result = await self.compileAndRun(source: source)
 					if !result.success {
 						pluginLog.error("Failed to compile Rust factory preset: \(result.error ?? "unknown", privacy: .public)")
+						self.scriptLoadFailure.send(ScriptLoadFailure(
+							preset: presetName,
+							error: result.error ?? "Failed to compile preset"
+						))
 					}
 					dsp_kernel_end_preset_transition(kernelRef)
 				}

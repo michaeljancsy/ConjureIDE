@@ -6,7 +6,7 @@ PARAMS = {
 }
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Stereo Width — mid/side stereo width control.
 
@@ -19,17 +19,17 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     Params:
         width: Stereo width (0.0 = mono, 1.0 = normal, 2.0 = extra wide)
     """
-    width = params["width"]
+    width = ctx.params["width"]
 
-    n_ch = len(inputs)
+    n_ch = len(ctx.inputs)
 
     if n_ch < 2:
         # Mono: passthrough
-        outputs[0][:frame_count] = inputs[0][:frame_count]
+        ctx.outputs[0][:ctx.frame_count] = ctx.inputs[0][:ctx.frame_count]
         return
 
-    left = inputs[0][:frame_count]
-    right = inputs[1][:frame_count]
+    left = ctx.inputs[0][:ctx.frame_count]
+    right = ctx.inputs[1][:ctx.frame_count]
 
     # Encode to mid/side
     mid = (left + right) * 0.5
@@ -39,5 +39,5 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     side_scaled = side * width
 
     # Decode back to L/R
-    outputs[0][:frame_count] = mid + side_scaled
-    outputs[1][:frame_count] = mid - side_scaled
+    ctx.outputs[0][:ctx.frame_count] = mid + side_scaled
+    ctx.outputs[1][:ctx.frame_count] = mid - side_scaled

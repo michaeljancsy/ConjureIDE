@@ -16,7 +16,7 @@ _left_dl = None
 _right_dl = None
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Ping-Pong Delay — stereo bouncing echo.
 
@@ -33,37 +33,37 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _left_dl, _right_dl
 
-    delay_ms = params["time"]
-    feedback = params["feedback"]
-    mix = params["mix"]
+    delay_ms = ctx.params["time"]
+    feedback = ctx.params["feedback"]
+    mix = ctx.params["mix"]
 
-    n_ch = len(inputs)
+    n_ch = len(ctx.inputs)
 
     if _left_dl is None:
         _left_dl = DelayLine(MAX_DELAY)
         _right_dl = DelayLine(MAX_DELAY)
 
-    delay_samples = int(delay_ms * 0.001 * sample_rate)
+    delay_samples = int(delay_ms * 0.001 * ctx.sample_rate)
     if delay_samples >= MAX_DELAY:
         delay_samples = MAX_DELAY - 1
 
     if n_ch < 2:
         # Mono: simple delay with feedback
-        for i in range(frame_count):
+        for i in range(ctx.frame_count):
             delayed = _left_dl.tap(delay_samples)
-            _left_dl.write(inputs[0][i] + delayed * feedback)
-            outputs[0][i] = inputs[0][i] * (1.0 - mix) + delayed * mix
+            _left_dl.write(ctx.inputs[0][i] + delayed * feedback)
+            ctx.outputs[0][i] = ctx.inputs[0][i] * (1.0 - mix) + delayed * mix
     else:
         # Stereo: ping-pong
-        for i in range(frame_count):
+        for i in range(ctx.frame_count):
             left_delayed = _left_dl.tap(delay_samples)
             right_delayed = _right_dl.tap(delay_samples)
 
             # Input goes to left, left feeds right, right feeds back to left
-            mono_in = (inputs[0][i] + inputs[1][i]) * 0.5
+            mono_in = (ctx.inputs[0][i] + ctx.inputs[1][i]) * 0.5
             _left_dl.write(mono_in + right_delayed * feedback)
             _right_dl.write(left_delayed * feedback)
 
             # Mix dry + wet
-            outputs[0][i] = inputs[0][i] * (1.0 - mix) + left_delayed * mix
-            outputs[1][i] = inputs[1][i] * (1.0 - mix) + right_delayed * mix
+            ctx.outputs[0][i] = ctx.inputs[0][i] * (1.0 - mix) + left_delayed * mix
+            ctx.outputs[1][i] = ctx.inputs[1][i] * (1.0 - mix) + right_delayed * mix

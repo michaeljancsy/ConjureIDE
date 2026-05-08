@@ -50,28 +50,28 @@ class _S:
         self.pipe_lp = [Biquad() for _ in range(nch)]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    calliope = params["calliope"] / 100.0
-    waltz = params["waltz"] / 100.0
-    organ = params["organ"] / 100.0
-    tube = params["tube"] / 100.0
-    mx = params["mix"]
+    calliope = ctx.params["calliope"] / 100.0
+    waltz = ctx.params["waltz"] / 100.0
+    organ = ctx.params["organ"] / 100.0
+    tube = ctx.params["tube"] / 100.0
+    mx = ctx.params["mix"]
 
-    pipe_lpc = BiquadCoeffs.lowpass(2800.0, 0.707, sample_rate)
+    pipe_lpc = BiquadCoeffs.lowpass(2800.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         s.pipe_lp[ch].set_coeffs(pipe_lpc)
 
-    chorus_base = [CHORUS_MS[k] * 0.001 * sample_rate for k in range(5)]
-    chorus_depth = (0.8 + 1.8 * calliope) * 0.001 * sample_rate
+    chorus_base = [CHORUS_MS[k] * 0.001 * ctx.sample_rate for k in range(5)]
+    chorus_depth = (0.8 + 1.8 * calliope) * 0.001 * ctx.sample_rate
     waltz_depth = 0.65 * waltz
-    pipe_d = (1.0 / PIPE_HZ) * sample_rate
+    pipe_d = (1.0 / PIPE_HZ) * ctx.sample_rate
     pipe_fb_amt = 0.50 + 0.40 * organ
 
     drive_pos = 1.0 + 3.0 * tube
@@ -79,13 +79,13 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
 
     chorus_gain = 1.0 / 5.0
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         cm = [s.chorus_lfo[k].tick() for k in range(5)]
         w_tri = s.waltz_lfo.tick()
         waltz_mod = (1.0 - waltz_depth) + waltz_depth * abs(w_tri)
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: 5-voice calliope chorus
             chorus_sum = 0.0
@@ -112,4 +112,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             else:
                 wet = math.tanh(x * drive_neg) / drive_neg
 
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

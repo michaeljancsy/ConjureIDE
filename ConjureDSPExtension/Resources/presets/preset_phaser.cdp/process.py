@@ -17,7 +17,7 @@ _ap_state = [[[0.0, 0.0] for _ in range(MAX_STAGES)] for _ in range(2)]
 _lfo_phase = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Phaser — cascaded allpass filters with LFO-swept frequency.
 
@@ -36,28 +36,28 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _ap_state, _lfo_phase
 
-    rate_hz = params["rate"]
-    min_freq = params["min_freq"]
-    max_freq = params["max_freq"]
-    stages = int(params["stages"])
-    mix = params["mix"]
+    rate_hz = ctx.params["rate"]
+    min_freq = ctx.params["min_freq"]
+    max_freq = ctx.params["max_freq"]
+    stages = int(ctx.params["stages"])
+    mix = ctx.params["mix"]
 
-    n_ch = len(inputs)
+    n_ch = len(ctx.inputs)
     two_pi = 2.0 * math.pi
-    lfo_inc = two_pi * rate_hz / sample_rate
+    lfo_inc = two_pi * rate_hz / ctx.sample_rate
     phase = _lfo_phase
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # LFO sweeps the allpass frequency between min_freq and max_freq
         lfo = 0.5 * (1.0 + math.sin(phase))
         freq = min_freq + (max_freq - min_freq) * lfo
 
         # Compute allpass coefficient
-        tan_val = math.tan(math.pi * freq / sample_rate)
+        tan_val = math.tan(math.pi * freq / ctx.sample_rate)
         a = (tan_val - 1.0) / (tan_val + 1.0)
 
         for ch in range(n_ch):
-            x = inputs[ch][i]
+            x = ctx.inputs[ch][i]
             # Pass through allpass cascade
             signal = x
             for s in range(stages):
@@ -69,7 +69,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
                 signal = y
 
             # Mix dry + wet
-            outputs[ch][i] = x * (1.0 - mix) + signal * mix
+            ctx.outputs[ch][i] = x * (1.0 - mix) + signal * mix
 
         phase += lfo_inc
 

@@ -518,7 +518,7 @@ struct ExportDSPIntegrationTests {
         // Export Python preset
         let pyURL = try manager.exportPreset(
             name: "ConfigTest_Python_\(testId)",
-            source: "def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry): pass",
+            source: "def process(ctx): pass",
             wasmData: nil,
             language: .python,
             templateURL: templateURL,
@@ -955,7 +955,7 @@ struct ExportDSPIntegrationTests {
         let source = """
             from conjuredsp.nam import load_model
             model = load_model("/nonexistent/bogus/model.nam")
-            def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+            def process(ctx):
                 pass
             """
 
@@ -1026,9 +1026,9 @@ struct ExportDSPIntegrationTests {
         // 2. Source script — any simple Python will do; the UI is what we're
         //    testing.
         let source = """
-            def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-                for ch in range(len(inputs)):
-                    outputs[ch][:frame_count] = inputs[ch][:frame_count]
+            def process(ctx):
+                for ch in range(len(ctx.inputs)):
+                    ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count]
             """
 
         // 3. Export with a CustomUIPayload pointing at the fake ui/ tree.
@@ -1198,9 +1198,9 @@ struct ExportDSPIntegrationTests {
 
         let presetName = "RoundtripPreset_\(testId)"
         let source = """
-            def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-                for ch in range(len(inputs)):
-                    outputs[ch][:frame_count] = inputs[ch][:frame_count]
+            def process(ctx):
+                for ch in range(len(ctx.inputs)):
+                    ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count]
             """
         let mgr = PresetManager(extensionBundle: extensionBundle, presetsURL: presetsDir)
         let preset = try mgr.savePreset(
@@ -1299,7 +1299,7 @@ struct ExportDSPIntegrationTests {
         }
 
         let source = """
-            def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+            def process(ctx):
                 pass
             """
 
@@ -1384,7 +1384,7 @@ struct ExportNamReferenceTests {
         let source = """
         from conjuredsp.nam import load_model
         model = load_model("tone3000://60092/351559")
-        def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+        def process(ctx):
             pass
         """
         #expect(ExportManager.containsNamReference(source: source, language: .python))
@@ -1415,8 +1415,8 @@ struct ExportNamReferenceTests {
 
     @Test func pythonWithoutNamReference() {
         let source = """
-        def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-            outputs[:] = inputs * params["gain"]
+        def process(ctx):
+            ctx.outputs[:] = ctx.inputs * ctx.params["gain"]
         """
         #expect(!ExportManager.containsNamReference(source: source, language: .python))
     }

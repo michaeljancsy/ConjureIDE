@@ -23,6 +23,16 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     /// view appears it's always set.
     var kernelRef: DSPKernelRef? { kernel }
 
+    /// Coordinator for the bundle-private STATE channel — UI-writable,
+    /// audio-readable JSON that is NOT in the AU parameter tree.
+    /// Lifetime matches the AU instance. The kernel pointer is captured
+    /// at first access; `applyDefaults` is called after every successful
+    /// preset load to reset to the new preset's STATE defaults.
+    @MainActor
+    private(set) lazy var presetStateManager: ExportPresetStateManager = {
+        ExportPresetStateManager(kernel: self.kernelRef)
+    }()
+
     // Runtime configuration loaded from bundle
     private var config: RuntimeConfig?
 
@@ -397,6 +407,9 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
             trace(.info, "preset.wasm", "WASM preset loaded successfully")
             // Inject embedded NAM model if present
             injectEmbeddedNamModel(from: bundle)
+            DispatchQueue.main.async { [weak self] in
+                self?.applyPresetStateDefaults()
+            }
             warmStart()
         } else {
             let err = kernelErrorString() ?? "Failed to load preset"
@@ -435,6 +448,9 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
         if success {
             trace(.info, "preset.python", "Python preset loaded successfully")
+            DispatchQueue.main.async { [weak self] in
+                self?.applyPresetStateDefaults()
+            }
             warmStart()
         } else {
             let err = kernelErrorString() ?? "Failed to load preset"
@@ -571,6 +587,77 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
         if warmupTime >= 0 {
             trace(.info, "warmup", "warm-up complete: \(String(format: "%.3f", warmupTime * 1000))ms")
         }
+    }
+
+    // MARK: - Bundle-private STATE channel
+
+    /// After a successful preset load, snapshot the kernel's declared
+    /// STATE defaults + cap and push them into `presetStateManager`.
+    /// This resets the Swift mirror, bumps the kernel's state generation,
+    /// and broadcasts a `.presetLoad` stateChange so any live custom UI
+    /// re-pulls. fullState restore (in the setter below) runs AFTER this
+    /// and overwrites the defaults when the DAW saved per-instance state
+    /// — that's the right ordering: defaults are the floor, restore is
+    /// the override.
+    @MainActor
+    private func applyPresetStateDefaults() {
+        var defaultsJSON = "{}"
+        if let cstr = dsp_kernel_state_defaults_json(kernel) {
+            defaultsJSON = String(cString: cstr)
+        }
+        let cap = Int(dsp_kernel_state_cap(kernel))
+        // declaredKeys: parse top-level keys of the defaults JSON.
+        // Every key the script declared has a default entry, so this is
+        // the right vocabulary for the bridge / validator.
+        var declaredKeys: [String] = []
+        if let data = defaultsJSON.data(using: .utf8),
+           let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            declaredKeys = Array(dict.keys)
+        }
+        presetStateManager.applyDefaults(
+            defaultsJSON: defaultsJSON,
+            declaredKeys: declaredKeys,
+            maxBytes: cap
+        )
+    }
+
+    // MARK: - fullState (DAW project persistence)
+
+    /// Bundle-private STATE channel bytes (JSON UTF-8). UI-writable,
+    /// audio-readable, NOT in the AU parameter tree. Persisted into
+    /// DAW project state so per-instance UI scribbles (XY pad
+    /// positions, sequencer steps, etc.) survive session reopen.
+    private static let stateKey = "conjuredsp_state"
+
+    public override var fullState: [String: Any]? {
+        get {
+            var state = super.fullState ?? [:]
+            // Future: if other keys need to round-trip, add them here.
+            let stateBytes = MainActor.assumeIsolated {
+                presetStateManager.currentJSONBytes()
+            }
+            state[Self.stateKey] = stateBytes
+            return state
+        }
+        set {
+            super.fullState = newValue
+            guard let state = newValue else { return }
+            if let bytes = state[Self.stateKey] as? Data {
+                MainActor.assumeIsolated {
+                    presetStateManager.restore(from: bytes)
+                }
+            }
+        }
+    }
+
+    /// Dual override of `fullStateForDocument`. Some hosts (Logic for
+    /// project saves) read this property; others (auval, AU testing
+    /// hosts) only call `fullState`. Mirroring both with identical
+    /// content guarantees the bundle-private STATE blob survives in
+    /// every host path.
+    public override var fullStateForDocument: [String: Any]? {
+        get { return self.fullState }
+        set { self.fullState = newValue }
     }
 
     /// Returns the current kernel error, if any. Safe to call from any thread.

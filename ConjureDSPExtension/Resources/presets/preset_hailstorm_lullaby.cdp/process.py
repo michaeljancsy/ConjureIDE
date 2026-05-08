@@ -49,46 +49,46 @@ class _S:
         self.lcg_state = 0x13579BDF
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    impact = params["impact"] / 100.0
-    patter = params["patter"] / 100.0
-    subpad = params["subpad"] / 100.0
-    hall = params["hall"] / 100.0
-    mx = params["mix"]
+    impact = ctx.params["impact"] / 100.0
+    patter = ctx.params["patter"] / 100.0
+    subpad = ctx.params["subpad"] / 100.0
+    hall = ctx.params["hall"] / 100.0
+    mx = ctx.params["mix"]
 
-    sub_lpc = BiquadCoeffs.lowpass(80.0, 0.707, sample_rate)
-    comb_lpc = BiquadCoeffs.lowpass(1800.0, 0.707, sample_rate)
+    sub_lpc = BiquadCoeffs.lowpass(80.0, 0.707, ctx.sample_rate)
+    comb_lpc = BiquadCoeffs.lowpass(1800.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         s.sub_lp[ch].set_coeffs(sub_lpc)
         for k in range(2):
             s.comb_lp[ch][k].set_coeffs(comb_lpc)
 
     # Envelope follower: fast attack (~2 ms), slow release (~80 ms)
-    attack_alpha = 1.0 - math.exp(-1.0 / (0.002 * sample_rate))
-    release_alpha = 1.0 - math.exp(-1.0 / (0.080 * sample_rate))
+    attack_alpha = 1.0 - math.exp(-1.0 / (0.002 * ctx.sample_rate))
+    release_alpha = 1.0 - math.exp(-1.0 / (0.080 * ctx.sample_rate))
 
-    ap_d = [max(AP_MS[k] * 0.001 * sample_rate, 1.0) for k in range(2)]
-    comb_d = [COMB_MS[k] * 0.001 * sample_rate for k in range(2)]
+    ap_d = [max(AP_MS[k] * 0.001 * ctx.sample_rate, 1.0) for k in range(2)]
+    comb_d = [COMB_MS[k] * 0.001 * ctx.sample_rate for k in range(2)]
     comb_fb_amt = 0.55 + 0.30 * hall
 
     thresh = 0.02 + 0.25 * (1.0 - patter)  # lower patter → higher thresh → less hail
     hail_gain = 2.0 + 4.0 * impact
     sub_gain = 0.6 + 1.4 * subpad
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # Deterministic LCG noise, shared across channels
         s.lcg_state = (s.lcg_state * 1103515245 + 12345) & 0x7FFFFFFF
         noise = (s.lcg_state / 2147483647.0) * 2.0 - 1.0
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Envelope follower (asymmetric attack/release)
             absx = abs(dry)
@@ -128,4 +128,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             gate_amt = 0.25 + 0.75 * min(env * 3.0, 1.0)
             wet = hail + sub_voice + tail_sum * gate_amt
 
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

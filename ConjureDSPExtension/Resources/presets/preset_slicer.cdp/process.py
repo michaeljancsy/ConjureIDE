@@ -15,7 +15,7 @@ _write_pos = 0
 _chunk_size = 0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Reverse Slicer — records chunks and plays them backwards.
 
@@ -30,10 +30,10 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _record_buf, _play_buf, _write_pos, _chunk_size
 
-    chunk_ms = params["rate"]
+    chunk_ms = ctx.params["rate"]
 
-    n_ch = len(inputs)
-    chunk_size = int(chunk_ms * 0.001 * sample_rate)
+    n_ch = len(ctx.inputs)
+    chunk_size = int(chunk_ms * 0.001 * ctx.sample_rate)
     if chunk_size > MAX_CHUNK:
         chunk_size = MAX_CHUNK
 
@@ -46,14 +46,14 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
 
     wp = _write_pos
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         for ch in range(n_ch):
             # Record into record buffer
-            _record_buf[ch][wp] = inputs[ch][i]
+            _record_buf[ch][wp] = ctx.inputs[ch][i]
 
             # Play from play buffer in reverse
             read_pos = chunk_size - 1 - wp
-            outputs[ch][i] = _play_buf[ch][read_pos]
+            ctx.outputs[ch][i] = _play_buf[ch][read_pos]
 
         wp += 1
         if wp >= chunk_size:

@@ -43,25 +43,25 @@ class _S:
         self.breath_lfo = LFO(sr, freq=BREATH_HZ, waveform="triangle")
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    mask = params["mask"] / 100.0
-    breath = params["breath"] / 100.0
-    rasp = params["rasp"] / 100.0
-    presence = params["presence"] / 100.0
-    mx = params["mix"]
+    mask = ctx.params["mask"] / 100.0
+    breath = ctx.params["breath"] / 100.0
+    rasp = ctx.params["rasp"] / 100.0
+    presence = ctx.params["presence"] / 100.0
+    mx = ctx.params["mix"]
 
     formant_gain = 4.0 + 8.0 * mask
-    formant_c = [BiquadCoeffs.peak(FORMANT_HZ[k], 4.0, formant_gain, sample_rate)
+    formant_c = [BiquadCoeffs.peak(FORMANT_HZ[k], 4.0, formant_gain, ctx.sample_rate)
                  for k in range(3)]
     presence_gain = 2.0 + 6.0 * presence
-    presence_c = BiquadCoeffs.peak(PRESENCE_HZ, 2.0, presence_gain, sample_rate)
+    presence_c = BiquadCoeffs.peak(PRESENCE_HZ, 2.0, presence_gain, ctx.sample_rate)
     for ch in range(nch):
         for k in range(3):
             s.formant[ch][k].set_coeffs(formant_c[k])
@@ -70,14 +70,14 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     breath_depth = 0.60 * breath
     drive = 1.0 + 3.5 * rasp
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         tri = s.breath_lfo.tick()
         # Asymmetric breath: (0.5+0.5*tri)^1.5-ish via squaring
         env = 0.5 + 0.5 * tri
         breath_mod = (1.0 - breath_depth) + breath_depth * env * env
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: 3 cascaded nasal/throat formants
             x = dry
@@ -93,4 +93,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             # Stage D: soft tanh saturation
             wet = math.tanh(x * drive) / drive
 
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

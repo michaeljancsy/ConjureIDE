@@ -12,7 +12,7 @@ PARAMS = {
 _envelope = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Limiter — brick-wall peak limiter.
 
@@ -30,22 +30,22 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _envelope
 
-    threshold_db = params["threshold"]
-    attack_ms = params["attack"]
-    release_ms = params["release"]
+    threshold_db = ctx.params["threshold"]
+    attack_ms = ctx.params["attack"]
+    release_ms = ctx.params["release"]
 
     threshold = db_to_gain(threshold_db)
-    attack_coeff = smooth_coeff(attack_ms, sample_rate)
-    release_coeff = smooth_coeff(release_ms, sample_rate)
+    attack_coeff = smooth_coeff(attack_ms, ctx.sample_rate)
+    release_coeff = smooth_coeff(release_ms, ctx.sample_rate)
 
-    gain = np.ones(frame_count, dtype=np.float32)
+    gain = np.ones(ctx.frame_count, dtype=np.float32)
     env = _envelope
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # Peak detect across all channels
         peak = 0.0
-        for ch in range(len(inputs)):
-            peak = max(peak, abs(inputs[ch][i]))
+        for ch in range(len(ctx.inputs)):
+            peak = max(peak, abs(ctx.inputs[ch][i]))
 
         # Envelope follower
         if peak > env:
@@ -61,5 +61,5 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
 
     _envelope = env
 
-    for ch in range(len(inputs)):
-        outputs[ch][:frame_count] = inputs[ch][:frame_count] * gain
+    for ch in range(len(ctx.inputs)):
+        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count] * gain

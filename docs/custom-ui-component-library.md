@@ -64,6 +64,79 @@ Exposed for preset JS that wants to go beyond the components:
 - `requireVersion(n)` — future-proofing; asserts the library is at
   least version `n`.
 
+## Bundle-private state channel — `ConjureDSP.state.*`
+
+For UI-writable, audio-readable structured data that doesn't fit on
+the AU parameter tree — sequencer steps, slot selections, NAM model
+paths, MIDI-learn maps, captured impulse responses. State persists
+in the **DAW project** (via `fullState` / `fullStateForDocument`),
+not the bundle. New instances boot from the script's defaults; user
+edits diverge into per-instance state; reopening the project
+restores those edits.
+
+The script declares defaults at module level (Python `STATE = {…}`)
+or via `state!();` (Rust — see `get_docs("state")` for the
+raw-bytes accessor pattern). The audio thread reads through
+`ctx.state` (Python — a read-only mapping) or `cx.state_bytes()`
+(Rust — raw JSON content); writes only happen through this JS
+surface or the MCP `set_state` tool.
+
+```js
+ConjureDSP.state.get(key)               // current value
+ConjureDSP.state.set(key, value)        // returns boolean —
+                                         //   false on size cap reject
+ConjureDSP.state.onChange(key, cb)      // fires on every set AND
+                                         //   external _stateUpdate
+                                         //   (DAW load / MCP / preset switch)
+ConjureDSP.state.onAnyChange((k, v) => {})  // any-key fan-out;
+                                              //   (k=null, v=null) = full reset
+ConjureDSP.state.reset(key)             // restore one key to script default
+ConjureDSP.state.resetAll()             // restore everything
+```
+
+**Behavioral notes:**
+
+- `set` returns `false` when the resulting JSON would exceed
+  `MAX_STATE_BYTES` (64 KiB default; presets can opt up to 1 MiB
+  via `state!(max_bytes = N)` in Rust). Existing buffer is
+  unchanged on rejection. Handle the boolean — silent drops are
+  the worst-of-both-worlds.
+- `onChange` fires synchronously inside `set`, so a widget that
+  redraws in `state.onChange('slots', refreshGrid)` will see the
+  user's drag the same way it sees a DAW load. No dedupe-on-equal
+  for state — deep-equal on arrays/objects would dominate the cost;
+  the author is responsible for not re-setting identical values
+  every animation frame.
+- Values must be JSON-serializable. The bridge serializes at the
+  moment of `set` to size-check — later mutations to the same
+  object reference are NOT visible to the kernel. Pass a fresh
+  object/array on every change.
+- Writing an undeclared key (one not in the script's Python
+  `STATE = {...}` defaults) succeeds at the kernel level but emits a
+  one-time-per-key console warning so the author can spot the
+  typo. The validator catches these statically for Python; Rust
+  scripts that parse raw bytes themselves get no static check.
+
+```html
+<!-- A 32-step sequencer grid driven entirely by state. -->
+<script>
+  ConjureDSP.ready(() => {
+    const cells = document.querySelectorAll('.cell');
+    const refresh = (slots) => {
+      cells.forEach((c, i) => c.classList.toggle('on', !!slots[i]));
+    };
+    refresh(ConjureDSP.state.get('slots') || []);
+    ConjureDSP.state.onChange('slots', refresh);
+    cells.forEach((c, i) => c.addEventListener('click', () => {
+      const slots = (ConjureDSP.state.get('slots') || []).slice();
+      slots[i] = slots[i] ? 0 : 1;
+      const ok = ConjureDSP.state.set('slots', slots);
+      if (!ok) console.warn('state cap exceeded — drop the write');
+    }));
+  });
+</script>
+```
+
 ## DSP→UI telemetry channel
 
 For meters / visualizers that need to display **internal DSP state** —
@@ -99,8 +172,7 @@ telemetry! {
 }
 ```
 
-**Python author surface** (process() must accept all 7 args
-including transport):
+**Python author surface** (`ctx.telemetry` is the writable channel):
 
 ```python
 TELEMETRY = {
@@ -108,10 +180,10 @@ TELEMETRY = {
     "env_db": {"unit": "dB"},
 }
 
-def process(inputs, outputs, frame_count, sample_rate, params, transport, telemetry):
+def process(ctx):
     # …compute…
-    telemetry["gr_db"] = max_gr_db
-    telemetry["env_db"] = env_db
+    ctx.telemetry["gr_db"] = max_gr_db
+    ctx.telemetry["env_db"] = env_db
 ```
 
 **UI consumer surface:**

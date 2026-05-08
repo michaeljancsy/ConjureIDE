@@ -15,7 +15,7 @@ MAX_DELAY = 48000
 _delays = None
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Simple Delay — echo effect with feedback.
 
@@ -31,21 +31,21 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _delays
 
-    delay_ms = params["time"]
-    feedback = params["feedback"]
-    mix = params["mix"]
+    delay_ms = ctx.params["time"]
+    feedback = ctx.params["feedback"]
+    mix = ctx.params["mix"]
 
-    n_ch = len(inputs)
+    n_ch = len(ctx.inputs)
 
     if _delays is None or len(_delays) != n_ch:
         _delays = [DelayLine(MAX_DELAY) for _ in range(n_ch)]
 
-    delay_samples = int(delay_ms * 0.001 * sample_rate)
+    delay_samples = int(delay_ms * 0.001 * ctx.sample_rate)
     if delay_samples >= MAX_DELAY:
         delay_samples = MAX_DELAY - 1
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         for ch in range(n_ch):
             delayed = _delays[ch].tap(delay_samples)
-            _delays[ch].write(inputs[ch][i] + delayed * feedback)
-            outputs[ch][i] = inputs[ch][i] * (1.0 - mix) + delayed * mix
+            _delays[ch].write(ctx.inputs[ch][i] + delayed * feedback)
+            ctx.outputs[ch][i] = ctx.inputs[ch][i] * (1.0 - mix) + delayed * mix

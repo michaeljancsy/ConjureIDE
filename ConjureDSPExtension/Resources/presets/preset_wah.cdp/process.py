@@ -17,7 +17,7 @@ _filters = None
 _envelope = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     Auto-Wah — envelope-controlled bandpass filter.
 
@@ -37,30 +37,30 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _filters, _envelope
 
-    n_ch = len(inputs)
+    n_ch = len(ctx.inputs)
 
     if _filters is None or len(_filters) != n_ch:
         _filters = [Biquad() for _ in range(n_ch)]
 
-    sensitivity_gain = db_to_gain(params["sensitivity"])
-    depth = params["depth"] / 100.0
-    min_freq = params["min_freq"]
-    max_freq = params["max_freq"]
-    q = params["q"]
-    attack_ms = params["attack"]
-    release_ms = params["release"]
+    sensitivity_gain = db_to_gain(ctx.params["sensitivity"])
+    depth = ctx.params["depth"] / 100.0
+    min_freq = ctx.params["min_freq"]
+    max_freq = ctx.params["max_freq"]
+    q = ctx.params["q"]
+    attack_ms = ctx.params["attack"]
+    release_ms = ctx.params["release"]
 
-    attack_coeff = smooth_coeff(attack_ms, sample_rate)
-    release_coeff = smooth_coeff(release_ms, sample_rate)
+    attack_coeff = smooth_coeff(attack_ms, ctx.sample_rate)
+    release_coeff = smooth_coeff(release_ms, ctx.sample_rate)
 
     freq_range = max_freq - min_freq
     env = _envelope
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # Peak detect across channels with sensitivity scaling
         peak = 0.0
         for ch in range(n_ch):
-            peak = max(peak, abs(float(inputs[ch][i])) * sensitivity_gain)
+            peak = max(peak, abs(float(ctx.inputs[ch][i])) * sensitivity_gain)
 
         # Envelope follower
         if peak > env:
@@ -73,10 +73,10 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         wah_freq = min_freq + depth * freq_range * env_clamped
 
         # Compute bandpass coefficients per sample
-        coeffs = BiquadCoeffs.bandpass(wah_freq, q, sample_rate)
+        coeffs = BiquadCoeffs.bandpass(wah_freq, q, ctx.sample_rate)
 
         for ch in range(n_ch):
             _filters[ch].set_coeffs(coeffs)
-            outputs[ch][i] = _filters[ch].process_sample(float(inputs[ch][i]))
+            ctx.outputs[ch][i] = _filters[ch].process_sample(float(ctx.inputs[ch][i]))
 
     _envelope = env

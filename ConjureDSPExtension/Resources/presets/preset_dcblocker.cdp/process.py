@@ -9,7 +9,7 @@ PARAMS = {
 _state = [[0.0, 0.0], [0.0, 0.0]]
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     DC Blocker — removes DC offset from the signal.
 
@@ -24,18 +24,18 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _state
 
-    cutoff_hz = params["cutoff"]
-    r = math.exp(-2.0 * math.pi * cutoff_hz / sample_rate)
+    cutoff_hz = ctx.params["cutoff"]
+    r = math.exp(-2.0 * math.pi * cutoff_hz / ctx.sample_rate)
 
-    for ch in range(len(inputs)):
+    for ch in range(len(ctx.inputs)):
         prev_x = _state[ch][0] if ch < len(_state) else 0.0
         prev_y = _state[ch][1] if ch < len(_state) else 0.0
 
-        for i in range(frame_count):
-            x = inputs[ch][i]
+        for i in range(ctx.frame_count):
+            x = ctx.inputs[ch][i]
             prev_y = x - prev_x + r * prev_y
             prev_x = x
-            outputs[ch][i] = prev_y
+            ctx.outputs[ch][i] = prev_y
 
         if ch < len(_state):
             _state[ch][0] = prev_x

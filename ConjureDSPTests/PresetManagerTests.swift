@@ -143,7 +143,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let script = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    pass\n"
+        let script = "def process(ctx):\n    pass\n"
         let preset = try manager.savePreset(name: "My Effect", source: script)
 
         #expect(preset.name == "My Effect")
@@ -173,7 +173,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let script = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    pass\n"
+        let script = "def process(ctx):\n    pass\n"
         try manager.savePreset(name: "Test Preset", source: script)
 
         let userPresets = manager.presets.filter { !$0.isFactory }
@@ -218,6 +218,96 @@ struct PresetManagerTests {
 
         let loaded = manager.loadSource(for: userPresets[0])
         #expect(loaded == "# version 2\n")
+    }
+
+    // Asana 1214622834383370: an agent that first saves a Rust preset then
+    // re-saves with Python source over the same name was leaving manifest
+    // language/entry pointing at the old Rust file. The bundle on disk
+    // ended up with manifest.language="rust", entry="process.rs", but
+    // process.rs contained Python — kernel reload would fail every time.
+    @Test @MainActor func resavePivotsManifestWhenLanguageChanges() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let rustSource = "use conjuredsp::*;\nfn process() {}\n"
+        let pythonSource = "from conjuredsp import freq\ndef process(ctx): pass\n"
+
+        try manager.savePreset(name: "Pivot", source: rustSource, language: .rust)
+
+        guard let rustPreset = manager.presets.first(where: {
+            !$0.isFactory && $0.name == "Pivot"
+        }) else {
+            Issue.record("Rust save did not produce a discoverable preset")
+            return
+        }
+        guard let bundleURL = rustPreset.fileURL else {
+            Issue.record("Saved preset missing fileURL")
+            return
+        }
+        let manifestURL = bundleURL.appendingPathComponent("manifest.json")
+        let rsURL = bundleURL.appendingPathComponent("process.rs")
+        let pyURL = bundleURL.appendingPathComponent("process.py")
+
+        #expect(FileManager.default.fileExists(atPath: rsURL.path),
+                "process.rs should exist after Rust save")
+
+        try manager.savePreset(name: "Pivot", source: pythonSource, language: .python)
+
+        let manifestData = try Data(contentsOf: manifestURL)
+        let manifest = try JSONDecoder().decode(PresetManifest.self, from: manifestData)
+        #expect(manifest.language == "python",
+                "manifest.language must update when source language changes")
+        #expect(manifest.entry == "process.py",
+                "manifest.entry must update when source language changes")
+
+        #expect(FileManager.default.fileExists(atPath: pyURL.path),
+                "process.py should be written for the Python re-save")
+        #expect(!FileManager.default.fileExists(atPath: rsURL.path),
+                "Orphan process.rs from the prior Rust save must be removed")
+
+        let pyContent = try String(contentsOf: pyURL, encoding: .utf8)
+        #expect(pyContent == pythonSource,
+                "Python source must land in process.py, not process.rs")
+    }
+
+    // Same name + same language re-save must NOT touch the manifest's
+    // entry/language fields. Locks in that the language pivot above is
+    // strictly opt-in on actual change; otherwise every Cmd+S would
+    // rewrite the manifest, churning git history.
+    @Test @MainActor func resaveSameLanguagePreservesManifestEntry() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(
+            name: "SameLang",
+            source: "# v1\n",
+            language: .python
+        )
+        guard let bundleURL = preset.fileURL else {
+            Issue.record("Saved preset missing fileURL")
+            return
+        }
+        let manifestURL = bundleURL.appendingPathComponent("manifest.json")
+
+        // Hand-edit the entry to a non-default name (mirrors a manifest
+        // that was edited via the file browser).
+        var dict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: manifestURL)
+        ) as! [String: Any]
+        dict["entry"] = "dsp.py"
+        try JSONSerialization.data(withJSONObject: dict).write(to: manifestURL)
+        try FileManager.default.moveItem(
+            at: bundleURL.appendingPathComponent("process.py"),
+            to: bundleURL.appendingPathComponent("dsp.py")
+        )
+
+        try manager.savePreset(name: "SameLang", source: "# v2\n", language: .python)
+
+        let reloaded = try JSONDecoder().decode(
+            PresetManifest.self, from: Data(contentsOf: manifestURL)
+        )
+        #expect(reloaded.entry == "dsp.py",
+                "Same-language re-save must preserve manifest.entry")
     }
 
     // MARK: - Manifest Persistence on Cmd+S
@@ -609,7 +699,7 @@ struct PresetManagerTests {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        let script = "def process(inputs, outputs, frame_count, sample_rate, _params, _transport, _telemetry):\n    pass\n"
+        let script = "def process(ctx):\n    pass\n"
         try manager.savePreset(name: "Alpha", source: script)
 
         let renamed = try manager.renamePreset(

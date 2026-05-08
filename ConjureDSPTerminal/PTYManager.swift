@@ -583,14 +583,20 @@ final class PTYManager {
         "ratio": ratio(),           # 1:1-20:1 compression ratio, default 4
     }
 
-    def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-        # ALWAYS declare all 7 args. Use _transport / _telemetry (underscore
-        # prefix = unused) when you don't read them; drop the underscore later
-        # if you start using them. inputs/outputs: list of numpy.float32 arrays,
-        # one per channel. params: dict keyed by PARAMS names
-        # (e.g. params["cutoff"] = 1000.0).
-        for ch in range(len(inputs)):
-            outputs[ch][:frame_count] = inputs[ch][:frame_count]  # passthrough
+    def process(ctx):
+        # The single accepted signature. `ctx` exposes:
+        #   ctx.inputs / ctx.outputs — list of numpy.float32 arrays (per channel)
+        #   ctx.frame_count          — valid samples this callback
+        #   ctx.sample_rate          — Hz
+        #   ctx.params               — dict keyed by PARAMS names (ctx.params["cutoff"])
+        #   ctx.transport            — read-only mapping (bpm, beat, is_playing, ...)
+        #   ctx.telemetry            — write per-block scalar readouts
+        #   ctx.state                — read-only mapping over the bundle's STATE channel
+        #   ctx.sidechain            — sidechain input arrays (when bus is connected)
+        # The legacy 7-arg form (inputs, outputs, frame_count, ...) is rejected at
+        # script load — kernel logs "process() must take exactly one argument (ctx)".
+        for ch_in, ch_out in zip(ctx.inputs, ctx.outputs):
+            ch_out[:ctx.frame_count] = ch_in[:ctx.frame_count]  # passthrough
     ```
 
     Persistent state: module-level globals (e.g. `_filters = None`, initialized on first call). \
@@ -778,6 +784,10 @@ final class PTYManager {
 
     After save_preset, tell the user what you named the new bundle so \
     they can find it in the preset browser.
+
+    **When iterating with `compile_and_run`, finish with `save_preset` to persist the bundle to disk** \
+    — `compile_and_run` only updates kernel state, so without a save the script vanishes on the next \
+    preset load (or when the DAW project reopens) and the kernel falls back to passthrough.
 
     **Validation protocol (mandatory before claiming done on a UI task):**
 

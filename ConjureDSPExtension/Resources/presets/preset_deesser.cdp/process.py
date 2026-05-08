@@ -16,7 +16,7 @@ _sc_filters = None
 _envelope = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     De-esser — sibilance reduction via sidechain compression.
 
@@ -35,34 +35,34 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _sc_filters, _envelope
 
-    n_ch = len(inputs)
+    n_ch = len(ctx.inputs)
 
     if _sc_filters is None or len(_sc_filters) != n_ch:
         _sc_filters = [Biquad() for _ in range(n_ch)]
 
-    center_freq = params["frequency"]
-    q = params["q"]
-    threshold_db = params["threshold"]
-    reduction_db = params["reduction"]
-    attack_ms = params["attack"]
-    release_ms = params["release"]
+    center_freq = ctx.params["frequency"]
+    q = ctx.params["q"]
+    threshold_db = ctx.params["threshold"]
+    reduction_db = ctx.params["reduction"]
+    attack_ms = ctx.params["attack"]
+    release_ms = ctx.params["release"]
 
     threshold_lin = db_to_gain(threshold_db)
-    attack_coeff = smooth_coeff(attack_ms, sample_rate)
-    release_coeff = smooth_coeff(release_ms, sample_rate)
+    attack_coeff = smooth_coeff(attack_ms, ctx.sample_rate)
+    release_coeff = smooth_coeff(release_ms, ctx.sample_rate)
 
     # Compute bandpass coefficients once per buffer
-    bp_coeffs = BiquadCoeffs.bandpass(center_freq, q, sample_rate)
+    bp_coeffs = BiquadCoeffs.bandpass(center_freq, q, ctx.sample_rate)
     for ch in range(n_ch):
         _sc_filters[ch].set_coeffs(bp_coeffs)
 
     env = _envelope
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # Sidechain: bandpass filter then peak detect across channels
         sc_peak = 0.0
         for ch in range(n_ch):
-            sc_sample = _sc_filters[ch].process_sample(float(inputs[ch][i]))
+            sc_sample = _sc_filters[ch].process_sample(float(ctx.inputs[ch][i]))
             sc_peak = max(sc_peak, abs(sc_sample))
 
         # Envelope follower
@@ -82,6 +82,6 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             gain = 1.0
 
         for ch in range(n_ch):
-            outputs[ch][i] = inputs[ch][i] * gain
+            ctx.outputs[ch][i] = ctx.inputs[ch][i] * gain
 
     _envelope = env

@@ -14,6 +14,11 @@ struct ExportAUMainView: View {
     /// Capture manager forwarded to the custom UI webview. Nil when the
     /// preset has no custom UI (generic slider path — no capture needed).
     let captureManager: ExportAudioCaptureManager?
+    /// Coordinator for the bundle-private STATE channel. Forwarded down
+    /// to `ExportCustomUIWebView` so JS bridge `state.set` / `state.reset`
+    /// route through the same actor that handles DAW persistence. Nil
+    /// when there's no custom UI (the generic slider path doesn't use it).
+    let stateManager: ExportPresetStateManager?
     let pythonRuntimeMissing: Bool
     var loadError: String? = nil
     /// Called when layout-relevant state changes (debug pane, error visibility)
@@ -58,14 +63,15 @@ struct ExportAUMainView: View {
                 // pane + error banner wrap both paths identically so DAW
                 // automation, stats, and error reporting behave the same
                 // regardless of whether a preset shipped a custom UI.
-                if let entryURL = customUIEntryURL, let captureManager {
+                if let entryURL = customUIEntryURL, let captureManager, let stateManager {
                     ExportCustomUIWebView(
                         parameterState: parameterState,
                         uiDirectoryURL: entryURL.deletingLastPathComponent(),
                         entryHTMLPath: entryURL.lastPathComponent,
                         theme: colorScheme,
                         captureManager: captureManager,
-                        audioFramesAllowed: config?.ui?.audioFrames ?? false
+                        audioFramesAllowed: config?.ui?.audioFrames ?? false,
+                        stateManager: stateManager
                     )
                     .frame(minHeight: CGFloat(config?.ui?.height ?? 220))
                 } else {

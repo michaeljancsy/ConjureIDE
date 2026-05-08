@@ -21,6 +21,7 @@
 		6D42863AE4B6C193BF7E4AFD /* ExportAUAudioUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30A24F58FB803BF3DAF9A8F5 /* ExportAUAudioUnit.swift */; };
 		7AFEE261152F30E33EF046AD /* ExportDebugLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E8C8C3F9C5D2BBE0354D69 /* ExportDebugLogTests.swift */; };
 		7E67640EA29E1F68B42F0640 /* RenderStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2DD0EEE93540428912EBBAA /* RenderStats.swift */; };
+		8A300FB6207D499DB049D423 /* ExportPresetStateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B2641643B780D904BECBC82 /* ExportPresetStateManager.swift */; };
 		8D4FF6CC2046A46FFDB9E200 /* ExportAUTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC07F89451DB3644FB06CC88 /* ExportAUTests.swift */; };
 		A14B5CC87855695B03814B4C /* RenderStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3C95F6B62BBB83E18DBE82 /* RenderStatsTests.swift */; };
 		A29373D99BEA97B250FB4780 /* PythonRuntimeErrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E49F55FDC52279BA4C1413D /* PythonRuntimeErrorView.swift */; };
@@ -79,6 +80,7 @@
 		542F5B9D60DD44AC42CC55B1 /* AUInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AUInfo.swift; sourceTree = "<group>"; };
 		565409BB4FD167D792DA5952 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		59B984FB5E98E97C85D5FC2C /* ExportCustomUIWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportCustomUIWebView.swift; sourceTree = "<group>"; };
+		6B2641643B780D904BECBC82 /* ExportPresetStateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportPresetStateManager.swift; sourceTree = "<group>"; };
 		75E8C8C3F9C5D2BBE0354D69 /* ExportDebugLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportDebugLogTests.swift; sourceTree = "<group>"; };
 		7B3C95F6B62BBB83E18DBE82 /* RenderStatsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderStatsTests.swift; sourceTree = "<group>"; };
 		7C548D4D797761AE5CDAE6E1 /* ExportAUBridgingHeader.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ExportAUBridgingHeader.h; sourceTree = "<group>"; };
@@ -151,6 +153,7 @@
 			children = (
 				7C548D4D797761AE5CDAE6E1 /* ExportAUBridgingHeader.h */,
 				0F1C66D700918AA8178CB7E0 /* ExportDebugLog.swift */,
+				6B2641643B780D904BECBC82 /* ExportPresetStateManager.swift */,
 				03413FD1AE782DCF776B1D1E /* ExportRenderStatsAtomics.h */,
 				C2DD0EEE93540428912EBBAA /* RenderStats.swift */,
 			);
@@ -393,6 +396,7 @@
 				D54CB9C061A9F9FC02098C2A /* ExportCustomUIWebView.swift in Sources */,
 				565C001632FF534FD548D5DC /* ExportDebugLog.swift in Sources */,
 				F8147023DF5F5A1DCFEED0A0 /* ExportParameterState.swift in Sources */,
+				8A300FB6207D499DB049D423 /* ExportPresetStateManager.swift in Sources */,
 				A29373D99BEA97B250FB4780 /* PythonRuntimeErrorView.swift in Sources */,
 				7E67640EA29E1F68B42F0640 /* RenderStats.swift in Sources */,
 				0C13E7E0026ACB052453ABB3 /* RuntimeConfig.swift in Sources */,

@@ -54,27 +54,27 @@ class _S:
         self.gran_phase = 0.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    shimmer = params["shimmer"] / 100.0
-    time_p = params["time"] / 100.0
-    partials = params["partials"] / 100.0
-    slowmo = params["slowmo"] / 100.0
-    mx = params["mix"]
+    shimmer = ctx.params["shimmer"] / 100.0
+    time_p = ctx.params["time"] / 100.0
+    partials = ctx.params["partials"] / 100.0
+    slowmo = ctx.params["slowmo"] / 100.0
+    mx = ctx.params["mix"]
 
     # Modal Q ranges from 12 (low partials) to 35 (high partials)
     modal_q = 12.0 + 23.0 * partials
-    modal_c = [BiquadCoeffs.bandpass(PARTIAL_HZ[k], modal_q, sample_rate)
+    modal_c = [BiquadCoeffs.bandpass(PARTIAL_HZ[k], modal_q, ctx.sample_rate)
                for k in range(6)]
-    sub_lpc = BiquadCoeffs.lowpass(80.0, 0.707, sample_rate)
-    shim_hpc = BiquadCoeffs.highpass(800.0, 0.707, sample_rate)
-    comb_lpc = BiquadCoeffs.lowpass(4000.0, 0.707, sample_rate)
+    sub_lpc = BiquadCoeffs.lowpass(80.0, 0.707, ctx.sample_rate)
+    shim_hpc = BiquadCoeffs.highpass(800.0, 0.707, ctx.sample_rate)
+    comb_lpc = BiquadCoeffs.lowpass(4000.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         for k in range(6):
             s.modal[ch][k].set_coeffs(modal_c[k])
@@ -84,10 +84,10 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             s.comb_lp[ch][k].set_coeffs(comb_lpc)
 
     # Pitch shifter delay parameters (samples)
-    shim_base = SHIMMER_BASE_MS * 0.001 * sample_rate
-    shim_grain = SHIMMER_GRAIN_MS * 0.001 * sample_rate
-    gran_base = GRAN_BASE_MS * 0.001 * sample_rate
-    gran_grain = GRAN_GRAIN_MS * 0.001 * sample_rate
+    shim_base = SHIMMER_BASE_MS * 0.001 * ctx.sample_rate
+    shim_grain = SHIMMER_GRAIN_MS * 0.001 * ctx.sample_rate
+    gran_base = GRAN_BASE_MS * 0.001 * ctx.sample_rate
+    gran_grain = GRAN_GRAIN_MS * 0.001 * ctx.sample_rate
 
     # Shimmer = octave up: read advances 1 sample faster per sample → grain_rate = 1.0/grain
     shim_rate = 1.0 / shim_grain
@@ -95,13 +95,13 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     gran_rate = 0.5 / gran_grain
 
     # Comb tail
-    comb_d = [COMB_MS[k] * 0.001 * sample_rate for k in range(4)]
+    comb_d = [COMB_MS[k] * 0.001 * ctx.sample_rate for k in range(4)]
     comb_fb_amt = 0.55 + 0.30 * time_p
 
     modal_gain = 2.0
     sub_gain = 0.8
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # Advance shimmer phase (octave up: read approaches write)
         sh_ph0 = s.shim_phase
         sh_ph1 = (s.shim_phase + 0.5) % 1.0
@@ -129,7 +129,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         s.gran_phase = (s.gran_phase + gran_rate) % 1.0
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: modal resonator bank (6 parallel high-Q bandpasses)
             m0 = s.modal[ch][0].process_sample(dry)
@@ -176,4 +176,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             # Stage F: final wet sum + mix
             wet = soft_clip(
                 modal_sum + shim_voice + gran_voice + sub_voice + tail, 1.0)
-            outputs[ch][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + wet * mx

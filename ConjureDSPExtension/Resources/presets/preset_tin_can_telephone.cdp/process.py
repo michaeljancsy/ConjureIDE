@@ -41,22 +41,22 @@ class _S:
         self.dropout_lfo = LFO(sr, freq=DROPOUT_HZ, waveform="sine")
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    can = params["can"] / 100.0
-    string = params["string"] / 100.0
-    clip = params["clip"] / 100.0
-    dropout = params["dropout"] / 100.0
-    mx = params["mix"]
+    can = ctx.params["can"] / 100.0
+    string = ctx.params["string"] / 100.0
+    clip = ctx.params["clip"] / 100.0
+    dropout = ctx.params["dropout"] / 100.0
+    mx = ctx.params["mix"]
 
     bp_q = 5.0 + 12.0 * can
-    bp_c = BiquadCoeffs.bandpass(BP_HZ, bp_q, sample_rate)
+    bp_c = BiquadCoeffs.bandpass(BP_HZ, bp_q, ctx.sample_rate)
     for ch in range(nch):
         s.bp[ch].set_coeffs(bp_c)
 
@@ -64,7 +64,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     drive = 1.0 + 5.0 * clip
     drop_thresh = -0.6 + 1.2 * dropout
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         drop_val = s.dropout_lfo.tick()
         gate = drop_val - drop_thresh
         if gate < 0.0:
@@ -76,8 +76,8 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
 
         if nch >= 2:
             # Cross-channel L↔R feedback
-            l_dry = float(inputs[0][i])
-            r_dry = float(inputs[1][i])
+            l_dry = float(ctx.inputs[0][i])
+            r_dry = float(ctx.inputs[1][i])
 
             l_in = l_dry + s.cross_fb[1] * fb_amt
             r_in = r_dry + s.cross_fb[0] * fb_amt
@@ -101,11 +101,11 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             s.cross_fb[0] = l_wet
             s.cross_fb[1] = r_wet
 
-            outputs[0][i] = l_dry * (1.0 - mx) + l_wet * mx
-            outputs[1][i] = r_dry * (1.0 - mx) + r_wet * mx
+            ctx.outputs[0][i] = l_dry * (1.0 - mx) + l_wet * mx
+            ctx.outputs[1][i] = r_dry * (1.0 - mx) + r_wet * mx
         else:
             # Mono fallback: self feedback
-            dry = float(inputs[0][i])
+            dry = float(ctx.inputs[0][i])
             x_in = dry + s.cross_fb[0] * fb_amt
             x_bp = s.bp[0].process_sample(x_in)
             if x_bp >= 0.0:
@@ -114,4 +114,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
                 x_clip = math.tanh(x_bp * drive * 0.7) / (drive * 0.7)
             wet = x_clip * gate_val
             s.cross_fb[0] = wet
-            outputs[0][i] = dry * (1.0 - mx) + wet * mx
+            ctx.outputs[0][i] = dry * (1.0 - mx) + wet * mx

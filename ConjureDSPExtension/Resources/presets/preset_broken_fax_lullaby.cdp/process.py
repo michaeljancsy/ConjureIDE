@@ -57,33 +57,33 @@ class _S:
         self.gate_env = 1.0
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     global _st, _sr
-    nch = len(inputs)
-    if _st is None or _sr != sample_rate:
-        _st = _S(sample_rate, nch)
-        _sr = sample_rate
+    nch = len(ctx.inputs)
+    if _st is None or _sr != ctx.sample_rate:
+        _st = _S(ctx.sample_rate, nch)
+        _sr = ctx.sample_rate
 
     s = _st
-    drift = params["drift"] / 100.0
-    crush = params["crush"] / 100.0
-    gate_hz = params["gate"]
-    lullaby = params["lullaby"] / 100.0
-    mx = params["mix"]
+    drift = ctx.params["drift"] / 100.0
+    crush = ctx.params["crush"] / 100.0
+    gate_hz = ctx.params["gate"]
+    lullaby = ctx.params["lullaby"] / 100.0
+    mx = ctx.params["mix"]
 
     # Update gate LFO rate from param (deterministic — once per block)
     s.lfo_dropout.set_freq(gate_hz)
 
     # Telephony bandpass and final highpass
-    bpc = BiquadCoeffs.bandpass(1700.0, 2.0, sample_rate)
-    hpc = BiquadCoeffs.highpass(250.0, 0.707, sample_rate)
+    bpc = BiquadCoeffs.bandpass(1700.0, 2.0, ctx.sample_rate)
+    hpc = BiquadCoeffs.highpass(250.0, 0.707, ctx.sample_rate)
     for ch in range(nch):
         s.bp[ch].set_coeffs(bpc)
         s.hp[ch].set_coeffs(hpc)
 
-    chorus_d = CHORUS_BASE_MS * 0.001 * sample_rate
-    chorus_depth = CHORUS_DEPTH_MS * drift * 0.001 * sample_rate
-    comb_d = max(COMB_MS * 0.001 * sample_rate, 1.0)
+    chorus_d = CHORUS_BASE_MS * 0.001 * ctx.sample_rate
+    chorus_depth = CHORUS_DEPTH_MS * drift * 0.001 * ctx.sample_rate
+    comb_d = max(COMB_MS * 0.001 * ctx.sample_rate, 1.0)
 
     # Bit-crush levels: 2 bits at crush=1, 10 bits at crush=0
     bits = 10.0 - 8.0 * crush
@@ -94,12 +94,12 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     sh_period = max(int(2.0 + 10.0 * crush), 1)
 
     # Smoothing for the dropout gate envelope (10 ms one-pole)
-    gate_alpha = math.exp(-1.0 / (0.010 * sample_rate))
+    gate_alpha = math.exp(-1.0 / (0.010 * ctx.sample_rate))
     one_minus_alpha = 1.0 - gate_alpha
 
     hum_gain = 0.079  # ≈ −22 dB
 
-    for i in range(frame_count):
+    for i in range(ctx.frame_count):
         # Tick all LFOs once per sample
         c_lfo = s.lfo_chorus.tick()
         car0 = s.lfo_carriers[0].tick()
@@ -122,7 +122,7 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
         s.sh_count += 1
 
         for ch in range(nch):
-            dry = float(inputs[ch][i])
+            dry = float(ctx.inputs[ch][i])
 
             # Stage A: lullaby chorus pre-stage
             s.chorus[ch].write(dry)
@@ -161,4 +161,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             # Stage I: final highpass
             sig = s.hp[ch].process_sample(sig)
 
-            outputs[ch][i] = dry * (1.0 - mx) + sig * mx
+            ctx.outputs[ch][i] = dry * (1.0 - mx) + sig * mx

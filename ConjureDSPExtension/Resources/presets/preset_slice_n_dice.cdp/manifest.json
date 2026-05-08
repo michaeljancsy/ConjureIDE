@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 2,
+  "entry": "process.py",
+  "language": "python",
+  "params": [
+    {"name": "Time Quarter", "key": "time_quarter", "min": 0.0, "max": 4.0, "default": 1.0, "unit": "q"},
+    {"name": "Sync Mode", "key": "sync_mode", "min": 0, "max": 1, "default": 1, "style": "choice", "options": ["Manual", "Sync"]},
+    {"name": "Note Value", "key": "note_value", "min": 0, "max": 17, "default": 4, "style": "choice", "options": ["1/1", "1/2", "1/2t", "1/2.", "1/4", "1/4t", "1/4.", "1/8", "1/8t", "1/8.", "1/16", "1/16t", "1/16.", "1/32", "1/32t", "1/32.", "1/64", "1/64t"]},
+    {"name": "Dry Level", "key": "dry_level", "min": -60.0, "max": 0.0, "default": 0.0, "unit": "dB"},
+    {"name": "Wet Level", "key": "wet_level", "min": -60.0, "max": 0.0, "default": 0.0, "unit": "dB"}
+  ],
+  "ui": {
+    "entryHTML": "ui/index.html",
+    "width": 700,
+    "height": 460,
+    "fps": 30
+  },
+  "meta": {
+    "author": "ConjureDSP",
+    "description": "Pluggo-style slice/repeat delay with 32-step gate sequencer"
+  }
+}

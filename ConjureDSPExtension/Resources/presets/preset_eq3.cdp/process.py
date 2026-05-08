@@ -20,7 +20,7 @@ Q = 0.707
 _filters = None
 
 
-def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+def process(ctx):
     """
     3-Band EQ — non-parametric equalizer with low shelf, mid peak, and high shelf.
 
@@ -38,30 +38,30 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
     """
     global _filters
 
-    n_ch = len(inputs)
+    n_ch = len(ctx.inputs)
 
     if _filters is None or len(_filters) != n_ch:
         _filters = [[Biquad(), Biquad(), Biquad()] for _ in range(n_ch)]
 
-    low_gain = params["low_gain"]
-    mid_gain = params["mid_gain"]
-    high_gain = params["high_gain"]
-    low_bypass = params["low_bypass"] > 0.5
-    mid_bypass = params["mid_bypass"] > 0.5
-    high_bypass = params["high_bypass"] > 0.5
+    low_gain = ctx.params["low_gain"]
+    mid_gain = ctx.params["mid_gain"]
+    high_gain = ctx.params["high_gain"]
+    low_bypass = ctx.params["low_bypass"] > 0.5
+    mid_bypass = ctx.params["mid_bypass"] > 0.5
+    high_bypass = ctx.params["high_bypass"] > 0.5
 
     # Compute coefficients once per buffer
-    low_coeffs = BiquadCoeffs.lowshelf(LOW_FREQ, Q, low_gain, sample_rate)
-    mid_coeffs = BiquadCoeffs.peak(MID_FREQ, Q, mid_gain, sample_rate)
-    high_coeffs = BiquadCoeffs.highshelf(HIGH_FREQ, Q, high_gain, sample_rate)
+    low_coeffs = BiquadCoeffs.lowshelf(LOW_FREQ, Q, low_gain, ctx.sample_rate)
+    mid_coeffs = BiquadCoeffs.peak(MID_FREQ, Q, mid_gain, ctx.sample_rate)
+    high_coeffs = BiquadCoeffs.highshelf(HIGH_FREQ, Q, high_gain, ctx.sample_rate)
 
     for ch in range(n_ch):
         _filters[ch][0].set_coeffs(low_coeffs)
         _filters[ch][1].set_coeffs(mid_coeffs)
         _filters[ch][2].set_coeffs(high_coeffs)
 
-        for i in range(frame_count):
-            x = float(inputs[ch][i])
+        for i in range(ctx.frame_count):
+            x = float(ctx.inputs[ch][i])
 
             if not low_bypass:
                 x = _filters[ch][0].process_sample(x)
@@ -78,4 +78,4 @@ def process(inputs, outputs, frame_count, sample_rate, params, _transport, _tele
             else:
                 _filters[ch][2].process_sample(x)
 
-            outputs[ch][i] = x
+            ctx.outputs[ch][i] = x

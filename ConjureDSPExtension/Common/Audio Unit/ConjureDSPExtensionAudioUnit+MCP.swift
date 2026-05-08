@@ -119,6 +119,21 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 let result = await self.mcpSmokeTestUI()
                 completion(result.0, result.1)
             }
+        case "set_state":
+            Task { @MainActor in
+                let result = self.mcpSetState(input: input)
+                completion(result.0, result.1)
+            }
+        case "get_state":
+            Task { @MainActor in
+                let result = self.mcpGetState(input: input)
+                completion(result.0, result.1)
+            }
+        case "reset_state":
+            Task { @MainActor in
+                let result = self.mcpResetState(input: input)
+                completion(result.0, result.1)
+            }
         default:
             completion(jsonStr(["error": "Unknown tool: \(name)"]), true)
         }
@@ -1018,14 +1033,25 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         // run the static validator and include its report in the response
         // so the agent sees warnings on the same turn it wrote the file —
         // no separate tool call required for the common case.
+        //
+        // Also run on entry-script writes (process.py / process.rs) so
+        // STATE-key removals surface as orphaned UI references at the
+        // moment of the script edit, rather than on the next compile or
+        // smoke test. The validator inspects manifest + ui/* against the
+        // bundle's declared state keys; an entry-script edit that drops
+        // a STATE key invalidates any `ConjureDSP.state.get/set('foo')`
+        // reference in the UI HTML/JS.
         var response: [String: Any] = [
             "success": true,
             "path": input["path"] ?? "",
             "bytes_written": content.utf8.count,
         ]
+        let isEntryScript = pathStr == "process.py" || pathStr == "process.rs"
+            || (refreshedBundle.map { pathStr == $0.manifest.entry } ?? false)
         let touchesUISurface = pathStr.hasPrefix("ui/")
             || pathStr == PresetManifest.filename
             || url.lastPathComponent == PresetManifest.filename
+            || isEntryScript
         if touchesUISurface, let refreshedBundle {
             response["validation"] = validationReportAsJSON(BundleUIValidator.validate(refreshedBundle))
         }
@@ -1075,6 +1101,79 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         }
     }
 
+    // MARK: - State Channel (bundle-private STATE)
+
+    /// Set a single key in the bundle-private STATE channel. Strict-mode:
+    /// rejects unknown keys (i.e. keys not declared in the script's
+    /// `STATE = {…}` defaults dict) so authors don't accidentally write
+    /// to a misspelled key and wonder why the audio thread never sees it.
+    @MainActor
+    private func mcpSetState(input: [String: Any]) -> (String, Bool) {
+        guard let key = input["key"] as? String else {
+            return (jsonStr(["error": "Missing required parameter: key"]), true)
+        }
+        // `value` may be any JSON type, including NSNull (delete). Read it
+        // verbatim — the manager handles the type discriminator.
+        let value = input["value"]
+
+        let mgr = presetStateManager
+        let declared = mgr.declaredKeys
+        if !declared.isEmpty, !declared.contains(key) {
+            return (jsonStr([
+                "ok": false,
+                "reason": "unknown_key",
+                "available_keys": declared,
+            ]), true)
+        }
+        let ok = mgr.set(key: key, value: value, origin: .mcp)
+        if !ok {
+            return (jsonStr([
+                "ok": false,
+                "reason": "size_exceeded",
+                "max_bytes": mgr.maxBytes,
+            ]), true)
+        }
+        return (jsonStr([
+            "ok": true,
+            "generation": Int(mgr.generation),
+        ]), false)
+    }
+
+    /// Read the current STATE mirror. With `key`, returns just that
+    /// value (or NSNull if absent). Without, returns the full dict.
+    @MainActor
+    private func mcpGetState(input: [String: Any]) -> (String, Bool) {
+        let mgr = presetStateManager
+        let snapshot = mgr.snapshotForInit()
+        if let key = input["key"] as? String {
+            let value = snapshot[key] ?? NSNull()
+            return (jsonStr([
+                "ok": true,
+                "value": value,
+            ]), false)
+        }
+        return (jsonStr([
+            "ok": true,
+            "state": snapshot,
+            "declared_keys": mgr.declaredKeys,
+            "max_bytes": mgr.maxBytes,
+            "generation": Int(mgr.generation),
+        ]), false)
+    }
+
+    /// Reset a single key (or the whole mirror when `key` is omitted)
+    /// back to the script's declared defaults.
+    @MainActor
+    private func mcpResetState(input: [String: Any]) -> (String, Bool) {
+        let mgr = presetStateManager
+        let key = input["key"] as? String
+        let ok = mgr.reset(key: key, origin: .mcp)
+        return (jsonStr([
+            "ok": ok,
+            "generation": Int(mgr.generation),
+        ]), false)
+    }
+
     @MainActor
     private func mcpValidateBundle() -> (String, Bool) {
         guard let preset = presetManager.currentPreset else {
@@ -1120,7 +1219,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             return (jsonStr(["error": "Missing required parameter: topic"]), true)
         }
 
-        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "accel", "nam", "ui", "all"]
+        let validTopics = ["params", "filters", "delays", "oscillators", "utilities", "accel", "nam", "state", "ui", "all"]
         guard validTopics.contains(topic) else {
             return (jsonStr(["error": "Invalid topic: \(topic). Valid topics: \(validTopics.joined(separator: ", "))"]), true)
         }
@@ -1133,6 +1232,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         if topic == "utilities" || topic == "all" { sections.append(DSPDocumentation.utilities) }
         if topic == "accel" || topic == "all" { sections.append(DSPDocumentation.accel) }
         if topic == "nam" || topic == "all" { sections.append(DSPDocumentation.nam) }
+        if topic == "state" || topic == "all" { sections.append(DSPDocumentation.state) }
         if topic == "ui" || topic == "all" { sections.append(DSPDocumentation.ui) }
 
         return (jsonStr(["topic": topic, "docs": sections.joined(separator: "\n\n")]), false)
