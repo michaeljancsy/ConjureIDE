@@ -68,6 +68,12 @@ pub struct PythonBackend {
     /// The same dict object exposed as `ctx.telemetry` — pre-seeded with
     /// `0.0` for each declared slot so script writes are dict updates.
     py_telemetry_dict: Option<Py<PyAny>>,
+    /// The dict that `ctx.params`'s MappingProxyType wraps (rich-metadata
+    /// mode only). Cached so the per-block update mutates this dict in
+    /// place instead of allocating a fresh dict + proxy each callback.
+    /// The proxy on `ctx.params` shares the same Python ref, so script
+    /// reads see updated values without us touching the proxy.
+    py_params_dict: Option<Py<PyAny>>,
     /// Per-block telemetry snapshot the kernel reads via `read_telemetry`.
     telemetry_buf: [f32; TELEMETRY_LEN],
     /// Max frames the host may pass to `process()`.
@@ -252,6 +258,7 @@ impl PythonBackend {
                     param_metadata: r.param_metadata,
                     telemetry_metadata: r.telemetry_metadata,
                     py_telemetry_dict: None,
+                    py_params_dict: None,
                     telemetry_buf: [0.0; TELEMETRY_LEN],
                     py_max_frames: 0,
                     latency_samples: r.latency,
@@ -570,16 +577,20 @@ impl PythonBackend {
             // Params: pre-seed with metadata keys (or empty for legacy
             // mode) so the first block's writes are dict updates, not
             // insertions. We expose this via MappingProxyType so the
-            // script can't mutate it from inside process().
+            // script can't mutate it from inside process(). Cache the
+            // underlying dict so the per-block update mutates in place
+            // instead of allocating a fresh dict + proxy each callback.
             if let Some(ref metadata) = self.param_metadata {
                 let dict = PyDict::new(py);
                 for meta in metadata.iter() {
                     dict.set_item(&meta.key, meta.default)?;
                 }
                 let mappingproxy = py.import("types")?.getattr("MappingProxyType")?;
-                let proxy = mappingproxy.call1((dict,))?;
+                let proxy = mappingproxy.call1((dict.clone(),))?;
                 ctx.setattr("params", proxy)?;
+                self.py_params_dict = Some(dict.into_any().unbind());
             } else {
+                self.py_params_dict = None;
                 let list = PyList::new(py, [0.0f32; PARAM_COUNT].iter())?;
                 ctx.setattr("params", list)?;
             }
@@ -615,6 +626,10 @@ impl PythonBackend {
         })
         .ok();
         self.py_channel_count = channel_count;
+        // ctx.state was just rebuilt to an empty MappingProxyType; force
+        // the next update_state_view to re-parse rather than skip on a
+        // generation-match against the kernel's pre-rebuild value.
+        self.py_state_gen = u64::MAX;
     }
 
     /// Update `ctx.state` if the kernel's state generation has changed
@@ -716,22 +731,21 @@ impl PythonBackend {
 
             // Update params (denormalize via metadata when present).
             if let Some(ref metadata) = self.param_metadata {
-                let params_attr = ctx_handle.getattr("params")?;
-                // MappingProxyType wraps the underlying dict; reach
-                // through `__wrapped__`-style by re-reading the raw
-                // dict from the proxy via `dict()`. Cheap because the
-                // dict is small. Alternative: cache a separate dict
-                // handle — but that doubles per-allocate complexity for
-                // little gain (pyo3 dispatch dominates).
-                let underlying = params_attr.call_method0("copy")?;
-                let dict = underlying.downcast::<PyDict>()?;
+                // Mutate the cached dict in place. The MappingProxyType
+                // already on `ctx.params` shares this dict by Python ref,
+                // so script reads see updated values without us
+                // allocating a fresh dict + proxy each block.
+                let dict_handle = self
+                    .py_params_dict
+                    .as_ref()
+                    .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err(
+                        "PythonBackend: params dict not initialized",
+                    ))?;
+                let dict = dict_handle.bind(py).downcast::<PyDict>()?;
                 for (i, meta) in metadata.iter().enumerate() {
                     let actual = meta.denormalize(params[i]);
                     dict.set_item(&meta.key, actual)?;
                 }
-                let mappingproxy = py.import("types")?.getattr("MappingProxyType")?;
-                let proxy = mappingproxy.call1((dict,))?;
-                ctx_handle.setattr("params", proxy)?;
             } else {
                 let params_attr = ctx_handle.getattr("params")?;
                 let list = params_attr.downcast::<PyList>()?;
