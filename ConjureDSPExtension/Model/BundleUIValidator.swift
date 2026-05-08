@@ -1531,21 +1531,21 @@ enum BundleUIValidator {
         return []
     }
 
-    /// Every `<cdp-scope telemetry="X">` reference must resolve to a slot
-    /// declared in `manifest.telemetry` — when the manifest has a
-    /// `telemetry` block at all. When the block is absent we skip the
-    /// check entirely: unlike `param=` (which the bridge resolves at
-    /// `_init` against manifest metadata, before the DSP loads), the
-    /// telemetry binding happens at frame-arrival time against whatever
-    /// the loaded script actually publishes — no static guarantee broken.
-    /// Authors who want pre-load lint just declare a `telemetry` array
-    /// in their manifest.
+    /// Every `<cdp-scope telemetry="X">` / `<cdp-bargraph telemetry="X">`
+    /// reference must resolve to a slot declared in `manifest.telemetry`
+    /// — when the manifest has a `telemetry` block at all. When the
+    /// block is absent we skip the check entirely: unlike `param=`
+    /// (which the bridge resolves at `_init` against manifest metadata,
+    /// before the DSP loads), the telemetry binding happens at
+    /// frame-arrival time against whatever the loaded script actually
+    /// publishes — no static guarantee broken. Authors who want
+    /// pre-load lint just declare a `telemetry` array in their manifest.
     private static func checkTelemetryReferences(html: String, bundle: PresetBundle) -> [Issue] {
         let declared = bundle.manifest.telemetry ?? []
         guard !declared.isEmpty else { return [] }
 
         guard let regex = try? NSRegularExpression(
-            pattern: #"<cdp-scope\b[^>]*\btelemetry\s*=\s*["']([^"']+)["']"#,
+            pattern: #"<cdp-(?:scope|bargraph)\b[^>]*\btelemetry\s*=\s*["']([^"']+)["']"#,
             options: [.caseInsensitive]
         ) else { return [] }
 

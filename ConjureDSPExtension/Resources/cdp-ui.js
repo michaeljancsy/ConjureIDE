@@ -33,6 +33,8 @@
  *   <cdp-toggle param="1">                // boolean switch for style:"toggle"
  *   <cdp-choice param="2">                // segmented (<=2 opts) or dropdown
  *   <cdp-xy param-x="0" param-y="1">      // 2D pad mapping two parameters
+ *   <cdp-bargraph telemetry="x" count="N"> // N adjacent bars from a vector
+ *                                         // telemetry slot (read-only)
  *
  * Component styling hooks (in order of escalation):
  *   1. CSS custom properties on the host — see THEME_VARS below for the
@@ -2075,6 +2077,221 @@
     }
 
     // ------------------------------------------------------------------
+    // <cdp-bargraph telemetry="…" count="N"> — vector telemetry as N
+    // adjacent bars. Subscribes to audio.onFrame, reads the first `count`
+    // elements of the resolved telemetry slot, and renders each as a
+    // div whose fill height (vertical) or width (horizontal) is the
+    // value's position in [min, max] (clamped, default 0..1).
+    //
+    // Why a separate component vs. cdp-scope: scope is one-shape-per-
+    // tick (line/filled/dots over the whole vector); bargraph is N
+    // discrete bars where each bar is a meaningful entity (comb-filter
+    // tap energy, EQ band level, grain-pool slot occupancy, step-
+    // sequencer per-step level). The visual model is "stacked indicators",
+    // not "waveform".
+    //
+    // Implementation: flexbox row/column of div bars. No canvas — bars
+    // are real DOM nodes so authors can ::part(bar) / ::part(bar-fill)
+    // them, and the browser handles theme color cascades for free.
+    // ------------------------------------------------------------------
+    var BARGRAPH_CSS = [
+        ':host {',
+        '  display: block;',
+        '  position: relative;',
+        '  width: 100%;',
+        '  min-height: 40px;',
+        '  --cdp-bargraph-gap: 2px;',
+        '  --cdp-bargraph-bar-bg: color-mix(in srgb, var(--cdp-fg) 14%, transparent);',
+        '  --cdp-bargraph-bar-fill: var(--cdp-accent);',
+        '}',
+        '.bars {',
+        '  display: flex;',
+        '  width: 100%;',
+        '  height: 100%;',
+        '  gap: var(--cdp-bargraph-gap);',
+        '  align-items: stretch;',
+        '}',
+        ':host(:not([orientation="horizontal"])) .bars {',
+        '  flex-direction: row;',
+        '}',
+        ':host([orientation="horizontal"]) .bars {',
+        '  flex-direction: column;',
+        '}',
+        '.bar {',
+        '  position: relative;',
+        '  background: var(--cdp-bargraph-bar-bg);',
+        '  border-radius: var(--cdp-radius);',
+        '  overflow: hidden;',
+        '}',
+        ':host(:not([orientation="horizontal"])) .bar {',
+        '  flex: 1 1 0;',
+        '  min-width: 0;',
+        '}',
+        ':host([orientation="horizontal"]) .bar {',
+        '  flex: 1 1 0;',
+        '  min-height: 0;',
+        '}',
+        '.bar-fill {',
+        '  position: absolute;',
+        '  background: var(--cdp-bargraph-bar-fill);',
+        '  border-radius: inherit;',
+        '}',
+        // Vertical: fill grows upward (anchored to bottom).
+        ':host(:not([orientation="horizontal"])) .bar-fill {',
+        '  left: 0; right: 0; bottom: 0;',
+        '  height: 0%;',
+        '}',
+        // Horizontal: fill grows rightward (anchored to left).
+        ':host([orientation="horizontal"]) .bar-fill {',
+        '  top: 0; bottom: 0; left: 0;',
+        '  width: 0%;',
+        '}',
+    ].join('\n');
+
+    class CdpBargraph extends HTMLElement {
+        static get observedAttributes() {
+            return ['telemetry', 'count', 'min', 'max', 'orientation'];
+        }
+
+        constructor() {
+            super();
+            var root = this.attachShadow({ mode: 'open' });
+            root.append(styleEl(THEME_CSS + '\n' + BARGRAPH_CSS));
+            this._barsEl = document.createElement('div');
+            this._barsEl.className = 'bars';
+            this._barsEl.setAttribute('part', 'bars');
+            root.append(this._barsEl);
+
+            this._fills = [];          // array of `.bar-fill` div nodes, length = count
+            this._resolvedKey = null;  // cached telemetry key (cleared on attr change)
+
+            this._onFrame = this._onFrame.bind(this);
+        }
+
+        connectedCallback() {
+            adoptTheme(this);
+            this._rebuildBars();
+
+            if (CDP.audio && typeof CDP.audio.onFrame === 'function') {
+                CDP.audio.onFrame(this._onFrame);
+            }
+        }
+
+        disconnectedCallback() {
+            if (CDP.audio && typeof CDP.audio.offFrame === 'function') {
+                CDP.audio.offFrame(this._onFrame);
+            }
+        }
+
+        attributeChangedCallback(name) {
+            if (!this.isConnected) return;
+            if (name === 'telemetry') {
+                this._resolvedKey = null;
+            }
+            if (name === 'count') {
+                this._rebuildBars();
+            } else if (name === 'min' || name === 'max') {
+                // Range change — re-render fills with the last data
+                // (we don't cache it, so just zero them; next frame
+                // arrives at fps and refills).
+                for (var i = 0; i < this._fills.length; i++) {
+                    this._setFill(this._fills[i], 0);
+                }
+            }
+        }
+
+        // --- attribute readers ---
+        _readCount() {
+            var n = parseInt(this.getAttribute('count'), 10);
+            return (isFinite(n) && n > 0) ? n : 0;
+        }
+        _readMin() {
+            var n = parseFloat(this.getAttribute('min'));
+            return isFinite(n) ? n : 0;
+        }
+        _readMax() {
+            var n = parseFloat(this.getAttribute('max'));
+            return isFinite(n) ? n : 1;
+        }
+
+        /// (Re)create the bar DOM nodes to match `count`. Idempotent —
+        /// safe to call on attribute change or repeated connect.
+        _rebuildBars() {
+            var count = this._readCount();
+            this._barsEl.innerHTML = '';
+            this._fills = new Array(count);
+            for (var i = 0; i < count; i++) {
+                var bar = document.createElement('div');
+                bar.className = 'bar';
+                bar.setAttribute('part', 'bar');
+                var fill = document.createElement('div');
+                fill.className = 'bar-fill';
+                fill.setAttribute('part', 'bar-fill');
+                bar.append(fill);
+                this._barsEl.append(bar);
+                this._fills[i] = fill;
+            }
+        }
+
+        _onFrame(frame) {
+            if (!frame) return;
+            var attr = this.getAttribute('telemetry');
+            if (!attr) return;
+
+            // Re-resolve when cache miss or when the cached key has
+            // disappeared (preset swap mid-session). Same pattern as
+            // <cdp-scope>.
+            var key = this._resolvedKey;
+            if (key == null ||
+                !frame.telemetry ||
+                !Object.prototype.hasOwnProperty.call(frame.telemetry, key)) {
+                key = resolveTelemetryKey(frame, attr);
+                this._resolvedKey = key;
+            }
+            if (key == null) return;
+
+            var v = frame.telemetry[key];
+            // Bail on scalars or anything not array-like.
+            if (v == null || typeof v === 'number' ||
+                typeof v.length !== 'number') {
+                return;
+            }
+
+            var min = this._readMin();
+            var max = this._readMax();
+            var span = max - min;
+            if (span === 0) span = 1; // avoid divide-by-zero on degenerate range
+
+            var n = this._fills.length;
+            var available = v.length;
+            for (var i = 0; i < n; i++) {
+                var raw = (i < available) ? Number(v[i]) : 0;
+                if (!isFinite(raw)) raw = 0;
+                // Normalize to [0, 1] within [min, max], clamped.
+                var t = (raw - min) / span;
+                if (t < 0) t = 0;
+                if (t > 1) t = 1;
+                this._setFill(this._fills[i], t);
+            }
+        }
+
+        /// Apply a 0..1 fill amount to a bar-fill node. Vertical fills
+        /// set `height`; horizontal fills set `width`.
+        _setFill(fill, t) {
+            if (!fill) return;
+            var pct = (t * 100) + '%';
+            var horizontal = this.getAttribute('orientation') === 'horizontal';
+            if (horizontal) {
+                fill.style.height = '';
+                fill.style.width = pct;
+            } else {
+                fill.style.width = '';
+                fill.style.height = pct;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // <cdp-panel auto> — renders one appropriate control per parameter.
     // Replaces the previous hand-rolled starterIndexHTML() slider list
     // and matches the Swift ParameterSlidersView component-picking logic.
@@ -2137,6 +2354,7 @@
     define('cdp-knob', CdpKnob);
     define('cdp-meter', CdpMeter);
     define('cdp-scope', CdpScope);
+    define('cdp-bargraph', CdpBargraph);
     define('cdp-panel', CdpPanel);
 
     CDP.ui = {

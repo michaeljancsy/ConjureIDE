@@ -252,7 +252,7 @@ struct CdpUIComponentTests {
         try await h.waitForNavigationAndSetup()
 
         // Every component tag must: register, and upgrade on create.
-        let tags = ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-knob", "cdp-meter", "cdp-panel"]
+        let tags = ["cdp-slider", "cdp-toggle", "cdp-choice", "cdp-xy", "cdp-knob", "cdp-meter", "cdp-bargraph", "cdp-panel"]
         for tag in tags {
             let registered = try await h.eval("!!customElements.get('\(tag)')") as? Bool
             #expect(registered == true, "\(tag) not registered")
@@ -1011,6 +1011,290 @@ struct CdpUIComponentTests {
             #expect(!s.contains("oklch"),
                     "default oklch stops should be absent when override is set; got \(s)")
         }
+    }
+
+    // MARK: - <cdp-bargraph>
+
+    @Test func bargraphRendersShadowDom() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-bargraph", id: "b",
+                                attrs: ["telemetry": "BAR", "count": "4"])
+        let hasBars = try await h.eval(
+            "!!document.getElementById('b').shadowRoot.querySelector('[part=\"bars\"]')") as? Bool
+        let barCount = try await h.eval(
+            "document.getElementById('b').shadowRoot.querySelectorAll('[part=\"bar\"]').length") as? Int
+        let fillCount = try await h.eval(
+            "document.getElementById('b').shadowRoot.querySelectorAll('[part=\"bar-fill\"]').length") as? Int
+        #expect(hasBars == true)
+        #expect(barCount == 4, "expected 4 bar nodes; got \(barCount ?? -1)")
+        #expect(fillCount == 4, "expected 4 bar-fill nodes; got \(fillCount ?? -1)")
+    }
+
+    @Test func bargraphSubscribesOnConnectAndUnsubscribesOnDisconnect() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+
+        let subBefore = try await h.eval("ConjureDSP.audio._subCount") as? Int
+        #expect(subBefore == 0)
+
+        try await createElement(h, tag: "cdp-bargraph", id: "b",
+                                attrs: ["telemetry": "BAR", "count": "4"])
+        let subAfter = try await h.eval("ConjureDSP.audio._subCount") as? Int
+        #expect(subAfter == 1, "bargraph should call onFrame once on connect; got \(subAfter ?? -1)")
+
+        try await h.eval("document.getElementById('b').remove()")
+        let unsub = try await h.eval("ConjureDSP.audio._unsubCount") as? Int
+        #expect(unsub == 1, "bargraph should call offFrame once on disconnect; got \(unsub ?? -1)")
+    }
+
+    /// Spec test: 4 bars, 4-element vector at [0.25, 0.5, 0.75, 1.0],
+    /// default range [0, 1], vertical orientation. Each bar's fill height
+    /// should reflect its value as a percent.
+    @Test func bargraphRendersFourBarsWithExpectedHeights() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-bargraph", id: "b",
+                                attrs: ["telemetry": "BAR", "count": "4"])
+        try await h.eval("""
+            ConjureDSP._audioFrame({
+                peakIn: 0, peakOut: 0, rmsIn: 0, rmsOut: 0, t: 0,
+                telemetry: {BAR: [0.25, 0.5, 0.75, 1.0]}
+            })
+        """)
+        let heights = try await h.eval("""
+            (() => {
+                var fills = document.getElementById('b').shadowRoot.querySelectorAll('[part="bar-fill"]');
+                return Array.from(fills).map(f => f.style.height);
+            })()
+        """) as? [String]
+        #expect(heights != nil, "could not read fill heights")
+        guard let h0 = heights else { return }
+        #expect(h0.count == 4, "expected 4 fills; got \(h0.count)")
+        let parsed = h0.compactMap { Double($0.replacingOccurrences(of: "%", with: "")) }
+        #expect(parsed.count == 4, "all 4 heights should parse as percentages; got \(h0)")
+        #expect(abs(parsed[0] - 25.0) < 0.5, "bar 0 = 0.25 → 25%; got \(parsed[0])")
+        #expect(abs(parsed[1] - 50.0) < 0.5, "bar 1 = 0.5 → 50%; got \(parsed[1])")
+        #expect(abs(parsed[2] - 75.0) < 0.5, "bar 2 = 0.75 → 75%; got \(parsed[2])")
+        #expect(abs(parsed[3] - 100.0) < 0.5, "bar 3 = 1.0 → 100%; got \(parsed[3])")
+    }
+
+    @Test func bargraphRespectsCustomMinMaxRange() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        // Range [0, 10]: value 5 → 50%, value 2.5 → 25%.
+        try await createElement(h, tag: "cdp-bargraph", id: "b",
+                                attrs: ["telemetry": "BAR", "count": "2",
+                                        "min": "0", "max": "10"])
+        try await h.eval("""
+            ConjureDSP._audioFrame({
+                peakIn: 0, peakOut: 0, rmsIn: 0, rmsOut: 0, t: 0,
+                telemetry: {BAR: [2.5, 5.0]}
+            })
+        """)
+        let heights = try await h.eval("""
+            (() => {
+                var fills = document.getElementById('b').shadowRoot.querySelectorAll('[part="bar-fill"]');
+                return Array.from(fills).map(f => f.style.height);
+            })()
+        """) as? [String]
+        guard let hs = heights, hs.count == 2 else {
+            Issue.record("could not read both fill heights")
+            return
+        }
+        let p0 = Double(hs[0].replacingOccurrences(of: "%", with: ""))
+        let p1 = Double(hs[1].replacingOccurrences(of: "%", with: ""))
+        #expect(p0 != nil && abs(p0! - 25.0) < 0.5, "2.5 / 10 → 25%; got \(hs[0])")
+        #expect(p1 != nil && abs(p1! - 50.0) < 0.5, "5 / 10 → 50%; got \(hs[1])")
+    }
+
+    @Test func bargraphClampsValuesOutsideRange() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-bargraph", id: "b",
+                                attrs: ["telemetry": "BAR", "count": "3"])
+        // Below min, in-range, above max.
+        try await h.eval("""
+            ConjureDSP._audioFrame({
+                peakIn: 0, peakOut: 0, rmsIn: 0, rmsOut: 0, t: 0,
+                telemetry: {BAR: [-0.5, 0.5, 2.0]}
+            })
+        """)
+        let heights = try await h.eval("""
+            (() => {
+                var fills = document.getElementById('b').shadowRoot.querySelectorAll('[part="bar-fill"]');
+                return Array.from(fills).map(f => f.style.height);
+            })()
+        """) as? [String]
+        guard let hs = heights, hs.count == 3 else {
+            Issue.record("could not read fill heights")
+            return
+        }
+        let parsed = hs.compactMap { Double($0.replacingOccurrences(of: "%", with: "")) }
+        #expect(parsed.count == 3)
+        #expect(abs(parsed[0] - 0.0) < 0.5, "negative value should clamp to 0%; got \(hs[0])")
+        #expect(abs(parsed[1] - 50.0) < 0.5, "0.5 → 50%; got \(hs[1])")
+        #expect(abs(parsed[2] - 100.0) < 0.5, "above max should clamp to 100%; got \(hs[2])")
+    }
+
+    @Test func bargraphShortVectorLeavesRemainingBarsZero() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        // count=4, but we publish only 2 elements.
+        try await createElement(h, tag: "cdp-bargraph", id: "b",
+                                attrs: ["telemetry": "BAR", "count": "4"])
+        try await h.eval("""
+            ConjureDSP._audioFrame({
+                peakIn: 0, peakOut: 0, rmsIn: 0, rmsOut: 0, t: 0,
+                telemetry: {BAR: [0.6, 0.9]}
+            })
+        """)
+        let heights = try await h.eval("""
+            (() => {
+                var fills = document.getElementById('b').shadowRoot.querySelectorAll('[part="bar-fill"]');
+                return Array.from(fills).map(f => f.style.height);
+            })()
+        """) as? [String]
+        guard let hs = heights, hs.count == 4 else {
+            Issue.record("expected 4 fill nodes")
+            return
+        }
+        let parsed = hs.compactMap { Double($0.replacingOccurrences(of: "%", with: "")) }
+        #expect(parsed.count == 4)
+        #expect(abs(parsed[0] - 60.0) < 0.5)
+        #expect(abs(parsed[1] - 90.0) < 0.5)
+        #expect(abs(parsed[2] - 0.0) < 0.5, "remaining bars should be 0; got bar 2 = \(hs[2])")
+        #expect(abs(parsed[3] - 0.0) < 0.5, "remaining bars should be 0; got bar 3 = \(hs[3])")
+    }
+
+    @Test func bargraphHorizontalOrientationFillsWidth() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-bargraph", id: "b",
+                                attrs: ["telemetry": "BAR", "count": "2",
+                                        "orientation": "horizontal"])
+        try await h.eval("""
+            ConjureDSP._audioFrame({
+                peakIn: 0, peakOut: 0, rmsIn: 0, rmsOut: 0, t: 0,
+                telemetry: {BAR: [0.4, 0.8]}
+            })
+        """)
+        // Horizontal: width is set, height should not be.
+        let widths = try await h.eval("""
+            (() => {
+                var fills = document.getElementById('b').shadowRoot.querySelectorAll('[part="bar-fill"]');
+                return Array.from(fills).map(f => f.style.width);
+            })()
+        """) as? [String]
+        let heights = try await h.eval("""
+            (() => {
+                var fills = document.getElementById('b').shadowRoot.querySelectorAll('[part="bar-fill"]');
+                return Array.from(fills).map(f => f.style.height);
+            })()
+        """) as? [String]
+        guard let ws = widths, ws.count == 2 else {
+            Issue.record("could not read fill widths")
+            return
+        }
+        let parsed = ws.compactMap { Double($0.replacingOccurrences(of: "%", with: "")) }
+        #expect(parsed.count == 2)
+        #expect(abs(parsed[0] - 40.0) < 0.5, "horizontal: width should be 40%; got \(ws[0])")
+        #expect(abs(parsed[1] - 80.0) < 0.5, "horizontal: width should be 80%; got \(ws[1])")
+        // Heights should be empty (not set inline) so the CSS-default
+        // height: 0% rule doesn't apply — but the production CSS sets
+        // height: 0% on horizontal fills via :host selector, so we just
+        // check the inline style isn't populated.
+        if let hsArr = heights {
+            for h2 in hsArr {
+                #expect(h2 == "" || h2 == "0%",
+                        "horizontal orientation should not set height inline; got \(h2)")
+            }
+        }
+    }
+
+    @Test func bargraphLooseTelemetryNameResolvesAcrossCases() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        // Attribute "tap_energies" should resolve against published
+        // "TAP_ENERGIES" via the loose normalizer.
+        try await createElement(h, tag: "cdp-bargraph", id: "b",
+                                attrs: ["telemetry": "tap_energies", "count": "3"])
+        try await h.eval("""
+            ConjureDSP._audioFrame({
+                peakIn: 0, peakOut: 0, rmsIn: 0, rmsOut: 0, t: 0,
+                telemetry: {TAP_ENERGIES: [0.1, 0.2, 0.3]}
+            })
+        """)
+        let heights = try await h.eval("""
+            (() => {
+                var fills = document.getElementById('b').shadowRoot.querySelectorAll('[part="bar-fill"]');
+                return Array.from(fills).map(f => f.style.height);
+            })()
+        """) as? [String]
+        guard let hs = heights, hs.count == 3 else {
+            Issue.record("expected 3 fills")
+            return
+        }
+        let parsed = hs.compactMap { Double($0.replacingOccurrences(of: "%", with: "")) }
+        #expect(parsed.count == 3, "loose-resolution should bind despite case mismatch; got \(hs)")
+        if parsed.count == 3 {
+            #expect(abs(parsed[0] - 10.0) < 0.5)
+            #expect(abs(parsed[1] - 20.0) < 0.5)
+            #expect(abs(parsed[2] - 30.0) < 0.5)
+        }
+    }
+
+    @Test func bargraphScalarTelemetryIsIgnored() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-bargraph", id: "b",
+                                attrs: ["telemetry": "GR_DB", "count": "2"])
+        // Scalar slot — bargraph should bail (bar fills stay at default empty).
+        try await h.eval("""
+            ConjureDSP._audioFrame({
+                peakIn: 0, peakOut: 0, rmsIn: 0, rmsOut: 0, t: 0,
+                telemetry: {GR_DB: -6}
+            })
+        """)
+        let heights = try await h.eval("""
+            (() => {
+                var fills = document.getElementById('b').shadowRoot.querySelectorAll('[part="bar-fill"]');
+                return Array.from(fills).map(f => f.style.height);
+            })()
+        """) as? [String]
+        // Initial inline height is unset (CSS default 0%); scalar bail
+        // means we never write an inline value, so it stays empty.
+        if let hs = heights {
+            for v in hs {
+                #expect(v == "" || v == "0%",
+                        "scalar telemetry should not populate any bar fill; got \(v)")
+            }
+        }
+    }
+
+    @Test func bargraphCountChangeRebuildsBars() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [["name": "x", "min": 0.0, "max": 1.0]])
+        try await createElement(h, tag: "cdp-bargraph", id: "b",
+                                attrs: ["telemetry": "BAR", "count": "3"])
+        let initial = try await h.eval(
+            "document.getElementById('b').shadowRoot.querySelectorAll('[part=\"bar\"]').length") as? Int
+        #expect(initial == 3)
+
+        try await h.eval("document.getElementById('b').setAttribute('count', '6')")
+        let after = try await h.eval(
+            "document.getElementById('b').shadowRoot.querySelectorAll('[part=\"bar\"]').length") as? Int
+        #expect(after == 6, "count change should rebuild bars; got \(after ?? -1)")
     }
 
     /// Parse a "X.X%" string to Double. Returns nil on failure.
