@@ -408,6 +408,30 @@ enum DSPDocumentation {
     samples_to_ms(samples, sr)      — sample count to milliseconds
     freq_to_period(freq, sr)        — frequency in Hz to period in samples
 
+    ## VU calibration (house standard)
+
+    ConjureDSP uses **0 VU = -18 dBFS** (EBU R68). All presets that expose
+    VU-style meters or "0 VU"-relative thresholds should use this convention
+    so the meaning of "0 VU" is consistent across the library.
+
+    To convert sample / RMS levels to VU dB:
+
+      vu_db = 20 * log10(rms / VU_REF)   where VU_REF = 10^(-18/20) ≈ 0.1259
+
+    Or, equivalently, in dBFS:
+
+      vu_db = dbfs - (-18.0) = dbfs + 18.0
+
+    Use the helpers from conjuredsp / conjuredsp-rs::dsp:
+
+      VU_REF_DBFS  — the constant -18.0
+      dbfs_to_vu(dbfs) -> vu_db   — dbfs_to_vu(-18.0) == 0.0, dbfs_to_vu(0.0) == 18.0
+
+    Why -18 and not -20: EBU R68 (-18 dBFS = 0 VU) is the most-cited modern
+    broadcast / mastering reference. SMPTE RP155 (-20 dBFS) and various US
+    broadcast conventions (-14 to -20 dBFS) also exist; without a single
+    house standard, presets silently disagree about what "0 VU" means.
+
     ## Smoothing
 
     smooth_coeff(time_ms, sr) -> alpha
@@ -2081,6 +2105,22 @@ enum DSPDocumentation {
     samples_to_ms(samples, sr)      — sample count to milliseconds
     freq_to_period(freq, sr)        — frequency in Hz to period in samples
 
+    ## VU calibration (house standard)
+
+    ConjureDSP uses **0 VU = -18 dBFS** (EBU R68). Use this convention for
+    any preset that exposes VU-style meters or "0 VU"-relative thresholds
+    so the meaning of "0 VU" is consistent across the library.
+
+      from conjuredsp import VU_REF_DBFS, dbfs_to_vu
+
+      vu_db = dbfs_to_vu(rms_dbfs)   # dbfs_to_vu(-18.0) == 0.0
+      # VU_REF_DBFS == -18.0
+
+    Conversion math (if you need it inline):
+
+      vu_db = 20 * log10(rms / VU_REF)   where VU_REF = 10^(-18/20) ≈ 0.1259
+      # equivalently:  vu_db = dbfs + 18.0
+
     ## Smoothing
 
     smooth_coeff(time_ms, sr) -> alpha
@@ -2116,6 +2156,22 @@ enum DSPDocumentation {
     ms_to_samples(ms, sr) -> int    — milliseconds to sample count (rounded)
     samples_to_ms(samples, sr)      — sample count to milliseconds
     freq_to_period(freq, sr)        — frequency in Hz to period in samples
+
+    ## VU calibration (house standard)
+
+    ConjureDSP uses **0 VU = -18 dBFS** (EBU R68). Use this convention for
+    any preset that exposes VU-style meters or "0 VU"-relative thresholds
+    so the meaning of "0 VU" is consistent across the library.
+
+      use conjuredsp::{VU_REF_DBFS, dbfs_to_vu};
+
+      let vu_db = dbfs_to_vu(rms_dbfs);   // dbfs_to_vu(-18.0) == 0.0
+      // VU_REF_DBFS == -18.0_f64
+
+    Conversion math (if you need it inline):
+
+      vu_db = 20 * log10(rms / VU_REF)   where VU_REF = 10^(-18/20) ≈ 0.1259
+      // equivalently: vu_db = dbfs + 18.0
 
     ## Smoothing
 
