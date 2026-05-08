@@ -437,6 +437,39 @@ struct BundleUISmokeTesterTests {
                 "twenty siblings sharing one selector should produce exactly one issue; got \(pIssues.count)")
     }
 
+    // MARK: - console.log capture
+
+    @Test @MainActor func capturesConsoleLogWithStringifiedObjects() async throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>
+            console.log("hello", {x: 1});
+          </script>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: twoParamManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff", 1: "resonance"],
+            hostParameterCount: 2,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        #expect(!report.consoleLogs.isEmpty,
+                "expected at least one captured console.log entry; got \(report.consoleLogs)")
+        let entry = report.consoleLogs.first { $0.contains("hello") }
+        #expect(entry != nil,
+                "expected a console.log entry containing the literal string; got \(report.consoleLogs)")
+        #expect(entry?.contains("\"x\":1") == true || entry?.contains("\"x\": 1") == true,
+                "object args must be JSON-stringified, not '[object Object]'; got \(String(describing: entry))")
+        #expect(entry?.contains("[object Object]") == false,
+                "stringification must avoid '[object Object]'; got \(String(describing: entry))")
+    }
+
     @Test @MainActor func cdpXYUnboundWhenAxisMissing() async throws {
         // param-y names a param that doesn't exist → xy pad doesn't
         // bind and drags move nothing.

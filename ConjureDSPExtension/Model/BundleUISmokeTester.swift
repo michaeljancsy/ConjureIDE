@@ -210,6 +210,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         let readyTimeMs: Double?          // time from load to `ready`, nil if it didn't fire
         let loadError: String?            // WKNavigationDelegate didFail*
         let jsErrors: [JSLogEntry]
+        let consoleLogs: [String]
         let components: [ComponentReport]
         let params: [ParamCoverage]
         let contentOverflow: ContentOverflow?
@@ -222,6 +223,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             case readyTimeMs = "ready_time_ms"
             case loadError = "load_error"
             case jsErrors = "js_errors"
+            case consoleLogs = "console_logs"
             case components
             case params
             case contentOverflow = "content_overflow"
@@ -256,6 +258,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
     /// so anything landing in this list is either author debug output
     /// or a caught-and-reformatted error.
     private var bridgeLogs: [(String, Double)] = []
+    private var consoleLogs: [String] = []
     /// Where to look for `customui-bridge.js` + `cdp-ui.js`. In
     /// production this is the extension's own bundle (via
     /// `Bundle(for: Self.self)`). Tests override with the appex's
@@ -345,6 +348,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         // can surface those errors too — otherwise a throw inside
         // `ConjureDSP.ready(cb)` silently vanishes.
         config.userContentController.add(self, name: "log")
+        config.userContentController.add(self, name: "consoleLog")
 
         let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: w, height: h), configuration: config)
         wv.navigationDelegate = self
@@ -404,6 +408,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             wv.configuration.userContentController.removeAllUserScripts()
             wv.configuration.userContentController.removeScriptMessageHandler(forName: "smokeReady")
             wv.configuration.userContentController.removeScriptMessageHandler(forName: "log")
+            wv.configuration.userContentController.removeScriptMessageHandler(forName: "consoleLog")
             wv.navigationDelegate = nil
         }
         webView = nil
@@ -592,6 +597,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             readyTimeMs: readyAtMs,
             loadError: loadError,
             jsErrors: combinedErrors,
+            consoleLogs: consoleLogs,
             components: componentsRaw,
             params: paramCoverage,
             contentOverflow: contentOverflow,
@@ -712,6 +718,9 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             let text = (message.body as? String) ?? String(describing: message.body)
             let t = (CFAbsoluteTimeGetCurrent() - loadStart) * 1000.0
             bridgeLogs.append((text, t))
+        case "consoleLog":
+            let text = (message.body as? String) ?? String(describing: message.body)
+            consoleLogs.append(text)
         default:
             break
         }
@@ -833,15 +842,44 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             var msg = reason && (reason.message || reason.toString) ? (reason.message || reason.toString()) : String(reason);
             capture('unhandledrejection', msg);
         });
+        function stringifyArg(a) {
+            if (a === null) return 'null';
+            if (a === undefined) return 'undefined';
+            if (typeof a === 'string') return a;
+            if (typeof a !== 'object') return String(a);
+            try {
+                var seen = new WeakSet();
+                return JSON.stringify(a, function (k, v) {
+                    if (typeof v === 'object' && v !== null) {
+                        if (seen.has(v)) return '[Circular]';
+                        seen.add(v);
+                    }
+                    return v;
+                });
+            } catch (_) {
+                try { return String(a); } catch (_e) { return '[Unstringifiable]'; }
+            }
+        }
+        function joinArgs(args) {
+            return Array.prototype.slice.call(args).map(stringifyArg).join(' ');
+        }
         var origErr = console.error;
         console.error = function () {
-            capture('console.error', Array.prototype.slice.call(arguments).map(String).join(' '));
+            capture('console.error', joinArgs(arguments));
             if (origErr) { origErr.apply(console, arguments); }
         };
         var origWarn = console.warn;
         console.warn = function () {
-            capture('console.warn', Array.prototype.slice.call(arguments).map(String).join(' '));
+            capture('console.warn', joinArgs(arguments));
             if (origWarn) { origWarn.apply(console, arguments); }
+        };
+        var origLog = console.log;
+        console.log = function () {
+            var msg = joinArgs(arguments);
+            try {
+                window.webkit.messageHandlers.consoleLog.postMessage(msg);
+            } catch (_) { /* harness may have torn down */ }
+            if (origLog) { origLog.apply(console, arguments); }
         };
 
         // Poll for the bridge's ready contract, then notify Swift.
