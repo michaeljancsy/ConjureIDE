@@ -536,6 +536,136 @@ struct BundleUISmokeTesterTests {
                 "sparse flag must be set when coverage_ratio < 0.20; got \(report.layoutFlags)")
     }
 
+    @Test @MainActor func flagsCdpSliderTrackSqueeze() async throws {
+        let manifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.py",
+          "language": "python",
+          "params": [
+            { "name": "foo", "min": 0.0, "max": 1.0, "default": 0.5, "unit": "" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 400, "height": 240, "fps": 30, "audioFrames": false
+          }
+        }
+        """
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <div style="width: 200px">
+            <cdp-slider param="foo"></cdp-slider>
+          </div>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: manifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "foo"],
+            hostParameterCount: 1,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        let squeeze = report.smallControls.first { $0.reason == "track_squeezed" }
+        #expect(squeeze != nil,
+                "expected a smallControls entry with reason == \"track_squeezed\"; got \(report.smallControls)")
+        #expect(squeeze?.param == "foo")
+    }
+
+    @Test @MainActor func flagsEmptyRegionViaCellCoverageGrid() async throws {
+        let manifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.py",
+          "language": "python",
+          "params": [
+            { "name": "a", "min": 0.0, "max": 1.0, "default": 0.5, "unit": "" },
+            { "name": "b", "min": 0.0, "max": 1.0, "default": 0.5, "unit": "" },
+            { "name": "c", "min": 0.0, "max": 1.0, "default": 0.5, "unit": "" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 600, "height": 400, "fps": 30, "audioFrames": false
+          }
+        }
+        """
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <div style="position:absolute;left:0;top:0;width:600px;height:100px;display:flex;flex-direction:row">
+            <cdp-slider param="a" style="flex:1;height:100px"></cdp-slider>
+            <cdp-slider param="b" style="flex:1;height:100px"></cdp-slider>
+            <cdp-slider param="c" style="flex:1;height:100px"></cdp-slider>
+          </div>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: manifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "a", 1: "b", 2: "c"],
+            hostParameterCount: 3,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        #expect(!report.cellCoverage.isEmpty,
+                "expected cell_coverage to be populated for a 600x400 canvas; got \(report.cellCoverage)")
+        #expect(report.cellCoverage.count == 3,
+                "expected 3 rows in cell_coverage; got \(report.cellCoverage.count)")
+        if report.cellCoverage.count == 3 {
+            let bottomRow = report.cellCoverage[2]
+            #expect(bottomRow.count == 3,
+                    "expected 3 cells in bottom row; got \(bottomRow.count)")
+            for (idx, cov) in bottomRow.enumerated() {
+                #expect(cov < 0.05,
+                        "bottom row cell \(idx) should have coverage < 0.05; got \(cov)")
+            }
+        }
+        #expect(report.layoutFlags.contains("empty_region"),
+                "expected 'empty_region' flag when bottom row is empty; got \(report.layoutFlags)")
+    }
+
+    @Test @MainActor func skipsCellCoverageOnTinyCanvas() async throws {
+        let manifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.py",
+          "language": "python",
+          "params": [
+            { "name": "a", "min": 0.0, "max": 1.0, "default": 0.5, "unit": "" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 200, "height": 60, "fps": 30, "audioFrames": false
+          }
+        }
+        """
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <cdp-slider param="a"></cdp-slider>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: manifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "a"],
+            hostParameterCount: 1,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        #expect(report.cellCoverage.isEmpty,
+                "expected cell_coverage to be empty when canvas is below 100px in either dim; got \(report.cellCoverage)")
+        #expect(!report.layoutFlags.contains("empty_region"),
+                "expected 'empty_region' NOT to be flagged when grid is skipped; got \(report.layoutFlags)")
+    }
+
     @Test @MainActor func cdpXYUnboundWhenAxisMissing() async throws {
         // param-y names a param that doesn't exist → xy pad doesn't
         // bind and drags move nothing.
@@ -557,5 +687,65 @@ struct BundleUISmokeTesterTests {
         let xy = report.components.first { $0.tag == "cdp-xy" }
         #expect(xy?.bound == false)
         #expect(report.status == .fail)
+    }
+
+    @Test @MainActor func flagsCanvasWithZeroDrawingBuffer() async throws {
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="x" style="width:200px;height:140px"></canvas>
+          <script>
+            var cv = document.getElementById('x');
+            cv.width = 0;
+            cv.height = 0;
+          </script>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: twoParamManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff", 1: "resonance"],
+            hostParameterCount: 2,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        #expect(!report.canvasIssues.isEmpty,
+                "expected at least one canvas issue; got \(report.canvasIssues)")
+        let zeroBuf = report.canvasIssues.first { $0.reason == "zero_buffer" }
+        #expect(zeroBuf != nil,
+                "expected a zero_buffer canvas issue; got \(report.canvasIssues)")
+        #expect(zeroBuf?.id == "x")
+        #expect(report.layoutFlags.contains("canvas_zero_buffer"),
+                "expected 'canvas_zero_buffer' in layoutFlags; got \(report.layoutFlags)")
+    }
+
+    @Test @MainActor func cleanCanvasProducesNoIssues() async throws {
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="y" style="width:400px;height:300px"></canvas>
+          <script>
+            var cv = document.getElementById('y');
+            cv.width = 400;
+            cv.height = 300;
+          </script>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: twoParamManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff", 1: "resonance"],
+            hostParameterCount: 2,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        #expect(report.canvasIssues.isEmpty,
+                "expected no canvas issues on a properly-sized canvas; got \(report.canvasIssues)")
     }
 }

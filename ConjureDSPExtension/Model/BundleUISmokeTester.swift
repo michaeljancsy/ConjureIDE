@@ -209,9 +209,23 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         let param: String?
         let width: Double
         let height: Double
+        let reason: String?
+        let detail: String?
 
         enum CodingKeys: String, CodingKey {
-            case tag, param, width, height
+            case tag, param, width, height, reason, detail
+        }
+    }
+
+    struct CanvasIssue: Encodable, Equatable {
+        let id: String
+        let layout: [Double]
+        let buffer: [Double]
+        let reason: String
+        let hint: String
+
+        enum CodingKeys: String, CodingKey {
+            case id, layout, buffer, reason, hint
         }
     }
 
@@ -231,6 +245,8 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         let coverageRatio: Double
         let bboxRatio: Double
         let layoutFlags: [String]
+        let cellCoverage: [[Double]]
+        let canvasIssues: [CanvasIssue]
 
         enum CodingKeys: String, CodingKey {
             case status
@@ -248,6 +264,8 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             case coverageRatio = "coverage_ratio"
             case bboxRatio = "bbox_ratio"
             case layoutFlags = "layout_flags"
+            case cellCoverage = "cell_coverage"
+            case canvasIssues = "canvas_issues"
         }
     }
 
@@ -539,9 +557,12 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         var coverageRatio: Double = 0
         var bboxRatio: Double = 0
         var layoutFlags: [String] = []
+        var cellCoverage: [[Double]] = []
+        var canvasIssues: [CanvasIssue] = []
         if readyAtMs != nil, let wv = webView {
+            let probeJS = Self.layoutProbeScript(manifestW: declaredWidth, manifestH: declaredHeight)
             let raw: String = await withCheckedContinuation { cont in
-                wv.evaluateJavaScript(Self.layoutProbeScript) { result, _ in
+                wv.evaluateJavaScript(probeJS) { result, _ in
                     cont.resume(returning: (result as? String) ?? "{}")
                 }
             }
@@ -557,9 +578,22 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                             tag: tag,
                             param: c["param"] as? String,
                             width: w,
-                            height: h
+                            height: h,
+                            reason: nil,
+                            detail: nil
                         ))
                     }
+                }
+                let squeezed = obj["squeezed"] as? [[String: Any]] ?? []
+                for s in squeezed {
+                    smallControls.append(SmallControl(
+                        tag: (s["tag"] as? String) ?? "",
+                        param: s["param"] as? String,
+                        width: (s["width"] as? Double) ?? 0,
+                        height: (s["height"] as? Double) ?? 0,
+                        reason: s["reason"] as? String,
+                        detail: s["detail"] as? String
+                    ))
                 }
                 let canvasArea = Double(declaredWidth) * Double(declaredHeight)
                 if canvasArea > 0 {
@@ -574,6 +608,41 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                     }
                     if hasInteractive && bboxRatio < 0.40 {
                         layoutFlags.append("clustered")
+                    }
+                }
+                if let raw2D = obj["cellCoverage"] as? [[Any]] {
+                    cellCoverage = raw2D.map { row in
+                        row.compactMap { v -> Double? in
+                            if let d = v as? Double { return d }
+                            if let n = v as? NSNumber { return n.doubleValue }
+                            return nil
+                        }
+                    }
+                }
+                if let extraFlags = obj["layoutFlags"] as? [String] {
+                    for f in extraFlags where !layoutFlags.contains(f) {
+                        layoutFlags.append(f)
+                    }
+                }
+                if let issues = obj["canvasIssues"] as? [[String: Any]] {
+                    for i in issues {
+                        let layoutArr = (i["layout"] as? [Any])?.compactMap { v -> Double? in
+                            if let d = v as? Double { return d }
+                            if let n = v as? NSNumber { return n.doubleValue }
+                            return nil
+                        } ?? []
+                        let bufferArr = (i["buffer"] as? [Any])?.compactMap { v -> Double? in
+                            if let d = v as? Double { return d }
+                            if let n = v as? NSNumber { return n.doubleValue }
+                            return nil
+                        } ?? []
+                        canvasIssues.append(CanvasIssue(
+                            id: (i["id"] as? String) ?? "",
+                            layout: layoutArr,
+                            buffer: bufferArr,
+                            reason: (i["reason"] as? String) ?? "",
+                            hint: (i["hint"] as? String) ?? ""
+                        ))
                     }
                 }
             }
@@ -673,7 +742,9 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             smallControls: smallControls,
             coverageRatio: coverageRatio,
             bboxRatio: bboxRatio,
-            layoutFlags: layoutFlags
+            layoutFlags: layoutFlags,
+            cellCoverage: cellCoverage,
+            canvasIssues: canvasIssues
         )
     }
 
@@ -976,13 +1047,19 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
     /// density metrics — the Swift side compares against per-tag
     /// minimums and the manifest's declared canvas to decide which are
     /// too small or laid out too sparsely.
-    private static let layoutProbeScript = """
+    private static func layoutProbeScript(manifestW: Int, manifestH: Int) -> String {
+        return """
     (function () {
         try {
             void document.body.offsetHeight;
+            var manifestW = \(manifestW);
+            var manifestH = \(manifestH);
             var sels = ['cdp-slider', 'cdp-knob', 'cdp-toggle', 'cdp-choice', 'cdp-xy', 'button', 'input'];
             var nodes = document.querySelectorAll(sels.join(','));
             var controls = [];
+            var interactiveRects = [];
+            var squeezed = [];
+            var layoutFlags = [];
             var minLeft = Infinity, minTop = Infinity, maxRight = -Infinity, maxBottom = -Infinity;
             var coverage = 0;
             for (var i = 0; i < nodes.length; i++) {
@@ -1002,6 +1079,88 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                     if (r.top < minTop) minTop = r.top;
                     if (r.right > maxRight) maxRight = r.right;
                     if (r.bottom > maxBottom) maxBottom = r.bottom;
+                    interactiveRects.push({
+                        left: r.left, top: r.top, right: r.right, bottom: r.bottom
+                    });
+                }
+            }
+            var sliders = document.querySelectorAll('cdp-slider');
+            for (var j = 0; j < sliders.length; j++) {
+                var s = sliders[j];
+                if (s.getAttribute('orientation') === 'vertical') continue;
+                if (s.clientWidth === 0) continue;
+                var cs = getComputedStyle(s);
+                var labelW = parseFloat(cs.getPropertyValue('--cdp-label-width')) || 120;
+                var valueW = parseFloat(cs.getPropertyValue('--cdp-value-width')) || 76;
+                var trackW = s.clientWidth - labelW - valueW - 24;
+                if (trackW < 30) {
+                    squeezed.push({
+                        tag: 'cdp-slider',
+                        param: s.getAttribute('param') || null,
+                        width: s.clientWidth,
+                        height: s.clientHeight,
+                        reason: 'track_squeezed',
+                        detail: 'track ~' + Math.round(trackW) + 'px after label ' + labelW + ' + value ' + valueW + ' + gaps'
+                    });
+                }
+            }
+            var canvasIssues = [];
+            var canvases = document.querySelectorAll('canvas');
+            for (var ci = 0; ci < canvases.length; ci++) {
+                var cv = canvases[ci];
+                var cvRect = cv.getBoundingClientRect();
+                if (cvRect.width <= 0 || cvRect.height <= 0) continue;
+                var bufW = cv.width, bufH = cv.height;
+                if (bufW === 0 || bufH === 0) {
+                    canvasIssues.push({
+                        id: cv.id || cv.className || '<anonymous>',
+                        layout: [cvRect.width, cvRect.height],
+                        buffer: [bufW, bufH],
+                        reason: 'zero_buffer',
+                        hint: 'Canvas has CSS size but a 0\\u00d70 drawing buffer. Author probably set cv.width/height before layout settled. Try requestAnimationFrame or a ResizeObserver before the first resize() call.'
+                    });
+                } else if (bufW === 300 && bufH === 150 && (Math.abs(cvRect.width - 300) > 1 || Math.abs(cvRect.height - 150) > 1)) {
+                    canvasIssues.push({
+                        id: cv.id || cv.className || '<anonymous>',
+                        layout: [cvRect.width, cvRect.height],
+                        buffer: [bufW, bufH],
+                        reason: 'default_buffer_unset',
+                        hint: 'Canvas drawing buffer is the HTML default 300\\u00d7150 but layout is different. Drawing will be stretched. Set cv.width = rect.width * devicePixelRatio (and likewise for height).'
+                    });
+                }
+            }
+            if (canvasIssues.some(function (c) { return c.reason === 'zero_buffer'; })) {
+                layoutFlags.push('canvas_zero_buffer');
+            }
+            var cellCoverage = [];
+            if (manifestW >= 100 && manifestH >= 100) {
+                var COLS = 3, ROWS = 3;
+                var cellW = manifestW / COLS;
+                var cellH = manifestH / ROWS;
+                var cells = new Array(ROWS * COLS).fill(0);
+                for (var ri = 0; ri < interactiveRects.length; ri++) {
+                    var rect = interactiveRects[ri];
+                    for (var cy = 0; cy < ROWS; cy++) {
+                        for (var cx = 0; cx < COLS; cx++) {
+                            var cellL = cx * cellW, cellT = cy * cellH;
+                            var cellR = cellL + cellW, cellB = cellT + cellH;
+                            var ox = Math.max(0, Math.min(rect.right, cellR) - Math.max(rect.left, cellL));
+                            var oy = Math.max(0, Math.min(rect.bottom, cellB) - Math.max(rect.top, cellT));
+                            cells[cy * COLS + cx] += ox * oy;
+                        }
+                    }
+                }
+                var cellArea = cellW * cellH;
+                var flat = cells.map(function (a) { return a / cellArea; });
+                cellCoverage = [
+                    flat.slice(0, 3),
+                    flat.slice(3, 6),
+                    flat.slice(6, 9)
+                ];
+                var sparseCount = flat.filter(function (c) { return c < 0.05; }).length;
+                var denseCount = flat.filter(function (c) { return c > 0.20; }).length;
+                if (sparseCount >= 3 && denseCount >= 1) {
+                    layoutFlags.push('empty_region');
                 }
             }
             var hasAny = controls.some(function (c) { return c.width > 0 && c.height > 0; });
@@ -1009,15 +1168,20 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             var bboxH = hasAny ? (maxBottom - minTop) : 0;
             return JSON.stringify({
                 controls: controls,
+                squeezed: squeezed,
                 coverage: coverage,
                 bboxW: bboxW,
-                bboxH: bboxH
+                bboxH: bboxH,
+                cellCoverage: cellCoverage,
+                layoutFlags: layoutFlags,
+                canvasIssues: canvasIssues
             });
         } catch (e) {
             return JSON.stringify({error: 'layout probe threw: ' + (e && e.message ? e.message : String(e))});
         }
     })()
     """
+    }
 
     /// Per-tag minimum sizes (width, height) used by the layout probe
     /// to flag controls too small to grab. The slider's long-axis check
