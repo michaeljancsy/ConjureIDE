@@ -453,6 +453,45 @@ final class PTYManager {
         } catch {
             ptyLog.warning("Failed to write agent workspace: \(error.localizedDescription, privacy: .public)")
         }
+        writeAgentSettings()
+    }
+
+    /// Write `<agent-workspace>/.claude/settings.json` + the `bundle-path-hint.sh`
+    /// script it references. The settings.json registers a PreToolUse hook for
+    /// Edit / Write / MultiEdit that prints an advisory hint when the file path
+    /// looks like a preset-bundle file (manifest.json, process.{py,rs}, ui/*,
+    /// or anything under the App Group's `Presets/` directory). Hint nudges
+    /// toward `mcp__conjuredsp__write_bundle_file`, which routes through the
+    /// AU's MCP server (static validation + hot reload). Advisory only — the
+    /// script always exits 0, so the agent can still proceed.
+    private func writeAgentSettings() {
+        let workspaceDir = URL(fileURLWithPath: Self.agentWorkspacePath)
+        let claudeDir = workspaceDir.appendingPathComponent(".claude")
+        let hooksDir = claudeDir.appendingPathComponent("hooks")
+        let scriptURL = hooksDir.appendingPathComponent(AgentSettingsBuilder.bundlePathHintScriptName)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+
+        do {
+            try FileManager.default.createDirectory(at: hooksDir, withIntermediateDirectories: true)
+
+            // Hook script — write first, chmod +x, then write settings.json so
+            // the settings.json never references a non-executable script.
+            let scriptBody = AgentSettingsBuilder.bundlePathHintScript()
+            try scriptBody.write(to: scriptURL, atomically: true, encoding: .utf8)
+            // 0o755 — owner rwx, group/other rx
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: scriptURL.path
+            )
+
+            let settings = AgentSettingsBuilder.settingsJSON(hookScriptAbsolutePath: scriptURL.path)
+            let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: settingsURL)
+
+            ptyLog.info("Wrote agent settings.json to \(settingsURL.path, privacy: .public)")
+        } catch {
+            ptyLog.warning("Failed to write agent settings: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     // MARK: - Launch command construction
