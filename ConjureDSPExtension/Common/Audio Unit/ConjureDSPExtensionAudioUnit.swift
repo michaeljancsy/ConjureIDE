@@ -1369,12 +1369,13 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			// When a Python script fails because a NAM tone hasn't been
 			// downloaded yet, report it as a warning (passthrough) rather
 			// than a hard error so the status bar shows an amber hint
-			// instead of a red error. Load a passthrough script into the
-			// kernel so the old preset doesn't keep running.
+			// instead of a red error. The kernel already installed
+			// `PassthroughBackend` inside `dsp_kernel_load_script`'s Err
+			// branch when reloadScript returned false, so audio is
+			// already dry — no extra Swift-side hop needed.
 			if !result.success,
 			   let err = result.error,
 			   err.contains(Self.namNotDownloadedMarker) {
-				loadPassthroughScript()
 				return (true, nil, Self.namNotDownloadedMessage, nil, nil)
 			}
 
@@ -1439,22 +1440,6 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	}
 
 	private static let namNotDownloadedMessage = "This preset uses a NAM tone that hasn't been downloaded yet. Open the Tones panel from the toolbar to search and download it."
-
-	/// Replace the current kernel backend with a minimal passthrough script
-	/// so the previously loaded preset doesn't keep running.
-	private func loadPassthroughScript() {
-		guard let pythonHome = self.pythonHome else { return }
-		let passthrough = """
-		def process(ctx):
-		    for ch_in, ch_out in zip(ctx.inputs, ctx.outputs):
-		        ch_out[:ctx.frame_count] = ch_in[:ctx.frame_count]
-		"""
-		let tempDir = FileManager.default.temporaryDirectory
-		let tempFile = tempDir.appendingPathComponent("passthrough_\(UUID().uuidString).py")
-		guard let _ = try? passthrough.write(to: tempFile, atomically: true, encoding: .utf8) else { return }
-		defer { try? FileManager.default.removeItem(at: tempFile) }
-		dsp_kernel_load_script(kernel, pythonHome, tempFile.path)
-	}
 
 	/// Convert a WASM load result to a compile result, promoting NAM-not-downloaded errors to warnings.
 	private static func wasmResultWithWarning(
