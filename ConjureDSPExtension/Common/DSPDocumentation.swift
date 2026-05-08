@@ -978,8 +978,8 @@ enum DSPDocumentation {
 
       ```js
       // Pivot at bottom-center, sweep ±42° around vertical
-      const ANG_MIN = -Math.PI * 0.42;
-      const ANG_MAX =  Math.PI * 0.42;
+      const ANG_MIN = -42 * Math.PI / 180;
+      const ANG_MAX =  42 * Math.PI / 180;
       const t = (value - min) / (max - min);            // 0..1
       const ang = -Math.PI / 2 + ANG_MIN + t * (ANG_MAX - ANG_MIN);
       const nx = cx + Math.cos(ang) * radius;
