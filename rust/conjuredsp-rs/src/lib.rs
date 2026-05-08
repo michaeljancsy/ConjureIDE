@@ -49,7 +49,7 @@ pub use params::{param, ParamSpec, TelemetryShape, TelemetrySpec};
 
 // Re-export param builders (these are functions, not macros)
 pub use params::{
-    choice, db, freq, integer, mix, pct, ratio, scalar_telemetry, time_ms, toggle,
+    choice, db, freq, integer, lfo_rate, mix, pct, ratio, scalar_telemetry, time_ms, toggle,
     vector_telemetry,
 };
 

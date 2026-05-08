@@ -50,12 +50,31 @@ impl ParamSpec {
 
 /// Frequency parameter with Hz unit and log curve.
 /// Default range: 20–20000 Hz, default value: 1000.
+///
+/// For sub-audio rates (LFOs, tremolo speed, chorus rate), use `lfo_rate()`
+/// instead — same Hz unit and log curve, but with sub-audio defaults.
 pub const fn freq() -> ParamSpec {
     ParamSpec {
         min_val: 20.0,
         max_val: 20000.0,
         unit_str: "Hz",
         default_val: 1000.0,
+        curve_str: "log",
+        style_str: "slider",
+        options: &[],
+    }
+}
+
+/// LFO rate parameter (sub-audio Hz) with log curve.
+/// Default range: 0.1–20 Hz, default value: 1.0. Use for tremolo / autopan /
+/// chorus / vibrato rate parameters. For audio-rate frequencies (filter
+/// cutoff, oscillator pitch), use `freq()` instead.
+pub const fn lfo_rate() -> ParamSpec {
+    ParamSpec {
+        min_val: 0.1,
+        max_val: 20.0,
+        unit_str: "Hz",
+        default_val: 1.0,
         curve_str: "log",
         style_str: "slider",
         options: &[],
@@ -262,6 +281,16 @@ mod tests {
         assert!(approx_eq(p.max_val, 20000.0, 1e-10));
         assert_eq!(p.unit_str, "Hz");
         assert!(approx_eq(p.default_val, 1000.0, 1e-10));
+        assert_eq!(p.curve_str, "log");
+    }
+
+    #[test]
+    fn test_lfo_rate_defaults() {
+        let p = lfo_rate();
+        assert!(approx_eq(p.min_val, 0.1, 1e-10));
+        assert!(approx_eq(p.max_val, 20.0, 1e-10));
+        assert_eq!(p.unit_str, "Hz");
+        assert!(approx_eq(p.default_val, 1.0, 1e-10));
         assert_eq!(p.curve_str, "log");
     }
 

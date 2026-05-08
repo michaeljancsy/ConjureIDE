@@ -80,8 +80,24 @@ def freq(
 
     Default range: 20 Hz to 20 kHz (audible spectrum). Unit and curve are
     baked in — pass them explicitly to `param()` if you need overrides.
+
+    For sub-audio rates (LFOs, tremolo speed, chorus rate), use `lfo_rate()`
+    instead — same Hz unit and log curve, but with sub-audio defaults.
     """
     _reject_unknown_kwargs("freq", {"unit": "Hz", "curve": "log"}, kwargs)
+    return param(min, max, unit="Hz", default=default, curve="log")
+
+
+def lfo_rate(
+    min: float = 0.1, max: float = 20.0, default: float = 1.0, **kwargs
+) -> ParamSpec:
+    """LFO rate parameter (sub-audio Hz) with log curve.
+
+    Default range: 0.1–20 Hz, default 1 Hz. Use for tremolo / autopan /
+    chorus / vibrato rate parameters. For audio-rate frequencies (filter
+    cutoff, oscillator pitch), use `freq()` instead.
+    """
+    _reject_unknown_kwargs("lfo_rate", {"unit": "Hz", "curve": "log"}, kwargs)
     return param(min, max, unit="Hz", default=default, curve="log")
 
 
