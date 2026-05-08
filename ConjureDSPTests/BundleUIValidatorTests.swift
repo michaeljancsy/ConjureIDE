@@ -599,6 +599,66 @@ struct BundleUIValidatorTests {
         #expect(!report.issues.contains { $0.check == "no_interactive_surface" })
     }
 
+    // MARK: - control_explicit_size_too_small
+
+    @Test func inlineStyleTooSmallSliderWarns() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff" style="width:30px;height:8px"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let issue = report.issues.first { $0.check == "control_explicit_size_too_small" }
+        #expect(issue != nil, "30x8 inline cdp-slider should warn; issues: \(report.issues)")
+        #expect(issue?.severity == .warn)
+    }
+
+    @Test func styleBlockTooSmallSliderWarns() throws {
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-slider { width: 30px; height: 8px; }
+        </style></head><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "control_explicit_size_too_small" },
+                "<style> cdp-slider { width:30px; height:8px } should warn; issues: \(report.issues)")
+    }
+
+    @Test func percentSizeNotFlagged() throws {
+        // Relative units are out of scope — runtime smoke test handles them.
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-slider { width: 100%; }
+        </style></head><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "control_explicit_size_too_small" },
+                "% width must not trigger; issues: \(report.issues)")
+    }
+
+    @Test func verticalSliderShapeNotFlagged() throws {
+        // 16x140 is a deliberate vertical slider — long axis >= 60, short
+        // axis at the threshold. Should not warn.
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-slider { width: 16px; height: 140px; }
+        </style></head><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "control_explicit_size_too_small" },
+                "vertical 16x140 slider must not trigger; issues: \(report.issues)")
+    }
+
     // MARK: - param_no_ui_binding (inverse coverage check)
 
     /// Two manifest params; UI binds only one. The unbound one should fail.

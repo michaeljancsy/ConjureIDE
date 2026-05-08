@@ -104,6 +104,7 @@ enum BundleUIValidator {
             issues.append(contentsOf: checkNoExternalNetwork(html: html))
             issues.append(contentsOf: checkNoSystemColorInCanvas(html: html))
             issues.append(contentsOf: checkHasInteractiveSurface(html: html, bundle: bundle))
+            issues.append(contentsOf: checkExplicitControlSizes(html: html))
             issues.append(contentsOf: checkTextContrast(html: html))
             issues.append(contentsOf: checkColorSchemeDeclared(html: html))
         }
@@ -522,6 +523,193 @@ enum BundleUIValidator {
                 suggestion: "Add per-param controls, or drop in <cdp-panel auto></cdp-panel> as a catch-all. Every declared parameter must be reachable from the UI."
             )
         ]
+    }
+
+    /// Per-tag minimum sizes (px) used by `checkExplicitControlSizes`.
+    /// Must match the runtime smoke test's thresholds.
+    private struct ControlSizeMin {
+        let width: Double
+        let height: Double
+    }
+
+    private static let controlSizeMinimums: [String: ControlSizeMin] = [
+        "cdp-slider": ControlSizeMin(width: 60, height: 16),
+        "cdp-knob":   ControlSizeMin(width: 24, height: 24),
+        "cdp-xy":     ControlSizeMin(width: 60, height: 60),
+        "cdp-toggle": ControlSizeMin(width: 28, height: 16),
+        "cdp-choice": ControlSizeMin(width: 60, height: 24),
+    ]
+
+    /// Lint that flags `cdp-*` controls explicitly sized below per-tag
+    /// minimums via `<style>` rules or inline `style=` attrs. Catches
+    /// scaffolds like `cdp-slider { width: 30px }` or
+    /// `<cdp-knob style="width:18px;height:18px">` that ship with controls
+    /// too small to grab. Only `px` values are considered — `%`, `em`, and
+    /// other relative units are deferred to the runtime smoke test.
+    private static func checkExplicitControlSizes(html: String) -> [Issue] {
+        var issues: [Issue] = []
+
+        // Style block rules: walk every `selector { decls }` from <style>
+        // and resolve which cdp-* tag(s) the rule targets.
+        for rule in extractCSSRules(from: html) {
+            let tags = cdpTagsInSelector(rule.selector)
+            guard !tags.isEmpty else { continue }
+            let decls = parseDeclarations(rule.declarations)
+            let widthPx = pxValue(decls["width"])
+            let heightPx = pxValue(decls["height"])
+            for tag in tags {
+                issues.append(contentsOf: explicitSizeIssues(
+                    tag: tag,
+                    widthPx: widthPx,
+                    heightPx: heightPx,
+                    sourceLabel: "<style> rule \(rule.selector.trimmingCharacters(in: .whitespacesAndNewlines))"
+                ))
+            }
+        }
+
+        // Inline `style=` attrs on cdp-* tags.
+        let tagPattern = #"<(cdp-(?:slider|knob|xy|toggle|choice))\b([^>]*)>"#
+        if let tagRegex = try? NSRegularExpression(pattern: tagPattern, options: [.caseInsensitive]) {
+            let ns = html as NSString
+            let matches = tagRegex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+            for match in matches where match.numberOfRanges >= 3 {
+                let tag = ns.substring(with: match.range(at: 1)).lowercased()
+                let attrs = ns.substring(with: match.range(at: 2))
+                guard let styleVal = inlineStyleAttr(attrs) else { continue }
+                let decls = parseDeclarations(styleVal)
+                let widthPx = pxValue(decls["width"])
+                let heightPx = pxValue(decls["height"])
+                issues.append(contentsOf: explicitSizeIssues(
+                    tag: tag,
+                    widthPx: widthPx,
+                    heightPx: heightPx,
+                    sourceLabel: "<\(tag) style=\"…\">"
+                ))
+            }
+        }
+
+        return issues
+    }
+
+    /// Extract the value of `style="…"` (or `'…'`) from a tag's attribute
+    /// segment. Returns nil if no style attr present.
+    private static func inlineStyleAttr(_ attrs: String) -> String? {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"\bstyle\s*=\s*["']([^"']*)["']"#,
+            options: [.caseInsensitive]
+        ) else { return nil }
+        let ns = attrs as NSString
+        guard let match = regex.firstMatch(
+            in: attrs, range: NSRange(location: 0, length: ns.length)
+        ), match.numberOfRanges >= 2 else { return nil }
+        return ns.substring(with: match.range(at: 1))
+    }
+
+    /// Find every `cdp-(slider|knob|xy|toggle|choice)` tag referenced as
+    /// a type selector in `selector`. Splits on commas first so
+    /// `cdp-slider, cdp-knob` resolves to both. Within each subselector,
+    /// returns every cdp-* token found (covers `body cdp-slider` and
+    /// `cdp-slider.foo`). Tag names are lowercased for the keys in
+    /// `controlSizeMinimums`.
+    private static func cdpTagsInSelector(_ selector: String) -> [String] {
+        let parts = selector.split(separator: ",")
+        var tags: Set<String> = []
+        guard let regex = try? NSRegularExpression(
+            pattern: #"\bcdp-(slider|knob|xy|toggle|choice)\b"#,
+            options: [.caseInsensitive]
+        ) else { return [] }
+        for sub in parts {
+            let s = String(sub)
+            let ns = s as NSString
+            for m in regex.matches(in: s, range: NSRange(location: 0, length: ns.length)) where m.numberOfRanges >= 2 {
+                tags.insert("cdp-" + ns.substring(with: m.range(at: 1)).lowercased())
+            }
+        }
+        return Array(tags).sorted()
+    }
+
+    /// Parse a CSS length value as `px`. Returns the numeric magnitude
+    /// only when the unit is literally `px` (case-insensitive). Any other
+    /// unit (`%`, `em`, `rem`, `vw`, `vh`, `auto`, `fit-content`, etc.) or
+    /// unparseable value returns nil — those are out of scope for this
+    /// static lint and deferred to the runtime smoke test.
+    private static func pxValue(_ raw: String?) -> Double? {
+        guard let raw = raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let regex = try? NSRegularExpression(
+            pattern: #"^([0-9]+(?:\.[0-9]+)?)\s*px$"#,
+            options: [.caseInsensitive]
+        ) else { return nil }
+        let ns = trimmed as NSString
+        guard let m = regex.firstMatch(
+            in: trimmed, range: NSRange(location: 0, length: ns.length)
+        ), m.numberOfRanges >= 2 else { return nil }
+        return Double(ns.substring(with: m.range(at: 1)))
+    }
+
+    /// Decide whether a (widthPx, heightPx) pair on `tag` falls below
+    /// the per-tag minimum and produce one issue per offending dimension.
+    /// `cdp-slider` has the special vertical-slider exception:
+    /// `min(w, h) < 16` is fine if `max(w, h) >= 60` (deliberate vertical
+    /// orientation). Both nil (no px width or height declared) returns
+    /// the empty list.
+    private static func explicitSizeIssues(
+        tag: String,
+        widthPx: Double?,
+        heightPx: Double?,
+        sourceLabel: String
+    ) -> [Issue] {
+        guard let mins = controlSizeMinimums[tag] else { return [] }
+
+        if tag == "cdp-slider" {
+            // Slider can be vertical; only flag when both axes are too
+            // small to be either orientation. Skip when neither dim is
+            // explicitly set, or when only one is set (the other can
+            // default to a usable size).
+            guard let w = widthPx, let h = heightPx else { return [] }
+            let shortAxis = min(w, h)
+            let longAxis = max(w, h)
+            guard shortAxis < mins.height, longAxis < mins.width else { return [] }
+            return [
+                Issue(
+                    severity: .warn,
+                    check: "control_explicit_size_too_small",
+                    file: "ui/index.html",
+                    message: "\(sourceLabel) sets \(tag) to \(formatPx(w))×\(formatPx(h)), below the recommended minimum (\(Int(mins.width))×\(Int(mins.height))). Users may not be able to grab this control.",
+                    suggestion: "Consider removing the explicit dimension and letting the component's default size take over. For a vertical slider, keep one axis at or above \(Int(mins.width))px."
+                )
+            ]
+        }
+
+        var issues: [Issue] = []
+        if let w = widthPx, w < mins.width {
+            issues.append(Issue(
+                severity: .warn,
+                check: "control_explicit_size_too_small",
+                file: "ui/index.html",
+                message: "\(sourceLabel) with explicit width:\(formatPx(w))px is below the recommended minimum (\(Int(mins.width))px). Users may not be able to grab this control.",
+                suggestion: "Consider removing the explicit dimension and letting the component's default size take over."
+            ))
+        }
+        if let h = heightPx, h < mins.height {
+            issues.append(Issue(
+                severity: .warn,
+                check: "control_explicit_size_too_small",
+                file: "ui/index.html",
+                message: "\(sourceLabel) with explicit height:\(formatPx(h))px is below the recommended minimum (\(Int(mins.height))px). Users may not be able to grab this control.",
+                suggestion: "Consider removing the explicit dimension and letting the component's default size take over."
+            ))
+        }
+        return issues
+    }
+
+    /// Format a px magnitude without trailing `.0` so `30.0` renders as
+    /// `30` while `30.5` keeps its decimal.
+    private static func formatPx(_ v: Double) -> String {
+        if v.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(Int(v))
+        }
+        return String(v)
     }
 
     /// Scan the UI for text whose color and background are both dark
