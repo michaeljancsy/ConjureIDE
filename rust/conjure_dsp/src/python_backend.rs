@@ -512,7 +512,7 @@ impl PythonBackend {
             self.py_telemetry_dict = None;
         }
         self.py_max_frames = max_frames;
-        Python::with_gil(|py| -> PyResult<()> {
+        let result = Python::with_gil(|py| -> PyResult<()> {
             self.py_input_arrays = (0..channel_count)
                 .map(|_| {
                     PyArray1::<f32>::zeros(py, max_frames, false)
@@ -623,8 +623,14 @@ impl PythonBackend {
 
             self.py_ctx = Some(ctx.unbind());
             Ok(())
-        })
-        .ok();
+        });
+        if let Err(e) = result {
+            let msg = Python::with_gil(|py| {
+                format!("PythonBackend::allocate_py_arrays failed: {}", e.value(py))
+            });
+            eprintln!("ConjureDSP-Rust: {}", msg);
+            self.last_error = Some(msg);
+        }
         self.py_channel_count = channel_count;
         // ctx.state was just rebuilt to an empty MappingProxyType; force
         // the next update_state_view to re-parse rather than skip on a

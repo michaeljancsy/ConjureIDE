@@ -130,7 +130,7 @@
     var MAX_STATE_BYTES = 65536;
     var _stateHandlers = {};       // key -> [callback]
     var _anyStateHandlers = [];    // [callback(key, value)]
-    var _warnedKeys;               // Set of keys we've already warned about
+    var _warnedKeys = new Set();   // Set of keys we've already warned about; initialized upfront so a state.set() that races _init doesn't crash
 
     // `parameters.set(...)` fires onChange/onAnyChange handlers
     // synchronously, exactly like an external `_paramUpdate` callback
