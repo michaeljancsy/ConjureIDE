@@ -740,6 +740,10 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         // authors deliberately ship muted/secondary text that scrapes
         // the threshold, and we'd rather not block a save on a
         // judgment call. JS errors and unbound components stay fail.
+        // Canvas issues (zero_buffer / default_buffer_unset) are hard
+        // runtime misconfigurations — the viz still loads but draws
+        // wrong, so they warn rather than fail. Pinning: a non-empty
+        // canvas_issues array must never collapse into `.pass`.
         let failureKinds: Set<String> = [
             "error", "unhandledrejection", "load", "harness", "callback_exception"
         ]
@@ -751,6 +755,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             status = .fail
         } else if paramCoverage.contains(where: { !$0.hasInteractiveBinding })
                   || !lowContrastTexts.isEmpty
+                  || !canvasIssues.isEmpty
         {
             status = .warn
         } else {
@@ -1187,6 +1192,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                 var cvRect = cv.getBoundingClientRect();
                 if (cvRect.width <= 0 || cvRect.height <= 0) continue;
                 var bufW = cv.width, bufH = cv.height;
+                var misconfigured = false;
                 if (bufW === 0 || bufH === 0) {
                     canvasIssues.push({
                         id: cv.id || cv.className || '<anonymous>',
@@ -1195,6 +1201,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                         reason: 'zero_buffer',
                         hint: 'Canvas has CSS size but a 0\\u00d70 drawing buffer. Author probably set cv.width/height before layout settled. Try requestAnimationFrame or a ResizeObserver before the first resize() call.'
                     });
+                    misconfigured = true;
                 } else if (bufW === 300 && bufH === 150 && (Math.abs(cvRect.width - 300) > 1 || Math.abs(cvRect.height - 150) > 1)) {
                     canvasIssues.push({
                         id: cv.id || cv.className || '<anonymous>',
@@ -1203,14 +1210,20 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                         reason: 'default_buffer_unset',
                         hint: 'Canvas drawing buffer is the HTML default 300\\u00d7150 but layout is different. Drawing will be stretched. Set cv.width = rect.width * devicePixelRatio (and likewise for height).'
                     });
+                    misconfigured = true;
                 }
-                // Canvases with usable buffers are eligible for advisory
-                // suppression — many UIs deliberately allocate a large
-                // canvas (oscilloscope, spectrum, grain timeline) that
-                // only paints during audio playback. The smoke tester
-                // never feeds audio, so the canvas is legitimately
-                // empty in this run, but the area is NOT a layout flaw.
-                if (bufW > 0 && bufH > 0) {
+                // Only correctly-configured canvases count toward
+                // advisory suppression — many UIs deliberately allocate
+                // a large canvas (oscilloscope, spectrum, grain
+                // timeline) that only paints during audio playback. The
+                // smoke tester never feeds audio, so the canvas is
+                // legitimately empty in this run, but the area is NOT a
+                // layout flaw. Misconfigured canvases (zero_buffer /
+                // default_buffer_unset) are "live but broken" — letting
+                // their pixel area suppress 'sparse' / 'clustered'
+                // advisories would hide real layout issues behind a
+                // hard runtime bug we already report via canvas_issues.
+                if (bufW > 0 && bufH > 0 && !misconfigured) {
                     canvasRects.push({
                         left: cvRect.left, top: cvRect.top,
                         right: cvRect.right, bottom: cvRect.bottom

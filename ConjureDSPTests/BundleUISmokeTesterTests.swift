@@ -1106,4 +1106,105 @@ struct BundleUISmokeTesterTests {
         #expect(advisoryFlags.contains("sparse"),
                 "sparse must fire when the on-screen slice of a partially-overflowing canvas is < 20% of the manifest; got \(advisoryFlags)")
     }
+
+    /// A canvas that left its drawing buffer at the HTML default
+    /// (300×150) while the layout is a different size is misconfigured
+    /// — the viz will draw stretched and the canvas is "live but
+    /// broken". Letting its pixel area suppress `sparse` / `clustered`
+    /// would hide a real layout issue behind a hard runtime bug we
+    /// already report via `canvas_issues`. Pin: `default_buffer_unset`
+    /// canvases must NOT count toward `canvasArea`-based advisory
+    /// suppression.
+    @Test @MainActor func defaultBufferUnsetCanvasDoesNotSuppressSparse() async throws {
+        // 600×400 manifest. Tiny corner toggle would normally trigger
+        // `sparse`. A big <canvas> spans much of the manifest, but the
+        // author forgot to set cv.width/cv.height — the buffer is
+        // stuck at the 300×150 HTML default while CSS says 1000×800.
+        // After the fix, canvasArea must not count this canvas, so
+        // sparse should still fire.
+        let manifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.py",
+          "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 600, "height": 400, "fps": 30, "audioFrames": false
+          }
+        }
+        """
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <div style="position:absolute;left:0;top:0">
+            <cdp-toggle param="cutoff" style="width:32px;height:18px"></cdp-toggle>
+          </div>
+          <canvas id="broken" style="position:absolute;left:0;top:0;width:1000px;height:800px"></canvas>
+          <!-- intentionally no script that sets cv.width / cv.height —
+               the canvas keeps the HTML default 300x150 buffer -->
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: manifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff"],
+            hostParameterCount: 1,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        // The canvas is misconfigured — surfaces as a canvas_issue.
+        let dbu = report.canvasIssues.first { $0.reason == "default_buffer_unset" }
+        #expect(dbu != nil,
+                "expected a default_buffer_unset canvas issue; got \(report.canvasIssues)")
+        // …and because the canvas is "live but broken", its pixel area
+        // must not legitimize the empty surrounding space — sparse
+        // must still fire.
+        let advisoryFlags = report.layoutAdvisory?.flags ?? []
+        #expect(advisoryFlags.contains("sparse"),
+                "sparse must still fire when the only large canvas is misconfigured (default_buffer_unset); got flags=\(advisoryFlags)")
+    }
+
+    /// A non-empty `canvas_issues` array is a hard runtime
+    /// misconfiguration — the report status MUST reflect that, never
+    /// `.pass`. Earlier versions of the layout-heuristics reshape
+    /// accidentally collapsed canvas issues into the same "soft"
+    /// bucket as advisory flags, leaving `default_buffer_unset` /
+    /// `zero_buffer` invisible to consumers that only checked
+    /// `status`. Pin: at least `.warn`.
+    @Test @MainActor func canvasIssuesProduceNonPassStatus() async throws {
+        // Otherwise-clean bundle (slider binds, param covered, no JS
+        // errors) — the canvas with default_buffer_unset is the ONLY
+        // thing that should knock status off `.pass`.
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <cdp-slider param="cutoff"></cdp-slider>
+          <cdp-slider param="resonance"></cdp-slider>
+          <canvas id="stretched" style="width:200px;height:140px"></canvas>
+          <!-- no cv.width/cv.height set: stays at HTML default 300x150
+               while layout is 200x140 → default_buffer_unset -->
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: twoParamManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff", 1: "resonance"],
+            hostParameterCount: 2,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        #expect(!report.canvasIssues.isEmpty,
+                "expected canvas_issues to be populated; got \(report.canvasIssues)")
+        #expect(report.canvasIssues.contains { $0.reason == "default_buffer_unset" },
+                "expected a default_buffer_unset canvas issue; got \(report.canvasIssues)")
+        #expect(report.status != .pass,
+                "non-empty canvas_issues must yield non-.pass status; got \(report.status)")
+    }
 }
