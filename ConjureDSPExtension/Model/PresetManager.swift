@@ -456,8 +456,22 @@ class PresetManager: ObservableObject {
             }()
             // If we can't parse the existing manifest, fall back to the
             // defaults — a broken manifest is worse than losing user edits.
-            let manifest = existingManifest
+            var manifest = existingManifest
                 ?? PresetBundle.defaultManifest(language: language, includeUI: scaffoldUI)
+
+            // If the caller's language disagrees with the existing
+            // manifest, patch entry/language and delete the now-orphan
+            // source file so a Rust→Python (or reverse) save doesn't
+            // leave the bundle pointing manifest.language at the wrong
+            // extension. Same shape as the duplicateFrom branch below.
+            var manifestNeedsRewrite = existingManifest == nil
+            if existingManifest != nil, manifest.resolvedLanguage != language {
+                let oldEntryURL = bundleURL.appendingPathComponent(manifest.entry)
+                try? fileManager.removeItem(at: oldEntryURL)
+                manifest.entry = language == .rust ? "process.rs" : "process.py"
+                manifest.language = language.rawValue
+                manifestNeedsRewrite = true
+            }
 
             // Write the entry script according to whatever the manifest
             // says its entry path is — respects user edits to `entry` too.
@@ -465,9 +479,7 @@ class PresetManager: ObservableObject {
             try source.write(to: scriptURL, atomically: true, encoding: .utf8)
             AppGroupContainer.stripQuarantine(at: scriptURL)
 
-            // If the existing manifest didn't round-trip (corrupt file),
-            // rewrite it with the fallback so subsequent reads succeed.
-            if existingManifest == nil {
+            if manifestNeedsRewrite {
                 try manifest.jsonData().write(to: manifestURL)
                 AppGroupContainer.stripQuarantine(at: manifestURL)
             }
