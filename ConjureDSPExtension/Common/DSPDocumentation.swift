@@ -674,12 +674,25 @@ enum DSPDocumentation {
     ## Rust author surface
 
     Declare the state buffer with `state!()`. The macro emits the
-    host-facing exports plus `cx.state_bytes()` (raw JSON content) and
-    `cx.state_generation()` (counter that bumps on every accepted
-    write). The script chooses how to parse the bytes — install a JSON
-    crate via the crate package manager, hand-roll a tiny parser for a
-    known shape, or use a fixed-layout binary format the script's UI
-    agrees to write.
+    host-facing exports plus typed accessors on `cx` for the common
+    fixed-shape cases plus a raw-bytes escape hatch:
+
+    | Accessor | Returns |
+    |---|---|
+    | `cx.state_int(key)` / `cx.state_int_or(key, default)` | `Option<i32>` / `i32` |
+    | `cx.state_bool(key)` / `cx.state_bool_or(key, default)` | `Option<bool>` / `bool` |
+    | `cx.state_f32(key)` / `cx.state_f32_or(key, default)` | `Option<f32>` / `f32` |
+    | `cx.state_array_u8::<N>(key)` / `cx.state_array_u8_or(key, default)` | `Option<[u8; N]>` / `[u8; N]` |
+    | `cx.state_array_i32::<N>(key)` / `cx.state_array_i32_or(key, default)` | `Option<[i32; N]>` / `[i32; N]` |
+    | `cx.state_array_f32::<N>(key)` / `cx.state_array_f32_or(key, default)` | `Option<[f32; N]>` / `[f32; N]` |
+    | `cx.state_bytes()` | `&'static [u8]` (raw JSON content) |
+    | `cx.state_generation()` | `u64` (bumps on every accepted write) |
+
+    The typed readers parse the kernel's JSON STATE buffer in place and
+    have no allocation cost on the audio thread. Fixed-size array
+    readers return `None` if the JSON array is shorter than `N` (so the
+    caller can fall back to defaults rather than getting partially
+    initialised data) and silently take the prefix when it's longer.
 
     ```rust
     use conjuredsp::*;
@@ -689,7 +702,9 @@ enum DSPDocumentation {
     // state!(max_bytes = 131_072);
 
     static mut CACHED_GEN: u64 = u64::MAX;
-    static mut SLOTS: [u8; 32] = [0; 32];
+    static mut PATTERN: [u8; 16] = [1; 16];
+    static mut SELECTED: i32 = 0;
+    static mut FROZEN: bool = false;
 
     #[no_mangle] pub extern "C" fn process(
         input: *const f32, output: *mut f32,
@@ -699,21 +714,26 @@ enum DSPDocumentation {
         unsafe {
             let gen = cx.state_generation();
             if gen != CACHED_GEN {
-                let bytes = cx.state_bytes();
-                // … parse bytes into SLOTS via your chosen parser …
+                PATTERN = cx.state_array_u8_or::<16>("pattern", [1; 16]);
+                SELECTED = cx.state_int_or("selected", 0);
+                FROZEN = cx.state_bool_or("frozen", false);
                 CACHED_GEN = gen;
             }
         }
-        // … apply SLOTS to ctx.input / ctx.set_output …
+        // … apply PATTERN / SELECTED / FROZEN to ctx.input / ctx.set_output …
     }
     ```
 
-    Why no auto-deserialized struct? Wiring `serde::Deserialize` into
-    the macro pulls `serde` + `serde_json` into the WASM build, which
-    aren't bundled in the script-side sysroot. The raw-bytes API keeps
-    the macro dependency-free; scripts that want serde can add it
-    through the same crate package manager that handles any other
-    dependency.
+    For shapes the typed accessors don't cover (nested objects,
+    variable-length strings, custom binary), fall back to
+    `cx.state_bytes()` + your own parser. The kernel stores STATE as
+    UTF-8 JSON, so `serde_json` works once you've added it through the
+    crate package manager — the conjuredsp crate stays dependency-free
+    so that's an opt-in, not a tax on every preset.
+
+    Note: there's no `set_state_*` from Rust. STATE is UI/MCP-writable
+    and audio-readable by design — the audio thread stays lock-free
+    because writers can't race with it.
 
     ## JS surface — `ConjureDSP.state.*`
 
@@ -1129,13 +1149,18 @@ enum DSPDocumentation {
     use conjuredsp::*;
     setup!();
     telemetry! {
-        GR_DB  = telemetry().unit("dB"),
-        ENV_DB = telemetry().unit("dB"),
+        GR_DB  = scalar_telemetry().unit("dB"),
+        ENV_DB = scalar_telemetry().unit("dB"),
     }
     // inside process():
-    ctx.set_telemetry(GR_DB, max_gr_db_this_block);
-    ctx.set_telemetry(ENV_DB, env_db);
+    ctx.set_telemetry_scalar(GR_DB, max_gr_db_this_block);
+    ctx.set_telemetry_scalar(ENV_DB, env_db);
     ```
+
+    The macro must be invoked with at least one slot — either fill it in
+    or omit it entirely. Empty `telemetry!{}` and `telemetry!()` forms
+    are accepted as no-ops so the script still compiles while you're
+    iterating, but they don't expose anything to the host.
 
     Python (`ctx.telemetry` is the single writable mapping):
 

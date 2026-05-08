@@ -37,6 +37,7 @@ pub mod json;
 pub mod nam;
 pub mod osc;
 pub mod params;
+pub mod state_json;
 
 // Re-export everything at crate root for `use conjuredsp::*;`
 pub use buffers::DelayLine;
@@ -294,7 +295,9 @@ macro_rules! params {
 /// ```
 #[macro_export]
 macro_rules! telemetry {
-    ( $( $NAME:ident = $spec:expr ),* $(,)? ) => {
+    () => {};
+    ( $(,)? ) => {};
+    ( $( $NAME:ident = $spec:expr ),+ $(,)? ) => {
         // Generate sequential index constants (independent of params).
         conjuredsp::_params_indices!(0usize; $( $NAME ),*);
 
@@ -725,6 +728,30 @@ macro_rules! state {
         trait __CdpStateExt {
             fn state_bytes(&self) -> &'static [u8];
             fn state_generation(&self) -> u64;
+            fn state_int(&self, key: &str) -> Option<i32>;
+            fn state_int_or(&self, key: &str, default: i32) -> i32;
+            fn state_bool(&self, key: &str) -> Option<bool>;
+            fn state_bool_or(&self, key: &str, default: bool) -> bool;
+            fn state_f32(&self, key: &str) -> Option<f32>;
+            fn state_f32_or(&self, key: &str, default: f32) -> f32;
+            fn state_array_u8<const N: usize>(&self, key: &str) -> Option<[u8; N]>;
+            fn state_array_u8_or<const N: usize>(
+                &self,
+                key: &str,
+                default: [u8; N],
+            ) -> [u8; N];
+            fn state_array_i32<const N: usize>(&self, key: &str) -> Option<[i32; N]>;
+            fn state_array_i32_or<const N: usize>(
+                &self,
+                key: &str,
+                default: [i32; N],
+            ) -> [i32; N];
+            fn state_array_f32<const N: usize>(&self, key: &str) -> Option<[f32; N]>;
+            fn state_array_f32_or<const N: usize>(
+                &self,
+                key: &str,
+                default: [f32; N],
+            ) -> [f32; N];
         }
 
         impl __CdpStateExt for conjuredsp::Context {
@@ -761,6 +788,124 @@ macro_rules! state {
                     );
                     u64::from_le_bytes(gen_bytes)
                 }
+            }
+
+            #[inline]
+            fn state_int(&self, key: &str) -> Option<i32> {
+                let bytes = self.state_bytes();
+                let v = $crate::state_json::find_value(bytes, key)?;
+                let n = $crate::state_json::parse_i64(v)?;
+                i32::try_from(n).ok()
+            }
+
+            #[inline]
+            fn state_int_or(&self, key: &str, default: i32) -> i32 {
+                self.state_int(key).unwrap_or(default)
+            }
+
+            #[inline]
+            fn state_bool(&self, key: &str) -> Option<bool> {
+                let bytes = self.state_bytes();
+                let v = $crate::state_json::find_value(bytes, key)?;
+                $crate::state_json::parse_bool(v)
+            }
+
+            #[inline]
+            fn state_bool_or(&self, key: &str, default: bool) -> bool {
+                self.state_bool(key).unwrap_or(default)
+            }
+
+            #[inline]
+            fn state_f32(&self, key: &str) -> Option<f32> {
+                let bytes = self.state_bytes();
+                let v = $crate::state_json::find_value(bytes, key)?;
+                let n = $crate::state_json::parse_f64(v)?;
+                let f = n as f32;
+                if f.is_finite() {
+                    Some(f)
+                } else {
+                    None
+                }
+            }
+
+            #[inline]
+            fn state_f32_or(&self, key: &str, default: f32) -> f32 {
+                self.state_f32(key).unwrap_or(default)
+            }
+
+            #[inline]
+            fn state_array_u8<const N: usize>(&self, key: &str) -> Option<[u8; N]> {
+                let bytes = self.state_bytes();
+                let v = $crate::state_json::find_value(bytes, key)?;
+                let mut out = [0u8; N];
+                let written = $crate::state_json::parse_array_into(
+                    v,
+                    &mut out,
+                    $crate::state_json::decode_u8,
+                )?;
+                if written < N {
+                    return None;
+                }
+                Some(out)
+            }
+
+            #[inline]
+            fn state_array_u8_or<const N: usize>(
+                &self,
+                key: &str,
+                default: [u8; N],
+            ) -> [u8; N] {
+                self.state_array_u8::<N>(key).unwrap_or(default)
+            }
+
+            #[inline]
+            fn state_array_i32<const N: usize>(&self, key: &str) -> Option<[i32; N]> {
+                let bytes = self.state_bytes();
+                let v = $crate::state_json::find_value(bytes, key)?;
+                let mut out = [0i32; N];
+                let written = $crate::state_json::parse_array_into(
+                    v,
+                    &mut out,
+                    $crate::state_json::decode_i32,
+                )?;
+                if written < N {
+                    return None;
+                }
+                Some(out)
+            }
+
+            #[inline]
+            fn state_array_i32_or<const N: usize>(
+                &self,
+                key: &str,
+                default: [i32; N],
+            ) -> [i32; N] {
+                self.state_array_i32::<N>(key).unwrap_or(default)
+            }
+
+            #[inline]
+            fn state_array_f32<const N: usize>(&self, key: &str) -> Option<[f32; N]> {
+                let bytes = self.state_bytes();
+                let v = $crate::state_json::find_value(bytes, key)?;
+                let mut out = [0f32; N];
+                let written = $crate::state_json::parse_array_into(
+                    v,
+                    &mut out,
+                    $crate::state_json::decode_f32,
+                )?;
+                if written < N {
+                    return None;
+                }
+                Some(out)
+            }
+
+            #[inline]
+            fn state_array_f32_or<const N: usize>(
+                &self,
+                key: &str,
+                default: [f32; N],
+            ) -> [f32; N] {
+                self.state_array_f32::<N>(key).unwrap_or(default)
             }
         }
     };
