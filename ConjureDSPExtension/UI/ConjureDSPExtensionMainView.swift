@@ -1063,6 +1063,11 @@ struct ConjureDSPExtensionMainView: View {
                 errorMessage = "Could not save \(file.relativePath): \(error.localizedDescription)"
                 return
             }
+            // Clear any prior debounce-write error (e.g., the manifest
+            // validator's "didn't parse" message). Without this, a
+            // typo + fix sequence leaves the stale error visible
+            // forever even though the next debounce wrote successfully.
+            errorMessage = nil
             // Record the write so the Save button lights up even when
             // only ui/** or manifest.json has changed (entry-script
             // modification already flips presetManager.isModified).

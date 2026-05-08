@@ -782,6 +782,63 @@ struct PresetManagerTests {
         #expect(after == preExisting, "Scaffold should not clobber a pre-existing index.html")
     }
 
+    /// Pinned regression: scaffoldCustomUI must preserve every manifest
+    /// field, not just `params` / `meta`. Sentry Seer flagged the original
+    /// implementation for silently dropping `paramsNote` (and would have
+    /// dropped any other Optional-defaulted property added later — same
+    /// trap with `telemetry`). Switching the inner builder from a
+    /// memberwise init to `var updated = bundle.manifest; updated.ui =
+    /// ...` makes that class of bug structurally impossible.
+    @Test @MainActor func scaffoldCustomUIPreservesAllManifestFields() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let preset = try manager.savePreset(name: "AllFields", source: "pass\n")
+        var bundle = try #require(manager.loadBundle(for: preset))
+
+        // Pre-populate every Optional field we care about — these are
+        // the ones a memberwise-init rebuild would silently lose.
+        let cutoff = PresetManifest.ParamDecl(
+            name: "Cutoff", key: nil, min: 20, max: 20000, default: 1000,
+            unit: "Hz", curve: "log", style: nil, options: nil
+        )
+        _ = try manager.syncManifestParamsFromKernel(
+            for: bundle, params: [cutoff]
+        )
+        bundle = try #require(manager.loadBundle(for: preset))
+
+        // Hand-add `meta` and `telemetry` blocks on disk via JSON-tree
+        // mutation so we don't depend on PresetManager APIs for either.
+        let manifestURL = bundle.rootURL
+            .appendingPathComponent(PresetManifest.filename)
+        var raw = try #require(
+            (try? JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)))
+                as? [String: Any]
+        )
+        raw["meta"] = ["author": "test", "description": "regression"]
+        raw["telemetry"] = [["name": "level", "shape": "scalar", "unit": "dB"]]
+        try JSONSerialization.data(
+            withJSONObject: raw, options: [.prettyPrinted, .sortedKeys]
+        ).write(to: manifestURL)
+        bundle = try #require(manager.loadBundle(for: preset))
+
+        // Sanity-check the precondition before scaffolding.
+        #expect(bundle.manifest.params?.count == 1)
+        #expect(bundle.manifest.paramsNote != nil)
+        #expect(bundle.manifest.meta?.author == "test")
+        #expect(bundle.manifest.telemetry?.count == 1)
+        #expect(bundle.manifest.ui == nil, "Precondition: no UI block yet")
+
+        _ = try manager.scaffoldCustomUI(for: bundle)
+
+        let after = try #require(manager.loadBundle(for: preset))
+        #expect(after.manifest.ui != nil, "Scaffold should have added the ui block")
+        #expect(after.manifest.params?.count == 1, "params must survive")
+        #expect(after.manifest.paramsNote != nil, "paramsNote must survive — Sentry Seer regression")
+        #expect(after.manifest.meta?.author == "test", "meta must survive")
+        #expect(after.manifest.telemetry?.count == 1, "telemetry must survive")
+    }
+
     // MARK: - External file watcher
 
     /// Regression guard for the "Reload UI" toolbar button never appearing
@@ -1339,19 +1396,26 @@ struct PresetManagerTests {
                 "fresh bundle must not inherit params from any other preset")
     }
 
-    // MARK: - updateManifestParams: kernel-extracted metadata mirror
+    // MARK: - syncManifestParamsFromKernel: cache of kernel metadata
     //
-    // The MCP `save_preset` path calls this after `compileAndRun` so a
-    // freshly-saved bundle's `manifest.json` carries a `params` block
-    // matching what the kernel extracted from the script's `PARAMS` /
-    // `params!{}` declarations. Before this helper existed, the
-    // scaffold path emitted a manifest without `params`, and the very
-    // next `write_bundle_file` for `ui/index.html` failed UI validation
-    // on every named `param=` reference. The 30-run /try-it battery
-    // (claude × gemini × codex × python × rust × 5 prompts) flagged
-    // this as the dominant friction across all 30 runs.
+    // `manifest.params` is a CACHE of the kernel-extracted parameter
+    // metadata, not an authoritative override. Every save and every
+    // load-with-drift refreshes the cache from kernel reflection. The
+    // sibling `_paramsNote` documents that contract in the file itself,
+    // so an author who hand-edits the block sees a warning before their
+    // change is silently overwritten on the next sync.
+    //
+    // This was a behavior change from the earlier (`updateManifestParams`)
+    // implementation, which preserved an existing non-empty `params`
+    // block. That preservation defended a hypothetical "narrow the
+    // slider range via manifest hand-edit" workflow at the cost of a
+    // real correctness bug: edits to PARAMS / params!() that ran via
+    // `compile_and_run` left the manifest stale, and a subsequent UI
+    // Cmd+S didn't re-sync — the bundle stayed on stale ranges across
+    // every future load. See the task body in Asana
+    // (1214586240091333) for the full drift sequence and rationale.
 
-    @Test @MainActor func updateManifestParamsWritesParamsBlock() throws {
+    @Test @MainActor func syncManifestParamsFromKernelWritesParamsBlock() throws {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
@@ -1377,7 +1441,7 @@ struct PresetManagerTests {
             name: "Resonance", key: nil, min: 0.5, max: 10, default: 0.707,
             unit: nil, curve: nil, style: nil, options: nil
         )
-        let didWrite = try manager.updateManifestParams(
+        let didWrite = try manager.syncManifestParamsFromKernel(
             for: bundle, params: [cutoff, resonance]
         )
         #expect(didWrite, "First mirror should write")
@@ -1395,13 +1459,25 @@ struct PresetManagerTests {
         #expect(params[1].unit == nil)
     }
 
-    @Test @MainActor func updateManifestParamsSkipsExistingParamsBlock() throws {
+    /// Pinned regression: an authored `params` block (e.g. someone who
+    /// hand-wrote `style: "choice"` + `options`) is OVERWRITTEN by a
+    /// subsequent kernel-extracted reflection. This is intentional —
+    /// kernel metadata is the source of truth, and the `_paramsNote`
+    /// sibling field documents that contract in the manifest itself so
+    /// an author who hand-edits the block sees a warning before the
+    /// next sync silently overwrites it.
+    ///
+    /// If a future maintainer reads `syncManifestParamsFromKernel` and
+    /// thinks "this looks unsafe — let me put back a guard against
+    /// overwriting authored params", this test should fail and surface
+    /// the rationale before they revert.
+    @Test @MainActor func syncManifestParamsFromKernelAlwaysOverwritesAuthoredBlock() throws {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
-        // Build a bundle that already has an explicitly-authored params
-        // block — e.g. someone wrote `style: "choice"` + options that
-        // the kernel reflection wouldn't know about.
+        // Build a bundle that has an explicitly-authored params block
+        // including choice metadata the kernel reflection won't know
+        // about (`style: "choice"` + options).
         _ = try manager.savePreset(
             name: "ExplicitParams", source: "# v1\n",
             language: .python, scaffoldUI: true
@@ -1411,62 +1487,232 @@ struct PresetManagerTests {
         )
         var bundle = try #require(manager.loadBundle(for: preset))
 
-        // Author writes their own params block (simulating a v2 manifest
-        // that includes choice options the kernel doesn't surface).
         let authored = PresetManifest.ParamDecl(
             name: "Mode", key: nil, min: 0, max: 2, default: 0,
             unit: nil, curve: nil, style: "choice",
             options: ["Low", "Mid", "High"]
         )
-        let firstWrite = try manager.updateManifestParams(
+        let firstWrite = try manager.syncManifestParamsFromKernel(
             for: bundle, params: [authored]
         )
         #expect(firstWrite)
 
-        // Now reload and try to mirror a kernel-extracted version that
-        // LACKS the choice metadata — this must NOT clobber the author.
+        // Now reload and overwrite with a kernel reflection that
+        // LACKS the choice metadata. New behavior: this MUST clobber
+        // the author. (Old behavior: this was a no-op, which masked
+        // real drift bugs.)
         bundle = try #require(manager.loadBundle(for: preset))
         let kernelReflection = PresetManifest.ParamDecl(
             name: "Mode", key: nil, min: 0, max: 2, default: 0,
             unit: nil, curve: nil, style: nil, options: nil
         )
-        let secondWrite = try manager.updateManifestParams(
+        let secondWrite = try manager.syncManifestParamsFromKernel(
             for: bundle, params: [kernelReflection]
         )
-        #expect(!secondWrite, "Existing params block must not be overwritten")
+        #expect(secondWrite, "Sync must always overwrite — manifest.params is a cache, not an override")
 
-        // Confirm the explicit choice metadata survived.
+        // Confirm the kernel reflection won; choice metadata is gone.
         let reloaded = try #require(manager.loadBundle(for: preset))
         let params = try #require(reloaded.manifest.params)
         #expect(params.count == 1)
-        #expect(params[0].style == "choice")
-        #expect(params[0].options == ["Low", "Mid", "High"])
+        #expect(params[0].style == nil, "Authored style: 'choice' must have been overwritten")
+        #expect(params[0].options == nil, "Authored options must have been overwritten")
     }
 
-    @Test @MainActor func updateManifestParamsSkipsEmptyInput() throws {
+    /// Empty-input semantics: when the script removes its PARAMS dict,
+    /// the next sync must clear the manifest's `params` block (and the
+    /// sibling `_paramsNote`). The old behavior short-circuited on
+    /// empty input and left a stale block on disk forever.
+    @Test @MainActor func syncManifestParamsFromKernelClearsStaleBlockOnEmptyInput() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        // Set up a bundle that has a params block (the typical
+        // post-save state for a preset whose script declares PARAMS).
+        _ = try manager.savePreset(
+            name: "WasParams", source: "# v1\n",
+            language: .python, scaffoldUI: true
+        )
+        let preset = try #require(
+            manager.presets.first(where: { $0.name == "WasParams" })
+        )
+        var bundle = try #require(manager.loadBundle(for: preset))
+        let original = PresetManifest.ParamDecl(
+            name: "Gain", key: nil, min: -24, max: 12, default: 0,
+            unit: "dB", curve: nil, style: nil, options: nil
+        )
+        _ = try manager.syncManifestParamsFromKernel(
+            for: bundle, params: [original]
+        )
+
+        // Confirm the params block AND _paramsNote landed on disk.
+        bundle = try #require(manager.loadBundle(for: preset))
+        #expect(bundle.manifest.params?.count == 1)
+        #expect(bundle.manifest.paramsNote != nil)
+
+        // Now sync with empty input — the script removed its PARAMS
+        // dict. The manifest must clear both fields.
+        let didWrite = try manager.syncManifestParamsFromKernel(
+            for: bundle, params: []
+        )
+        #expect(didWrite, "Clearing a stale block counts as a write")
+
+        let reloaded = try #require(manager.loadBundle(for: preset))
+        #expect(reloaded.manifest.params == nil,
+                "Stale params block must be cleared")
+        #expect(reloaded.manifest.paramsNote == nil,
+                "Stale _paramsNote must be cleared alongside params")
+
+        // A second empty-input sync against the now-clean manifest
+        // must be a no-op — keeps `git status` clean and avoids
+        // spurious commits on every load of a paramless script.
+        let secondDidWrite = try manager.syncManifestParamsFromKernel(
+            for: reloaded, params: []
+        )
+        #expect(!secondDidWrite, "Empty input on already-clean manifest must not write")
+    }
+
+    /// Pinned regression: hand-edited top-level fields outside
+    /// `PresetManifest`'s schema (e.g., `"metadata": "asdf"` typed in
+    /// Monaco) survive a sync. A real user incident — typing
+    /// `"metadata": "asdf"` and saving the script silently dropped the
+    /// field on the next sync because the old Codable round-trip
+    /// ignored unknown keys on decode and omitted them on re-encode.
+    /// Switching to JSON-tree mutation keeps them in place.
+    @Test @MainActor func syncManifestParamsFromKernelPreservesUnknownTopLevelFields() throws {
         let (manager, tempDir) = try Self.makeManager()
         defer { Self.cleanup(tempDir) }
 
         _ = try manager.savePreset(
-            name: "NoParams", source: "# no params\n",
+            name: "UnknownFieldTarget", source: "# v1\n",
             language: .python, scaffoldUI: true
         )
         let preset = try #require(
-            manager.presets.first(where: { $0.name == "NoParams" })
+            manager.presets.first(where: { $0.name == "UnknownFieldTarget" })
+        )
+        let bundle = try #require(manager.loadBundle(for: preset))
+        let manifestURL = bundle.rootURL
+            .appendingPathComponent(PresetManifest.filename)
+
+        // Hand-add an unknown top-level field, the way an author might
+        // by editing manifest.json in Monaco.
+        var raw = try #require(
+            (try? JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)))
+                as? [String: Any]
+        )
+        raw["metadata"] = "asdf"
+        raw["customAuthorTag"] = ["nested": "value"]
+        try JSONSerialization.data(
+            withJSONObject: raw, options: [.prettyPrinted, .sortedKeys]
+        ).write(to: manifestURL)
+
+        // Now sync params — this used to drop the unknown fields via
+        // the Codable round-trip.
+        let cutoff = PresetManifest.ParamDecl(
+            name: "Cutoff", key: nil, min: 20, max: 20000, default: 1000,
+            unit: "Hz", curve: "log", style: nil, options: nil
+        )
+        _ = try manager.syncManifestParamsFromKernel(
+            for: bundle, params: [cutoff]
+        )
+
+        // Re-read raw JSON and confirm the unknown fields survived
+        // alongside the new params block.
+        let after = try #require(
+            (try? JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)))
+                as? [String: Any]
+        )
+        #expect(after["metadata"] as? String == "asdf",
+                "Unknown top-level field `metadata` must survive the sync")
+        #expect(after["customAuthorTag"] as? [String: String] == ["nested": "value"],
+                "Unknown nested field must also survive")
+        #expect((after["params"] as? [Any])?.count == 1,
+                "Sync should still have written the new params block")
+        #expect(after["_paramsNote"] != nil,
+                "Sync should still have written the _paramsNote sibling")
+    }
+
+    /// Idempotency: re-syncing the same params on a manifest that
+    /// already matches must NOT write. Without this guard, every
+    /// `persistManifest=true` reload of a non-drifting preset would
+    /// emit a spurious `manifestDriftCorrected` event and an empty
+    /// git-commit attempt — every Run / save would queue a no-op
+    /// commit.
+    @Test @MainActor func syncManifestParamsFromKernelIsIdempotent() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        _ = try manager.savePreset(
+            name: "IdempotentTarget", source: "# v1\n",
+            language: .python, scaffoldUI: true
+        )
+        let preset = try #require(
+            manager.presets.first(where: { $0.name == "IdempotentTarget" })
+        )
+        var bundle = try #require(manager.loadBundle(for: preset))
+
+        let cutoff = PresetManifest.ParamDecl(
+            name: "Cutoff", key: nil, min: 20, max: 20000, default: 1000,
+            unit: "Hz", curve: "log", style: nil, options: nil
+        )
+        let firstWrite = try manager.syncManifestParamsFromKernel(
+            for: bundle, params: [cutoff]
+        )
+        #expect(firstWrite, "First sync should write")
+
+        bundle = try #require(manager.loadBundle(for: preset))
+        let secondWrite = try manager.syncManifestParamsFromKernel(
+            for: bundle, params: [cutoff]
+        )
+        #expect(!secondWrite, "Second sync with identical params must be a no-op")
+    }
+
+    /// `_paramsNote` round-trips through `PresetManifest`'s Codable —
+    /// the JSON key is `_paramsNote` (custom CodingKeys), the Swift
+    /// property is `paramsNote`. The fixed warning string sorts
+    /// alphabetically just above `params` in the pretty-printed output.
+    @Test @MainActor func syncManifestParamsFromKernelWritesParamsNoteOnNonEmpty() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        _ = try manager.savePreset(
+            name: "NoteTarget", source: "# v1\n",
+            language: .python, scaffoldUI: true
+        )
+        let preset = try #require(
+            manager.presets.first(where: { $0.name == "NoteTarget" })
         )
         let bundle = try #require(manager.loadBundle(for: preset))
 
-        // Scripts with no PARAMS dict produce empty kernel metadata.
-        // We must not synthesize an empty params: [] block — that's
-        // visually noisy in the manifest and conveys no information.
-        let didWrite = try manager.updateManifestParams(
-            for: bundle, params: []
+        let gain = PresetManifest.ParamDecl(
+            name: "Gain", key: nil, min: -24, max: 12, default: 0,
+            unit: "dB", curve: nil, style: nil, options: nil
         )
-        #expect(!didWrite)
+        _ = try manager.syncManifestParamsFromKernel(
+            for: bundle, params: [gain]
+        )
 
+        // Round-trip the manifest through Codable (loadBundle uses
+        // JSONDecoder internally) and verify the note shows up.
         let reloaded = try #require(manager.loadBundle(for: preset))
-        #expect((reloaded.manifest.params?.isEmpty ?? true),
-                "Empty input must not synthesize an empty params block")
+        #expect(reloaded.manifest.paramsNote == PresetManager.kernelDerivedParamsNote,
+                "Every non-empty sync must write the fixed warning string")
+
+        // Verify the on-disk JSON uses the underscore-prefixed key
+        // and that it sorts above `params` (the encoder uses
+        // `.sortedKeys`, and `_` < `p` lexicographically).
+        let manifestPath = bundle.rootURL
+            .appendingPathComponent(PresetManifest.filename)
+        let jsonString = try String(contentsOf: manifestPath, encoding: .utf8)
+        #expect(jsonString.contains("\"_paramsNote\""),
+                "JSON key must use the underscore-prefixed `_paramsNote` form")
+        if let noteRange = jsonString.range(of: "\"_paramsNote\""),
+           let paramsRange = jsonString.range(of: "\"params\"") {
+            #expect(noteRange.lowerBound < paramsRange.lowerBound,
+                    "`_paramsNote` must sort above `params` so it reads as a header to that block")
+        } else {
+            Issue.record("Expected both `_paramsNote` and `params` keys in the manifest")
+        }
     }
 
     // The ParamDecl(from: ParamMetadata) round-trip lives in

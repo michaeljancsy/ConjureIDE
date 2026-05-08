@@ -160,7 +160,13 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         // post-load tree rebuild.
         beginPresetTransition()
         defer { endPresetTransition() }
-        let result = await compileAndRun(source: source)
+        // `persistManifest: false` honors the documented no-disk-writes
+        // contract — `compile_and_run` is an explicit "test this code"
+        // intent, not a save. Tree gets rebuilt below via
+        // `rebuildParamTreeFromKernelIfChanged` (which is purely
+        // in-memory) so the agent sees the new params, but
+        // `manifest.json` stays byte-for-byte identical.
+        let result = await compileAndRun(source: source, persistManifest: false)
         if result.success {
             mcpLastError = nil
             // After every successful MCP compile_and_run, force the
@@ -531,11 +537,13 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // flagged this as the dominant friction across all three
             // harnesses (claude, gemini, codex) and both languages.
             //
-            // Conditions we mirror under:
-            //  - kernel reload succeeded (no point mirroring an empty
-            //    or stale `currentParamMetadata`)
-            //  - the saved bundle's manifest doesn't already declare
-            //    params (don't clobber someone's explicit metadata)
+            // We mirror unconditionally on a successful kernel reload
+            // (always-overwrite: `manifest.params` is a cache, not an
+            // override). The Publisher-driven AVC sync path is NOT
+            // used here — `compileAndRun` ran with `persistManifest:
+            // false`, and the explicit call below keeps the response
+            // payload (`manifest_params_populated`) honest even when
+            // the AVC sink isn't subscribed (e.g., headless MCP run).
             //
             // We re-load the bundle from disk first because
             // `pm.savePreset` returned a `Preset` (a thin descriptor),
@@ -543,12 +551,11 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // round-trip is cheap and avoids stale-cache risk.
             var manifestSyncedFromKernel = false
             if kernelReloaded,
-               let kernelMeta = currentParamMetadata,
-               !kernelMeta.isEmpty,
                let savedBundle = pm.loadBundle(for: preset) {
+                let kernelMeta = currentParamMetadata ?? []
                 let decls = kernelMeta.map { PresetManifest.ParamDecl(from: $0) }
                 do {
-                    manifestSyncedFromKernel = try pm.updateManifestParams(
+                    manifestSyncedFromKernel = try pm.syncManifestParamsFromKernel(
                         for: savedBundle,
                         params: decls
                     )
@@ -703,7 +710,13 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             var kernelReloaded = false
             var kernelError: String? = nil
             if !runSource.isEmpty {
-                let result = await compileAndRun(source: runSource)
+                // `persistManifest: true` so a fork whose `new_source`
+                // declares different params from the source bundle's
+                // copied manifest auto-rewrites `manifest.params` to
+                // match the new kernel metadata. Drives the routed
+                // commit through `manifestDriftCorrected` → AVC sink
+                // → `gc.recordSave`, same as `selectPreset`.
+                let result = await compileAndRun(source: runSource, persistManifest: true)
                 kernelReloaded = result.success
                 kernelError = result.success ? nil : result.error
                 if result.success {

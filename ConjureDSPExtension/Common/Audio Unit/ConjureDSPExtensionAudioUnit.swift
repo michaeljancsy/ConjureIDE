@@ -178,6 +178,19 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Fires after every script load with the new param metadata (or nil).
 	public let paramMetadataDidChange = PassthroughSubject<[ParamMetadata]?, Never>()
 
+	/// Fires when a script load detects drift between the manifest's
+	/// declared `params` block and the kernel's freshly-extracted
+	/// metadata, AFTER the manifest has been auto-rewritten on disk to
+	/// match the kernel. Carries the bundle root URL so the view layer
+	/// can route a `gc.recordSave([url], "Sync manifest.params from
+	/// kernel")` to capture the rewrite in the preset repo's git log.
+	///
+	/// The AU has no reference to `PresetGitCoordinator` — it lives at
+	/// the view layer — so this Publisher is the seam that lets the AU
+	/// stay decoupled from the git layer while keeping every preset
+	/// mutation visible in `git log`.
+	public let manifestDriftCorrected = PassthroughSubject<URL, Never>()
+
 	/// Fires each time render resources are allocated (on load and on DAW buffer/sample-rate changes).
 	/// Carries the new maximum frame count and sample rate so the UI can update its budget display.
 	public let renderConfigurationChanged = PassthroughSubject<(maxFrames: UInt32, sampleRate: Double), Never>()
@@ -316,6 +329,114 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		buildParameterTree()
 		paramNamesDidChange.send(nil)
 		paramMetadataDidChange.send(nil)
+	}
+
+	/// Auto-rewrite the active bundle's `manifest.params` from the
+	/// kernel's freshly-extracted metadata if (a) the active bundle is
+	/// writable and (b) the on-disk manifest differs from the kernel.
+	///
+	/// Called from `reloadScript` / `loadWasm` when the caller passes
+	/// `persistManifest: true`. Fires AFTER `readParamNames` so the
+	/// per-field drift warnings emitted by `validateManifestVsDSP` land
+	/// before the single summary `os_log.notice` here — a console scroll
+	/// reads "details, then conclusion."
+	///
+	/// **Compares disk to kernel, not in-memory tree to kernel.** The
+	/// in-memory `currentParamMetadata` is unreliable for this decision:
+	/// `readParamNames` populates it from kernel metadata in the
+	/// non-manifest-priority path, so by the time we get here, kernel
+	/// and `currentParamMetadata` already agree even when `manifest.json`
+	/// on disk hasn't been touched. Two real cases this catches that the
+	/// in-memory comparison would miss:
+	///
+	///  - **New preset save** (e.g., `onNew` Python path): the fresh
+	///    bundle's `manifest.json` ships with no `params` block;
+	///    `readParamNames` reads the template's `PARAMS` from kernel and
+	///    sets `currentParamMetadata`. Kernel == in-memory, but disk is
+	///    empty.
+	///  - **Cmd-S after `compile_and_run` drift**: an earlier
+	///    `compile_and_run` already cleared `manifestDeclaredMetadata`
+	///    and rebuilt the in-memory tree from kernel. The save's
+	///    reload re-reads the same kernel, so kernel == in-memory but
+	///    the on-disk manifest is still the pre-edit version.
+	///
+	/// `syncManifestParamsFromKernel` is itself idempotent (returns
+	/// false when the manifest already matches), so we always call it
+	/// and only emit `manifestDriftCorrected` / log the notice when it
+	/// actually wrote.
+	///
+	/// On a successful sync, fires `manifestDriftCorrected` carrying the
+	/// bundle root URL. The view layer subscribes and routes a
+	/// `gc.recordSave([url], …)` so the auto-rewrite appears in the
+	/// preset repo's git log alongside every other preset mutation —
+	/// see `AudioUnitViewController.manifestDriftCancellable`.
+	///
+	/// The factory `currentPreset` setter is gated by `isWritableFile`
+	/// here too; factory bundles ship from the appex's read-only
+	/// Resources, so the sync is always a no-op on that path. Leaving
+	/// the writability gate in place is load-bearing — not redundant
+	/// with the factory check — so a future "cleanup" that drops it
+	/// would let exported AUs (which also ship read-only) attempt a
+	/// write that fails at the OS level.
+	///
+	/// Not marked `@MainActor` because `reloadScript` / `loadWasm` (the
+	/// callers) aren't either — they're invoked from KVO setters and
+	/// non-isolated async contexts where the compiler can't prove main
+	/// isolation. All production callers ARE on main; the inner
+	/// `MainActor.assumeIsolated` traps loudly if that invariant ever
+	/// breaks (matches the pattern in `PresetManager.startBundleWatcher`).
+	private func performManifestSyncIfNeeded() {
+		MainActor.assumeIsolated {
+			let pm = presetManager
+			guard let preset = pm.currentPreset,
+			      let bundle = pm.loadBundle(for: preset),
+			      FileManager.default.isWritableFile(atPath: bundle.rootURL.path)
+			else { return }
+
+			// Read kernel-extracted metadata DIRECTLY (not via
+			// `currentParamMetadata`, which by this point already
+			// reflects kernel truth from `readParamNames` and would
+			// give us the same value as the manifest-priority guard
+			// always thinks the tree was built from).
+			let kernelMeta: [ParamMetadata] = {
+				guard let metaPtr = dsp_kernel_param_metadata_json(kernel) else { return [] }
+				let json = String(cString: metaPtr)
+				guard let data = json.data(using: .utf8),
+				      let decoded = try? JSONDecoder().decode([ParamMetadata].self, from: data)
+				else { return [] }
+				return decoded
+			}()
+
+			let decls = kernelMeta.map { PresetManifest.ParamDecl(from: $0) }
+			do {
+				let didWrite = try pm.syncManifestParamsFromKernel(for: bundle, params: decls)
+				if didWrite {
+					// Bring the in-memory tree along when manifest
+					// drift is detected. Idempotent — `applyManifestParams`
+					// already did the heavy lifting in the manifest-
+					// priority case; this just clears the priority flag
+					// so subsequent reads come from kernel.
+					_ = rebuildParamTreeFromKernelIfChanged()
+					pluginLog.notice("manifest.params auto-corrected from kernel: \(bundle.name, privacy: .public)")
+					// Force the running custom-UI webview to re-mount
+					// against the new schema. Without this, components
+					// that were resolved at element-mount time against
+					// the OLD param schema (e.g., `<cdp-knob param="…">`)
+					// stay bound to whatever indexes they captured;
+					// newly-added params render as unbound knobs.
+					// Same primitive the MCP `compile_and_run` /
+					// `duplicate_bundle` paths use; the file watcher
+					// can't help here because no `ui/` file changed.
+					NotificationCenter.default.post(name: .reloadCustomUI, object: nil)
+					// Sink is assumed live; uncommitted disk writes
+					// here would match the existing MCP `save_preset`
+					// gap.
+					manifestDriftCorrected.send(bundle.rootURL)
+				}
+			} catch {
+				pluginLog.error("manifest.params auto-sync failed for '\(bundle.name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+			}
+		}
 	}
 
 	/// Force a parameter-tree rebuild from the kernel's currently-extracted
@@ -1089,7 +1210,15 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// Hot-reload a Python DSP script from source code.
 	/// Writes the source to a temp file and calls dsp_kernel_load_script.
 	/// On success, benchmarks the process function and returns timing info.
-	public func reloadScript(source: String) -> (success: Bool, error: String?, processTimeMs: Double?, budgetMs: Double?) {
+	///
+	/// `persistManifest` controls whether a successful kernel load that
+	/// produces metadata differing from the active bundle's manifest
+	/// triggers an auto-rewrite of the manifest's `params` block (and a
+	/// `manifestDriftCorrected` Publisher emission). Defaults to false so
+	/// callers that haven't been audited (and the `compile_and_run` MCP
+	/// handler, which has a documented no-disk-writes contract) keep the
+	/// pre-existing read-only behavior.
+	public func reloadScript(source: String, persistManifest: Bool = false) -> (success: Bool, error: String?, processTimeMs: Double?, budgetMs: Double?) {
 		guard let pythonHome = self.pythonHome else {
 			return (false, "Python runtime not available", nil, nil)
 		}
@@ -1126,6 +1255,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			// (when present) overwrites afterward.
 			applyPresetStateDefaults()
 
+			if persistManifest {
+				performManifestSyncIfNeeded()
+			}
+
 			// Benchmark the process function
 			let benchmarkSecs = dsp_kernel_benchmark_process(kernel)
 			var processTimeMs: Double? = nil
@@ -1160,7 +1293,13 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	}
 
 	/// Load a pre-compiled WASM module into the DSP kernel.
-	public func loadWasm(bytes: Data) -> (success: Bool, error: String?, processTimeMs: Double?, budgetMs: Double?) {
+	///
+	/// `persistManifest` mirrors `reloadScript`'s flag: when true, a
+	/// kernel/manifest drift triggers an auto-rewrite of `manifest.params`
+	/// and a `manifestDriftCorrected` Publisher emission. Default false
+	/// keeps WASM cache restores and other unaudited entry points
+	/// read-only.
+	public func loadWasm(bytes: Data, persistManifest: Bool = false) -> (success: Bool, error: String?, processTimeMs: Double?, budgetMs: Double?) {
 		let success = bytes.withUnsafeBytes { rawBuffer -> Bool in
 			guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
 				return false
@@ -1172,6 +1311,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			pluginLog.info("WASM module loaded successfully")
 			SentryHelper.breadcrumb("Script loaded", category: "dsp", data: ["language": "rust", "wasmSize": bytes.count])
 			readParamNames()
+
+			if persistManifest {
+				performManifestSyncIfNeeded()
+			}
 
 			// Inject NAM model if the WASM module declares one
 			if let namError = injectNamModelIfNeeded() {
@@ -1356,13 +1499,13 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		return lines.joined(separator: "\n")
 	}
 
-	public func compileAndRun(source rawSource: String) async -> (success: Bool, error: String?, warning: String?, processTimeMs: Double?, budgetMs: Double?) {
+	public func compileAndRun(source rawSource: String, persistManifest: Bool = false) async -> (success: Bool, error: String?, warning: String?, processTimeMs: Double?, budgetMs: Double?) {
 		let source = Self.stripCodeFences(rawSource)
 		let language = ScriptLanguage.detect(from: source)
 
 		switch language {
 		case .python:
-			let result = reloadScript(source: source)
+			let result = reloadScript(source: source, persistManifest: persistManifest)
 			currentScriptLanguage = .python
 			currentWasmBytes = nil
 
@@ -1389,7 +1532,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			let depsHash = CrateInstallManager.readManifestHash()
 			let cache = WasmCache()
 			if let cachedWasm = cache.cachedWasm(for: source, depsHash: depsHash) {
-				let result = loadWasm(bytes: cachedWasm)
+				let result = loadWasm(bytes: cachedWasm, persistManifest: persistManifest)
 				if result.success {
 					currentScriptSource = source
 					currentScriptLanguage = .rust
@@ -1414,7 +1557,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			do {
 				let wasmBytes = try await compiler.compile(source: source)
 				cache.cache(wasm: wasmBytes, for: source, depsHash: depsHash)
-				let result = loadWasm(bytes: wasmBytes)
+				let result = loadWasm(bytes: wasmBytes, persistManifest: persistManifest)
 				if result.success {
 					currentScriptSource = source
 					currentScriptLanguage = .rust
@@ -1741,7 +1884,12 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		pm.setCurrentPreset(preset, source: source)
 		scriptSourceDidChange.send(ScriptSourceChange(source: source))
 
-		let result = await compileAndRun(source: source)
+		// `persistManifest: true` so a load against an externally-edited
+		// script (whose `PARAMS` / `params!()` no longer matches the
+		// cached manifest) auto-rewrites `manifest.params` once the
+		// kernel finishes compiling. Without this, the bug from the
+		// task's "drift sequence" stays stuck across loads.
+		let result = await compileAndRun(source: source, persistManifest: true)
 
 		if result.success {
 			// Sync DAW-facing currentPreset with KVO so the host updates its UI
