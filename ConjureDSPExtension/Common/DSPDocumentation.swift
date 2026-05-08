@@ -1045,6 +1045,38 @@ enum DSPDocumentation {
       </cdp-meter>
       ```
 
+      **When to roll your own `<canvas>` instead.** `<cdp-meter>` renders
+      as a PPM-style bar fill (rectangular track + clip-path) — there is
+      no built-in primitive for analog-style rotating-needle visualizers
+      (VU meters, gauges, dial faces). For those, hand-roll a `<canvas>`
+      and draw the needle yourself: subscribe to `ConjureDSP.audio.onFrame`
+      (or a vector telemetry slot) for the source value, then map it to a
+      rotation angle. **Resolve fill/stroke colors via
+      `getComputedStyle(probe).color` on a hidden element styled with
+      `color: CanvasText; background: Canvas;`** so the canvas tracks the
+      host theme — Canvas 2D cannot parse system color literals like
+      `'CanvasText'` and will silently paint black. Re-resolve on the
+      `themechange` event. Minimal needle math:
+
+      ```js
+      // Pivot at bottom-center, sweep ±42° around vertical
+      const ANG_MIN = -42 * Math.PI / 180;
+      const ANG_MAX =  42 * Math.PI / 180;
+      const t = (value - min) / (max - min);            // 0..1
+      const ang = -Math.PI / 2 + ANG_MIN + t * (ANG_MAX - ANG_MIN);
+      const nx = cx + Math.cos(ang) * radius;
+      const ny = cy + Math.sin(ang) * radius;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(nx, ny);
+      ctx.stroke();
+      ```
+
+      A one-pole visual smoother (`disp += (target - disp) * 0.35`) on
+      top of the DSP-side ballistics hides per-frame jitter without
+      lying about the meter's response. See the VU Saturator factory
+      preset for a worked example.
+
     - `<cdp-scope telemetry="env_curve">` — read-only oscilloscope that
       draws a vector telemetry slot (one float per audio frame, see
       "Vector telemetry" below) as a waveform. `draw="line"` (default),
