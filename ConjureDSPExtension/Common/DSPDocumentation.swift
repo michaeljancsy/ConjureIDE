@@ -23,7 +23,8 @@ enum DSPDocumentation {
 
     Available builders and their default ranges:
 
-    freq — 20-20000 Hz, log curve, default 1000
+    freq — 20-20000 Hz, log curve, default 1000 (audio-rate — filters, oscillators)
+    lfo_rate — 0.1-20 Hz, log curve, default 1 (sub-audio — tremolo / autopan / chorus rate)
     db — -60 to +12 dB, linear curve, default 0
     time_ms — 0.1-1000 ms, log curve, default 100
     mix — 0.0-1.0, linear, default 0.5
@@ -354,18 +355,99 @@ enum DSPDocumentation {
         for i in range(frame_count):
             mod = lfo.tick()          # tick every iteration, no condition
             for ch in range(len(inputs)):
-                outputs[ch][i] = inputs[ch][i] * mod
+                outputs[ch][i] = inputs[ch][i] * mod   # placeholder — see "Common applications"
       Rust:
         for f in 0..ctx.frames() {
-            let mod_val = unsafe { LFO.tick() };  // tick once per frame
+            let mod_val = unsafe { LFO.tick() };       // tick once per frame
             for c in 0..ctx.channels() {
-                ctx.set_output(c, f, ctx.input(c, f) * mod_val);
+                ctx.set_output(c, f, ctx.input(c, f) * mod_val);  // placeholder — see "Common applications"
             }
         }
 
     Channels-outer loop (tick on channel 0, use .value for others):
       Python: mod = lfo.tick() if ch == 0 else lfo.value
       Rust: let mod_val = if c == 0 { unsafe { LFO.tick() } } else { unsafe { LFO.value } };
+
+    ## Common applications
+
+    The pattern above shows where to call tick(), not what to do with the value.
+    `tick()` returns a bipolar [-1, 1] sine — multiplying audio by it directly is
+    ring modulation, not tremolo. Three common LFO applications:
+
+    ### Tremolo (amplitude modulation with depth control)
+
+    Map the bipolar LFO to a unipolar [0, 1] gain envelope, then blend toward
+    unity by (1 - depth) so depth=0 is bypass and depth=1 is full modulation.
+    Python: use `lfo.tick_n(frame_count)` to fill the whole buffer at once and
+    apply with `np.multiply(in, gain, out=out)` — looping per-sample in Python
+    is much slower.
+
+      Python:
+        lfo = _lfo.tick_n(ctx.frame_count)                       # bipolar [-1, 1] array
+        gain = (1.0 - depth) + depth * (lfo * 0.5 + 0.5)         # unipolar [0, 1] envelope
+        for ch in range(len(ctx.inputs)):
+            np.multiply(ctx.inputs[ch][:ctx.frame_count], gain,
+                        out=ctx.outputs[ch][:ctx.frame_count])
+      Rust:
+        for f in 0..ctx.frames() {
+            let mod_val = unsafe { LFO.tick() } as f32;
+            let gain = (1.0 - depth) + depth * (mod_val * 0.5 + 0.5);
+            for c in 0..ctx.channels() {
+                ctx.set_output(c, f, ctx.input(c, f) * gain);
+            }
+        }
+
+    Why not `output = input * lfo.tick()` directly? The bipolar sine flips polarity
+    twice per cycle, so the perceived amplitude rate is 2× the LFO rate, depth is
+    locked at 100%, and zero crossings produce phase flips. At audio rates it
+    becomes pure ring modulation (sum/difference sidebands).
+
+    ### Auto-pan (stereo gain split)
+
+    Bipolar LFO is the right shape here — positive values pan right (attenuate
+    left), negative pan left. `depth` (0–1) scales the swing. Stereo only.
+
+      Python:
+        lfo = _lfo.tick_n(ctx.frame_count)                       # bipolar [-1, 1] array
+        pan = lfo * depth
+        gain_l = 1.0 - np.maximum(pan, 0.0)
+        gain_r = 1.0 + np.minimum(pan, 0.0)
+        np.multiply(ctx.inputs[0][:ctx.frame_count], gain_l,
+                    out=ctx.outputs[0][:ctx.frame_count])
+        np.multiply(ctx.inputs[1][:ctx.frame_count], gain_r,
+                    out=ctx.outputs[1][:ctx.frame_count])
+      Rust:
+        for f in 0..ctx.frames() {
+            let mod_val = unsafe { LFO.tick() } as f32;
+            let pan = mod_val * depth;
+            let gain_l = 1.0 - pan.max(0.0);
+            let gain_r = 1.0 + pan.min(0.0);
+            ctx.set_output(0, f, ctx.input(0, f) * gain_l);
+            ctx.set_output(1, f, ctx.input(1, f) * gain_r);
+        }
+
+    ### Chorus / vibrato (delay-time modulation)
+
+    Use the bipolar LFO to wobble the read position of a DelayLine around a
+    base delay (chorus: ~10–25 ms base; vibrato: ~3–8 ms base, mix=1.0).
+    `depth_samples` controls how far the read head swings. Use `read_cubic` for
+    smoother pitch behavior on a moving read position. See get_docs("delays")
+    for the full DelayLine API.
+
+    Note: delay-line reads/writes are inherently sequential (write head must
+    advance one sample at a time), so this section keeps the per-sample loop
+    in both languages. For the Python idiom (manual numpy ring buffer), see
+    factory preset `chorus`.
+
+      Rust (sketch — DelayLine declared at module scope):
+        for f in 0..ctx.frames() {
+            let mod_val = unsafe { LFO.tick() };                 // bipolar [-1, 1]
+            let read_samples = base_delay_samples + mod_val * depth_samples;
+            let dry = ctx.input(0, f);
+            let wet = unsafe { DELAY.read_cubic(read_samples) };
+            unsafe { DELAY.write(dry); }
+            ctx.set_output(0, f, dry * (1.0 - mix) + wet * mix);
+        }
 
     ## Multi-voice LFO phase spread
 
@@ -1719,7 +1801,8 @@ enum DSPDocumentation {
 
     Available builders and their default ranges:
 
-    freq — 20-20000 Hz, log curve, default 1000
+    freq — 20-20000 Hz, log curve, default 1000 (audio-rate — filters, oscillators)
+    lfo_rate — 0.1-20 Hz, log curve, default 1 (sub-audio — tremolo / autopan / chorus rate)
     db — -60 to +12 dB, linear curve, default 0
     time_ms — 0.1-1000 ms, log curve, default 100
     mix — 0.0-1.0, linear, default 0.5
@@ -1761,7 +1844,8 @@ enum DSPDocumentation {
 
     Available builders and their default ranges:
 
-    freq — 20-20000 Hz, log curve, default 1000
+    freq — 20-20000 Hz, log curve, default 1000 (audio-rate — filters, oscillators)
+    lfo_rate — 0.1-20 Hz, log curve, default 1 (sub-audio — tremolo / autopan / chorus rate)
     db — -60 to +12 dB, linear curve, default 0
     time_ms — 0.1-1000 ms, log curve, default 100
     mix — 0.0-1.0, linear, default 0.5
