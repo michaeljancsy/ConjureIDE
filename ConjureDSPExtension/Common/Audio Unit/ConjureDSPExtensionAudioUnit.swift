@@ -782,6 +782,12 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 				SentryHelper.capture("Failed to load Python DSP script (no error details)", level: .error, category: "dsp.python")
 				scriptLoadFailure.send(ScriptLoadFailure(preset: nil, error: "Failed to load Python DSP script"))
 			}
+			// Make the failed source available to MCP / fullState too —
+			// otherwise `get_script` returns nil at boot and the agent
+			// can't help the user fix the broken default.
+			if let source = try? String(contentsOfFile: scriptPath, encoding: .utf8) {
+				currentScriptSource = source
+			}
 		}
 	}
 
@@ -1141,6 +1147,14 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			}
 			pluginLog.error("Failed to reload Python DSP script: \(errorMsg, privacy: .public)")
 			SentryHelper.capture("Failed to reload Python DSP script", level: .error, category: "dsp.python", extra: ["error": errorMsg])
+			// Update `currentScriptSource` even on failure so the editor,
+			// MCP `get_script`, and `fullState` save all reflect the script
+			// the user is trying to fix — not the previous, unrelated
+			// successful preset that's no longer running (the kernel is
+			// in passthrough now). Without this, the embedded Claude Code
+			// agent's `get_script` returns the previous preset and tries
+			// to "fix" code that wasn't broken.
+			currentScriptSource = source
 			return (false, errorMsg, nil, nil)
 		}
 	}
@@ -1384,6 +1398,12 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						currentParamNames = names
 						paramNamesDidChange.send(names)
 					}
+				} else {
+					// See `reloadScript` (Python) failure branch — track the
+					// in-flight source so MCP `get_script` and the editor
+					// reflect what the user is trying to fix.
+					currentScriptSource = source
+					currentScriptLanguage = .rust
 				}
 				return Self.wasmResultWithWarning(result)
 			}
@@ -1403,9 +1423,16 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 						currentParamNames = names
 						paramNamesDidChange.send(names)
 					}
+				} else {
+					currentScriptSource = source
+					currentScriptLanguage = .rust
 				}
 				return Self.wasmResultWithWarning(result)
 			} catch {
+				// rustc errored — still surface the source the user wrote
+				// so they can fix it via MCP / the editor.
+				currentScriptSource = source
+				currentScriptLanguage = .rust
 				return (false, error.localizedDescription, nil, nil, nil)
 			}
 		}
