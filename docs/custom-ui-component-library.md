@@ -75,9 +75,11 @@ edits diverge into per-instance state; reopening the project
 restores those edits.
 
 The script declares defaults at module level (Python `STATE = {…}`)
-or via `state_struct! { … } state!(State);` (Rust). The audio thread
-reads through `ctx.state` (a read-only mapping); writes only happen
-through this JS surface or the MCP `set_state` tool.
+or via `state!();` (Rust — see `get_docs("state")` for the
+raw-bytes accessor pattern). The audio thread reads through
+`ctx.state` (Python — a read-only mapping) or `cx.state_bytes()`
+(Rust — raw JSON content); writes only happen through this JS
+surface or the MCP `set_state` tool.
 
 ```js
 ConjureDSP.state.get(key)               // current value
@@ -96,7 +98,7 @@ ConjureDSP.state.resetAll()             // restore everything
 
 - `set` returns `false` when the resulting JSON would exceed
   `MAX_STATE_BYTES` (64 KiB default; presets can opt up to 1 MiB
-  via `state!(State, max_bytes = N)` in Rust). Existing buffer is
+  via `state!(max_bytes = N)` in Rust). Existing buffer is
   unchanged on rejection. Handle the boolean — silent drops are
   the worst-of-both-worlds.
 - `onChange` fires synchronously inside `set`, so a widget that
@@ -109,10 +111,11 @@ ConjureDSP.state.resetAll()             // restore everything
   moment of `set` to size-check — later mutations to the same
   object reference are NOT visible to the kernel. Pass a fresh
   object/array on every change.
-- Writing an undeclared key (one not in the script's `STATE` /
-  `state_struct!`) succeeds at the kernel level but emits a
+- Writing an undeclared key (one not in the script's Python
+  `STATE = {...}` defaults) succeeds at the kernel level but emits a
   one-time-per-key console warning so the author can spot the
-  typo. The validator catches these statically too.
+  typo. The validator catches these statically for Python; Rust
+  scripts that parse raw bytes themselves get no static check.
 
 ```html
 <!-- A 32-step sequencer grid driven entirely by state. -->

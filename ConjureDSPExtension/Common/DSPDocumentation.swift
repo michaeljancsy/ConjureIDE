@@ -673,36 +673,47 @@ enum DSPDocumentation {
 
     ## Rust author surface
 
-    Declare a state struct + the `state!()` declaration. The struct
-    must implement `Default` so new instances have well-defined values:
+    Declare the state buffer with `state!()`. The macro emits the
+    host-facing exports plus `cx.state_bytes()` (raw JSON content) and
+    `cx.state_generation()` (counter that bumps on every accepted
+    write). The script chooses how to parse the bytes — install a JSON
+    crate via the crate package manager, hand-roll a tiny parser for a
+    known shape, or use a fixed-layout binary format the script's UI
+    agrees to write.
 
     ```rust
     use conjuredsp::*;
     setup!();
-
-    state_struct! {
-        pub struct State {
-            pub slots: Vec<u8>,
-            pub selected: u32,
-            pub ir_path: Option<String>,
-        }
-    }
-    impl Default for State {
-        fn default() -> Self {
-            Self { slots: vec![0; 32], selected: 0, ir_path: None }
-        }
-    }
-
-    state!(State);
+    state!();
     // Optional: bump the cap (default 64 KiB). Clamped to 1 MiB.
-    // state!(State, max_bytes = 131_072);
+    // state!(max_bytes = 131_072);
 
-    #[no_mangle] pub extern "C" fn process(...) {
-        let cx = ctx(...);
-        let s: &State = cx.state();
-        // read-only view; same audio/UI boundary as Python
+    static mut CACHED_GEN: u64 = u64::MAX;
+    static mut SLOTS: [u8; 32] = [0; 32];
+
+    #[no_mangle] pub extern "C" fn process(
+        input: *const f32, output: *mut f32,
+        channel_count: i32, frame_count: i32, sample_rate: f32,
+    ) {
+        let cx = ctx(input, output, channel_count, frame_count, sample_rate);
+        unsafe {
+            let gen = cx.state_generation();
+            if gen != CACHED_GEN {
+                let bytes = cx.state_bytes();
+                // … parse bytes into SLOTS via your chosen parser …
+                CACHED_GEN = gen;
+            }
+        }
+        // … apply SLOTS to ctx.input / ctx.set_output …
     }
     ```
+
+    Why no auto-deserialized struct? Wiring `serde::Deserialize` into
+    the macro pulls `serde` + `serde_json` into the WASM build, which
+    aren't bundled in the script-side sysroot. The raw-bytes API keeps
+    the macro dependency-free; scripts that want serde can add it
+    through the same crate package manager that handles any other
+    dependency.
 
     ## JS surface — `ConjureDSP.state.*`
 
@@ -744,13 +755,14 @@ enum DSPDocumentation {
     + reinstalls them.
 
     New instances always boot from the script's defaults — `STATE = {…}`
-    in Python or `Default::default()` in Rust. The bundle ships
-    behaviour, the DAW project ships per-instance edits.
+    in Python; Rust scripts read raw bytes via `cx.state_bytes()` and
+    are responsible for their own default-when-empty handling. The
+    bundle ships behaviour, the DAW project ships per-instance edits.
 
     ## Size cap
 
     Default cap: **64 KiB**. Hard ceiling: **1 MiB**. Rust opt-in to
-    raise the per-script cap via `state!(State, max_bytes = N)`. Python
+    raise the per-script cap via `state!(max_bytes = N)`. Python
     presets use the default. The cap protects the DAW project from
     presets that unbounded-grow their state buffer (each
     fullStateForDocument copy lands in the project file).

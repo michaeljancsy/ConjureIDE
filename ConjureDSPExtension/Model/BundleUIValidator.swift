@@ -1200,7 +1200,7 @@ enum BundleUIValidator {
                     check: "state_keys_unparseable",
                     file: "ui/index.html",
                     message: "UI references ConjureDSP.state.* but the validator could not parse STATE keys from the script for verification.",
-                    suggestion: "If the keys are correct at runtime you can ignore this; otherwise simplify the STATE declaration so the static lint can read it (top-level `STATE = {\"key\": default, ...}` for Python, `state_struct! { pub struct State { pub key: T, ... } }` for Rust)."
+                    suggestion: "If the keys are correct at runtime you can ignore this; otherwise simplify the STATE declaration so the static lint can read it (top-level `STATE = {\"key\": default, ...}` for Python). Rust scripts use `state!()` and parse raw bytes themselves, so the validator can't introspect declared keys — runtime behavior is the source of truth."
                 )
             )
             return issues
@@ -1259,9 +1259,6 @@ enum BundleUIValidator {
     }
 
     private static func parsePythonStateKeys(source: String) -> [String]? {
-        // Find the literal `STATE = {` and scan to the matching `}`.
-        // Tolerant: ignores leading whitespace, type annotations, and
-        // trailing comments. Returns nil if we can't find the dict.
         guard let startRegex = try? NSRegularExpression(
             pattern: #"(?m)^\s*STATE\s*(?::[^=]+)?=\s*\{"#,
             options: []
@@ -1270,81 +1267,73 @@ enum BundleUIValidator {
         guard let match = startRegex.firstMatch(
             in: source, range: NSRange(location: 0, length: ns.length)
         ) else { return nil }
-        // Find the closing `}` by walking braces.
         let openIdx = match.range.location + match.range.length - 1  // points at `{`
+
+        var keys: [String] = []
         var depth = 1
         var i = openIdx + 1
+        var awaitingKey = true
+
         while i < ns.length && depth > 0 {
             let ch = ns.character(at: i)
-            if ch == 0x7B /* { */ { depth += 1 }
-            else if ch == 0x7D /* } */ { depth -= 1 }
+
+            // Skip line comments through end of line.
+            if ch == 0x23 /* # */ {
+                while i < ns.length && ns.character(at: i) != 0x0A { i += 1 }
+                continue
+            }
+
+            // Quoted string: capture as a key only if we're at top-level
+            // and awaiting one. Otherwise just skip past it (handles
+            // string values, including ones containing `{`/`}`/`[`/`]`).
+            if ch == 0x22 /* " */ || ch == 0x27 /* ' */ {
+                let quote = ch
+                let strStart = i + 1
+                var j = strStart
+                while j < ns.length {
+                    let c = ns.character(at: j)
+                    if c == 0x5C /* \ */ { j += 2; continue }
+                    if c == quote { break }
+                    j += 1
+                }
+                if depth == 1 && awaitingKey {
+                    let raw = ns.substring(with: NSRange(location: strStart, length: j - strStart))
+                    var k = j + 1
+                    while k < ns.length {
+                        let c = ns.character(at: k)
+                        if c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D { k += 1; continue }
+                        break
+                    }
+                    if k < ns.length && ns.character(at: k) == 0x3A /* : */ {
+                        keys.append(raw)
+                        awaitingKey = false
+                        i = k + 1
+                        continue
+                    }
+                }
+                i = j + 1
+                continue
+            }
+
+            switch ch {
+            case 0x7B /* { */, 0x5B /* [ */, 0x28 /* ( */:
+                depth += 1
+            case 0x7D /* } */, 0x5D /* ] */, 0x29 /* ) */:
+                depth -= 1
+            case 0x2C /* , */:
+                if depth == 1 { awaitingKey = true }
+            default:
+                break
+            }
             i += 1
         }
         guard depth == 0 else { return nil }
-        let body = ns.substring(with: NSRange(location: openIdx + 1, length: i - openIdx - 2))
-        // Pull `"key":` / `'key':` pairs out. Top-level only — nested
-        // dicts get filtered downstream by simple brace tracking.
-        guard let keyRegex = try? NSRegularExpression(
-            pattern: #"["']([^"']+)["']\s*:"#,
-            options: []
-        ) else { return nil }
-        let bns = body as NSString
-        let keyMatches = keyRegex.matches(in: body, range: NSRange(location: 0, length: bns.length))
-        var keys: [String] = []
-        var depthAt: [Int: Int] = [:]
-        var bd = 0
-        // Compute depth at every offset cheaply by walking once.
-        for j in 0..<bns.length {
-            let ch = bns.character(at: j)
-            if ch == 0x7B /* { */ { bd += 1 }
-            else if ch == 0x7D /* } */ { bd -= 1 }
-            depthAt[j] = bd
-        }
-        for m in keyMatches where m.numberOfRanges >= 2 {
-            // Only count keys at top-level (depth 0 at the offset).
-            let off = m.range.location
-            if (depthAt[off] ?? 0) != 0 { continue }
-            keys.append(bns.substring(with: m.range(at: 1)))
-        }
         return keys
     }
 
     private static func parseRustStateKeys(source: String) -> [String]? {
-        // Look for `state_struct! { pub struct <Name> { ... } }` and
-        // extract field names from the struct body. Field syntax is
-        // `name: Type,` — we capture the identifier before the colon.
-        guard let startRegex = try? NSRegularExpression(
-            pattern: #"state_struct!\s*\{[^{}]*?pub\s+struct\s+\w+\s*\{"#,
-            options: []
-        ) else { return nil }
-        let ns = source as NSString
-        guard let match = startRegex.firstMatch(
-            in: source, range: NSRange(location: 0, length: ns.length)
-        ) else { return nil }
-        let openIdx = match.range.location + match.range.length - 1
-        var depth = 1
-        var i = openIdx + 1
-        while i < ns.length && depth > 0 {
-            let ch = ns.character(at: i)
-            if ch == 0x7B /* { */ { depth += 1 }
-            else if ch == 0x7D /* } */ { depth -= 1 }
-            i += 1
-        }
-        guard depth == 0 else { return nil }
-        let body = ns.substring(with: NSRange(location: openIdx + 1, length: i - openIdx - 2))
-        // `pub? name: Type,` — the `pub` is optional in older / inner
-        // syntax variants; tolerate either.
-        guard let fieldRegex = try? NSRegularExpression(
-            pattern: #"(?:pub\s+)?(\w+)\s*:"#,
-            options: []
-        ) else { return nil }
-        let bns = body as NSString
-        let fieldMatches = fieldRegex.matches(in: body, range: NSRange(location: 0, length: bns.length))
-        var keys: [String] = []
-        for m in fieldMatches where m.numberOfRanges >= 2 {
-            keys.append(bns.substring(with: m.range(at: 1)))
-        }
-        return keys
+        _ = source
+        return nil
     }
 
     /// Every `<cdp-scope telemetry="X">` reference must resolve to a slot

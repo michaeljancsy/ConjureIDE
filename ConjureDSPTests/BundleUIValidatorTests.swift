@@ -1360,4 +1360,47 @@ struct BundleUIValidatorTests {
         #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
                 "both quote styles must resolve declared state keys; issues: \(report.issues)")
     }
+
+    /// Bug-report shape: STATE dict with list values + a scalar value.
+    /// The Python parser must extract top-level keys without choking on
+    /// list / dict literals in the value position, and must not emit
+    /// `state_keys_unparseable` for this textbook shape.
+    @Test func listAndScalarStateValuesResolve() throws {
+        let scriptBody = """
+        STATE = {
+            "snap_cutoff":    [1000.0, 1000.0, 1000.0, 1000.0],
+            "snap_resonance": [0.707,  0.707,  0.707,  0.707],
+            "active":         0,
+        }
+
+        def process(ctx):
+            pass
+        """
+        let ui = """
+        <!doctype html><html><body>
+        <cdp-slider param="cutoff"></cdp-slider>
+        <script>
+          ConjureDSP.ready(() => {
+            const c = ConjureDSP.state.get('snap_cutoff') || [];
+            const r = ConjureDSP.state.get('snap_resonance') || [];
+            const a = ConjureDSP.state.get('active');
+            ConjureDSP.state.set('snap_cutoff', c);
+            ConjureDSP.state.set('snap_resonance', r);
+            ConjureDSP.state.set('active', a);
+          });
+        </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(
+            manifest: baselineManifest,
+            uiHTML: ui,
+            entryScriptName: "process.py",
+            entryScriptBody: scriptBody
+        )
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "state_keys_unparseable" },
+                "list/dict-valued STATE keys must parse cleanly; issues: \(report.issues)")
+        #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
+                "all referenced keys are declared and must resolve; issues: \(report.issues)")
+    }
 }
