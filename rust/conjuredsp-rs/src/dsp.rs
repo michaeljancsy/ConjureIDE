@@ -60,6 +60,22 @@ pub fn crossfade(dry: f32, wet: f32, mix: f32) -> f32 {
     dry * (1.0 - mix) + wet * mix
 }
 
+/// ConjureDSP house calibration: 0 VU = -18 dBFS (EBU R68).
+///
+/// Use this constant when scaling RMS or peak detectors to a VU-style
+/// reference level so all presets agree on what "0 VU" means.
+pub const VU_REF_DBFS: f64 = -18.0;
+
+/// Convert a dBFS sample/RMS level to VU dB under the ConjureDSP
+/// house calibration (0 VU = -18 dBFS, EBU R68).
+///
+/// `dbfs_to_vu(-18.0) == 0.0`. Above-reference levels map to positive
+/// VU dB; below-reference levels map to negative VU dB.
+#[inline]
+pub fn dbfs_to_vu(dbfs: f64) -> f64 {
+    dbfs - VU_REF_DBFS
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -201,5 +217,28 @@ mod tests {
     #[test]
     fn test_crossfade_mix_half() {
         assert!(approx_eq_f32(crossfade(1.0, 0.5, 0.5), 0.75, 1e-6));
+    }
+
+    // VU calibration tests (0 VU = -18 dBFS, EBU R68)
+    #[test]
+    fn test_vu_ref_dbfs_constant() {
+        assert!(approx_eq(VU_REF_DBFS, -18.0, 1e-12));
+    }
+
+    #[test]
+    fn test_dbfs_to_vu_at_reference() {
+        assert!(approx_eq(dbfs_to_vu(-18.0), 0.0, 1e-9));
+    }
+
+    #[test]
+    fn test_dbfs_to_vu_full_scale() {
+        // 0 dBFS is +18 VU under the EBU R68 calibration.
+        assert!(approx_eq(dbfs_to_vu(0.0), 18.0, 1e-9));
+    }
+
+    #[test]
+    fn test_dbfs_to_vu_below_reference() {
+        // -24 dBFS = -6 VU
+        assert!(approx_eq(dbfs_to_vu(-24.0), -6.0, 1e-9));
     }
 }

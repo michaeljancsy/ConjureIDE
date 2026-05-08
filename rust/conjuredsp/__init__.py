@@ -27,8 +27,10 @@ from .params import choice, db, freq, integer, lfo_rate, mix, param, pct, ratio,
 
 # DSP utilities
 from .dsp import (
+    VU_REF_DBFS,
     crossfade,
     db_to_gain,
+    dbfs_to_vu,
     equal_power_crossfade,
     freq_to_period,
     gain_to_db,
@@ -80,6 +82,8 @@ __all__ = [
     "equal_power_crossfade",
     "soft_clip",
     "lerp",
+    "VU_REF_DBFS",
+    "dbfs_to_vu",
     # Building blocks
     "DelayLine",
     "Biquad",

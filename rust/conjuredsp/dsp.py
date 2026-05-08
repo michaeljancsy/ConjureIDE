@@ -100,3 +100,19 @@ def soft_clip(x: float, drive: float = 1.0) -> float:
 def lerp(a: float, b: float, t: float) -> float:
     """Linear interpolation between a and b. t=0 returns a, t=1 returns b."""
     return a + (b - a) * t
+
+
+# ConjureDSP house calibration: 0 VU = -18 dBFS (EBU R68).
+# Use this constant when scaling RMS or peak detectors to a VU-style
+# reference level so all presets agree on what "0 VU" means.
+VU_REF_DBFS: float = -18.0
+
+
+def dbfs_to_vu(dbfs: float) -> float:
+    """Convert a dBFS sample/RMS level to VU dB under the ConjureDSP
+    house calibration (0 VU = -18 dBFS, EBU R68).
+
+    ``dbfs_to_vu(-18.0) == 0.0``. Above-reference levels map to positive
+    VU dB; below-reference levels map to negative VU dB.
+    """
+    return dbfs - VU_REF_DBFS
