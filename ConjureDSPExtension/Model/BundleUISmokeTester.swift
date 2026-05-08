@@ -1111,6 +1111,19 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             var layoutFlags = [];
             var minLeft = Infinity, minTop = Infinity, maxRight = -Infinity, maxBottom = -Infinity;
             var coverage = 0;
+            // Clip a rect to the manifest's declared canvas so an
+            // off-screen control can't inflate `coverage` (which would
+            // suppress 'sparse'/'clustered' advisories) or push the
+            // bbox out into space the user never sees.
+            function clippedArea(r) {
+                var l = Math.max(0, r.left);
+                var t = Math.max(0, r.top);
+                var rt = Math.min(manifestW, r.right);
+                var b = Math.min(manifestH, r.bottom);
+                var w = Math.max(0, rt - l);
+                var h = Math.max(0, b - t);
+                return w * h;
+            }
             for (var i = 0; i < nodes.length; i++) {
                 var el = nodes[i];
                 var r = el.getBoundingClientRect();
@@ -1123,14 +1136,26 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                     height: r.height
                 });
                 if (r.width > 0 && r.height > 0) {
-                    coverage += r.width * r.height;
-                    if (r.left < minLeft) minLeft = r.left;
-                    if (r.top < minTop) minTop = r.top;
-                    if (r.right > maxRight) maxRight = r.right;
-                    if (r.bottom > maxBottom) maxBottom = r.bottom;
-                    interactiveRects.push({
-                        left: r.left, top: r.top, right: r.right, bottom: r.bottom
-                    });
+                    var visible = clippedArea(r);
+                    if (visible > 0) {
+                        coverage += visible;
+                        // bbox is computed from the clipped corners so
+                        // controls extending past the manifest edge
+                        // don't blow the bbox-area suppression up past
+                        // 1.0 against the canvas it was supposed to fit
+                        // inside.
+                        var cl = Math.max(0, r.left);
+                        var ct = Math.max(0, r.top);
+                        var cr = Math.min(manifestW, r.right);
+                        var cb = Math.min(manifestH, r.bottom);
+                        if (cl < minLeft) minLeft = cl;
+                        if (ct < minTop) minTop = ct;
+                        if (cr > maxRight) maxRight = cr;
+                        if (cb > maxBottom) maxBottom = cb;
+                        interactiveRects.push({
+                            left: r.left, top: r.top, right: r.right, bottom: r.bottom
+                        });
+                    }
                 }
             }
             var sliders = document.querySelectorAll('cdp-slider');
@@ -1190,15 +1215,22 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                         left: cvRect.left, top: cvRect.top,
                         right: cvRect.right, bottom: cvRect.bottom
                     });
-                    canvasArea += cvRect.width * cvRect.height;
+                    // Clip to manifest bounds so a canvas that
+                    // overflows or sits partially off-canvas can't
+                    // claim more area than the visible surface — the
+                    // canvasFillRatio check that suppresses 'sparse' /
+                    // 'clustered' should reflect what the user
+                    // actually sees, not the full DOM rect.
+                    canvasArea += clippedArea(cvRect);
                 }
             }
             var cellCoverage = [];
             // Per-cell canvas coverage runs in lockstep with the
             // interactive-control grid so we can ask "is this 'empty'
             // cell actually covered by a canvas?" before flagging
-            // empty_region.
-            var canvasCellCoverage = [];
+            // empty_region. Local to the probe — only the final
+            // empty_region flag is surfaced to Swift; the per-cell
+            // canvas grid is consumed inline below.
             if (manifestW >= 100 && manifestH >= 100) {
                 var COLS = 3, ROWS = 3;
                 var cellW = manifestW / COLS;
@@ -1237,11 +1269,6 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                     flat.slice(3, 6),
                     flat.slice(6, 9)
                 ];
-                canvasCellCoverage = [
-                    cvFlat.slice(0, 3),
-                    cvFlat.slice(3, 6),
-                    cvFlat.slice(6, 9)
-                ];
                 // A cell counts as "empty" only when neither interactive
                 // controls NOR a canvas meaningfully cover it. ≥ 0.30
                 // canvas coverage means the user is looking at a
@@ -1267,7 +1294,6 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                 bboxW: bboxW,
                 bboxH: bboxH,
                 cellCoverage: cellCoverage,
-                canvasCellCoverage: canvasCellCoverage,
                 layoutFlags: layoutFlags,
                 canvasIssues: canvasIssues
             });

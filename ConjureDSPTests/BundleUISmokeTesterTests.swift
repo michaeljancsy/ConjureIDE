@@ -988,4 +988,122 @@ struct BundleUISmokeTesterTests {
         #expect(advisoryFlags.contains("empty_region"),
                 "empty_region must still fire when the empty bottom is genuinely empty (no canvas); got \(advisoryFlags)")
     }
+
+    /// A canvas positioned mostly off the manifest's declared canvas
+    /// must not count toward `canvasArea` — otherwise authors could
+    /// accidentally (or intentionally) suppress `sparse`/`clustered`
+    /// advisories by parking a giant canvas at a negative offset where
+    /// the user can't see it. Pins the clip-to-manifest fix from the
+    /// Seer review.
+    @Test @MainActor func offScreenCanvasDoesNotSuppressSparse() async throws {
+        // 600x400 manifest. Tiny corner toggle — would normally trigger
+        // `sparse` because coverage is < 0.20. A big <canvas> is
+        // present, but it's positioned at left:-3000, top:-3000 so the
+        // visible portion clipped to the manifest is zero. After the
+        // fix, `canvasArea` should be ~0 and `sparse` should still
+        // fire.
+        let manifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.py",
+          "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 600, "height": 400, "fps": 30, "audioFrames": false
+          }
+        }
+        """
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <div style="position:absolute;left:0;top:0">
+            <cdp-toggle param="cutoff" style="width:32px;height:18px"></cdp-toggle>
+          </div>
+          <canvas id="hidden" style="position:absolute;left:-3000px;top:-3000px;width:1200px;height:1200px"></canvas>
+          <script>
+            var cv = document.getElementById('hidden');
+            cv.width = 1200;
+            cv.height = 1200;
+          </script>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: manifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff"],
+            hostParameterCount: 1,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        let advisoryFlags = report.layoutAdvisory?.flags ?? []
+        #expect(advisoryFlags.contains("sparse"),
+                "sparse must still fire when a giant canvas is parked off-screen — clip-to-manifest should reduce its area to zero; got \(advisoryFlags)")
+    }
+
+    /// A canvas that hangs off the right edge of the manifest counts
+    /// only for the visible portion. Pin: a 1000pt-wide canvas on a
+    /// 600pt-wide manifest contributes 600pt of canvas area (clipped),
+    /// not 1000pt. Verifies the partial-clip path of `clippedArea`.
+    @Test @MainActor func partiallyOnScreenCanvasContributesClippedAreaOnly() async throws {
+        // 600x400 manifest. The canvas extends from x=400 to x=1400 —
+        // visible from 400→600 (200pt). With a 200pt-wide canvas at
+        // y=100→400 (300pt high) the visible area is 200×300 = 60_000.
+        // canvasFillRatio = 60_000 / (600×400 = 240_000) = 0.25, which
+        // is ≥ 0.20 → canvasOccupied → suppresses sparse. If the JS
+        // had used the raw 1000×300 = 300_000 area, the ratio would be
+        // 1.25 — same outcome but on accidentally-inflated math.
+        // Counter-test: shift the canvas further right so the visible
+        // chunk drops below 20% and `sparse` fires.
+        let manifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.py",
+          "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 600, "height": 400, "fps": 30, "audioFrames": false
+          }
+        }
+        """
+        // Visible chunk: x=560→600 (40pt wide), y=100→400 (300pt tall)
+        // → 40 × 300 = 12_000 / 240_000 = 0.05 < 0.20, NOT enough to
+        // suppress. With unclipped math the canvas would be 1000×300 =
+        // 300_000 / 240_000 = 1.25 — would suppress sparse and the
+        // advisory would silently disappear.
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <div style="position:absolute;left:0;top:0">
+            <cdp-toggle param="cutoff" style="width:32px;height:18px"></cdp-toggle>
+          </div>
+          <canvas id="overflow" style="position:absolute;left:560px;top:100px;width:1000px;height:300px"></canvas>
+          <script>
+            var cv = document.getElementById('overflow');
+            cv.width = 1000;
+            cv.height = 300;
+          </script>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: manifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff"],
+            hostParameterCount: 1,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        let advisoryFlags = report.layoutAdvisory?.flags ?? []
+        #expect(advisoryFlags.contains("sparse"),
+                "sparse must fire when the on-screen slice of a partially-overflowing canvas is < 20% of the manifest; got \(advisoryFlags)")
+    }
 }
