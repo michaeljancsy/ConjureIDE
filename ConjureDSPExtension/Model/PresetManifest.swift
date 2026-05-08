@@ -189,6 +189,56 @@ extension PresetManifest {
     var audioFramesEnabled: Bool {
         ui?.audioFrames ?? false
     }
+
+    /// Default `ui` block emitted by every scaffold path (fresh bundle
+    /// creation in `PresetManager.savePreset` AND the existing-bundle
+    /// branch when the caller upgrades to scaffold_ui=true). Centralized
+    /// so the two sites stay in sync — drift between them is what
+    /// produced the "ui block missing on re-save" failure mode in the
+    /// 2026-05-08 /try-it sweep.
+    static let defaultScaffoldUI = UI(
+        entryHTML: "ui/index.html",
+        width: 520,
+        height: 260,
+        fps: 30,
+        audioFrames: true
+    )
+
+    /// Pure rewrite applied to an existing manifest before re-saving a
+    /// user bundle's entry script. Owns two invariants the
+    /// `bundleExists` branch of `PresetManager.savePreset` previously
+    /// got wrong:
+    ///
+    /// 1. **`params`/`_paramsNote` are cleared.** They're a kernel-
+    ///    derived cache — the new `source` may declare entirely
+    ///    different params (or none), and the next compile-and-sync
+    ///    will repopulate accurately. Preserving the stale block let
+    ///    the MCP `save_preset` handler's `applyManifestParams` pin
+    ///    the old metadata, which then made the manifest-priority
+    ///    guard in `readParamNames` skip the kernel's freshly-
+    ///    extracted metadata, which made `syncManifestParamsFromKernel`
+    ///    write the OLD params straight back to disk. (Failure #2 in
+    ///    the 2026-05-08 /try-it sweep — `Sidechain Ducker` re-saved
+    ///    in Rust kept Python's threshold/ratio defaults.)
+    ///
+    /// 2. **A `ui` block is added when `scaffoldUI && self.ui == nil`.**
+    ///    The previous behavior dropped a starter `ui/index.html` on
+    ///    disk but left the manifest unchanged, producing an orphan
+    ///    that `BundleUIValidator` flagged on the next write — the
+    ///    agent had to hand-author the `ui` block. (Failures #1 / #4
+    ///    in the same sweep.)
+    ///
+    /// Returns a copy. Caller decides whether the rewrite materially
+    /// differs from the input and skips the disk write when not.
+    func applyingSaveRewrites(scaffoldUI: Bool) -> PresetManifest {
+        var copy = self
+        copy.params = nil
+        copy.paramsNote = nil
+        if scaffoldUI, copy.ui == nil {
+            copy.ui = Self.defaultScaffoldUI
+        }
+        return copy
+    }
 }
 
 // MARK: - Encoding / Decoding helpers

@@ -248,13 +248,7 @@ extension PresetBundle {
             schemaVersion: PresetManifest.currentSchemaVersion,
             entry: entry,
             language: language.rawValue,
-            ui: includeUI ? PresetManifest.UI(
-                entryHTML: "ui/index.html",
-                width: 520,
-                height: 260,
-                fps: 30,
-                audioFrames: true
-            ) : nil,
+            ui: includeUI ? PresetManifest.defaultScaffoldUI : nil,
             meta: nil
         )
     }
