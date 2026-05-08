@@ -1274,6 +1274,53 @@ enum DSPDocumentation {
     Pass `{ fft: true }` as a second arg to opt in to FFT (heavier
     payload; default payload is ~80 bytes).
 
+    ### `frame.fftIn` / `frame.fftOut` shape
+
+    Bin-to-frequency conversion (use `frame.sampleRate`, not a hardcoded
+    48000 — the host can run at 44.1k / 96k / etc.):
+
+    ```js
+    ConjureDSP.audio.onFrame(frame => {
+        if (!frame.fftOut) return;             // FFT only present when opts.fft = true
+        const N = frame.fftOut.length * 2;     // FFT size (halfN bins published)
+        for (let bin = 1; bin < frame.fftOut.length; bin++) {
+            const hz  = bin * frame.sampleRate / N;
+            const dB  = frame.fftOut[bin];     // already in dB, range [-120, 0]
+            // …plot or aggregate…
+        }
+    }, { fft: true });
+    ```
+
+    Spec (matches `AudioCaptureManager.computeFFT`):
+
+    - **Format:** real-only `Float32` array of **power dB**, computed as
+      `10 * log10(|X[k]|² / N²)`. Already in dB — do **not** take
+      `20*log10` again.
+    - **Range:** clamped to **[-120.0, 0.0]** dB. -120 is silence; 0 is
+      a full-scale unit-amplitude sinusoid hitting one bin exactly.
+    - **Length:** `fftSize / 2` floats (default fftSize = 2048 → **1024
+      bins**). Recover `N` as `frame.fftOut.length * 2`.
+    - **Window:** Hann, normalized via `vDSP_HANN_NORM` (Accelerate's
+      energy-preserving normalization).
+    - **Hop:** 50% (`fftSize / 2` samples). FFT bins only ride along on
+      ticks that produced a new column, so `frame.fftIn` / `frame.fftOut`
+      are `undefined` on most ticks (CADisplayLink fires faster than
+      hops complete) — gate on `if (!frame.fftOut) return;`.
+    - **Bin → Hz:** `freq_hz = bin * frame.sampleRate / N` for bins
+      `1..N/2 - 1`. Bin spacing is `sampleRate / N` (≈ 23.4 Hz at 48 kHz,
+      `N = 2048`).
+    - **DC and Nyquist:** vDSP's real-FFT packing folds **both** DC (bin
+      0) and Nyquist (bin N/2) into `bins[0]` as
+      `DC² + Nyquist²` — the array does not contain a separate Nyquist
+      bin, and `bins[0]` is not pure DC. Skip `bin = 0` for any
+      bin → frequency mapping that needs to be precise.
+    - **Channel mix:** mono — input/output ring buffers feed the FFT
+      from channel 0 only (no L/R split).
+
+    Both `fftIn` and `fftOut` use the identical pipeline — same window,
+    scale, clamp, and dB conversion — so per-bin subtraction
+    (`fftOut[i] - fftIn[i]`) yields a meaningful dB delta.
+
     ## DSP→UI telemetry channel
 
     For meters / visualizers that need to show **internal DSP state**
