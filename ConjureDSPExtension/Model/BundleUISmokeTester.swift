@@ -229,6 +229,33 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         }
     }
 
+    /// Soft layout observations grouped together so they don't read as
+    /// hard warnings at `status: pass`. The numeric ratios + per-cell
+    /// coverage are still useful diagnostics for an agent that cares,
+    /// but moving them off the top level keeps a clean pass response
+    /// from carrying items shaped like problems. `flags` captures the
+    /// soft heuristics (`sparse`, `clustered`, `empty_region`) — hard
+    /// runtime issues like canvas zero-buffer surface separately
+    /// through `canvas_issues`.
+    ///
+    /// Populated only when `ready` fired AND there's actual layout data
+    /// to summarize (i.e. at least one interactive control was measured
+    /// on a canvas big enough for the heuristics to mean anything).
+    /// Absent otherwise.
+    struct LayoutAdvisory: Encodable, Equatable {
+        let coverageRatio: Double
+        let bboxRatio: Double
+        let cellCoverage: [[Double]]
+        let flags: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case coverageRatio = "coverage_ratio"
+            case bboxRatio = "bbox_ratio"
+            case cellCoverage = "cell_coverage"
+            case flags
+        }
+    }
+
     struct Report: Encodable {
         let status: ReportStatus
         let readyFired: Bool
@@ -242,10 +269,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         let lowContrastTexts: [TextContrastIssue]
         let stateProbe: StateProbeResult?
         let smallControls: [SmallControl]
-        let coverageRatio: Double
-        let bboxRatio: Double
-        let layoutFlags: [String]
-        let cellCoverage: [[Double]]
+        let layoutAdvisory: LayoutAdvisory?
         let canvasIssues: [CanvasIssue]
 
         enum CodingKeys: String, CodingKey {
@@ -261,10 +285,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             case lowContrastTexts = "low_contrast_texts"
             case stateProbe = "state_probe"
             case smallControls = "small_controls"
-            case coverageRatio = "coverage_ratio"
-            case bboxRatio = "bbox_ratio"
-            case layoutFlags = "layout_flags"
-            case cellCoverage = "cell_coverage"
+            case layoutAdvisory = "layout_advisory"
             case canvasIssues = "canvas_issues"
         }
     }
@@ -595,18 +616,27 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                         detail: s["detail"] as? String
                     ))
                 }
-                let canvasArea = Double(declaredWidth) * Double(declaredHeight)
-                if canvasArea > 0 {
+                let canvasAreaPx = Double(declaredWidth) * Double(declaredHeight)
+                if canvasAreaPx > 0 {
                     let coverage = (obj["coverage"] as? Double) ?? 0
                     let bboxW = (obj["bboxW"] as? Double) ?? 0
                     let bboxH = (obj["bboxH"] as? Double) ?? 0
-                    coverageRatio = (coverage / canvasArea * 1000).rounded() / 1000
-                    bboxRatio = (bboxW * bboxH / canvasArea * 1000).rounded() / 1000
+                    coverageRatio = (coverage / canvasAreaPx * 1000).rounded() / 1000
+                    bboxRatio = (bboxW * bboxH / canvasAreaPx * 1000).rounded() / 1000
+                    // If the UI dedicates a meaningful chunk of its
+                    // declared canvas to a `<canvas>` element (scope,
+                    // spectrum, grain timeline, etc.), treat that area
+                    // as legitimately filled rather than an empty void.
+                    // The smoke tester never feeds audio, so those
+                    // canvases ARE empty in this run — but that's
+                    // expected, not a layout flaw.
+                    let canvasFillRatio = ((obj["canvasArea"] as? Double) ?? 0) / canvasAreaPx
+                    let canvasOccupied = canvasFillRatio >= 0.20
                     let hasInteractive = !controls.isEmpty
-                    if hasInteractive && coverageRatio < 0.20 {
+                    if hasInteractive && coverageRatio < 0.20 && !canvasOccupied {
                         layoutFlags.append("sparse")
                     }
-                    if hasInteractive && bboxRatio < 0.40 {
+                    if hasInteractive && bboxRatio < 0.40 && !canvasOccupied {
                         layoutFlags.append("clustered")
                     }
                 }
@@ -727,6 +757,28 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             status = .pass
         }
 
+        // Roll the soft layout numbers + flags into a separate
+        // advisory block. Empty advisory is omitted entirely so a
+        // `status: pass` response doesn't carry items shaped like
+        // problems. The advisory is populated whenever we have any
+        // soft signal worth surfacing — non-zero coverage / bbox
+        // ratios, a cell-coverage grid, or any advisory flag.
+        let layoutAdvisory: LayoutAdvisory?
+        let hasAdvisorySignal = coverageRatio > 0
+            || bboxRatio > 0
+            || !cellCoverage.isEmpty
+            || !layoutFlags.isEmpty
+        if hasAdvisorySignal {
+            layoutAdvisory = LayoutAdvisory(
+                coverageRatio: coverageRatio,
+                bboxRatio: bboxRatio,
+                cellCoverage: cellCoverage,
+                flags: layoutFlags
+            )
+        } else {
+            layoutAdvisory = nil
+        }
+
         return Report(
             status: status,
             readyFired: readyFired,
@@ -740,10 +792,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
             lowContrastTexts: lowContrastTexts,
             stateProbe: stateProbe,
             smallControls: smallControls,
-            coverageRatio: coverageRatio,
-            bboxRatio: bboxRatio,
-            layoutFlags: layoutFlags,
-            cellCoverage: cellCoverage,
+            layoutAdvisory: layoutAdvisory,
             canvasIssues: canvasIssues
         )
     }
@@ -1105,6 +1154,8 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                 }
             }
             var canvasIssues = [];
+            var canvasRects = [];   // visible canvases with non-zero layout, used for advisory suppression
+            var canvasArea = 0;     // total canvas layout area, intersected loosely with manifest
             var canvases = document.querySelectorAll('canvas');
             for (var ci = 0; ci < canvases.length; ci++) {
                 var cv = canvases[ci];
@@ -1128,16 +1179,32 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                         hint: 'Canvas drawing buffer is the HTML default 300\\u00d7150 but layout is different. Drawing will be stretched. Set cv.width = rect.width * devicePixelRatio (and likewise for height).'
                     });
                 }
-            }
-            if (canvasIssues.some(function (c) { return c.reason === 'zero_buffer'; })) {
-                layoutFlags.push('canvas_zero_buffer');
+                // Canvases with usable buffers are eligible for advisory
+                // suppression — many UIs deliberately allocate a large
+                // canvas (oscilloscope, spectrum, grain timeline) that
+                // only paints during audio playback. The smoke tester
+                // never feeds audio, so the canvas is legitimately
+                // empty in this run, but the area is NOT a layout flaw.
+                if (bufW > 0 && bufH > 0) {
+                    canvasRects.push({
+                        left: cvRect.left, top: cvRect.top,
+                        right: cvRect.right, bottom: cvRect.bottom
+                    });
+                    canvasArea += cvRect.width * cvRect.height;
+                }
             }
             var cellCoverage = [];
+            // Per-cell canvas coverage runs in lockstep with the
+            // interactive-control grid so we can ask "is this 'empty'
+            // cell actually covered by a canvas?" before flagging
+            // empty_region.
+            var canvasCellCoverage = [];
             if (manifestW >= 100 && manifestH >= 100) {
                 var COLS = 3, ROWS = 3;
                 var cellW = manifestW / COLS;
                 var cellH = manifestH / ROWS;
                 var cells = new Array(ROWS * COLS).fill(0);
+                var cvCells = new Array(ROWS * COLS).fill(0);
                 for (var ri = 0; ri < interactiveRects.length; ri++) {
                     var rect = interactiveRects[ri];
                     for (var cy = 0; cy < ROWS; cy++) {
@@ -1150,14 +1217,40 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                         }
                     }
                 }
+                for (var cri = 0; cri < canvasRects.length; cri++) {
+                    var crect = canvasRects[cri];
+                    for (var ccy = 0; ccy < ROWS; ccy++) {
+                        for (var ccx = 0; ccx < COLS; ccx++) {
+                            var ccellL = ccx * cellW, ccellT = ccy * cellH;
+                            var ccellR = ccellL + cellW, ccellB = ccellT + cellH;
+                            var cox = Math.max(0, Math.min(crect.right, ccellR) - Math.max(crect.left, ccellL));
+                            var coy = Math.max(0, Math.min(crect.bottom, ccellB) - Math.max(crect.top, ccellT));
+                            cvCells[ccy * COLS + ccx] += cox * coy;
+                        }
+                    }
+                }
                 var cellArea = cellW * cellH;
                 var flat = cells.map(function (a) { return a / cellArea; });
+                var cvFlat = cvCells.map(function (a) { return a / cellArea; });
                 cellCoverage = [
                     flat.slice(0, 3),
                     flat.slice(3, 6),
                     flat.slice(6, 9)
                 ];
-                var sparseCount = flat.filter(function (c) { return c < 0.05; }).length;
+                canvasCellCoverage = [
+                    cvFlat.slice(0, 3),
+                    cvFlat.slice(3, 6),
+                    cvFlat.slice(6, 9)
+                ];
+                // A cell counts as "empty" only when neither interactive
+                // controls NOR a canvas meaningfully cover it. ≥ 0.30
+                // canvas coverage means the user is looking at a
+                // visualization area and it's not a layout flaw that
+                // there are no buttons there.
+                var sparseCount = 0;
+                for (var fi = 0; fi < flat.length; fi++) {
+                    if (flat[fi] < 0.05 && cvFlat[fi] < 0.30) sparseCount++;
+                }
                 var denseCount = flat.filter(function (c) { return c > 0.20; }).length;
                 if (sparseCount >= 3 && denseCount >= 1) {
                     layoutFlags.push('empty_region');
@@ -1170,9 +1263,11 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
                 controls: controls,
                 squeezed: squeezed,
                 coverage: coverage,
+                canvasArea: canvasArea,
                 bboxW: bboxW,
                 bboxH: bboxH,
                 cellCoverage: cellCoverage,
+                canvasCellCoverage: canvasCellCoverage,
                 layoutFlags: layoutFlags,
                 canvasIssues: canvasIssues
             });

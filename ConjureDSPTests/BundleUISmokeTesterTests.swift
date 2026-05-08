@@ -530,10 +530,12 @@ struct BundleUISmokeTesterTests {
         )
 
         #expect(report.readyFired)
-        #expect(report.coverageRatio < 0.20,
-                "tiny corner control should have coverage_ratio well under 0.20; got \(report.coverageRatio)")
-        #expect(report.layoutFlags.contains("sparse"),
-                "sparse flag must be set when coverage_ratio < 0.20; got \(report.layoutFlags)")
+        let advisory = try #require(report.layoutAdvisory,
+                "expected layout_advisory to be populated when interactive controls exist on a 600x400 canvas")
+        #expect(advisory.coverageRatio < 0.20,
+                "tiny corner control should have coverage_ratio well under 0.20; got \(advisory.coverageRatio)")
+        #expect(advisory.flags.contains("sparse"),
+                "sparse flag must live in layout_advisory.flags when coverage_ratio < 0.20; got \(advisory.flags)")
     }
 
     @Test @MainActor func flagsCdpSliderTrackSqueeze() async throws {
@@ -612,12 +614,14 @@ struct BundleUISmokeTesterTests {
         )
 
         #expect(report.readyFired)
-        #expect(!report.cellCoverage.isEmpty,
-                "expected cell_coverage to be populated for a 600x400 canvas; got \(report.cellCoverage)")
-        #expect(report.cellCoverage.count == 3,
-                "expected 3 rows in cell_coverage; got \(report.cellCoverage.count)")
-        if report.cellCoverage.count == 3 {
-            let bottomRow = report.cellCoverage[2]
+        let advisory = try #require(report.layoutAdvisory,
+                "expected layout_advisory to be populated for a 600x400 canvas")
+        #expect(!advisory.cellCoverage.isEmpty,
+                "expected cell_coverage to be populated; got \(advisory.cellCoverage)")
+        #expect(advisory.cellCoverage.count == 3,
+                "expected 3 rows in cell_coverage; got \(advisory.cellCoverage.count)")
+        if advisory.cellCoverage.count == 3 {
+            let bottomRow = advisory.cellCoverage[2]
             #expect(bottomRow.count == 3,
                     "expected 3 cells in bottom row; got \(bottomRow.count)")
             for (idx, cov) in bottomRow.enumerated() {
@@ -625,8 +629,8 @@ struct BundleUISmokeTesterTests {
                         "bottom row cell \(idx) should have coverage < 0.05; got \(cov)")
             }
         }
-        #expect(report.layoutFlags.contains("empty_region"),
-                "expected 'empty_region' flag when bottom row is empty; got \(report.layoutFlags)")
+        #expect(advisory.flags.contains("empty_region"),
+                "expected 'empty_region' flag in layout_advisory.flags when bottom row is empty; got \(advisory.flags)")
     }
 
     @Test @MainActor func skipsCellCoverageOnTinyCanvas() async throws {
@@ -660,10 +664,16 @@ struct BundleUISmokeTesterTests {
         )
 
         #expect(report.readyFired)
-        #expect(report.cellCoverage.isEmpty,
-                "expected cell_coverage to be empty when canvas is below 100px in either dim; got \(report.cellCoverage)")
-        #expect(!report.layoutFlags.contains("empty_region"),
-                "expected 'empty_region' NOT to be flagged when grid is skipped; got \(report.layoutFlags)")
+        // Tiny canvases skip the cell-coverage grid entirely; the
+        // advisory may still be populated (coverage_ratio / bbox_ratio
+        // are useful), but cell_coverage must be empty and empty_region
+        // must not be flagged.
+        let cells = report.layoutAdvisory?.cellCoverage ?? []
+        #expect(cells.isEmpty,
+                "expected cell_coverage to be empty when canvas is below 100px in either dim; got \(cells)")
+        let flags = report.layoutAdvisory?.flags ?? []
+        #expect(!flags.contains("empty_region"),
+                "expected 'empty_region' NOT to be flagged when grid is skipped; got \(flags)")
     }
 
     @Test @MainActor func cdpXYUnboundWhenAxisMissing() async throws {
@@ -718,8 +728,13 @@ struct BundleUISmokeTesterTests {
         #expect(zeroBuf != nil,
                 "expected a zero_buffer canvas issue; got \(report.canvasIssues)")
         #expect(zeroBuf?.id == "x")
-        #expect(report.layoutFlags.contains("canvas_zero_buffer"),
-                "expected 'canvas_zero_buffer' in layoutFlags; got \(report.layoutFlags)")
+        // canvas_zero_buffer is fully captured by `canvas_issues`. We
+        // intentionally don't duplicate it as a layout-advisory flag —
+        // hard issues stay in `canvas_issues`, soft observations live
+        // in `layout_advisory.flags`.
+        let advisoryFlags = report.layoutAdvisory?.flags ?? []
+        #expect(!advisoryFlags.contains("canvas_zero_buffer"),
+                "advisory flags should not duplicate hard canvas issues; got \(advisoryFlags)")
     }
 
     @Test @MainActor func cleanCanvasProducesNoIssues() async throws {
@@ -747,5 +762,230 @@ struct BundleUISmokeTesterTests {
         #expect(report.readyFired)
         #expect(report.canvasIssues.isEmpty,
                 "expected no canvas issues on a properly-sized canvas; got \(report.canvasIssues)")
+    }
+
+    // MARK: - Advisory-vs-issues field shape
+
+    /// Soft layout heuristics live ONLY under `layout_advisory`, never
+    /// mixed into the top-level hard-issue arrays. That's the framing
+    /// fix the 5/10 try-it agents flagged on 2026-05-08: they couldn't
+    /// tell `sparse` / `clustered` / `empty_region` apart from a real
+    /// warning when those shared shape with hard issues.
+    ///
+    /// This bundle deliberately triggers the layout heuristics (two
+    /// short sliders cluster at the top of a 400×240 canvas, leaving
+    /// an empty bottom region) — `status` still passes because nothing
+    /// is genuinely broken, and the advisory flags surface only inside
+    /// `layout_advisory.flags`.
+    @Test @MainActor func passStatusKeepsSoftHeuristicsInAdvisoryBlock() async throws {
+        let manifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.py",
+          "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" },
+            { "name": "resonance", "min": 0.5, "max": 10.0, "default": 1.0, "unit": "Q" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 400, "height": 240, "fps": 30, "audioFrames": false
+          }
+        }
+        """
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <cdp-slider param="cutoff"></cdp-slider>
+          <cdp-slider param="resonance"></cdp-slider>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: manifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff", 1: "resonance"],
+            hostParameterCount: 2,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        // Pass status: nothing broken — sliders bind, params covered,
+        // no JS errors. Soft layout flags do not promote to warn/fail.
+        #expect(report.status == .pass)
+        // None of the top-level hard-issue arrays receive soft layout
+        // signals — the reshape's whole point.
+        #expect(report.canvasIssues.isEmpty,
+                "canvas_issues must not pick up layout heuristics; got \(report.canvasIssues)")
+        #expect(report.smallControls.isEmpty,
+                "small_controls must not pick up layout heuristics; got \(report.smallControls)")
+        #expect(report.lowContrastTexts.isEmpty,
+                "low_contrast_texts must not pick up layout heuristics; got \(report.lowContrastTexts)")
+        // The advisory block exists (coverage_ratio is informative),
+        // and any soft flags the heuristics produced are nested inside
+        // it — not at the top level alongside hard issues.
+        let advisory = try #require(report.layoutAdvisory,
+                "expected layout_advisory to be populated for an advisory-shaped bundle")
+        // Sanity: the heuristics actually fired here. If they didn't,
+        // the test would pass vacuously and not pin the reshape.
+        #expect(!advisory.flags.isEmpty,
+                "this bundle should trigger at least one advisory flag (sparse / clustered / empty_region); got \(advisory.flags)")
+    }
+
+    /// Encoded JSON shape: hard issues live at the top level, soft
+    /// observations live under `layout_advisory`. Pins the wire shape
+    /// MCP consumers receive — guards against an accidental future
+    /// regression that re-promotes `coverage_ratio` / `layout_flags`
+    /// to top-level keys (where they read as warnings).
+    @Test @MainActor func reportJSONNestsAdvisoryUnderItsOwnKey() async throws {
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <cdp-slider param="cutoff"></cdp-slider>
+          <cdp-slider param="resonance"></cdp-slider>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: twoParamManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff", 1: "resonance"],
+            hostParameterCount: 2,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        let data = try JSONEncoder().encode(report)
+        let obj = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            "report must encode to a JSON object"
+        )
+        // Soft heuristics live ONLY under layout_advisory — never at
+        // the top level alongside hard issue arrays.
+        #expect(obj["coverage_ratio"] == nil,
+                "coverage_ratio must not be a top-level key; got \(String(describing: obj["coverage_ratio"]))")
+        #expect(obj["bbox_ratio"] == nil,
+                "bbox_ratio must not be a top-level key; got \(String(describing: obj["bbox_ratio"]))")
+        #expect(obj["layout_flags"] == nil,
+                "layout_flags must not be a top-level key; got \(String(describing: obj["layout_flags"]))")
+        #expect(obj["cell_coverage"] == nil,
+                "cell_coverage must not be a top-level key; got \(String(describing: obj["cell_coverage"]))")
+        // Hard issue arrays + diagnostic blocks stay at the top level.
+        #expect(obj["canvas_issues"] != nil)
+        #expect(obj["small_controls"] != nil)
+        #expect(obj["js_errors"] != nil)
+        // When advisory data is present, it nests cleanly. (May be
+        // absent if there was no layout signal; but for this bundle
+        // we expect at least coverage_ratio.)
+        if let advisory = obj["layout_advisory"] as? [String: Any] {
+            #expect(advisory["coverage_ratio"] != nil)
+            #expect(advisory["bbox_ratio"] != nil)
+            #expect(advisory["flags"] != nil)
+        }
+    }
+
+    // MARK: - Canvas-aware empty_region suppression
+
+    /// A UI that hands most of its real estate to a `<canvas>` (audio
+    /// scope, spectrum analyzer, grain timeline) shouldn't be flagged
+    /// as having an empty region just because the smoke tester never
+    /// feeds audio so the canvas is blank. The canvas IS the visible
+    /// surface; the area is intentionally reserved for a paint that
+    /// only happens during playback.
+    @Test @MainActor func canvasCoveredRegionDoesNotTriggerEmptyRegion() async throws {
+        // 600x400 canvas. Two sliders span the top ~100pt; a 600x300
+        // <canvas> fills the rest. Without canvas-aware suppression
+        // the bottom row would be flagged 'empty_region' even though
+        // it's deliberately occupied by the visualization.
+        let manifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.py",
+          "language": "python",
+          "params": [
+            { "name": "a", "min": 0.0, "max": 1.0, "default": 0.5, "unit": "" },
+            { "name": "b", "min": 0.0, "max": 1.0, "default": 0.5, "unit": "" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 600, "height": 400, "fps": 30, "audioFrames": false
+          }
+        }
+        """
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <div style="position:absolute;left:0;top:0;width:600px;height:100px;display:flex;flex-direction:row">
+            <cdp-slider param="a" style="flex:1;height:100px"></cdp-slider>
+            <cdp-slider param="b" style="flex:1;height:100px"></cdp-slider>
+          </div>
+          <canvas id="scope" style="position:absolute;left:0;top:100px;width:600px;height:300px"></canvas>
+          <script>
+            var cv = document.getElementById('scope');
+            cv.width = 600;
+            cv.height = 300;
+          </script>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: manifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "a", 1: "b"],
+            hostParameterCount: 2,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        let advisoryFlags = report.layoutAdvisory?.flags ?? []
+        #expect(!advisoryFlags.contains("empty_region"),
+                "empty_region must not fire when the empty cells are covered by a canvas; got \(advisoryFlags)")
+        #expect(!advisoryFlags.contains("sparse"),
+                "sparse must not fire when a meaningful area is occupied by a canvas; got \(advisoryFlags)")
+        #expect(report.canvasIssues.isEmpty,
+                "the canvas itself should not generate canvas_issues — buffer is set correctly; got \(report.canvasIssues)")
+    }
+
+    /// Counter-test: an actually empty bottom row (no canvas, no
+    /// controls) still gets flagged. Confirms the suppression is
+    /// scoped to canvas-covered cells, not blanket.
+    @Test @MainActor func emptyRegionStillFiresWithoutCanvas() async throws {
+        let manifest = """
+        {
+          "schemaVersion": 2,
+          "entry": "process.py",
+          "language": "python",
+          "params": [
+            { "name": "a", "min": 0.0, "max": 1.0, "default": 0.5, "unit": "" },
+            { "name": "b", "min": 0.0, "max": 1.0, "default": 0.5, "unit": "" },
+            { "name": "c", "min": 0.0, "max": 1.0, "default": 0.5, "unit": "" }
+          ],
+          "ui": {
+            "entryHTML": "ui/index.html",
+            "width": 600, "height": 400, "fps": 30, "audioFrames": false
+          }
+        }
+        """
+        let ui = """
+        <!doctype html><html><body style="margin:0;padding:0">
+          <div style="position:absolute;left:0;top:0;width:600px;height:100px;display:flex;flex-direction:row">
+            <cdp-slider param="a" style="flex:1;height:100px"></cdp-slider>
+            <cdp-slider param="b" style="flex:1;height:100px"></cdp-slider>
+            <cdp-slider param="c" style="flex:1;height:100px"></cdp-slider>
+          </div>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: manifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "a", 1: "b", 2: "c"],
+            hostParameterCount: 3,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        let advisoryFlags = report.layoutAdvisory?.flags ?? []
+        #expect(advisoryFlags.contains("empty_region"),
+                "empty_region must still fire when the empty bottom is genuinely empty (no canvas); got \(advisoryFlags)")
     }
 }
