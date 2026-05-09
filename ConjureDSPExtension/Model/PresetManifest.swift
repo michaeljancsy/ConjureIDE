@@ -205,7 +205,7 @@ extension PresetManifest {
     )
 
     /// Pure rewrite applied to an existing manifest before re-saving a
-    /// user bundle's entry script. Owns two invariants the
+    /// user bundle's entry script. Owns three invariants the
     /// `bundleExists` branch of `PresetManager.savePreset` previously
     /// got wrong:
     ///
@@ -228,12 +228,23 @@ extension PresetManifest {
     ///    agent had to hand-author the `ui` block. (Failures #1 / #4
     ///    in the same sweep.)
     ///
+    /// 3. **`telemetry` is cleared.** Same root cause family as
+    ///    `params`: telemetry is a kernel-derived cache of slots the
+    ///    script publishes via `ctx.set_telemetry_*` (Rust) or the
+    ///    `TELEMETRY` dict (Python). A re-save may flip the language
+    ///    or drop / rename slots, and the next `syncManifestTelemetryFromKernel`
+    ///    repopulates accurately. Preserving the stale block leaves
+    ///    `BundleUIValidator` linting `<cdp-meter source="telemetry:…">`
+    ///    against slot names the new script no longer publishes —
+    ///    third member of the bug family PR #298 fixed.
+    ///
     /// Returns a copy. Caller decides whether the rewrite materially
     /// differs from the input and skips the disk write when not.
     func applyingSaveRewrites(scaffoldUI: Bool) -> PresetManifest {
         var copy = self
         copy.params = nil
         copy.paramsNote = nil
+        copy.telemetry = nil
         if scaffoldUI, copy.ui == nil {
             copy.ui = Self.defaultScaffoldUI
         }

@@ -698,6 +698,104 @@ class PresetManager: ObservableObject {
         return true
     }
 
+    /// Overwrite a user bundle's `manifest.json` `telemetry` block from
+    /// the kernel's freshly-extracted telemetry metadata. Mirrors
+    /// `syncManifestParamsFromKernel`'s contract field-for-field — same
+    /// JSON-tree mutation (preserves unknown top-level keys), same
+    /// idempotent-skip semantics, same factory-bundle gate.
+    ///
+    /// Why this exists: `manifest.telemetry` is a kernel-derived cache
+    /// of slots the script publishes via `ctx.set_telemetry_*` (Rust)
+    /// or the `TELEMETRY` dict (Python). Without an active sync,
+    /// re-saving an existing bundle with a new source preserved the old
+    /// telemetry block verbatim — third member of the bug family PR
+    /// #298 fixed for `params`. `BundleUIValidator` then linted
+    /// `<cdp-meter source="telemetry:…">` references against slot names
+    /// the new script no longer publishes, surfacing phantom warnings.
+    ///
+    /// No `_telemetryNote` sibling is written. The params version added
+    /// `_paramsNote` because the params block is large and visually
+    /// dominates the manifest (~16 entries × full ranges + units +
+    /// curves + styles + options); a header warning is load-bearing
+    /// for "don't hand-edit this." Telemetry blocks are tiny (typically
+    /// 1–4 entries × 2–4 short fields) so a header would more than
+    /// double the block's footprint while signaling the same contract
+    /// — keeping the manifest tidy wins.
+    ///
+    /// Behavior:
+    ///  - `telemetry` non-empty: write the new array. Returns true on
+    ///    actual change, false on idempotent skip.
+    ///  - `telemetry` empty: remove the manifest's `telemetry` key.
+    ///    Returns true if it was previously set; false otherwise.
+    ///  - Factory bundles (read-only Resources): skip silently.
+    ///    Returns false.
+    ///  - Manifest fails to parse as JSON at all: skip the write so we
+    ///    don't clobber whatever the user typed. Returns false.
+    @discardableResult
+    func syncManifestTelemetryFromKernel(
+        for bundle: PresetBundle,
+        telemetry: [PresetManifest.TelemetryDecl]
+    ) throws -> Bool {
+        if !fileManager.isWritableFile(atPath: bundle.rootURL.path) {
+            return false
+        }
+
+        let manifestURL = bundle.rootURL.appendingPathComponent(PresetManifest.filename)
+        guard let existingData = try? Data(contentsOf: manifestURL),
+              var json = (try? JSONSerialization.jsonObject(with: existingData)) as? [String: Any]
+        else {
+            // Unparseable JSON. Don't synthesize a replacement —
+            // matches the params sync rationale.
+            return false
+        }
+
+        // Encode the kernel-derived telemetry via the same JSONEncoder
+        // settings PresetManifest uses, then re-parse as a JSON array
+        // of dicts so we can splice it into the larger JSON tree.
+        let newTelemetryArray: [Any]
+        if telemetry.isEmpty {
+            newTelemetryArray = []
+        } else {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let encoded = try encoder.encode(telemetry)
+            newTelemetryArray = (try? JSONSerialization.jsonObject(with: encoded)) as? [Any] ?? []
+        }
+
+        if telemetry.isEmpty {
+            let hadTelemetry: Bool = {
+                guard let arr = json["telemetry"] as? [Any] else { return false }
+                return !arr.isEmpty
+            }()
+            if !hadTelemetry { return false }
+            json.removeValue(forKey: "telemetry")
+        } else {
+            // Idempotency check: decode the existing `telemetry` block
+            // back into `[TelemetryDecl]` and compare via Equatable.
+            // Beats raw NSArray equality because field ordering inside
+            // each dict varies depending on which side wrote the JSON.
+            let existingDecoded: [PresetManifest.TelemetryDecl] = {
+                guard let existingTelemetryAny = json["telemetry"],
+                      let existingTelemetryData = try? JSONSerialization.data(withJSONObject: existingTelemetryAny),
+                      let decoded = try? JSONDecoder().decode([PresetManifest.TelemetryDecl].self, from: existingTelemetryData)
+                else { return [] }
+                return decoded
+            }()
+            if existingDecoded == telemetry {
+                return false
+            }
+            json["telemetry"] = newTelemetryArray
+        }
+
+        let outData = try JSONSerialization.data(
+            withJSONObject: json,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+        try outData.write(to: manifestURL)
+        AppGroupContainer.stripQuarantine(at: manifestURL)
+        return true
+    }
+
     /// Drop a starter `ui/index.html` into an existing user bundle and return
     /// the URL of the newly-written file.
     ///

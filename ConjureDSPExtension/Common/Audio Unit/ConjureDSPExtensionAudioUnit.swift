@@ -166,8 +166,39 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		}
 	}
 
+	/// Rich metadata for a telemetry slot, declared by scripts via
+	/// `telemetry!()` (Rust) or the `TELEMETRY` dict (Python). Mirrors
+	/// the kernel-side `params::TelemetryMetadata` JSON shape returned
+	/// by `dsp_kernel_telemetry_metadata_json`.
+	public struct TelemetryMetadata: Codable, Equatable {
+		public let name: String
+		/// Original key from the Python `TELEMETRY` dict; empty for
+		/// Rust-declared slots (kernel emits "" rather than null).
+		public let key: String
+		public let unit: String
+		/// "scalar" (default — single f32 per block) or "vector"
+		/// (one f32 per audio frame in the block).
+		public let shape: String
+	}
+
 	/// Current rich parameter metadata (nil = legacy 0–1 mode).
 	private(set) var currentParamMetadata: [ParamMetadata]? = nil
+
+	/// Read kernel-extracted telemetry metadata directly from the FFI.
+	/// Returns nil when the script declares no telemetry. Parsed on
+	/// demand — the kernel rewrites this JSON on every script load and
+	/// callers (mostly `save_preset`) hit it once per save, so caching
+	/// would just complicate the lifecycle.
+	@MainActor
+	public func readKernelTelemetryMetadata() -> [TelemetryMetadata]? {
+		guard let metaPtr = dsp_kernel_telemetry_metadata_json(kernel) else { return nil }
+		let json = String(cString: metaPtr)
+		guard let data = json.data(using: .utf8),
+		      let decoded = try? JSONDecoder().decode([TelemetryMetadata].self, from: data),
+		      !decoded.isEmpty
+		else { return nil }
+		return decoded
+	}
 
 	/// Set by `applyManifestParams` when a preset ships declarations in
 	/// `manifest.json`. Makes `currentParamMetadata` authoritative over
