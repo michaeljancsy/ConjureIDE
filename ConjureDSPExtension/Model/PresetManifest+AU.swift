@@ -51,3 +51,25 @@ extension PresetManifest.ParamDecl {
         )
     }
 }
+
+extension PresetManifest.TelemetryDecl {
+    /// Convert kernel-extracted telemetry metadata back into the on-disk
+    /// manifest declaration form. Mirrors `ParamDecl(from:)` — used by
+    /// `save_preset` to mirror a freshly compiled script's
+    /// `TELEMETRY` / `telemetry!{}` declarations into
+    /// `manifest.json`'s `telemetry` array.
+    ///
+    /// Empty `key` / `unit` round-trip to nil so the JSON stays compact
+    /// (the kernel emits `""` for Rust-declared slots' key and for
+    /// unitless slots' unit; the manifest schema treats nil and "" as
+    /// equivalent downstream). The default `"scalar"` shape also
+    /// round-trips to nil.
+    init(from m: ConjureDSPExtensionAudioUnit.TelemetryMetadata) {
+        self.init(
+            name: m.name,
+            key: m.key.isEmpty ? nil : m.key,
+            shape: m.shape == "scalar" ? nil : m.shape,
+            unit: m.unit.isEmpty ? nil : m.unit
+        )
+    }
+}

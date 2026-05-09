@@ -558,6 +558,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // not a `PresetBundle` with a parsed manifest. The
             // round-trip is cheap and avoids stale-cache risk.
             var manifestSyncedFromKernel = false
+            var manifestTelemetrySyncedFromKernel = false
             if kernelReloaded,
                let savedBundle = pm.loadBundle(for: preset) {
                 let kernelMeta = currentParamMetadata ?? []
@@ -581,6 +582,31 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                     // are already correct). Surface as a warning in
                     // the response and keep going.
                     mcpLog.warning("[save_preset] manifest params mirror failed: \(error.localizedDescription, privacy: .public)")
+                }
+
+                // Mirror telemetry too. Same root-cause family as the
+                // params sync above (PR #298): without this, an
+                // existing-bundle re-save that flips the script's
+                // language or drops/renames telemetry slots leaves
+                // `manifest.telemetry` stale on disk —
+                // `BundleUIValidator` then lints against slot names
+                // the new script no longer publishes. The
+                // `applyingSaveRewrites` rewrite already cleared the
+                // block before disk write; this re-populates it from
+                // the freshly-loaded kernel.
+                let kernelTelemetry = readKernelTelemetryMetadata() ?? []
+                let telemetryDecls = kernelTelemetry.map { PresetManifest.TelemetryDecl(from: $0) }
+                // Re-load the bundle to pick up the post-params-sync
+                // manifest before the telemetry sync's idempotency
+                // check runs against it.
+                let bundleForTelemetry = pm.loadBundle(for: preset) ?? savedBundle
+                do {
+                    manifestTelemetrySyncedFromKernel = try pm.syncManifestTelemetryFromKernel(
+                        for: bundleForTelemetry,
+                        telemetry: telemetryDecls
+                    )
+                } catch {
+                    mcpLog.warning("[save_preset] manifest telemetry mirror failed: \(error.localizedDescription, privacy: .public)")
                 }
             }
 
@@ -617,6 +643,9 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             }
             if manifestSyncedFromKernel {
                 response["manifest_params_populated"] = true
+            }
+            if manifestTelemetrySyncedFromKernel {
+                response["manifest_telemetry_populated"] = true
             }
             return (jsonStr(response), !kernelReloaded)
         } catch {

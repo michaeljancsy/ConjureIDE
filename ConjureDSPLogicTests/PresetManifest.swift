@@ -73,6 +73,24 @@ struct PresetManifest: Codable, Equatable {
         var options: [String]?
     }
 
+    /// Telemetry slot declarations. Test-target mirror of the field on
+    /// the extension's `PresetManifest`; needed here so save-rewrite
+    /// tests can pin that the kernel-derived telemetry cache is cleared
+    /// alongside `params` (third member of PR #298's bug family).
+    var telemetry: [TelemetryDecl]?
+
+    /// Telemetry slot declaration — mirrors the documented slot name a
+    /// DSP script publishes via `ctx.set_telemetry_*` (Rust) or the
+    /// `TELEMETRY` dict (Python).
+    struct TelemetryDecl: Codable, Equatable {
+        var name: String
+        var key: String?
+        /// `"scalar"` (default) or `"vector"`.
+        var shape: String?
+        /// Display unit (e.g. `"dB"`).
+        var unit: String?
+    }
+
     /// Optional free-form author metadata.
     var meta: Meta?
 
@@ -86,6 +104,7 @@ struct PresetManifest: Codable, Equatable {
         case ui
         case params
         case paramsNote = "_paramsNote"
+        case telemetry
         case meta
     }
 
@@ -164,12 +183,14 @@ extension PresetManifest {
     /// Test-target mirror of `applyingSaveRewrites(scaffoldUI:)` on the
     /// extension's `PresetManifest`. See the extension's docstring for
     /// the failure-mode rationale (Failures #1 / #2 / #4 in the
-    /// 2026-05-08 /try-it sweep). Both copies must stay in sync — the
-    /// `SavePresetScaffoldRewriteTests` suite pins the contract.
+    /// 2026-05-08 /try-it sweep, plus the telemetry follow-on). Both
+    /// copies must stay in sync — the `SavePresetScaffoldRewriteTests`
+    /// + `SavePresetTelemetryRewriteTests` suites pin the contract.
     func applyingSaveRewrites(scaffoldUI: Bool) -> PresetManifest {
         var copy = self
         copy.params = nil
         copy.paramsNote = nil
+        copy.telemetry = nil
         if scaffoldUI, copy.ui == nil {
             copy.ui = Self.defaultScaffoldUI
         }

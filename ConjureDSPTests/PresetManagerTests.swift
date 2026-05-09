@@ -1810,4 +1810,230 @@ struct PresetManagerTests {
     // test target (the AU type ConjureDSPExtensionAudioUnit.ParamMetadata
     // would create a circular link). The conversion is exercised
     // end-to-end via the MCP save_preset integration test instead.
+
+    // MARK: - syncManifestTelemetryFromKernel: cache of kernel telemetry
+    //
+    // Parallel to `syncManifestParamsFromKernel`. `manifest.telemetry`
+    // is a CACHE of slots the script publishes via `ctx.set_telemetry_*`
+    // (Rust) or the `TELEMETRY` dict (Python). Re-saving an existing
+    // bundle with a new source (especially one that flips language or
+    // renames slots) must overwrite this cache so static lints
+    // (`<cdp-meter telemetry="…">`) match what the kernel actually
+    // publishes. Same root-cause family as PR #298 fixed for params.
+
+    @Test @MainActor func syncManifestTelemetryFromKernelWritesTelemetryBlock() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        _ = try manager.savePreset(
+            name: "TelemetryTarget", source: "# v1\n",
+            language: .python, scaffoldUI: true
+        )
+        let preset = try #require(
+            manager.presets.first(where: { $0.name == "TelemetryTarget" })
+        )
+        let bundle = try #require(manager.loadBundle(for: preset))
+        #expect((bundle.manifest.telemetry?.isEmpty ?? true),
+                "Precondition: fresh bundle has no telemetry block")
+
+        let grDb = PresetManifest.TelemetryDecl(
+            name: "GrDb", key: "gr_db", shape: nil, unit: "dB"
+        )
+        let envelope = PresetManifest.TelemetryDecl(
+            name: "Envelope", key: nil, shape: "vector", unit: nil
+        )
+        let didWrite = try manager.syncManifestTelemetryFromKernel(
+            for: bundle, telemetry: [grDb, envelope]
+        )
+        #expect(didWrite, "First mirror should write")
+
+        let reloaded = try #require(manager.loadBundle(for: preset))
+        let telemetry = try #require(reloaded.manifest.telemetry)
+        #expect(telemetry.count == 2)
+        #expect(telemetry[0].name == "GrDb")
+        #expect(telemetry[0].key == "gr_db")
+        #expect(telemetry[0].unit == "dB")
+        #expect(telemetry[1].name == "Envelope")
+        #expect(telemetry[1].shape == "vector")
+        // Empty unit / scalar shape round-trip to nil for compact JSON.
+        #expect(telemetry[1].unit == nil)
+    }
+
+    /// Pinned regression for the original bug: a stale telemetry block
+    /// (e.g., `[OLD_PHANTOM_SLOT, stale_lower]` from a previous Python
+    /// save) must be OVERWRITTEN by a subsequent kernel reflection
+    /// declaring different slots (e.g., `[Beta, Gamma]` from a Rust
+    /// re-save). Telemetry is a cache, not an authoritative override.
+    @Test @MainActor func syncManifestTelemetryFromKernelAlwaysOverwritesAuthoredBlock() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        _ = try manager.savePreset(
+            name: "ExplicitTelemetry", source: "# v1\n",
+            language: .python, scaffoldUI: true
+        )
+        let preset = try #require(
+            manager.presets.first(where: { $0.name == "ExplicitTelemetry" })
+        )
+        var bundle = try #require(manager.loadBundle(for: preset))
+
+        // Seed the original Python-source state.
+        let stalePhantom = PresetManifest.TelemetryDecl(
+            name: "OLD_PHANTOM_SLOT", key: "old_phantom_slot",
+            shape: nil, unit: "dB"
+        )
+        let staleLower = PresetManifest.TelemetryDecl(
+            name: "stale_lower", key: "stale_lower",
+            shape: "vector", unit: nil
+        )
+        let firstWrite = try manager.syncManifestTelemetryFromKernel(
+            for: bundle, telemetry: [stalePhantom, staleLower]
+        )
+        #expect(firstWrite)
+
+        // Now reload and overwrite with a Rust-source kernel reflection
+        // that declares completely different slots. This MUST clobber
+        // the previous block.
+        bundle = try #require(manager.loadBundle(for: preset))
+        let beta = PresetManifest.TelemetryDecl(
+            name: "Beta", key: nil, shape: nil, unit: nil
+        )
+        let gamma = PresetManifest.TelemetryDecl(
+            name: "Gamma", key: nil, shape: nil, unit: "Hz"
+        )
+        let secondWrite = try manager.syncManifestTelemetryFromKernel(
+            for: bundle, telemetry: [beta, gamma]
+        )
+        #expect(secondWrite, "Sync must always overwrite — manifest.telemetry is a cache, not an override")
+
+        let reloaded = try #require(manager.loadBundle(for: preset))
+        let telemetry = try #require(reloaded.manifest.telemetry)
+        #expect(telemetry.count == 2)
+        #expect(telemetry[0].name == "Beta",
+                "Old `OLD_PHANTOM_SLOT` must have been overwritten")
+        #expect(telemetry[1].name == "Gamma")
+        #expect(telemetry.contains(where: { $0.name == "OLD_PHANTOM_SLOT" }) == false,
+                "Stale phantom slot must not survive the sync")
+        #expect(telemetry.contains(where: { $0.name == "stale_lower" }) == false,
+                "Stale lower slot must not survive the sync")
+    }
+
+    /// Empty-input semantics: when the script removes its TELEMETRY
+    /// declarations, the next sync must clear the manifest's
+    /// `telemetry` block. Mirrors the params sync's empty-input path.
+    @Test @MainActor func syncManifestTelemetryFromKernelClearsStaleBlockOnEmptyInput() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        _ = try manager.savePreset(
+            name: "WasTelemetry", source: "# v1\n",
+            language: .python, scaffoldUI: true
+        )
+        let preset = try #require(
+            manager.presets.first(where: { $0.name == "WasTelemetry" })
+        )
+        var bundle = try #require(manager.loadBundle(for: preset))
+        let original = PresetManifest.TelemetryDecl(
+            name: "GrDb", key: "gr_db", shape: nil, unit: "dB"
+        )
+        _ = try manager.syncManifestTelemetryFromKernel(
+            for: bundle, telemetry: [original]
+        )
+
+        bundle = try #require(manager.loadBundle(for: preset))
+        #expect(bundle.manifest.telemetry?.count == 1)
+
+        // Sync with empty input — script removed its telemetry.
+        let didWrite = try manager.syncManifestTelemetryFromKernel(
+            for: bundle, telemetry: []
+        )
+        #expect(didWrite, "Clearing a stale block counts as a write")
+
+        let reloaded = try #require(manager.loadBundle(for: preset))
+        #expect(reloaded.manifest.telemetry == nil,
+                "Stale telemetry block must be cleared")
+
+        // Idempotency: a second empty-input sync against the now-clean
+        // manifest must be a no-op.
+        let secondDidWrite = try manager.syncManifestTelemetryFromKernel(
+            for: reloaded, telemetry: []
+        )
+        #expect(!secondDidWrite, "Empty input on already-clean manifest must not write")
+    }
+
+    /// Pinned regression: hand-edited top-level fields outside
+    /// `PresetManifest`'s schema must survive a telemetry sync — same
+    /// JSON-tree-mutation rationale as the params sync.
+    @Test @MainActor func syncManifestTelemetryFromKernelPreservesUnknownTopLevelFields() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        _ = try manager.savePreset(
+            name: "UnknownFieldTelemetry", source: "# v1\n",
+            language: .python, scaffoldUI: true
+        )
+        let preset = try #require(
+            manager.presets.first(where: { $0.name == "UnknownFieldTelemetry" })
+        )
+        let bundle = try #require(manager.loadBundle(for: preset))
+        let manifestURL = bundle.rootURL
+            .appendingPathComponent(PresetManifest.filename)
+
+        // Hand-add an unknown top-level field.
+        var raw = try #require(
+            (try? JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)))
+                as? [String: Any]
+        )
+        raw["customAuthorTag"] = ["nested": "value"]
+        try JSONSerialization.data(
+            withJSONObject: raw, options: [.prettyPrinted, .sortedKeys]
+        ).write(to: manifestURL)
+
+        let grDb = PresetManifest.TelemetryDecl(
+            name: "GrDb", key: "gr_db", shape: nil, unit: "dB"
+        )
+        _ = try manager.syncManifestTelemetryFromKernel(
+            for: bundle, telemetry: [grDb]
+        )
+
+        let after = try #require(
+            (try? JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)))
+                as? [String: Any]
+        )
+        #expect(after["customAuthorTag"] as? [String: String] == ["nested": "value"],
+                "Unknown nested field must survive the telemetry sync")
+        #expect((after["telemetry"] as? [Any])?.count == 1,
+                "Sync should still have written the new telemetry block")
+    }
+
+    /// Idempotency: re-syncing the same telemetry on a manifest that
+    /// already matches must NOT write. Without this guard, every reload
+    /// of a non-drifting preset would queue a no-op git commit.
+    @Test @MainActor func syncManifestTelemetryFromKernelIsIdempotent() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        _ = try manager.savePreset(
+            name: "IdempotentTelemetry", source: "# v1\n",
+            language: .python, scaffoldUI: true
+        )
+        let preset = try #require(
+            manager.presets.first(where: { $0.name == "IdempotentTelemetry" })
+        )
+        var bundle = try #require(manager.loadBundle(for: preset))
+
+        let grDb = PresetManifest.TelemetryDecl(
+            name: "GrDb", key: "gr_db", shape: nil, unit: "dB"
+        )
+        let firstWrite = try manager.syncManifestTelemetryFromKernel(
+            for: bundle, telemetry: [grDb]
+        )
+        #expect(firstWrite, "First sync should write")
+
+        bundle = try #require(manager.loadBundle(for: preset))
+        let secondWrite = try manager.syncManifestTelemetryFromKernel(
+            for: bundle, telemetry: [grDb]
+        )
+        #expect(!secondWrite, "Second sync with identical telemetry must be a no-op")
+    }
 }
