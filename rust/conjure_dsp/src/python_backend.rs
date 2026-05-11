@@ -530,6 +530,16 @@ impl PythonBackend {
         }
         self.py_max_frames = max_frames;
         let result = Python::with_gil(|py| -> PyResult<()> {
+            // Set the cached `:` slice first — PySlice::full is infallible.
+            // Anchoring it before any fallible setattr / import calls means
+            // a partial-failure state never has the slice cache pointing
+            // at None while leaving an interpreter-visible ctx object
+            // around. The prefix slice rebuilds lazily on the first block
+            // whose frame_count differs from cached_prefix_for_frames.
+            self.cached_full_slice = Some(PySlice::full(py).unbind());
+            self.cached_prefix_slice = None;
+            self.cached_prefix_for_frames = 0;
+
             // Allocate 2D backing arrays of shape (channel_count, max_frames),
             // one per role. Scripts see them directly as ctx.inputs / outputs /
             // sidechain — no list wrapping. `ctx.inputs[ch]` returns a 1D row
@@ -635,13 +645,6 @@ impl PythonBackend {
             ctx.setattr("state", proxy)?;
 
             self.py_ctx = Some(ctx.unbind());
-
-            // Cache the `:` slice once per allocate — it never changes.
-            // The prefix slice gets built lazily on the first block whose
-            // frame_count differs from `cached_prefix_for_frames`.
-            self.cached_full_slice = Some(PySlice::full(py).unbind());
-            self.cached_prefix_slice = None;
-            self.cached_prefix_for_frames = 0;
             Ok(())
         });
         if let Err(e) = result {
