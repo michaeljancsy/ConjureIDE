@@ -1143,15 +1143,23 @@ impl DSPKernel {
     /// when the main thread briefly holds the mutex. Drops the write on
     /// contention; the next failing block will set it again, and the
     /// success path is contention-free in steady state.
+    ///
+    /// Returns `true` when the lock was acquired (whether or not the
+    /// value changed — the no-op case still reflects committed state),
+    /// `false` on contention. Callers use this to gate audio-thread
+    /// state that depends on the kernel error having reached the value
+    /// they wrote (e.g. clearing `had_error_last_block` in the recovery
+    /// branch only when the paired `last_error = None` actually landed).
     fn update_last_error_try(&self, err: Option<String>) -> bool {
         if let Ok(mut guard) = self.last_error.try_lock() {
             if *guard != err {
                 *guard = err;
                 self.error_generation.fetch_add(1, Ordering::Release);
-                return true;
             }
+            true
+        } else {
+            false
         }
-        false
     }
 
     /// Update the cached JSON representation of parameter names.
@@ -1906,8 +1914,9 @@ impl DSPKernel {
                     // 10 Hz poll picks up the clear on the next tick.
                     if self.had_error_last_block.load(Ordering::Relaxed) {
                         backend.clear_last_error();
-                        self.update_last_error_try(None);
-                        self.had_error_last_block.store(false, Ordering::Relaxed);
+                        if self.update_last_error_try(None) {
+                            self.had_error_last_block.store(false, Ordering::Relaxed);
+                        }
                     }
                 } else {
                     // Backend failed — capture error before dropping the &mut borrow.
@@ -3000,7 +3009,40 @@ mod tests {
         std::fs::remove_file(good_script).ok();
     }
 
-    /// PR #4: a failed reload must reset `had_error_last_block`. Without
+    /// PR #4: `update_last_error_try` reports `true` only when it acquired
+    /// the lock. The audio-thread recovery branch gates its `had_error_last_block`
+    /// clear on this return so a contended write doesn't desynchronize the
+    /// flag from `last_error` (which would suppress retry forever and leave
+    /// a stale error in the UI).
+    #[test]
+    fn test_update_last_error_try_signals_lock_acquisition() {
+        let kernel = DSPKernel::new();
+
+        // Uncontended: lock acquires → true, even when the value didn't
+        // change. The "no-op write" case (already-equal) still reflects
+        // committed state, so the caller can safely clear flags.
+        assert!(kernel.update_last_error_try(None));
+        assert!(kernel.update_last_error_try(Some("first".to_string())));
+        assert!(
+            kernel.update_last_error_try(Some("first".to_string())),
+            "no-op (same value) must return true under post-fix semantics"
+        );
+
+        // Contended: an outstanding `last_error.lock()` blocks try_lock →
+        // we get false, and the recovery-branch caller will not clear
+        // its had_error_last_block flag (tested via integration above).
+        {
+            let _guard = kernel.last_error.lock().unwrap();
+            assert!(
+                !kernel.update_last_error_try(Some("second".to_string())),
+                "contended try_lock must return false"
+            );
+        }
+        // After the guard drops, the call succeeds again.
+        assert!(kernel.update_last_error_try(Some("third".to_string())));
+    }
+
+/// PR #4: a failed reload must reset `had_error_last_block`. Without
     /// this, the next passthrough block (which returns `ok=true`) would
     /// see the stale `true` flag from the prior runtime failure and let
     /// the recovery branch wipe the freshly-written load-error string.
