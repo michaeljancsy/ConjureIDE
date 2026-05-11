@@ -463,7 +463,16 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             let preset = try pm.savePreset(
                 name: name, source: source,
                 language: language,
-                scaffoldUI: scaffoldUI
+                scaffoldUI: scaffoldUI,
+                // Agents calling save_preset don't know about prior
+                // user content — a name collision is incidental, not an
+                // intentional replace. Auto-suffix on cross-language
+                // collision so a Rust save can't silently delete a
+                // user's Python bundle of the same name (and vice
+                // versa). The response's `name` field surfaces the
+                // actual saved-as name so callers see the suffix.
+                // Caught by 2026-05-08 /try-it sweep, Asana 1214671618931260.
+                crossLanguageCollision: .autoSuffix
             )
 
             // Hold the audio output muted across param-tree mutation +
@@ -634,6 +643,16 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 "switched_current_preset": true,
                 "kernel_reloaded": kernelReloaded,
             ]
+            // If the cross-language collision path auto-suffixed the
+            // bundle (e.g. Rust save into a name owned by an existing
+            // Python bundle), surface that explicitly so the agent
+            // doesn't keep referring to the requested name. Compare
+            // against the *requested* name pre-sanitize-and-suffix.
+            let requestedSanitized = pm.sanitizeFilename(name)
+            if preset.name != requestedSanitized {
+                response["renamed_from"] = requestedSanitized
+                response["rename_reason"] = "A preset named \"\(requestedSanitized)\" already exists in another language; saved as \"\(preset.name)\" instead. The existing bundle was preserved untouched."
+            }
             if let err = kernelError {
                 response["kernel_error"] = err
             }
