@@ -69,8 +69,11 @@ pub struct PythonBackend {
     /// Cached `slice(0, frame_count, 1)`. Rebuilt only when `frame_count`
     /// changes; reused across blocks where it doesn't (the common case).
     cached_prefix_slice: Option<Py<PySlice>>,
-    /// `frame_count` value the cached prefix slice was built for. 0 forces
-    /// rebuild on the first block after allocate / channel resize.
+    /// `frame_count` value the cached prefix slice was built for.
+    /// `u32::MAX` is the sentinel that forces a rebuild on the first block
+    /// after allocate / channel resize — using `0` here would skip the
+    /// rebuild when the host calls with `frame_count == 0`, leaving
+    /// `cached_prefix_slice` unwrappable.
     cached_prefix_for_frames: u32,
     last_error: Option<String>,
     param_names: HashMap<u8, String>,
@@ -269,7 +272,7 @@ impl PythonBackend {
                     py_sidechain_array: None,
                     cached_full_slice: None,
                     cached_prefix_slice: None,
-                    cached_prefix_for_frames: 0,
+                    cached_prefix_for_frames: u32::MAX,
                     last_error: None,
                     param_names: r.param_names,
                     param_metadata: r.param_metadata,
@@ -538,7 +541,7 @@ impl PythonBackend {
             // whose frame_count differs from cached_prefix_for_frames.
             self.cached_full_slice = Some(PySlice::full(py).unbind());
             self.cached_prefix_slice = None;
-            self.cached_prefix_for_frames = 0;
+            self.cached_prefix_for_frames = u32::MAX;
 
             // Allocate 2D backing arrays of shape (channel_count, max_frames),
             // one per role. Scripts see them directly as ctx.inputs / outputs /
@@ -850,7 +853,9 @@ impl PythonBackend {
                 let prefix = self
                     .cached_prefix_slice
                     .as_ref()
-                    .unwrap()
+                    .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err(
+                        "PythonBackend: prefix slice not cached",
+                    ))?
                     .bind(py);
                 let in_array = self.py_input_array.as_ref().unwrap().bind(py);
                 let out_array = self.py_output_array.as_ref().unwrap().bind(py);

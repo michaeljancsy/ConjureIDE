@@ -2828,6 +2828,47 @@ mod tests {
         std::fs::remove_file(script).ok();
     }
 
+    /// A render block with `frame_count == 0` must not panic. The prefix-
+    /// slice cache uses `u32::MAX` as its "uninitialized" sentinel so a
+    /// real zero-frame block still triggers the rebuild path on the very
+    /// first call. Hosts can pass zero frames at transport edges; previously
+    /// this would `.unwrap()` on `None` and crash the audio thread.
+    #[test]
+    fn test_python_zero_frame_count_does_not_panic() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    np.copyto(ctx.outputs, ctx.inputs)\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 4, 44100.0);
+
+        let input: [f32; 4] = [0.0; 4];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        // Drive a 0-frame block FIRST. With the old `cached_prefix_for_frames: 0`
+        // initializer, this would skip the rebuild and unwrap None.
+        unsafe { kernel.process(&ip, &op, 1, 0); }
+        assert!(
+            kernel.last_error().is_none(),
+            "0-frame block should not raise, got: {:?}",
+            kernel.last_error()
+        );
+        // Follow-up non-zero block must also work.
+        let input2: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+        let ip2: *const f32 = input2.as_ptr();
+        unsafe { kernel.process(&ip2, &op, 1, 4); }
+        assert_eq!(output, [0.1, 0.2, 0.3, 0.4]);
+        std::fs::remove_file(script).ok();
+    }
+
     /// PR #4: `error_generation` bumps on the first failing block. Swift's
     /// poll uses this delta to know it needs to re-read `last_error`.
     #[test]
