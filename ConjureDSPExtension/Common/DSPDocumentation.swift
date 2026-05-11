@@ -2612,7 +2612,11 @@ enum DSPDocumentation {
     /// topic, or `nil` if the topic has no library backing or extraction
     /// yields nothing. Cached per-process via `appendixCache`.
     static func apiReferenceAppendix(for topic: String) -> String? {
-        if let cached = appendixCache[topic] { return cached.isEmpty ? nil : cached }
+        appendixCacheLock.lock()
+        let cached = appendixCache[topic]
+        appendixCacheLock.unlock()
+        if let cached { return cached.isEmpty ? nil : cached }
+
         guard let files = topicSourceMap[topic] else { return nil }
         guard let resourceURL = appexResourceURL else { return nil }
 
@@ -2639,12 +2643,17 @@ enum DSPDocumentation {
             sections.append("## API reference (Rust)\n\n\(DSPDocumentationExtractor.renderMarkdown(rsSymbols))")
         }
         let joined = sections.joined(separator: "\n\n")
+        appendixCacheLock.lock()
         appendixCache[topic] = joined
+        appendixCacheLock.unlock()
         return joined.isEmpty ? nil : joined
     }
 
     /// Cache so repeat `get_docs("filters")` calls don't re-read disk.
+    /// Guarded by `appendixCacheLock`; the disk-read + extractor pass runs
+    /// outside the lock so concurrent topics don't serialize on I/O.
     nonisolated(unsafe) private static var appendixCache: [String: String] = [:]
+    private static let appendixCacheLock = NSLock()
 
     /// The extension's bundle `Resources/` URL — where the build phase
     /// drops `conjuredsp/*.py` and `conjuredsp-rs/*.rs`. Resolved via the
