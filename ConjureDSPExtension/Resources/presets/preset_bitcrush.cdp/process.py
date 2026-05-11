@@ -25,18 +25,14 @@ def process(ctx):
     downsample = int(ctx.params["downsample"])
     levels = 2 ** bit_depth
 
-    for ch in range(len(ctx.inputs)):
-        signal = ctx.inputs[ch][:ctx.frame_count]
+    # Bit depth reduction: quantize all channels at once. Half-away-from-zero
+    # rounding (matches Rust f32::round) rather than numpy's default banker's
+    # rounding, so Python and Rust backends produce bit-identical output.
+    scaled = ctx.inputs * levels
+    crushed = np.trunc(scaled + np.sign(scaled) * 0.5) / levels
 
-        # Bit depth reduction: quantize to fewer levels.
-        # Use half-away-from-zero rounding (matches Rust f32::round) rather than
-        # numpy's default banker's rounding, so the Python and Rust backends
-        # produce bit-identical output.
-        scaled = signal * levels
-        crushed = np.trunc(scaled + np.sign(scaled) * 0.5) / levels
-
-        # Sample rate reduction: hold every Nth sample
-        for i in range(ctx.frame_count):
-            if i % downsample == 0:
-                held = crushed[i]
-            ctx.outputs[ch][i] = held
+    # Sample rate reduction: hold every Nth sample. Map each output index i
+    # to (i // downsample) * downsample, then fancy-index the columns. No
+    # Python loop — numpy reshuffles every channel in one call.
+    indices = (np.arange(ctx.inputs.shape[1]) // downsample) * downsample
+    ctx.outputs[:] = crushed[:, indices]

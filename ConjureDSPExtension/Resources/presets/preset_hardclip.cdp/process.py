@@ -18,6 +18,5 @@ def process(ctx):
         drive: Pre-clip gain (1–20x)
     """
     drive = ctx.params["drive"]
-
-    for ch in range(len(ctx.inputs)):
-        ctx.outputs[ch][:ctx.frame_count] = np.clip(drive * ctx.inputs[ch][:ctx.frame_count], -1.0, 1.0)
+    # Whole-array clip across all channels in one call.
+    np.clip(drive * ctx.inputs, -1.0, 1.0, out=ctx.outputs)

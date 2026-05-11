@@ -19,18 +19,18 @@ def process(ctx):
         gain: Volume (-24 to +12 dB)
         pan:  Stereo position (0.0 = hard left, 0.5 = center, 1.0 = hard right)
     """
-    gain_db = ctx.params["gain"]
+    gain = db_to_gain(ctx.params["gain"])
     pan = ctx.params["pan"]
 
-    gain = db_to_gain(gain_db)
-    n_ch = len(ctx.inputs)
-
-    if n_ch == 1:
-        # Mono: just apply gain
-        np.multiply(ctx.inputs[0][:ctx.frame_count], gain, out=ctx.outputs[0][:ctx.frame_count])
+    if ctx.inputs.shape[0] == 1:
+        # Mono: just apply gain.
+        np.multiply(ctx.inputs, gain, out=ctx.outputs)
     else:
-        # Stereo: constant-power pan
-        left_gain = gain * math.cos(pan * math.pi * 0.5)
-        right_gain = gain * math.sin(pan * math.pi * 0.5)
-        np.multiply(ctx.inputs[0][:ctx.frame_count], left_gain, out=ctx.outputs[0][:ctx.frame_count])
-        np.multiply(ctx.inputs[1][:ctx.frame_count], right_gain, out=ctx.outputs[1][:ctx.frame_count])
+        # Stereo: constant-power pan. Build a (channels, 1) gain vector so
+        # numpy broadcasts it across the frame_count axis in one call.
+        gains = np.array(
+            [[gain * math.cos(pan * math.pi * 0.5)],
+             [gain * math.sin(pan * math.pi * 0.5)]],
+            dtype=np.float32,
+        )
+        np.multiply(ctx.inputs, gains, out=ctx.outputs)

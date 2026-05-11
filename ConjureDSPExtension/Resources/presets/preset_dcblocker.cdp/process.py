@@ -24,18 +24,22 @@ def process(ctx):
     """
     global _state
 
-    cutoff_hz = ctx.params["cutoff"]
-    r = math.exp(-2.0 * math.pi * cutoff_hz / ctx.sample_rate)
+    r = math.exp(-2.0 * math.pi * ctx.params["cutoff"] / ctx.sample_rate)
+    n_ch, frame_count = ctx.inputs.shape
 
-    for ch in range(len(ctx.inputs)):
+    # IIR feedback is sequential per channel (y[n] depends on y[n-1]), so
+    # the inner loop stays per-sample. The outer per-channel loop stays for
+    # the same reason. Slack-region slicing is no longer needed.
+    for ch in range(n_ch):
         prev_x = _state[ch][0] if ch < len(_state) else 0.0
         prev_y = _state[ch][1] if ch < len(_state) else 0.0
-
-        for i in range(ctx.frame_count):
-            x = ctx.inputs[ch][i]
+        row_in = ctx.inputs[ch]
+        row_out = ctx.outputs[ch]
+        for i in range(frame_count):
+            x = row_in[i]
             prev_y = x - prev_x + r * prev_y
             prev_x = x
-            ctx.outputs[ch][i] = prev_y
+            row_out[i] = prev_y
 
         if ch < len(_state):
             _state[ch][0] = prev_x

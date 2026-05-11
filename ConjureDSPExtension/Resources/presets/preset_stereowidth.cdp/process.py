@@ -21,23 +21,18 @@ def process(ctx):
     """
     width = ctx.params["width"]
 
-    n_ch = len(ctx.inputs)
-
-    if n_ch < 2:
-        # Mono: passthrough
-        ctx.outputs[0][:ctx.frame_count] = ctx.inputs[0][:ctx.frame_count]
+    if ctx.inputs.shape[0] < 2:
+        # Mono: passthrough.
+        ctx.outputs[:] = ctx.inputs
         return
 
-    left = ctx.inputs[0][:ctx.frame_count]
-    right = ctx.inputs[1][:ctx.frame_count]
+    left = ctx.inputs[0]
+    right = ctx.inputs[1]
 
-    # Encode to mid/side
+    # Encode to mid/side, scale, decode back. Each line is a whole-row
+    # numpy op — no Python loop, no slack-region slicing needed.
     mid = (left + right) * 0.5
-    side = (left - right) * 0.5
+    side = (left - right) * 0.5 * width
 
-    # Scale side component
-    side_scaled = side * width
-
-    # Decode back to L/R
-    ctx.outputs[0][:ctx.frame_count] = mid + side_scaled
-    ctx.outputs[1][:ctx.frame_count] = mid - side_scaled
+    ctx.outputs[0] = mid + side
+    ctx.outputs[1] = mid - side
