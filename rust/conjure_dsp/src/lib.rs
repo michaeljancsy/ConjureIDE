@@ -400,6 +400,20 @@ pub unsafe extern "C" fn dsp_kernel_benchmark_process(kernel: DSPKernelRef) -> f
     (*kernel).benchmark_process().unwrap_or(-1.0)
 }
 
+/// Monotonic counter that bumps on every state change to the kernel's
+/// `last_error` (None → Some, Some → None, Some(x) → Some(y), and the
+/// initial set). Swift polls this on a timer; only when it advances does
+/// it re-read `dsp_kernel_last_error`. Lets the editor surface runtime
+/// errors as Monaco markers without scanning the error string on every
+/// poll.
+///
+/// # Safety
+/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dsp_kernel_error_generation(kernel: DSPKernelRef) -> u64 {
+    (*kernel).error_generation()
+}
+
 /// Returns the last error message as a null-terminated C string.
 /// Returns null if no error. The pointer is valid until the next call to this function or destroy.
 ///

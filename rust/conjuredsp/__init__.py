@@ -3,6 +3,14 @@
 This package provides type definitions, parameter helpers, DSP utilities,
 and building blocks for writing ConjureDSP presets.
 
+The companion Rust crate (``conjuredsp-rs``) ships the same DSP building
+blocks (Biquad, DelayLine, LFO, db_to_gain, smooth_coeff, …) with a
+one-to-one API match. Parameter builders differ between the two by design:
+Python uses keyword arguments (``db(min=-40, max=-3, default=-20)``) because
+they're idiomatic; Rust uses fluent chains (``db().min(-40).max(-3)…``)
+because ``const fn`` rules out kwargs. Both produce identical metadata —
+pick the language idiom that fits.
+
 Quick start::
 
     from conjuredsp import freq, db, mix, time_ms

@@ -20,6 +20,7 @@ def process(ctx):
     """
     drive = ctx.params["drive"]
     norm = 1.0 / np.tanh(drive)
-
-    for ch in range(len(ctx.inputs)):
-        ctx.outputs[ch][:ctx.frame_count] = np.tanh(drive * ctx.inputs[ch][:ctx.frame_count]) * norm
+    # np.tanh broadcasts across channels; out= writes straight into the
+    # backing array. Single ufunc call covers the whole block.
+    np.tanh(drive * ctx.inputs, out=ctx.outputs)
+    ctx.outputs *= norm

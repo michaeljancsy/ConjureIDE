@@ -113,7 +113,11 @@ Scripts can be written in Python (instant load) or Rust (compiled to WASM). `Scr
 4. Parameter metadata is extracted from `get_param_metadata_json`/`get_param_metadata_len` WASM exports
 
 ### conjuredsp Libraries (Python + Rust)
-Both Python and Rust DSP scripts can use a `conjuredsp` library that provides DSP building blocks and eliminates boilerplate. The two libraries have equivalent APIs:
+Both Python and Rust DSP scripts can use a `conjuredsp` library that provides DSP building blocks and eliminates boilerplate. The two libraries provide **equivalent capability, language-idiomatic surface**: the DSP building blocks (Biquad, DelayLine, LFO, db_to_gain, smooth_coeff, etc.) match one-to-one. Parameter builders differ slightly — Python uses keyword arguments (`db(min=-40, max=-3, default=-20)`) because that's idiomatic Python; Rust uses fluent chains (`db().min(-40).max(-3).default(-20)`) because `const fn` constraints rule out kwargs. Both produce the same metadata; pick the language idiom that fits.
+
+(`CLAUDE.md` is repo-reader documentation — not what `get_docs()` returns. The runtime docs surface flows from the `conjuredsp` library docstrings, surfaced via the `DSPDocumentationExtractor` API-reference appendix.)
+
+The library shape:
 
 **Python** (`rust/conjuredsp/`): Installed into bundled Python's site-packages by `setup-python.sh`. User scripts `from conjuredsp import freq, db, ...`.
 

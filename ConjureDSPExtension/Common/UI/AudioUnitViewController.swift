@@ -881,6 +881,16 @@ pub extern "C" fn process(
             .receive(on: DispatchQueue.main)
             .eraseToAnyPublisher()
 
+        // PR #4: Runtime errors from `process()` raises. Fires when the
+        // kernel's `last_error` transitions (None → Some, Some → None,
+        // Some(x) → Some(y)). The main view subscribes to push a Monaco
+        // marker at the offending line and show a persistent banner that
+        // stays visible across all bundle files (so the user notices the
+        // error even when editing `ui/index.html`).
+        let runtimeErrorPublisher = au.runtimeErrorChanged
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
+
         let buildID = extensionBundle.infoDictionary?["BuildID"] as? Int ?? 0
 
         // Bundle-private STATE channel coordinator — owned by the AU,
@@ -895,6 +905,7 @@ pub extern "C" fn process(
             extensionBundle: extensionBundle,
             scriptSourcePublisher: scriptPublisher,
             scriptLoadFailurePublisher: scriptLoadFailurePublisher,
+            runtimeErrorPublisher: runtimeErrorPublisher,
             presetManager: pm,
             captureManager: capture,
             transportManager: transport,

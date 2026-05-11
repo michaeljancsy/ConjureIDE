@@ -143,6 +143,19 @@ pub struct DSPKernel {
     /// Written on both the main thread (load failures) and render thread (runtime errors),
     /// so it must be mutex-protected to avoid a data race.
     last_error: Mutex<Option<String>>,
+    /// Monotonic counter that bumps on every state change to `last_error`
+    /// (None → Some, Some → None, Some(x) → Some(y), and the initial set).
+    /// Swift polls this on a 100 ms timer; only when it advances does it
+    /// re-read `dsp_kernel_last_error`. Lets the editor surface runtime
+    /// errors as Monaco markers without scanning the error string on every
+    /// poll. See `update_last_error_blocking` / `_try` for the only legal
+    /// write paths.
+    error_generation: AtomicU64,
+    /// Audio-thread state: was the previous block's process call a failure?
+    /// Used to detect the first successful render after an error so the
+    /// kernel can clear `last_error` and notify Swift via `error_generation`.
+    /// Without this flag the marker would stick until the script reloads.
+    had_error_last_block: AtomicBool,
     /// 16 generic parameters (0.0–1.0), stored as AtomicU32 via f32::to_bits/from_bits.
     /// Main thread writes (DAW automation), audio thread reads — lock-free via Relaxed ordering.
     params: [AtomicU32; PARAM_COUNT],
@@ -395,6 +408,8 @@ impl DSPKernel {
             channel_count: 0,
             backend: Mutex::new(None),
             last_error: Mutex::new(None),
+            error_generation: AtomicU64::new(0),
+            had_error_last_block: AtomicBool::new(false),
             params: [ZERO; PARAM_COUNT],
             input_ring: AudioRingBuffer::new(AudioRingBuffer::DEFAULT_CAPACITY),
             output_ring: AudioRingBuffer::new(AudioRingBuffer::DEFAULT_CAPACITY),
@@ -707,12 +722,16 @@ impl DSPKernel {
                     self.install_backend_immediate(boxed, defaults);
                 }
 
-                if let Ok(mut guard) = self.last_error.lock() { *guard = None; }
+                self.update_last_error_blocking(None);
+                // Fresh load wipes any prior runtime-error state on the
+                // audio side too; the new backend hasn't failed yet.
+                self.had_error_last_block.store(false, Ordering::Relaxed);
                 true
             }
             Err(err_msg) => {
                 self.install_passthrough_after_failed_load();
-                if let Ok(mut guard) = self.last_error.lock() { *guard = Some(err_msg); }
+                self.update_last_error_blocking(Some(err_msg));
+                self.had_error_last_block.store(false, Ordering::Relaxed);
                 false
             }
         }
@@ -763,12 +782,14 @@ impl DSPKernel {
                     self.install_backend_immediate(boxed, defaults);
                 }
 
-                if let Ok(mut guard) = self.last_error.lock() { *guard = None; }
+                self.update_last_error_blocking(None);
+                self.had_error_last_block.store(false, Ordering::Relaxed);
                 true
             }
             Err(err_msg) => {
                 self.install_passthrough_after_failed_load();
-                if let Ok(mut guard) = self.last_error.lock() { *guard = Some(err_msg); }
+                self.update_last_error_blocking(Some(err_msg));
+                self.had_error_last_block.store(false, Ordering::Relaxed);
                 false
             }
         }
@@ -1087,9 +1108,57 @@ impl DSPKernel {
     }
 
     /// Sets the last error message. Safe to call from any thread.
+    /// Bumps `error_generation` on an actual state change so Swift's poll
+    /// notices the new value.
     pub(crate) fn set_last_error(&self, err: Option<String>) {
+        self.update_last_error_blocking(err);
+    }
+
+    /// Returns the current `error_generation` counter. Swift polls this to
+    /// detect transitions; reads `dsp_kernel_last_error` only when the
+    /// value advances.
+    pub fn error_generation(&self) -> u64 {
+        self.error_generation.load(Ordering::Acquire)
+    }
+
+    /// Writes `err` to `last_error` and bumps `error_generation` if the
+    /// value actually changed. Blocks on the mutex — only safe to call
+    /// from the main thread (e.g. load paths).
+    ///
+    /// Returns true if the new value was written, false if the value was
+    /// already equal or the mutex was poisoned.
+    fn update_last_error_blocking(&self, err: Option<String>) -> bool {
         if let Ok(mut guard) = self.last_error.lock() {
-            *guard = err;
+            if *guard != err {
+                *guard = err;
+                self.error_generation.fetch_add(1, Ordering::Release);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Audio-thread variant of `update_last_error_blocking`: uses
+    /// `try_lock` instead of `lock` to avoid blocking the render thread
+    /// when the main thread briefly holds the mutex. Drops the write on
+    /// contention; the next failing block will set it again, and the
+    /// success path is contention-free in steady state.
+    ///
+    /// Returns `true` when the lock was acquired (whether or not the
+    /// value changed — the no-op case still reflects committed state),
+    /// `false` on contention. Callers use this to gate audio-thread
+    /// state that depends on the kernel error having reached the value
+    /// they wrote (e.g. clearing `had_error_last_block` in the recovery
+    /// branch only when the paired `last_error = None` actually landed).
+    fn update_last_error_try(&self, err: Option<String>) -> bool {
+        if let Ok(mut guard) = self.last_error.try_lock() {
+            if *guard != err {
+                *guard = err;
+                self.error_generation.fetch_add(1, Ordering::Release);
+            }
+            true
+        } else {
+            false
         }
     }
 
@@ -1510,13 +1579,13 @@ impl DSPKernel {
     }
 
     /// Capture any backend error into `last_error` so it outlives the mutex guard.
+    /// Uses `try_lock` so it's safe to call from any thread (including the
+    /// audio thread); drops the capture on contention.
     fn capture_backend_error(&self) {
-        if let Ok(backend_guard) = self.backend.lock() {
+        if let Ok(backend_guard) = self.backend.try_lock() {
             if let Some(ref backend) = *backend_guard {
                 if let Some(err) = backend.last_error() {
-                    if let Ok(mut last) = self.last_error.lock() {
-                        *last = Some(err.to_string());
-                    }
+                    self.update_last_error_try(Some(err.to_string()));
                 }
             }
         }
@@ -1836,13 +1905,28 @@ impl DSPKernel {
                 if ok {
                     Self::safety_clamp(outputs, channel_count, frame_count);
                     produced = true;
-                } else {
-                    // Backend failed — capture error before dropping the &mut borrow
-                    if let Some(err) = backend.last_error() {
-                        if let Ok(mut last) = self.last_error.lock() {
-                            *last = Some(err.to_string());
+
+                    // Recovery: if the previous block errored, clear the
+                    // backend's and kernel's error state on the first
+                    // successful render. Without this, a transient failure
+                    // would leave the editor's gutter marker stuck until
+                    // the user reloads. Bumps `error_generation` so Swift's
+                    // 10 Hz poll picks up the clear on the next tick.
+                    if self.had_error_last_block.load(Ordering::Relaxed) {
+                        backend.clear_last_error();
+                        if self.update_last_error_try(None) {
+                            self.had_error_last_block.store(false, Ordering::Relaxed);
                         }
                     }
+                } else {
+                    // Backend failed — capture error before dropping the &mut borrow.
+                    // `try_lock` so the audio thread doesn't block on the main
+                    // thread; on contention we drop this block's error report
+                    // and the next failing block will set it again.
+                    if let Some(err) = backend.last_error() {
+                        self.update_last_error_try(Some(err.to_string()));
+                    }
+                    self.had_error_last_block.store(true, Ordering::Relaxed);
                 }
                 // Snapshot script-published telemetry into the kernel's
                 // atomic store. Single-writer (audio thread, here) /
@@ -2549,6 +2633,642 @@ mod tests {
         // process.py applies gain from params["gain"], default 0 dB = unity gain
         assert_eq!(output_l, [1.0, 0.5, -1.0, 0.0]);
         assert_eq!(output_r, [0.2, 0.4, 0.6, 0.8]);
+    }
+
+    /// `ctx.inputs` is exposed as a 2D `(n_channels, max_frames)` ndarray
+    /// (not a list of per-channel arrays). The script writes the ndim into
+    /// the first output sample; passthrough fallback would show the input.
+    #[test]
+    fn test_python_ctx_inputs_is_2d_ndarray() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        // Encode ndim and shape into samples within [-1, 1] (the kernel's
+        // safety-limiter range), then read back and decode. The script
+        // writes 0.1 * ndim and 0.1 * shape[0] / shape[1] so a 2D (2, 1024)
+        // ctx produces output_l[0..3] = [0.2, 0.2, 102.4 → clamped to 1.0]
+        // — but we only assert on positions that stay in range.
+        let script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    ctx.outputs[0][0] = ctx.inputs.ndim * 0.1\n    ctx.outputs[0][1] = ctx.inputs.shape[0] * 0.1\n    ctx.outputs[1][0] = 1.0 if ctx.inputs[0].flags.c_contiguous else -1.0\n    ctx.outputs[1][1] = 0.5 if isinstance(ctx.inputs, np.ndarray) else -0.5\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(2, 2, 44100.0);
+
+        let input_l: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+        let input_r: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+        let mut output_l: [f32; 4] = [0.0; 4];
+        let mut output_r: [f32; 4] = [0.0; 4];
+        let input_ptrs: [*const f32; 2] = [input_l.as_ptr(), input_r.as_ptr()];
+        let output_ptrs: [*mut f32; 2] = [output_l.as_mut_ptr(), output_r.as_mut_ptr()];
+        unsafe {
+            kernel.process(input_ptrs.as_ptr(), output_ptrs.as_ptr(), 2, 4);
+        }
+        assert!(
+            kernel.last_error().is_none(),
+            "python raised: {:?}",
+            kernel.last_error()
+        );
+        // ctx.inputs.ndim == 2 → 0.2
+        assert!((output_l[0] - 0.2).abs() < 1e-6, "ndim should be 2 (got {})", output_l[0] * 10.0);
+        // ctx.inputs.shape[0] == 2 (channel count) → 0.2
+        assert!((output_l[1] - 0.2).abs() < 1e-6, "shape[0] should be 2 (got {})", output_l[1] * 10.0);
+        // Row 0 of a C-contiguous PyArray2 must be contiguous → 1.0
+        assert_eq!(output_r[0], 1.0, "ctx.inputs[0] should be c_contiguous");
+        // ctx.inputs should be a numpy ndarray → 0.5
+        assert_eq!(output_r[1], 0.5, "ctx.inputs should be a numpy ndarray");
+        std::fs::remove_file(script).ok();
+    }
+
+    /// Verify cross-channel numpy vectorization: `ctx.outputs[:] = ctx.inputs * 0.5`
+    /// works because the arrays are 2D. With the previous list-of-arrays
+    /// shape this would raise; the kernel would fall through to passthrough.
+    #[test]
+    fn test_python_cross_channel_vectorized() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    ctx.outputs[:] = ctx.inputs * 0.5\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(2, 2, 44100.0);
+
+        let input_l: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
+        let input_r: [f32; 4] = [0.2, 0.4, 0.6, 0.8];
+        let mut output_l: [f32; 4] = [0.0; 4];
+        let mut output_r: [f32; 4] = [0.0; 4];
+        let input_ptrs: [*const f32; 2] = [input_l.as_ptr(), input_r.as_ptr()];
+        let output_ptrs: [*mut f32; 2] = [output_l.as_mut_ptr(), output_r.as_mut_ptr()];
+        unsafe {
+            kernel.process(input_ptrs.as_ptr(), output_ptrs.as_ptr(), 2, 4);
+        }
+        assert!(
+            kernel.last_error().is_none(),
+            "python raised: {:?}",
+            kernel.last_error()
+        );
+        assert_eq!(output_l, [0.5, 0.25, -0.5, 0.0]);
+        assert_eq!(output_r, [0.1, 0.2, 0.3, 0.4]);
+        std::fs::remove_file(script).ok();
+    }
+
+    /// After PR #2, ctx.inputs/outputs are sliced views of length
+    /// frame_count, not the underlying max_frames buffer. Each row's length
+    /// must equal frame_count for the block.
+    #[test]
+    fn test_python_ctx_views_pre_sliced_to_frame_count() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    ctx.outputs[0][0] = len(ctx.inputs[0]) * 0.001\n    ctx.outputs[0][1] = ctx.inputs.shape[1] * 0.001\n    ctx.outputs[1][0] = len(ctx.outputs[0]) * 0.001\n    ctx.outputs[1][1] = ctx.outputs.shape[1] * 0.001\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(2, 2, 44100.0);
+
+        let input_l: [f32; 7] = [0.0; 7];
+        let input_r: [f32; 7] = [0.0; 7];
+        let mut output_l: [f32; 7] = [0.0; 7];
+        let mut output_r: [f32; 7] = [0.0; 7];
+        let input_ptrs: [*const f32; 2] = [input_l.as_ptr(), input_r.as_ptr()];
+        let output_ptrs: [*mut f32; 2] = [output_l.as_mut_ptr(), output_r.as_mut_ptr()];
+        unsafe {
+            kernel.process(input_ptrs.as_ptr(), output_ptrs.as_ptr(), 2, 7);
+        }
+        assert!(
+            kernel.last_error().is_none(),
+            "python raised: {:?}",
+            kernel.last_error()
+        );
+        // Each encoded value is frame_count * 0.001 = 7 * 0.001 = 0.007.
+        assert!((output_l[0] - 0.007).abs() < 1e-5, "len(ctx.inputs[0]) should be 7 (got {})", output_l[0] * 1000.0);
+        assert!((output_l[1] - 0.007).abs() < 1e-5, "ctx.inputs.shape[1] should be 7 (got {})", output_l[1] * 1000.0);
+        assert!((output_r[0] - 0.007).abs() < 1e-5, "len(ctx.outputs[0]) should be 7 (got {})", output_r[0] * 1000.0);
+        assert!((output_r[1] - 0.007).abs() < 1e-5, "ctx.outputs.shape[1] should be 7 (got {})", output_r[1] * 1000.0);
+        std::fs::remove_file(script).ok();
+    }
+
+    /// Out-of-bounds index assignment on the pre-sliced view raises
+    /// IndexError. Under PR #2, ctx.outputs[ch] has length frame_count, so
+    /// writing past it surfaces immediately. The kernel falls back to
+    /// passthrough on the exception.
+    #[test]
+    fn test_python_oob_index_assignment_raises() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        // Write to ctx.outputs[0][ctx.frame_count] — one past the end.
+        let script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    ctx.outputs[0][ctx.frame_count] = 0.9\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [0.5, 0.5, 0.5, 0.5];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+
+        // Passthrough: input copied to output. The error is captured.
+        assert_eq!(output, [0.5, 0.5, 0.5, 0.5]);
+        let err = kernel.last_error().expect("oob assignment should set last_error");
+        assert!(
+            err.contains("IndexError") || err.contains("index"),
+            "expected IndexError in last_error, got: {err}"
+        );
+        std::fs::remove_file(script).ok();
+    }
+
+    /// Negative test: a script that rebinds ctx.outputs to a fresh array
+    /// does NOT change the host's output — Rust reads from the unchanged
+    /// backing array. Locks the contract so a future "fix" doesn't quietly
+    /// change it.
+    #[test]
+    fn test_python_outputs_rebinding_silently_discarded() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        // Rebind ctx.outputs to a fresh array, then write a known value into
+        // it. The backing array Rust reads from is unchanged.
+        let script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    ctx.outputs = np.zeros_like(ctx.outputs)\n    ctx.outputs[:] = 0.9\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+
+        // Backing array was never written to — it stays zero (allocated
+        // fresh by allocate_py_arrays). Host hears silence.
+        assert_eq!(output, [0.0, 0.0, 0.0, 0.0]);
+        assert!(
+            kernel.last_error().is_none(),
+            "no error expected (rebinding is silent), got: {:?}",
+            kernel.last_error()
+        );
+        std::fs::remove_file(script).ok();
+    }
+
+    /// A render block with `frame_count == 0` must not panic. The prefix-
+    /// slice cache uses `u32::MAX` as its "uninitialized" sentinel so a
+    /// real zero-frame block still triggers the rebuild path on the very
+    /// first call. Hosts can pass zero frames at transport edges; previously
+    /// this would `.unwrap()` on `None` and crash the audio thread.
+    #[test]
+    fn test_python_zero_frame_count_does_not_panic() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    np.copyto(ctx.outputs, ctx.inputs)\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 4, 44100.0);
+
+        let input: [f32; 4] = [0.0; 4];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        // Drive a 0-frame block FIRST. With the old `cached_prefix_for_frames: 0`
+        // initializer, this would skip the rebuild and unwrap None.
+        unsafe { kernel.process(&ip, &op, 1, 0); }
+        assert!(
+            kernel.last_error().is_none(),
+            "0-frame block should not raise, got: {:?}",
+            kernel.last_error()
+        );
+        // Follow-up non-zero block must also work.
+        let input2: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+        let ip2: *const f32 = input2.as_ptr();
+        unsafe { kernel.process(&ip2, &op, 1, 4); }
+        assert_eq!(output, [0.1, 0.2, 0.3, 0.4]);
+        std::fs::remove_file(script).ok();
+    }
+
+    /// PR #4: `error_generation` bumps on the first failing block. Swift's
+    /// poll uses this delta to know it needs to re-read `last_error`.
+    #[test]
+    fn test_error_generation_bumps_on_render_failure() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    raise ValueError('boom')\n",
+        );
+        let mut kernel = DSPKernel::new();
+        let gen_before_load = kernel.error_generation();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        // Successful load with `last_error` previously None — should not bump
+        // (state didn't change).
+        let gen_after_load = kernel.error_generation();
+        assert_eq!(
+            gen_after_load, gen_before_load,
+            "successful load on clean state should not bump generation"
+        );
+
+        kernel.initialize(1, 1, 44100.0);
+        let input: [f32; 4] = [0.5, 0.5, 0.5, 0.5];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+
+        // After one failing block, the counter advanced and last_error is Some.
+        assert!(
+            kernel.error_generation() > gen_after_load,
+            "error_generation should bump on raise"
+        );
+        assert!(kernel.last_error().is_some(), "last_error should be Some");
+        std::fs::remove_file(script).ok();
+    }
+
+    /// PR #4: `error_generation` bumps again when the kernel auto-clears the
+    /// stuck error on the first successful render after a failure. This is
+    /// what stops the editor's gutter marker from getting stuck.
+    #[test]
+    fn test_error_generation_bumps_on_recovery_clear() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        // Script raises only when ctx.params[0] >= 0.5 (default 0). We'll
+        // drive the param to trigger the raise, then back down to recover.
+        let script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    if ctx.params[0] >= 0.5:\n        raise ValueError('intermittent')\n    ctx.outputs[:] = ctx.inputs\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [0.5, 0.5, 0.5, 0.5];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        // Drive params[0] high → script raises.
+        kernel.set_parameter(0, 0.9);
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        let gen_after_failure = kernel.error_generation();
+        assert!(kernel.last_error().is_some(), "should have error after raise");
+
+        // Drive params[0] low → script succeeds. Kernel detects the
+        // transition from had_error_last_block=true and clears.
+        kernel.set_parameter(0, 0.0);
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert!(
+            kernel.error_generation() > gen_after_failure,
+            "generation should bump on auto-clear"
+        );
+        assert!(
+            kernel.last_error().is_none(),
+            "last_error should clear after recovery, got: {:?}",
+            kernel.last_error()
+        );
+        std::fs::remove_file(script).ok();
+    }
+
+    /// PR #4: `error_generation` bumps on script reload that clears a prior
+    /// load failure. Same Swift-side mechanism handles both render-time and
+    /// load-time clears.
+    #[test]
+    fn test_error_generation_bumps_on_reload_clear() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let bad_script = write_temp_script(
+            "this is not valid python at all\ndef process",
+        );
+        let good_script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    pass\n",
+        );
+
+        let mut kernel = DSPKernel::new();
+        // First load fails; generation bumps and last_error is Some.
+        let r1 = kernel.load_script(&python_home, bad_script.to_str().unwrap());
+        assert!(!r1, "bad script should fail to load");
+        let gen_after_fail = kernel.error_generation();
+        assert!(gen_after_fail > 0, "load failure should bump generation");
+        assert!(kernel.last_error().is_some());
+
+        // Second load succeeds; clears last_error → generation bumps again.
+        let r2 = kernel.load_script(&python_home, good_script.to_str().unwrap());
+        assert!(r2, "clean script should load");
+        assert!(
+            kernel.error_generation() > gen_after_fail,
+            "successful reload should bump generation when clearing prior error"
+        );
+        assert!(kernel.last_error().is_none());
+
+        std::fs::remove_file(bad_script).ok();
+        std::fs::remove_file(good_script).ok();
+    }
+
+    /// PR #4: `update_last_error_try` reports `true` only when it acquired
+    /// the lock. The audio-thread recovery branch gates its `had_error_last_block`
+    /// clear on this return so a contended write doesn't desynchronize the
+    /// flag from `last_error` (which would suppress retry forever and leave
+    /// a stale error in the UI).
+    #[test]
+    fn test_update_last_error_try_signals_lock_acquisition() {
+        let kernel = DSPKernel::new();
+
+        // Uncontended: lock acquires → true, even when the value didn't
+        // change. The "no-op write" case (already-equal) still reflects
+        // committed state, so the caller can safely clear flags.
+        assert!(kernel.update_last_error_try(None));
+        assert!(kernel.update_last_error_try(Some("first".to_string())));
+        assert!(
+            kernel.update_last_error_try(Some("first".to_string())),
+            "no-op (same value) must return true under post-fix semantics"
+        );
+
+        // Contended: an outstanding `last_error.lock()` blocks try_lock →
+        // we get false, and the recovery-branch caller will not clear
+        // its had_error_last_block flag (tested via integration above).
+        {
+            let _guard = kernel.last_error.lock().unwrap();
+            assert!(
+                !kernel.update_last_error_try(Some("second".to_string())),
+                "contended try_lock must return false"
+            );
+        }
+        // After the guard drops, the call succeeds again.
+        assert!(kernel.update_last_error_try(Some("third".to_string())));
+    }
+
+/// PR #4: a failed reload must reset `had_error_last_block`. Without
+    /// this, the next passthrough block (which returns `ok=true`) would
+    /// see the stale `true` flag from the prior runtime failure and let
+    /// the recovery branch wipe the freshly-written load-error string.
+    #[test]
+    fn test_failed_reload_resets_had_error_flag() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let raising_script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    raise ValueError('runtime boom')\n",
+        );
+        let bad_syntax_script = write_temp_script(
+            "this is not valid python at all\ndef process",
+        );
+
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, raising_script.to_str().unwrap()));
+        kernel.initialize(1, 4, 44100.0);
+
+        let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        // Render → runtime error sets had_error_last_block to true.
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert!(
+            kernel.had_error_last_block.load(Ordering::Relaxed),
+            "runtime error should set had_error_last_block"
+        );
+
+        // Failed reload — the fix wires `.store(false, …)` into the Err arm
+        // of `load_script`. Without it the flag would stay `true`.
+        let r = kernel.load_script(&python_home, bad_syntax_script.to_str().unwrap());
+        assert!(!r, "bad-syntax script should fail to load");
+        assert!(
+            !kernel.had_error_last_block.load(Ordering::Relaxed),
+            "failed reload must reset had_error_last_block"
+        );
+        assert!(
+            kernel.last_error().is_some(),
+            "failed reload should leave last_error set"
+        );
+
+        std::fs::remove_file(raising_script).ok();
+        std::fs::remove_file(bad_syntax_script).ok();
+    }
+
+    /// PR #4: re-setting the same error string (e.g. a script that raises
+    /// every block with an identical message) does NOT bump the counter
+    /// after the first hit. Steady-state failure is one initial bump plus
+    /// zero per-block bumps.
+    #[test]
+    fn test_error_generation_steady_state_no_repeated_bump() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    raise ValueError('same message every time')\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [0.5; 4];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        let gen_after_first = kernel.error_generation();
+        for _ in 0..10 {
+            unsafe { kernel.process(&ip, &op, 1, 4); }
+        }
+        assert_eq!(
+            kernel.error_generation(),
+            gen_after_first,
+            "identical error message should not bump generation per block"
+        );
+        std::fs::remove_file(script).ok();
+    }
+
+    /// PR #3: ctx.params supports both dict-style and attribute-style read.
+    /// Identical values returned from both surfaces.
+    #[test]
+    fn test_python_ctx_params_attr_access() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "PARAMS = {'gain': {'min': 0.0, 'max': 1.0, 'default': 0.42, 'unit': ''}}\ndef process(ctx):\n    ok = ctx.params.gain == ctx.params['gain']\n    ctx.outputs[0][0] = 0.5 if ok else -0.5\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+
+        let input: [f32; 4] = [0.0; 4];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert!(
+            kernel.last_error().is_none(),
+            "python raised: {:?}", kernel.last_error()
+        );
+        assert_eq!(output[0], 0.5, "ctx.params.gain should equal ctx.params['gain']");
+        std::fs::remove_file(script).ok();
+    }
+
+    /// PR #3: unknown attribute access raises AttributeError. Script catches
+    /// it and signals success via the output.
+    #[test]
+    fn test_python_ctx_params_unknown_attr_raises() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "PARAMS = {'gain': {'min': 0.0, 'max': 1.0, 'default': 0.0, 'unit': ''}}\ndef process(ctx):\n    try:\n        _ = ctx.params.bogus\n        ctx.outputs[0][0] = -0.5\n    except AttributeError as e:\n        # Confirm the error message mentions the missing key AND lists declared params.\n        if 'bogus' in str(e) and 'gain' in str(e):\n            ctx.outputs[0][0] = 0.5\n        else:\n            ctx.outputs[0][0] = -0.7\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+        let input: [f32; 4] = [0.0; 4];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert!(kernel.last_error().is_none(), "python raised: {:?}", kernel.last_error());
+        assert_eq!(output[0], 0.5, "unknown attr should raise AttributeError citing both 'bogus' and 'gain'");
+        std::fs::remove_file(script).ok();
+    }
+
+    /// PR #3: unknown key access raises KeyError with the same helpful
+    /// "did you mean" message as the attribute path.
+    #[test]
+    fn test_python_ctx_params_unknown_key_raises() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "PARAMS = {'gain': {'min': 0.0, 'max': 1.0, 'default': 0.0, 'unit': ''}}\ndef process(ctx):\n    try:\n        _ = ctx.params['bogus']\n        ctx.outputs[0][0] = -0.5\n    except KeyError as e:\n        msg = str(e)\n        if 'bogus' in msg and 'gain' in msg:\n            ctx.outputs[0][0] = 0.5\n        else:\n            ctx.outputs[0][0] = -0.7\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+        let input: [f32; 4] = [0.0; 4];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert!(kernel.last_error().is_none(), "python raised: {:?}", kernel.last_error());
+        assert_eq!(output[0], 0.5, "unknown key should raise KeyError citing both 'bogus' and 'gain'");
+        std::fs::remove_file(script).ok();
+    }
+
+    /// PR #3: any write to ctx.params raises (attribute or subscript). Locks
+    /// the read-only contract.
+    #[test]
+    fn test_python_ctx_params_readonly() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "PARAMS = {'gain': {'min': 0.0, 'max': 1.0, 'default': 0.0, 'unit': ''}}\ndef process(ctx):\n    attr_raised = False\n    item_raised = False\n    try: ctx.params.gain = 0.0\n    except AttributeError: attr_raised = True\n    try: ctx.params['gain'] = 0.0\n    except TypeError: item_raised = True\n    ctx.outputs[0][0] = 0.5 if (attr_raised and item_raised) else -0.5\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+        let input: [f32; 4] = [0.0; 4];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert!(kernel.last_error().is_none(), "python raised: {:?}", kernel.last_error());
+        assert_eq!(output[0], 0.5, "both attr and subscript writes should raise");
+        std::fs::remove_file(script).ok();
+    }
+
+    /// PR #3: keys/values/items/iteration all work and reflect declared params.
+    #[test]
+    fn test_python_ctx_params_iteration() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let script = write_temp_script(
+            "PARAMS = {'gain': {'min': 0.0, 'max': 1.0, 'default': 0.0, 'unit': ''}, 'mix': {'min': 0.0, 'max': 1.0, 'default': 0.0, 'unit': ''}}\ndef process(ctx):\n    keys = sorted(ctx.params.keys())\n    names_iter = sorted(list(ctx.params))\n    values_count = sum(1 for _ in ctx.params.values())\n    items_count = sum(1 for _ in ctx.params.items())\n    contains_ok = 'gain' in ctx.params and 'mix' in ctx.params\n    ok = (keys == ['gain', 'mix']\n          and names_iter == ['gain', 'mix']\n          and values_count == 2\n          and items_count == 2\n          and contains_ok\n          and len(ctx.params) == 2)\n    ctx.outputs[0][0] = 0.5 if ok else -0.5\n",
+        );
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, script.to_str().unwrap()));
+        kernel.initialize(1, 1, 44100.0);
+        let input: [f32; 4] = [0.0; 4];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert!(kernel.last_error().is_none(), "python raised: {:?}", kernel.last_error());
+        assert_eq!(output[0], 0.5, "all iteration methods should work");
+        std::fs::remove_file(script).ok();
     }
 
     #[test]

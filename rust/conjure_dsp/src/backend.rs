@@ -105,6 +105,12 @@ pub trait Backend: Any {
     /// Returns the last error message, if any.
     fn last_error(&self) -> Option<&str>;
 
+    /// Clears the backend's last error. Called by the kernel on the first
+    /// successful render after a failure so stale errors don't surface
+    /// indefinitely. Default no-op for backends that don't store an error
+    /// state.
+    fn clear_last_error(&mut self) {}
+
     /// Returns script-declared parameter names, keyed by address (0–15).
     /// Empty map means no names were declared (backward compatible).
     fn param_names(&self) -> HashMap<u8, String> {

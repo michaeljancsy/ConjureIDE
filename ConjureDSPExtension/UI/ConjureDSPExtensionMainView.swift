@@ -35,6 +35,10 @@ struct ConjureDSPExtensionMainView: View {
     /// StatusBarView as Run/in-plugin-browser failures so the user always
     /// sees the error.
     var scriptLoadFailurePublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.ScriptLoadFailure, Never>?
+    /// PR #4: stream of runtime-error transitions from the kernel. `nil`
+    /// payload means the error cleared (auto-recovery on next successful
+    /// render, or successful reload after a load failure).
+    var runtimeErrorPublisher: AnyPublisher<ConjureDSPExtensionAudioUnit.RuntimeError?, Never>?
     // captureManager / processProfiler / memoryMonitor are NOT observed
     // here — they fire at 4Hz+ and re-evaluating this whole body on every
     // publish caused ~12MB/min growth. Child views that actually render
@@ -834,6 +838,31 @@ struct ConjureDSPExtensionMainView: View {
             }
             if let processTimeMs = change.processTimeMs, let budgetMs = change.budgetMs {
                 lastBenchmark = (processTimeMs, budgetMs)
+            }
+        }
+        .onReceive(runtimeErrorPublisher ?? Empty().eraseToAnyPublisher()) { err in
+            // PR #4: route runtime errors through the same UI as load /
+            // compile errors — `errorMessage` (StatusBarView headline),
+            // `errorDetails` (More-info popover), and `editorMarkers` (Monaco
+            // gutter glyph). No separate banner: keeps the surface
+            // consistent with handleResult's compile-error display.
+            if let err = err {
+                let scriptName = (err.scriptPath as NSString).lastPathComponent
+                let location = err.lineNumber.map { "\(scriptName):\($0)" } ?? scriptName
+                errorMessage = "Runtime error in \(location)"
+                errorDetails = err.message
+                let line = err.lineNumber ?? 1
+                editorMarkers = [
+                    MonacoEditorView.Marker(
+                        startLine: line,
+                        message: err.message,
+                        severity: "error"
+                    )
+                ]
+            } else {
+                errorMessage = nil
+                errorDetails = nil
+                editorMarkers = []
             }
         }
         .onReceive(scriptLoadFailurePublisher ?? Empty().eraseToAnyPublisher()) { failure in
