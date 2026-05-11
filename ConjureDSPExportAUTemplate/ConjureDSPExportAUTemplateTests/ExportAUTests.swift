@@ -65,12 +65,15 @@ struct ExportAUComponentTests {
         #expect(avAU.auAudioUnit != nil)
     }
 
-    @Test("Has 1 input bus and 1 output bus")
+    @Test("Has main input + sidechain input and 1 output bus")
     func busConfiguration() async throws {
         let desc = try discoverComponentDescription()
         let avAU = try await AVAudioUnit.instantiate(with: desc, options: .loadInProcess)
         let au = avAU.auAudioUnit
-        #expect(au.inputBusses.count == 1)
+        // Two input busses: the main signal + an always-on optional
+        // sidechain (added in #286). Presets that don't read sidechain
+        // simply ignore the second bus's audio.
+        #expect(au.inputBusses.count == 2)
         #expect(au.outputBusses.count == 1)
     }
 
@@ -238,5 +241,49 @@ struct RustFFITests {
         // The preset was loaded during init — verify render block exists
         let renderBlock = au.renderBlock
         #expect(renderBlock != nil)
+    }
+}
+
+// MARK: - fullState (DAW persistence) Tests
+
+@Suite("Export AU fullState")
+struct ExportAUFullStateTests {
+    /// Regression: AURemoteHost reads `fullState` over XPC on
+    /// `com.apple.NSXPCConnection.user.endpoint`, not the main thread. An
+    /// earlier implementation used `MainActor.assumeIsolated` inside the
+    /// getter, which traps loudly off the main actor (EXC_BREAKPOINT in
+    /// `dispatch_assert_queue_fail`) — Live surfaced this as "Lost the
+    /// connection to the Audio Unit v3 plug-in" on first instantiation
+    /// from the plug-in browser.
+    @Test("fullState getter is safe from non-main thread")
+    func fullStateGetterFromNonMainThread() async throws {
+        let desc = try discoverComponentDescription()
+        let avAU = try await AVAudioUnit.instantiate(with: desc, options: .loadInProcess)
+        let au = avAU.auAudioUnit
+        let queue = DispatchQueue(label: "test.fullstate.nonmain")
+        let state: [String: Any]? = await withCheckedContinuation { cont in
+            queue.async { cont.resume(returning: au.fullState) }
+        }
+        let bytes = state?["conjuredsp_state"] as? Data
+        #expect(bytes != nil)
+    }
+
+    @Test("fullState setter is safe from non-main thread")
+    func fullStateSetterFromNonMainThread() async throws {
+        let desc = try discoverComponentDescription()
+        let avAU = try await AVAudioUnit.instantiate(with: desc, options: .loadInProcess)
+        let au = avAU.auAudioUnit
+        let snapshot = await withCheckedContinuation { (cont: CheckedContinuation<[String: Any]?, Never>) in
+            DispatchQueue(label: "test.fullstate.read").async {
+                cont.resume(returning: au.fullState)
+            }
+        }
+        let restored: Void = await withCheckedContinuation { cont in
+            DispatchQueue(label: "test.fullstate.write").async {
+                au.fullState = snapshot
+                cont.resume(returning: ())
+            }
+        }
+        _ = restored
     }
 }

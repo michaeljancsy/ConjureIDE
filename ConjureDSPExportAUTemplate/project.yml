@@ -141,6 +141,12 @@ targets:
         OTHER_LDFLAGS:
           - "-lconjure_dsp"
           - "-lpython3.14t"
+          # libconjure_dsp.a calls vDSP/cblas via the conjuredsp accel
+          # module — same reason the extension target links Accelerate
+          # explicitly. The test target doesn't import Accelerate from
+          # Swift, so the implicit framework link doesn't happen.
+          - "-framework"
+          - "Accelerate"
         LD_RUNPATH_SEARCH_PATHS:
           - "$(inherited)"
           - "$(SRCROOT)/../rust/python-dist/lib"

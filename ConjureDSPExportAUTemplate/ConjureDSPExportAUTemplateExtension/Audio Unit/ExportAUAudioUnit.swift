@@ -632,20 +632,48 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     public override var fullState: [String: Any]? {
         get {
             var state = super.fullState ?? [:]
-            // Future: if other keys need to round-trip, add them here.
-            let stateBytes = MainActor.assumeIsolated {
-                presetStateManager.currentJSONBytes()
+            // fullState may be read from XPC threads (auval, host preset
+            // pickers), so we go directly to the kernel's atomic-swap
+            // JSON buffer rather than through the @MainActor
+            // ExportPresetStateManager. The kernel guarantees
+            // thread-safety on `dsp_kernel_get_state_json`.
+            let needed = Int(dsp_kernel_get_state_json(kernel, nil, 0))
+            if needed > 0 {
+                var bytes = Data(count: needed)
+                let written = bytes.withUnsafeMutableBytes { raw -> Int in
+                    guard let base = raw.baseAddress else { return 0 }
+                    return Int(dsp_kernel_get_state_json(
+                        kernel,
+                        base.assumingMemoryBound(to: UInt8.self),
+                        UInt(needed)
+                    ))
+                }
+                if written < bytes.count { bytes = bytes.prefix(written) }
+                state[Self.stateKey] = bytes
             }
-            state[Self.stateKey] = stateBytes
             return state
         }
         set {
             super.fullState = newValue
-            guard let state = newValue else { return }
-            if let bytes = state[Self.stateKey] as? Data {
-                MainActor.assumeIsolated {
-                    presetStateManager.restore(from: bytes)
-                }
+            guard let state = newValue,
+                  let bytes = state[Self.stateKey] as? Data,
+                  !bytes.isEmpty else { return }
+            // Same XPC-thread reasoning as the getter: write to the
+            // kernel synchronously (thread-safe atomic-swap) so the
+            // audio thread observes the restored bytes immediately,
+            // then hop to the MainActor to update the Swift mirror
+            // inside ExportPresetStateManager.
+            _ = bytes.withUnsafeBytes { raw -> Bool in
+                guard let base = raw.baseAddress else { return false }
+                return dsp_kernel_set_state_json(
+                    kernel,
+                    base.assumingMemoryBound(to: UInt8.self),
+                    UInt(bytes.count)
+                )
+            }
+            let capturedBytes = bytes
+            Task { @MainActor [weak self] in
+                self?.presetStateManager.restore(from: capturedBytes)
             }
         }
     }
