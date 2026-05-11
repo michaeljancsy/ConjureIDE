@@ -65,12 +65,15 @@ struct ExportAUComponentTests {
         #expect(avAU.auAudioUnit != nil)
     }
 
-    @Test("Has 1 input bus and 1 output bus")
+    @Test("Has main input + sidechain input and 1 output bus")
     func busConfiguration() async throws {
         let desc = try discoverComponentDescription()
         let avAU = try await AVAudioUnit.instantiate(with: desc, options: .loadInProcess)
         let au = avAU.auAudioUnit
-        #expect(au.inputBusses.count == 1)
+        // Two input busses: the main signal + an always-on optional
+        // sidechain (added in #286). Presets that don't read sidechain
+        // simply ignore the second bus's audio.
+        #expect(au.inputBusses.count == 2)
         #expect(au.outputBusses.count == 1)
     }
 
