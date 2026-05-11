@@ -253,6 +253,20 @@ enum MCPProtocol {
             description: "List downloaded NAM tone models available for use in DSP scripts. Returns tone name, author, gear type, tags, makes, model variants, and the tone3000:// path to use with load_model(). Always call this before writing a NAM preset. If the user hasn't specified which tone to use, show them the available tones and ask which they prefer.",
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
+        ToolDefinition(
+            name: "dsp_probe",
+            description: "Render the currently loaded DSP script offline against a synthesized test signal and report time-domain stats (RMS, peak, DC, NaN/Inf). Catches audio bugs neither validate_bundle nor smoke_test_ui can see: NaN propagation, broken passthrough at identity settings, gross gain/polarity errors. After the probe, the script is reloaded under a brief mute envelope to reset DSP state (filter histories, delay buffers, LFO phase) so reverb/delay tails don't carry test-signal residue. Use after compile_and_run to verify behavior. Response shape: `{signal, sample_rate, channel_count, frames, block_size, in_rms, out_rms, in_peak, out_peak, out_dc, has_nan, has_inf}`. Note: the audio thread Mutex-contends on the kernel during the probe; if a DAW is actively playing through the AU, expect brief glitches in the user's audio and possibly polluted reverb/delay tails until the post-probe reload completes.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "signal": PropertySchema(type: "string", description: "Test signal to feed: \"sine\", \"impulse\", or \"silence\"."),
+                    "freq_hz": PropertySchema(type: "number", description: "Sine frequency in Hz. Default 1000. Ignored for impulse/silence."),
+                    "duration_ms": PropertySchema(type: "integer", description: "Test signal duration in milliseconds. Default 500. Clamped to [50, 5000].", minimum: 50, maximum: 5000),
+                    "amplitude": PropertySchema(type: "number", description: "Linear amplitude (not dB). Default 0.5. Clamped to [0, 1]."),
+                ],
+                required: ["signal"]
+            )
+        ),
     ]
 }
 
