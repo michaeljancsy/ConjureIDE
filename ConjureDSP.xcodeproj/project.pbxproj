@@ -432,6 +432,7 @@
 				2579117B2F5013850036AAB6 /* Frameworks */,
 				2579117C2F5013850036AAB6 /* Resources */,
 				AABB00032F5013850036AAB6 /* Copy Python Dylib */,
+				AABB0050000000LIBSRCS1 /* Copy DSP Library Sources */,
 				AABB0040000000PYSTDLIB1 /* Copy Python Stdlib for Tests */,
 				AABB00092F5013850036AAB6 /* Copy Rust Compiler */,
 				AABB0010000000MONACO0001 /* Copy Monaco Editor */,
@@ -964,6 +965,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "# Copy full Python distribution into ConjureDSPTerminal.app/Contents/Resources/python-dist/\nset -euo pipefail\n\nPYSRC=\"${SRCROOT}/rust/python-dist\"\nPYDST=\"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/python-dist\"\nSTAMP=\"${PYDST}/.copy-stamp\"\n\nif [ ! -d \"$PYSRC\" ]; then\n    echo \"error: python-dist not found at $PYSRC. Run rust/setup-python.sh first.\" >&2\n    exit 1\nfi\n\nif [ -f \"$STAMP\" ] && [ \"$PYSRC/lib/libpython3.14t.dylib\" -ot \"$STAMP\" ]; then\n    echo \"note: Python runtime unchanged, skipping copy\" >&2\n    exit 0\nfi\n\nmkdir -p \"${PYDST}/bin\"\nmkdir -p \"${PYDST}/lib\"\n\n# Copy Python binary\ncp \"${PYSRC}/bin/python3\" \"${PYDST}/bin/python3\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${PYDST}/bin/python3\"\n\n# Copy libpython dylib\ncp \"${PYSRC}/lib/libpython3.14t.dylib\" \"${PYDST}/lib/\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp \"${PYDST}/lib/libpython3.14t.dylib\"\n\n# Copy stdlib + numpy + scipy\ncp -R \"${PYSRC}/lib/python3.14t\" \"${PYDST}/lib/\"\n\n# Code-sign all .so files\nfind \"${PYDST}\" -name '*.so' -exec codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --options runtime --timestamp {} \\;\n\n# Verify critical files exist before stamping success. Without this, an\n# intermediate cp/codesign failure (now caught by set -e) would still have\n# stamped, masking a partial bundle on the next incremental build. Belt-and-\n# suspenders: an explicit existence check on the load-bearing files.\nfor f in bin/python3 lib/libpython3.14t.dylib lib/python3.14t/os.py; do\n    if [ ! -e \"${PYDST}/$f\" ]; then\n        echo \"error: ${PYDST}/$f missing after copy — bundle is incomplete\" >&2\n        exit 1\n    fi\ndone\n\ntouch \"$STAMP\"\n";
+		};
+		AABB0050000000LIBSRCS1 /* Copy DSP Library Sources */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy DSP Library Sources";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# PR #5: bundle conjuredsp Python + Rust source files into the\n# appex's Resources so DSPDocumentationExtractor can read them at\n# runtime to produce the API-reference appendix for `get_docs`.\nset -euo pipefail\n\nDST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nSRC_PY=\"${SRCROOT}/rust/conjuredsp\"\nSRC_RS=\"${SRCROOT}/rust/conjuredsp-rs/src\"\n\nmkdir -p \"${DST}/conjuredsp\" \"${DST}/conjuredsp-rs\"\n\nfor f in params dsp filters buffers osc accel nam; do\n    if [ -f \"${SRC_PY}/${f}.py\" ]; then\n        cp \"${SRC_PY}/${f}.py\" \"${DST}/conjuredsp/${f}.py\"\n    fi\ndone\n\nfor f in params dsp filters buffers osc context; do\n    if [ -f \"${SRC_RS}/${f}.rs\" ]; then\n        cp \"${SRC_RS}/${f}.rs\" \"${DST}/conjuredsp-rs/${f}.rs\"\n    fi\ndone\n";
 		};
 		AABB0040000000PYSTDLIB1 /* Copy Python Stdlib for Tests */ = {
 			isa = PBXShellScriptBuildPhase;

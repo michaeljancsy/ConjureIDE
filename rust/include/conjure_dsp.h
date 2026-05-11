@@ -311,6 +311,19 @@ bool dsp_kernel_inject_nam_slot(DSPKernelRef kernel,
 double dsp_kernel_benchmark_process(DSPKernelRef kernel);
 
 /**
+ * Monotonic counter that bumps on every state change to the kernel's
+ * `last_error` (None → Some, Some → None, Some(x) → Some(y), and the
+ * initial set). Swift polls this on a timer; only when it advances does
+ * it re-read `dsp_kernel_last_error`. Lets the editor surface runtime
+ * errors as Monaco markers without scanning the error string on every
+ * poll.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ */
+uint64_t dsp_kernel_error_generation(DSPKernelRef kernel);
+
+/**
  * Returns the last error message as a null-terminated C string.
  * Returns null if no error. The pointer is valid until the next call to this function or destroy.
  *

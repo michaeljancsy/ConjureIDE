@@ -1434,6 +1434,10 @@ impl Backend for WasmBackend {
         self.last_error.as_deref()
     }
 
+    fn clear_last_error(&mut self) {
+        self.last_error = None;
+    }
+
     fn param_names(&self) -> HashMap<u8, String> {
         self.param_names.clone()
     }

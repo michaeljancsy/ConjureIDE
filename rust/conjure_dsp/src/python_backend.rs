@@ -1,9 +1,9 @@
 use crate::backend::{Backend, SidechainInput, StateSnapshot};
 use crate::kernel::TransportState;
 use crate::params::{ParamMetadata, TelemetryMetadata, PARAM_COUNT, TELEMETRY_LEN};
-use numpy::{PyArray1, PyArrayMethods};
+use numpy::{PyArray1, PyArray2, PyArrayMethods};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyDict, PyList, PySlice};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,10 +25,16 @@ static PYTHON_ENV_INIT: OnceLock<()> = OnceLock::new();
 /// and calls it each render callback. The `ctx` object is built once at
 /// `initialize()` time and mutated in place per block — its attributes:
 ///
-///   `inputs`        list of `numpy.ndarray[float32]` per channel
-///   `outputs`       list of `numpy.ndarray[float32]` per channel
-///   `sidechain`     list of per-channel sidechain numpy arrays (always
-///                   present; zero-filled when nothing is routed)
+///   `inputs`        2D `numpy.ndarray[float32]` of shape
+///                   `(channel_count, max_frames)` — row `ch` is the
+///                   per-channel buffer
+///   `outputs`       2D `numpy.ndarray[float32]` of shape
+///                   `(channel_count, max_frames)`
+///   `sidechain`     2D `numpy.ndarray[float32]` (always present;
+///                   zero-filled when nothing is routed). The trailing
+///                   `[:, frame_count..]` slack region of any of these
+///                   carries stale data from previous blocks and is
+///                   undefined; do not read past `frame_count`.
 ///   `params`        read-only mapping (denormalized values keyed by
 ///                   declared name, or 0–1 indexed list in legacy mode)
 ///   `state`         read-only mapping over bundle-private persisted JSON
@@ -48,15 +54,24 @@ pub struct PythonBackend {
     /// The single ctx object passed to process(). Rebuilt on channel-
     /// count or max-frames change; mutated in place each block.
     py_ctx: Option<Py<PyAny>>,
-    /// Underlying numpy arrays for `ctx.inputs` (the list itself is a
-    /// child of `py_ctx`).
-    py_input_arrays: Vec<Py<PyAny>>,
-    /// Underlying numpy arrays for `ctx.outputs`.
-    py_output_arrays: Vec<Py<PyAny>>,
-    /// Underlying numpy arrays for `ctx.sidechain` (always allocated;
-    /// zero-filled when host has nothing routed).
-    py_sidechain_arrays: Vec<Py<PyAny>>,
-    py_channel_count: usize,
+    /// 2D backing array for `ctx.inputs`, shape `(channel_count, max_frames)`.
+    /// `None` until `allocate_py_arrays` runs at `initialize()`.
+    py_input_array: Option<Py<PyArray2<f32>>>,
+    /// 2D backing array for `ctx.outputs`.
+    py_output_array: Option<Py<PyArray2<f32>>>,
+    /// 2D backing array for `ctx.sidechain` (always allocated; zero-filled
+    /// when host has nothing routed).
+    py_sidechain_array: Option<Py<PyArray2<f32>>>,
+    /// Cached `slice(None)` (i.e. `:`) — never changes across the backend's
+    /// lifetime. Used to build the 2D sliced views `backing[:, :frame_count]`
+    /// that the script sees as `ctx.inputs` / `outputs` / `sidechain`.
+    cached_full_slice: Option<Py<PySlice>>,
+    /// Cached `slice(0, frame_count, 1)`. Rebuilt only when `frame_count`
+    /// changes; reused across blocks where it doesn't (the common case).
+    cached_prefix_slice: Option<Py<PySlice>>,
+    /// `frame_count` value the cached prefix slice was built for. 0 forces
+    /// rebuild on the first block after allocate / channel resize.
+    cached_prefix_for_frames: u32,
     last_error: Option<String>,
     param_names: HashMap<u8, String>,
     /// Rich parameter metadata from `PARAMS` dict. When present, ctx.params
@@ -249,10 +264,12 @@ impl PythonBackend {
                 Ok(Self {
                     py_process_fn: r.process_fn,
                     py_ctx: None,
-                    py_input_arrays: Vec::new(),
-                    py_output_arrays: Vec::new(),
-                    py_sidechain_arrays: Vec::new(),
-                    py_channel_count: 0,
+                    py_input_array: None,
+                    py_output_array: None,
+                    py_sidechain_array: None,
+                    cached_full_slice: None,
+                    cached_prefix_slice: None,
+                    cached_prefix_for_frames: 0,
                     last_error: None,
                     param_names: r.param_names,
                     param_metadata: r.param_metadata,
@@ -503,8 +520,8 @@ impl PythonBackend {
             .join(" ")
     }
 
-    /// (Re)build the per-block ctx object — numpy arrays sized to
-    /// (channel_count × max_frames), wrapped lists, telemetry dict
+    /// (Re)build the per-block ctx object — 2D numpy arrays sized to
+    /// `(channel_count, max_frames)` (one per role), telemetry dict
     /// pre-seeded with declared slot keys. Called from `initialize()`
     /// and any time the channel count or max frames changes.
     fn allocate_py_arrays(&mut self, channel_count: usize, max_frames: usize) {
@@ -513,46 +530,39 @@ impl PythonBackend {
         }
         self.py_max_frames = max_frames;
         let result = Python::with_gil(|py| -> PyResult<()> {
-            self.py_input_arrays = (0..channel_count)
-                .map(|_| {
-                    PyArray1::<f32>::zeros(py, max_frames, false)
-                        .into_any()
-                        .unbind()
-                })
-                .collect();
-            self.py_output_arrays = (0..channel_count)
-                .map(|_| {
-                    PyArray1::<f32>::zeros(py, max_frames, false)
-                        .into_any()
-                        .unbind()
-                })
-                .collect();
-            // Sidechain mirrors main inputs unconditionally — old
-            // pre-state presets see a list of zero-filled arrays they
-            // can ignore; new presets read it via `ctx.sidechain[ch]`.
-            self.py_sidechain_arrays = (0..channel_count)
-                .map(|_| {
-                    PyArray1::<f32>::zeros(py, max_frames, false)
-                        .into_any()
-                        .unbind()
-                })
-                .collect();
+            // Allocate 2D backing arrays of shape (channel_count, max_frames),
+            // one per role. Scripts see them directly as ctx.inputs / outputs /
+            // sidechain — no list wrapping. `ctx.inputs[ch]` returns a 1D row
+            // view; `ctx.outputs[:] = ctx.inputs * gain` broadcasts across all
+            // channels (per-row SIMD inside numpy). PyArray2::zeros allocates
+            // row-major (C-contiguous) by default, so per-row slices are
+            // contiguous.
+            let input_array =
+                PyArray2::<f32>::zeros(py, [channel_count, max_frames], false);
+            let output_array =
+                PyArray2::<f32>::zeros(py, [channel_count, max_frames], false);
+            // Sidechain is always allocated and zero-filled when the host has
+            // nothing routed, so scripts see a defined signal without having
+            // to check for None.
+            let sidechain_array =
+                PyArray2::<f32>::zeros(py, [channel_count, max_frames], false);
 
             // Build the canonical ctx object. We use `types.SimpleNamespace`
             // for read-mostly attributes (transport, sample_rate,
             // frame_count, params, state) and direct attribute writes for
-            // the lists / telemetry dict that scripts are expected to read.
+            // the audio arrays / telemetry dict that scripts are expected to
+            // read.
             let types_module = py.import("types")?;
             let simple_ns_cls = types_module.getattr("SimpleNamespace")?;
             let ctx = simple_ns_cls.call0()?;
 
-            let input_list = PyList::new(py, self.py_input_arrays.iter().map(|a| a.bind(py)))?;
-            let output_list = PyList::new(py, self.py_output_arrays.iter().map(|a| a.bind(py)))?;
-            let sidechain_list =
-                PyList::new(py, self.py_sidechain_arrays.iter().map(|a| a.bind(py)))?;
-            ctx.setattr("inputs", input_list)?;
-            ctx.setattr("outputs", output_list)?;
-            ctx.setattr("sidechain", sidechain_list)?;
+            ctx.setattr("inputs", &input_array)?;
+            ctx.setattr("outputs", &output_array)?;
+            ctx.setattr("sidechain", &sidechain_array)?;
+
+            self.py_input_array = Some(input_array.unbind());
+            self.py_output_array = Some(output_array.unbind());
+            self.py_sidechain_array = Some(sidechain_array.unbind());
 
             // Transport: a SimpleNamespace with the canonical field names.
             // We rebuild the whole namespace each block (six attribute
@@ -576,18 +586,21 @@ impl PythonBackend {
 
             // Params: pre-seed with metadata keys (or empty for legacy
             // mode) so the first block's writes are dict updates, not
-            // insertions. We expose this via MappingProxyType so the
-            // script can't mutate it from inside process(). Cache the
-            // underlying dict so the per-block update mutates in place
-            // instead of allocating a fresh dict + proxy each callback.
+            // insertions. We expose this via `conjuredsp._ctx.ParamsView`
+            // which supports both `ctx.params["name"]` and the more
+            // discoverable `ctx.params.name` style. Cache the underlying
+            // dict so the per-block update mutates in place — ParamsView
+            // wraps the same dict by reference, so script reads see
+            // updated values without us touching the wrapper.
             if let Some(ref metadata) = self.param_metadata {
                 let dict = PyDict::new(py);
                 for meta in metadata.iter() {
                     dict.set_item(&meta.key, meta.default)?;
                 }
-                let mappingproxy = py.import("types")?.getattr("MappingProxyType")?;
-                let proxy = mappingproxy.call1((dict.clone(),))?;
-                ctx.setattr("params", proxy)?;
+                let ctx_module = py.import("conjuredsp._ctx")?;
+                let params_view_cls = ctx_module.getattr("ParamsView")?;
+                let view = params_view_cls.call1((dict.clone(),))?;
+                ctx.setattr("params", view)?;
                 self.py_params_dict = Some(dict.into_any().unbind());
             } else {
                 self.py_params_dict = None;
@@ -622,6 +635,13 @@ impl PythonBackend {
             ctx.setattr("state", proxy)?;
 
             self.py_ctx = Some(ctx.unbind());
+
+            // Cache the `:` slice once per allocate — it never changes.
+            // The prefix slice gets built lazily on the first block whose
+            // frame_count differs from `cached_prefix_for_frames`.
+            self.cached_full_slice = Some(PySlice::full(py).unbind());
+            self.cached_prefix_slice = None;
+            self.cached_prefix_for_frames = 0;
             Ok(())
         });
         if let Err(e) = result {
@@ -631,7 +651,6 @@ impl PythonBackend {
             eprintln!("ConjureDSP-Rust: {}", msg);
             self.last_error = Some(msg);
         }
-        self.py_channel_count = channel_count;
         // ctx.state was just rebuilt to an empty MappingProxyType; force
         // the next update_state_view to re-parse rather than skip on a
         // generation-match against the kernel's pre-rebuild value.
@@ -708,29 +727,54 @@ impl PythonBackend {
                 }
             };
 
-            // Copy input audio into pre-allocated numpy arrays.
-            for ch in 0..channel_count {
-                let src = std::slice::from_raw_parts(inputs[ch], frame_count);
-                let py_arr: &Bound<'_, PyArray1<f32>> =
-                    self.py_input_arrays[ch].bind(py).downcast()?;
-                let py_slice = py_arr.as_slice_mut()?;
-                py_slice[..frame_count].copy_from_slice(src);
+            // Copy input audio into pre-allocated 2D numpy array. One bind
+            // + one as_array_mut per role per block, then per-channel row
+            // copies via as_slice_mut on each row view (rows of a
+            // C-contiguous PyArray2 are contiguous by construction).
+            {
+                let in_array = self
+                    .py_input_array
+                    .as_ref()
+                    .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err(
+                        "PythonBackend: input array not allocated",
+                    ))?
+                    .bind(py);
+                let mut in_view = in_array.as_array_mut();
+                for ch in 0..channel_count {
+                    let src = std::slice::from_raw_parts(inputs[ch], frame_count);
+                    let mut row = in_view.row_mut(ch);
+                    let row_slice = row
+                        .as_slice_mut()
+                        .expect("row of C-contiguous PyArray2 must be contiguous");
+                    row_slice[..frame_count].copy_from_slice(src);
+                }
             }
 
-            // Refresh sidechain numpy arrays. Always overwrite the full
+            // Refresh sidechain numpy array. Always overwrite the full
             // window so scripts see a defined signal even after a
             // host-disconnect.
-            for ch in 0..self.py_sidechain_arrays.len() {
-                let py_arr: &Bound<'_, PyArray1<f32>> =
-                    self.py_sidechain_arrays[ch].bind(py).downcast()?;
-                let py_slice = py_arr.as_slice_mut()?;
-                let dst = &mut py_slice[..frame_count];
-                if sidechain.connected && ch < sidechain.channel_count {
-                    let src = std::slice::from_raw_parts(sidechain.inputs[ch], frame_count);
-                    dst.copy_from_slice(src);
-                } else {
-                    for v in dst.iter_mut() {
-                        *v = 0.0;
+            {
+                let sc_array = self
+                    .py_sidechain_array
+                    .as_ref()
+                    .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err(
+                        "PythonBackend: sidechain array not allocated",
+                    ))?
+                    .bind(py);
+                let mut sc_view = sc_array.as_array_mut();
+                for ch in 0..channel_count {
+                    let mut row = sc_view.row_mut(ch);
+                    let row_slice = row
+                        .as_slice_mut()
+                        .expect("row of C-contiguous PyArray2 must be contiguous");
+                    let dst = &mut row_slice[..frame_count];
+                    if sidechain.connected && ch < sidechain.channel_count {
+                        let src = std::slice::from_raw_parts(sidechain.inputs[ch], frame_count);
+                        dst.copy_from_slice(src);
+                    } else {
+                        for v in dst.iter_mut() {
+                            *v = 0.0;
+                        }
                     }
                 }
             }
@@ -773,7 +817,51 @@ impl PythonBackend {
             ctx_handle.setattr("sample_rate", sample_rate)?;
             ctx_handle.setattr("frame_count", frame_count as u32)?;
 
-            // Single ctx call.
+            // Replace ctx.inputs / outputs / sidechain with views sliced to
+            // [:, :frame_count]. The backing arrays stay alive via
+            // self.py_*_array; the views remain valid for the duration of
+            // process(). Whole-array operations on the views are implicitly
+            // windowed to frame_count (np.tanh(ctx.inputs, out=ctx.outputs),
+            // ctx.outputs[:] = ctx.inputs * gain), so nothing leaks into the
+            // slack region. Out-of-bounds writes like ctx.outputs[ch][N]
+            // (N >= frame_count) raise IndexError on a sliced view, surfacing
+            // bugs that would have silently corrupted the next block under
+            // the unsliced shape.
+            //
+            // The prefix slice is rebuilt only when frame_count changes; the
+            // common case (DAW with stable buffer size) reuses the cached
+            // slice across blocks for zero per-block allocation.
+            if self.cached_prefix_for_frames != frame_count as u32 {
+                let p = PySlice::new(py, 0, frame_count as isize, 1);
+                self.cached_prefix_slice = Some(p.unbind());
+                self.cached_prefix_for_frames = frame_count as u32;
+            }
+            {
+                let full = self
+                    .cached_full_slice
+                    .as_ref()
+                    .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err(
+                        "PythonBackend: full slice not cached",
+                    ))?
+                    .bind(py);
+                let prefix = self
+                    .cached_prefix_slice
+                    .as_ref()
+                    .unwrap()
+                    .bind(py);
+                let in_array = self.py_input_array.as_ref().unwrap().bind(py);
+                let out_array = self.py_output_array.as_ref().unwrap().bind(py);
+                let sc_array = self.py_sidechain_array.as_ref().unwrap().bind(py);
+                let in_view = in_array.get_item((full, prefix))?;
+                let out_view = out_array.get_item((full, prefix))?;
+                let sc_view = sc_array.get_item((full, prefix))?;
+                ctx_handle.setattr("inputs", in_view)?;
+                ctx_handle.setattr("outputs", out_view)?;
+                ctx_handle.setattr("sidechain", sc_view)?;
+            }
+
+            // Single ctx call. The script sees the sliced views; Rust's
+            // output copy below reads from the unsliced backing array.
             self.py_process_fn.call1(py, (ctx_handle,))?;
 
             // Snapshot telemetry back into the f32 buffer the kernel reads.
@@ -796,13 +884,25 @@ impl PythonBackend {
                 }
             }
 
-            // Copy output back to audio buffers.
-            for ch in 0..channel_count {
-                let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
-                let py_arr: &Bound<'_, PyArray1<f32>> =
-                    self.py_output_arrays[ch].bind(py).downcast()?;
-                let py_slice = py_arr.as_slice()?;
-                dst.copy_from_slice(&py_slice[..frame_count]);
+            // Copy output back to audio buffers. Single bind + as_array on
+            // the 2D backing array, then per-channel row reads.
+            {
+                let out_array = self
+                    .py_output_array
+                    .as_ref()
+                    .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err(
+                        "PythonBackend: output array not allocated",
+                    ))?
+                    .bind(py);
+                let out_view = out_array.as_array();
+                for ch in 0..channel_count {
+                    let dst = std::slice::from_raw_parts_mut(outputs[ch], frame_count);
+                    let row = out_view.row(ch);
+                    let row_slice = row
+                        .as_slice()
+                        .expect("row of C-contiguous PyArray2 must be contiguous");
+                    dst.copy_from_slice(&row_slice[..frame_count]);
+                }
             }
 
             Ok(())
@@ -841,11 +941,11 @@ impl Backend for PythonBackend {
     }
 
     fn deinitialize(&mut self) {
-        if !self.py_input_arrays.is_empty() {
+        if self.py_input_array.is_some() {
             Python::with_gil(|_py| {
-                self.py_input_arrays.clear();
-                self.py_output_arrays.clear();
-                self.py_sidechain_arrays.clear();
+                self.py_input_array = None;
+                self.py_output_array = None;
+                self.py_sidechain_array = None;
                 self.py_telemetry_dict = None;
                 self.py_state_dict = None;
                 self.py_ctx = None;
@@ -865,7 +965,7 @@ impl Backend for PythonBackend {
         sidechain: SidechainInput<'_>,
         state: &StateSnapshot,
     ) -> bool {
-        if self.py_input_arrays.is_empty() {
+        if self.py_input_array.is_none() {
             self.last_error = Some(
                 "Python arrays not allocated — initialize() not called or failed".to_string(),
             );
@@ -886,6 +986,10 @@ impl Backend for PythonBackend {
 
     fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    fn clear_last_error(&mut self) {
+        self.last_error = None;
     }
 
     fn param_names(&self) -> HashMap<u8, String> {

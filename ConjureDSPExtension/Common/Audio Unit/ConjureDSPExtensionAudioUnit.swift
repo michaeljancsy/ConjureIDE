@@ -700,6 +700,10 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	// Current script source (cached on successful reload, persisted in fullState)
 	private var currentScriptSource: String?
+	/// Filesystem path passed to the most recent successful kernel load
+	/// (Python `.py` only; WASM doesn't have one). Used by the runtime-
+	/// error poller to identify the matching traceback frame.
+	private var currentScriptPath: String?
 
 	// Current script language (for fullState persistence and UI syncing)
 	var currentScriptLanguage: ScriptLanguage = .python
@@ -756,6 +760,28 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// error to a SwiftUI caller — currently `currentPreset.set` (DAW
 	/// preset menu) and `loadPythonScript` (extension boot, NAM-retry).
 	public let scriptLoadFailure = PassthroughSubject<ScriptLoadFailure, Never>()
+
+	/// Runtime error captured from a Python (or WASM) script raising during
+	/// `process()`. Surfaced from the kernel via `dsp_kernel_last_error` +
+	/// `dsp_kernel_error_generation`. The `lineNumber` is extracted from the
+	/// traceback frame matching the active script path; `nil` when no frame
+	/// matches (e.g. exception in a helper module).
+	public struct RuntimeError: Equatable {
+		public let scriptPath: String
+		public let message: String
+		public let lineNumber: Int?
+		public init(scriptPath: String, message: String, lineNumber: Int?) {
+			self.scriptPath = scriptPath
+			self.message = message
+			self.lineNumber = lineNumber
+		}
+	}
+
+	/// Fires when the kernel's `last_error` transitions (None → Some, Some
+	/// → None, Some(x) → Some(y)). `nil` payload means the error cleared
+	/// (e.g. successful render after a transient failure, or successful
+	/// reload after a load failure).
+	public let runtimeErrorChanged = PassthroughSubject<RuntimeError?, Never>()
 
 	/// Script-declared parameter names, keyed by address (0–7).
 	/// nil = no names declared (backward compatible, show all 8 with default labels).
@@ -840,6 +866,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 	/// kernel value changed since the last tick. A silent tick means
 	/// the audio thread still sees the same values as last time.
 	private func startKernelPollTimer() {
+		// Initialize the runtime-error generation watermark to the kernel's
+		// CURRENT value rather than 0. A load failure on startup may have
+		// already bumped the counter; we don't want to spuriously fire a
+		// stale error event on the first poll.
+		lastErrorGeneration = dsp_kernel_error_generation(kernel)
 		let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
 			guard let self else { return }
 			let kernelRef = self.kernel!
@@ -855,9 +886,110 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 					self.lastKernelPollValues[addr] = v
 				}
 			}
+			self.pollRuntimeError()
 		}
 		RunLoop.main.add(t, forMode: .common)
 		kernelPollTimer = t
+	}
+
+	// MARK: - Runtime error polling (PR #4)
+
+	private var lastErrorGeneration: UInt64 = 0
+	private var lastPublishedRuntimeError: RuntimeError? = nil
+	/// Per-script-path event counter; capped at `maxRuntimeErrorEventsPerScript`
+	/// to prevent flooding when a preset raises every block with varying
+	/// f-string messages that bypass message-hash dedup.
+	private var sentryRuntimeErrorCountByScript: [String: Int] = [:]
+	/// Dedup by message hash: identical errors don't re-fire Sentry events.
+	private var sentryRuntimeErrorMessageHashes: Set<Int> = []
+	private static let maxRuntimeErrorEventsPerScript = 10
+
+	/// Checks `dsp_kernel_error_generation` for a change since last poll.
+	/// On change: reads `dsp_kernel_last_error` (copying the C string
+	/// immediately — it's invalidated by the next call on the same thread),
+	/// parses the line number from the traceback frame matching the active
+	/// script path, and publishes a `RuntimeError?` event via
+	/// `runtimeErrorChanged`. `nil` payload signals the error cleared.
+	private func pollRuntimeError() {
+		let gen = dsp_kernel_error_generation(kernel)
+		guard gen != lastErrorGeneration else { return }
+		lastErrorGeneration = gen
+
+		// Copy the CString immediately. `dsp_kernel_last_error` uses a
+		// thread-local CString for its return pointer; the next call on
+		// the same thread invalidates the buffer. Any subsequent kernel
+		// FFI that returns a C string would corrupt the read if we held
+		// the pointer.
+		let errMsg: String? = {
+			guard let p = dsp_kernel_last_error(kernel) else { return nil }
+			return String(cString: p)
+		}()
+
+		let newError: RuntimeError?
+		if let msg = errMsg {
+			let line = Self.extractLineNumber(traceback: msg, scriptPath: currentScriptPath)
+			newError = RuntimeError(
+				scriptPath: currentScriptPath ?? "",
+				message: msg,
+				lineNumber: line
+			)
+		} else {
+			newError = nil
+		}
+
+		guard newError != lastPublishedRuntimeError else { return }
+		lastPublishedRuntimeError = newError
+		runtimeErrorChanged.send(newError)
+
+		if let err = newError {
+			reportRuntimeErrorToSentry(err)
+		}
+	}
+
+	/// Walks Python traceback frames outermost-to-innermost, returning the
+	/// line number from the LAST frame whose file path matches `scriptPath`.
+	/// `nil` if no match (e.g. exception raised inside a helper module).
+	///
+	/// Tracebacks contain frames formatted like:
+	///   File "/path/to/script.py", line 42, in process
+	static func extractLineNumber(traceback: String, scriptPath: String?) -> Int? {
+		guard let scriptPath, !scriptPath.isEmpty else { return nil }
+		let pattern = #"File\s+"([^"]+)",\s+line\s+(\d+)"#
+		guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+		let range = NSRange(traceback.startIndex..., in: traceback)
+		var bestLine: Int? = nil
+		re.enumerateMatches(in: traceback, range: range) { match, _, _ in
+			guard let match,
+				  let pathRange = Range(match.range(at: 1), in: traceback),
+				  let lineRange = Range(match.range(at: 2), in: traceback) else { return }
+			let path = String(traceback[pathRange])
+			if path == scriptPath, let line = Int(traceback[lineRange]) {
+				bestLine = line  // innermost wins (last match in walk order)
+			}
+		}
+		return bestLine
+	}
+
+	/// Capture runtime-error events to Sentry with per-script per-session
+	/// caps and message-hash dedup, so a script that raises every block
+	/// doesn't flood (would be ~750 events/sec at 64 frames @ 48 kHz).
+	private func reportRuntimeErrorToSentry(_ err: RuntimeError) {
+		let count = sentryRuntimeErrorCountByScript[err.scriptPath] ?? 0
+		if count >= Self.maxRuntimeErrorEventsPerScript { return }
+		let hash = err.message.hashValue
+		if sentryRuntimeErrorMessageHashes.contains(hash) { return }
+		sentryRuntimeErrorMessageHashes.insert(hash)
+		sentryRuntimeErrorCountByScript[err.scriptPath] = count + 1
+		SentryHelper.capture(
+			"Python DSP runtime error",
+			level: .error,
+			category: "dsp.python.runtime",
+			extra: [
+				"scriptPath": err.scriptPath,
+				"lineNumber": err.lineNumber.map(String.init) ?? "unknown",
+				"message": err.message
+			]
+		)
 	}
 
 	/// Default preset loaded on AU init (before any fullState restore).
@@ -893,6 +1025,7 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		pluginLog.info("Loading Python script. pythonHome=\(pythonHome, privacy: .public) scriptPath=\(scriptPath, privacy: .public)")
 		let success = dsp_kernel_load_script(kernel, pythonHome, scriptPath)
 		if success {
+			currentScriptPath = scriptPath
 			pluginLog.info("Python DSP script loaded successfully")
 			SentryHelper.breadcrumb("Script loaded", category: "dsp", data: ["language": "python"])
 
@@ -1271,6 +1404,11 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		if success {
 			currentScriptSource = source
+			// Python stores the path used at load time in tracebacks; the
+			// temp file itself is deleted via the defer above, but the
+			// string lives on inside the interpreter and is what we'll see
+			// in runtime tracebacks. Match against it in the poller.
+			currentScriptPath = tempFile.path
 			pluginLog.info("Python DSP script reloaded successfully")
 			readParamNames()
 

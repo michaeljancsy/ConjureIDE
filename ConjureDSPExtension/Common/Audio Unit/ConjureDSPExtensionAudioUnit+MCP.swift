@@ -1397,6 +1397,22 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         if topic == "state" || topic == "all" { sections.append(DSPDocumentation.state) }
         if topic == "ui" || topic == "all" { sections.append(DSPDocumentation.ui) }
 
+        // PR #5: append auto-extracted API reference for library-backed topics.
+        // Hand-curated content above + extractor output below. Graceful: if
+        // source files aren't bundled or extraction yields nothing, this is
+        // a no-op and the hand-curated text ships unchanged.
+        let libraryBackedTopics = ["filters", "delays", "oscillators", "utilities", "accel", "nam"]
+        if topic == "all" {
+            for t in libraryBackedTopics {
+                if let appendix = DSPDocumentation.apiReferenceAppendix(for: t) {
+                    sections.append(appendix)
+                }
+            }
+        } else if libraryBackedTopics.contains(topic),
+                  let appendix = DSPDocumentation.apiReferenceAppendix(for: topic) {
+            sections.append(appendix)
+        }
+
         return (jsonStr(["topic": topic, "docs": sections.joined(separator: "\n\n")]), false)
     }
 

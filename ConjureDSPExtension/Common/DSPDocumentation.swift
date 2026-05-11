@@ -6,6 +6,8 @@
 //  Used by the MCP get_docs tool and the AI Prompt Helper view.
 //
 
+import Foundation
+
 enum DSPDocumentation {
 
     static let params = """
@@ -2584,4 +2586,70 @@ enum DSPDocumentation {
     - Bulk activation functions (tanh, sigmoid on arrays)
     - Element-wise vector operations on large buffers
     """
+
+    // MARK: - API reference appendix (PR #5)
+    //
+    // For library-backed topics (filters, delays, oscillators, utilities,
+    // accel, nam), we append an auto-extracted API reference to the
+    // hand-curated topic strings. The sources are bundled into the appex's
+    // Resources by the "Copy DSP Library Sources" build phase; the
+    // extractor (DSPDocumentationExtractor) parses Python and Rust
+    // docstrings via regex. Graceful fallback: if a source file is missing
+    // or extraction returns nothing, the topic string ships unchanged.
+
+    /// Maps a `get_docs` topic to the library source files that back it.
+    /// Topics not in the map (`params`, `ui`, `state`) are hand-curated only.
+    private static let topicSourceMap: [String: (python: [String], rust: [String])] = [
+        "filters":     (python: ["filters.py"],  rust: ["filters.rs"]),
+        "delays":      (python: ["buffers.py"],  rust: ["buffers.rs"]),
+        "oscillators": (python: ["osc.py"],      rust: ["osc.rs"]),
+        "utilities":   (python: ["dsp.py"],      rust: ["dsp.rs"]),
+        "accel":       (python: ["accel.py"],    rust: []),
+        "nam":         (python: ["nam.py"],      rust: []),
+    ]
+
+    /// Builds the auto-extracted API-reference Markdown appendix for a
+    /// topic, or `nil` if the topic has no library backing or extraction
+    /// yields nothing. Cached per-process via `appendixCache`.
+    static func apiReferenceAppendix(for topic: String) -> String? {
+        if let cached = appendixCache[topic] { return cached.isEmpty ? nil : cached }
+        guard let files = topicSourceMap[topic] else { return nil }
+        guard let resourceURL = appexResourceURL else { return nil }
+
+        var pySymbols: [DSPDocumentationExtractor.Symbol] = []
+        for name in files.python {
+            let url = resourceURL.appendingPathComponent("conjuredsp").appendingPathComponent(name)
+            if let content = try? String(contentsOf: url, encoding: .utf8) {
+                pySymbols.append(contentsOf: DSPDocumentationExtractor.extractPython(content: content))
+            }
+        }
+        var rsSymbols: [DSPDocumentationExtractor.Symbol] = []
+        for name in files.rust {
+            let url = resourceURL.appendingPathComponent("conjuredsp-rs").appendingPathComponent(name)
+            if let content = try? String(contentsOf: url, encoding: .utf8) {
+                rsSymbols.append(contentsOf: DSPDocumentationExtractor.extractRust(content: content))
+            }
+        }
+
+        var sections: [String] = []
+        if !pySymbols.isEmpty {
+            sections.append("## API reference (Python)\n\n\(DSPDocumentationExtractor.renderMarkdown(pySymbols))")
+        }
+        if !rsSymbols.isEmpty {
+            sections.append("## API reference (Rust)\n\n\(DSPDocumentationExtractor.renderMarkdown(rsSymbols))")
+        }
+        let joined = sections.joined(separator: "\n\n")
+        appendixCache[topic] = joined
+        return joined.isEmpty ? nil : joined
+    }
+
+    /// Cache so repeat `get_docs("filters")` calls don't re-read disk.
+    nonisolated(unsafe) private static var appendixCache: [String: String] = [:]
+
+    /// The extension's bundle `Resources/` URL — where the build phase
+    /// drops `conjuredsp/*.py` and `conjuredsp-rs/*.rs`. Resolved via the
+    /// AU class so we pick up the appex (not the host app's Bundle.main).
+    private static var appexResourceURL: URL? {
+        Bundle(for: ConjureDSPExtensionAudioUnit.self).resourceURL
+    }
 }
