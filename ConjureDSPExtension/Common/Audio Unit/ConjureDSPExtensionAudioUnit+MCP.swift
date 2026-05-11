@@ -119,6 +119,11 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 let result = await self.mcpSmokeTestUI()
                 completion(result.0, result.1)
             }
+        case "dsp_probe":
+            Task { @MainActor in
+                let result = await self.mcpDspProbe(input: input)
+                completion(result.0, result.1)
+            }
         case "set_state":
             Task { @MainActor in
                 let result = self.mcpSetState(input: input)
@@ -1121,6 +1126,126 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             hostParameterCount: count
         )
         return (encodeReport(report), false)
+    }
+
+    // MARK: - dsp_probe
+
+    /// Render the loaded DSP script offline against a synthesized test signal.
+    /// Reuses the live kernel (Python's single shared interpreter forces this —
+    /// a second kernel would race the live one's `sys.modules` state). Mutes
+    /// audio output via the preset-transition envelope while the probe is
+    /// running, then reloads the script to reset DSP state (filter histories,
+    /// delay buffers) so test-signal residue doesn't bleed into reverb tails.
+    @MainActor
+    private func mcpDspProbe(input: [String: Any]) async -> (String, Bool) {
+        // Parse signal kind.
+        guard let signalRaw = input["signal"] as? String else {
+            return (jsonStr(["error": "Missing required parameter: signal"]), true)
+        }
+        let signal: DSPProbe.Signal
+        switch signalRaw.lowercased() {
+        case "sine":
+            let freq = (input["freq_hz"] as? Double)
+                ?? (input["freq_hz"] as? Int).map(Double.init)
+                ?? 1000.0
+            guard freq > 0, freq.isFinite else {
+                return (jsonStr(["error": "freq_hz must be positive and finite"]), true)
+            }
+            signal = .sine(freqHz: freq)
+        case "impulse":
+            signal = .impulse
+        case "silence":
+            signal = .silence
+        default:
+            return (jsonStr(["error": "Unknown signal: \(signalRaw). Use sine, impulse, or silence."]), true)
+        }
+
+        // Parse + clamp duration / amplitude.
+        let rawDuration = (input["duration_ms"] as? Int)
+            ?? (input["duration_ms"] as? Double).map(Int.init)
+            ?? 500
+        let durationMs = max(50, min(5000, rawDuration))
+
+        let rawAmp = (input["amplitude"] as? Double)
+            ?? (input["amplitude"] as? Int).map(Double.init)
+            ?? 0.5
+        let amplitude = max(0.0, min(1.0, rawAmp))
+
+        // Source is needed for the post-probe reload that restores clean
+        // DSP state. Without a loaded source the kernel is in passthrough
+        // and has no internal state to restore — skip the reload in that case.
+        let source = self.scriptSource
+        let language = self.currentScriptLanguage
+
+        // Read live audio config.
+        let sampleRate = self.outputBusses[0].format.sampleRate
+        guard sampleRate >= 8000, sampleRate.isFinite else {
+            return (jsonStr(["error": "Live kernel sample rate (\(sampleRate)) is invalid. Allocate render resources first."]), true)
+        }
+        let channels = max(1, Int(self.outputBusses[0].format.channelCount))
+        let blockSize = max(1, Int(self.maximumFramesToRender))
+
+        guard let kernelRef = self.kernelReference else {
+            return (jsonStr(["error": "Kernel is not initialized."]), true)
+        }
+
+        // NOTE: we do NOT wrap the probe in begin/endPresetTransition. That
+        // mute envelope is applied to the output of every dsp_kernel_process
+        // call regardless of caller — including ours. For continuous signals
+        // (sine) it only biases the first ~5 ms; for an impulse (whose entire
+        // response lives in those first samples) it would silence the output
+        // completely. So the probe runs against the bare backend. The audio
+        // thread Mutex-contends with us per block — if a DAW is playing
+        // audio through the AU at probe time, the user may hear a brief
+        // glitch and any reverb/delay state will be polluted by the test
+        // signal until the post-probe reload runs.
+        let result: DSPProbe.Result = await Task.detached(priority: .userInitiated) {
+            DSPProbe.run(
+                kernel: kernelRef,
+                signal: signal,
+                sampleRate: sampleRate,
+                channels: channels,
+                blockSize: blockSize,
+                durationMs: durationMs,
+                amplitude: amplitude
+            )
+        }.value
+
+        // Reload to reset filter/delay/LFO state polluted by the probe's
+        // test-signal samples. Wrap THIS step in the transition envelope
+        // so the brief backend swap doesn't click. Skip the reload when
+        // there's no cached source — the kernel is in passthrough, no
+        // state to reset.
+        if let source = source {
+            dsp_kernel_begin_preset_transition(kernelRef)
+            switch language {
+            case .python:
+                _ = self.reloadScript(source: source, persistManifest: false)
+            case .rust:
+                if let bytes = self.wasmBytes {
+                    _ = self.loadWasm(bytes: bytes, persistManifest: false)
+                } else {
+                    _ = await self.compileAndRun(source: source, persistManifest: false)
+                }
+            }
+            dsp_kernel_end_preset_transition(kernelRef)
+        }
+
+        let response: [String: Any] = [
+            "signal": result.signal.name,
+            "sample_rate": result.sampleRate,
+            "channel_count": result.channelCount,
+            "frames": result.frames,
+            "block_size": result.blockSize,
+            "in_rms": Double(result.inStats.rms),
+            "out_rms": Double(result.outStats.rms),
+            "in_peak": Double(result.inStats.peak),
+            "out_peak": Double(result.outStats.peak),
+            "out_dc": Double(result.outStats.dc),
+            "has_nan": result.outStats.hasNaN,
+            "has_inf": result.outStats.hasInf,
+        ]
+        return (jsonStr(response), false)
     }
 
     /// Structured Codable → [String: Any] → jsonStr. Keeps the MCP

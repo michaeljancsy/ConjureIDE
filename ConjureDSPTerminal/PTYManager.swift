@@ -605,6 +605,15 @@ final class PTYManager {
     is "the visual responds when audio plays" (level meters, spectrum scopes, oscilloscopes, \
     gain-reduction histories), tell the user smoke_test confirms binding only and ask them \
     to play audio and confirm the visual responds.
+    - `dsp_probe` is how you verify a DSP edit actually made sound. After a non-trivial \
+    `compile_and_run` (new algorithm, parameter wiring change, anything that touches the \
+    audio math), call `dsp_probe` once with `signal: "sine"` and check `has_nan` / `has_inf` \
+    are false and `out_rms` is in a sensible range for the script (non-zero unless the script \
+    is deliberately gating). For filter / delay / dynamics edits, also probe with \
+    `signal: "impulse"` and confirm the impulse response peak is non-zero. "The math derives \
+    correctly" is not verification — `dsp_probe` is. The probe briefly mutes audio output \
+    while it reloads the script to reset DSP state, so don't run it in a tight loop during \
+    a user's playback session.
 
     ## Python DSP Scripts
 
