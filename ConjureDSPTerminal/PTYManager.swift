@@ -62,6 +62,7 @@ final class PTYManager {
     private var sessionGeneration: UInt64 = 0  // distinguishes fd reuse across sessions
     private var readSource: DispatchSourceRead?
     private var waitSource: DispatchSourceProcess?
+    private var lastWinsize: winsize?
 
     deinit {
         stop()
@@ -189,8 +190,11 @@ final class PTYManager {
             return
         }
 
-        // Create pty
-        var winSize = winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0)
+        // Create pty. Reuse the last applied winsize across restarts so a
+        // relaunched PTY (which keeps the WebSocket open, so no socket.onopen
+        // re-sends the size) doesn't start at the hardcoded default and smear
+        // Claude's redraws until the user nudges the splitter.
+        var winSize = Self.initialWinsize(cached: lastWinsize)
 
         let pid = forkpty(&masterFD, nil, nil, &winSize)
 
@@ -403,9 +407,26 @@ final class PTYManager {
     }
 
     func resize(cols: UInt16, rows: UInt16) {
-        guard masterFD >= 0 else { return }
         var winSize = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
+        // Cache independent of PTY liveness — resizes that arrive during the
+        // 500ms gap inside restart(), or while the agent is exited between
+        // sessions, still seed the next start()'s initial winsize.
+        if cols > 0 && rows > 0 {
+            lastWinsize = winSize
+        }
+        guard masterFD >= 0 else { return }
         ioctl(masterFD, TIOCSWINSZ, &winSize)
+    }
+
+    /// Pick the initial winsize for forkpty. Uses the cached size from a prior
+    /// `resize()` when it's a sane non-zero value; otherwise falls back to the
+    /// standard 24x80 terminal default. Static so tests can exercise the
+    /// selection logic without standing up a real PTY.
+    static func initialWinsize(cached: winsize?) -> winsize {
+        if let last = cached, last.ws_col > 0, last.ws_row > 0 {
+            return last
+        }
+        return winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0)
     }
 
     func sendSIGWINCH() {
