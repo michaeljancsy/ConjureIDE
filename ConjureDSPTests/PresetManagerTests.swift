@@ -270,6 +270,109 @@ struct PresetManagerTests {
                 "Python source must land in process.py, not process.rs")
     }
 
+    // Asana 1214671618931260: an agent calling save_preset with the same
+    // name as an existing user bundle (different language) was silently
+    // destroying the existing bundle. Caught in the 2026-05-08 /try-it
+    // sweep — Rust "Sidechain Ducker" overwrote a Python "Sidechain Ducker"
+    // saved earlier in the same session, with no warning. The MCP path
+    // now opts into `.autoSuffix`: cross-language collisions route to a
+    // suffixed bundle ("Foo" → "Foo 2"), leaving the existing bundle
+    // intact. Same-language re-saves keep updating in place.
+    @Test @MainActor func crossLanguageCollisionAutoSuffixesAndPreservesExisting() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        let pythonSource = "from conjuredsp import db\ndef process(ctx): pass\n"
+        let rustSource = "use conjuredsp::*;\nfn process() {}\n"
+
+        let py = try manager.savePreset(
+            name: "Sidechain Ducker", source: pythonSource, language: .python,
+            crossLanguageCollision: .autoSuffix
+        )
+        #expect(py.name == "Sidechain Ducker")
+
+        let rust = try manager.savePreset(
+            name: "Sidechain Ducker", source: rustSource, language: .rust,
+            crossLanguageCollision: .autoSuffix
+        )
+        #expect(rust.name == "Sidechain Ducker 2",
+                "Rust save must auto-suffix to ' 2' instead of overwriting the Python bundle")
+
+        // Both bundles must exist on disk after the Rust save — the
+        // Python compressor data the user authored must survive.
+        let userPresets = manager.presets.filter { !$0.isFactory }
+        let names = Set(userPresets.map(\.name))
+        #expect(names.contains("Sidechain Ducker"))
+        #expect(names.contains("Sidechain Ducker 2"))
+
+        // Python bundle's source must still be Python — the Rust save
+        // must not have touched it.
+        guard let pyBundleURL = userPresets.first(where: { $0.name == "Sidechain Ducker" })?.fileURL else {
+            Issue.record("Python bundle vanished")
+            return
+        }
+        let pyManifest = try JSONDecoder().decode(
+            PresetManifest.self,
+            from: Data(contentsOf: pyBundleURL.appendingPathComponent("manifest.json"))
+        )
+        #expect(pyManifest.language == "python")
+        #expect(pyManifest.entry == "process.py")
+        #expect(FileManager.default.fileExists(
+            atPath: pyBundleURL.appendingPathComponent("process.py").path
+        ), "Python entry script must remain — the Rust save took a new bundle, not this one")
+    }
+
+    // `.autoSuffix` must NOT suffix when the languages match — that case
+    // is the routine "save → edit → save" loop the agent goes through
+    // while iterating, and a suffix every save would explode the preset
+    // library into "Foo", "Foo 2", "Foo 3" within seconds.
+    @Test @MainActor func sameLanguageAutoSuffixUpdatesInPlace() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        try manager.savePreset(
+            name: "Iterative", source: "# v1\n", language: .python,
+            crossLanguageCollision: .autoSuffix
+        )
+        let p2 = try manager.savePreset(
+            name: "Iterative", source: "# v2\n", language: .python,
+            crossLanguageCollision: .autoSuffix
+        )
+        #expect(p2.name == "Iterative",
+                "Same-language re-save must keep the original name regardless of collision flag")
+
+        let userPresets = manager.presets.filter { !$0.isFactory && $0.name.hasPrefix("Iterative") }
+        #expect(userPresets.count == 1, "Same-language collision must update in place, not auto-suffix")
+
+        let loaded = manager.loadSource(for: userPresets[0])
+        #expect(loaded == "# v2\n", "In-place update must overwrite source")
+    }
+
+    // The default behavior (no flag passed) is `.overwrite` — locks in
+    // the legacy in-plugin Save path. Verifies that the in-plugin
+    // language-switch flow (open Python preset, switch editor to Rust,
+    // press Save) still pivots the manifest in place. The MCP-only fix
+    // must not regress this. Pairs with `resavePivotsManifestWhenLanguageChanges`.
+    @Test @MainActor func defaultCollisionBehaviorIsOverwriteForBackcompat() throws {
+        let (manager, tempDir) = try Self.makeManager()
+        defer { Self.cleanup(tempDir) }
+
+        try manager.savePreset(
+            name: "Legacy", source: "from conjuredsp import db\ndef process(ctx): pass\n",
+            language: .python
+        )
+        try manager.savePreset(
+            name: "Legacy", source: "use conjuredsp::*;\nfn process() {}\n",
+            language: .rust
+        )
+
+        // Default behavior: same name, different language → in-place pivot.
+        let userPresets = manager.presets.filter { !$0.isFactory && $0.name.hasPrefix("Legacy") }
+        #expect(userPresets.count == 1,
+                "Default `.overwrite` must keep the legacy pivot-in-place behavior — only one bundle should exist.")
+        #expect(userPresets[0].language == .rust)
+    }
+
     // Same name + same language re-save must NOT touch the manifest's
     // entry/language fields. Locks in that the language pivot above is
     // strictly opt-in on actual change; otherwise every Cmd+S would

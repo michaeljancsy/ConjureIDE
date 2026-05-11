@@ -420,24 +420,75 @@ class PresetManager: ObservableObject {
     /// Keeping save_preset minimal avoids the manifest-vs-source
     /// mismatch that auto-cloning a factory bundle used to produce when
     /// the new source declared different params.
+    ///
+    /// `crossLanguageCollision` controls what happens when an existing
+    /// bundle of the same name has a *different* language than the
+    /// incoming save. The default — `.overwrite` — preserves the legacy
+    /// in-plugin Save behavior: the existing manifest is patched, the
+    /// orphan entry script is deleted, and the bundle migrates to the new
+    /// language with `manifest.params` and `ui/` preserved. MCP callers
+    /// pass `.autoSuffix` instead, which sidesteps the data-loss footgun
+    /// the 2026-05-08 /try-it sweep caught (Asana 1214671618931260): an
+    /// agent saving a Rust compressor as "Sidechain Ducker" silently
+    /// destroyed the user's Python compressor by the same name. With
+    /// `.autoSuffix` the cross-language case routes to a fresh bundle
+    /// with a `name 2` / `name 3` suffix and leaves the existing
+    /// other-language bundle on disk untouched. Same-language re-saves
+    /// always update in place regardless of the flag.
     @discardableResult
     func savePreset(
         name: String,
         source: String,
         language: ScriptLanguage = .python,
         scaffoldUI: Bool = false,
-        duplicateFrom: PresetBundle? = nil
+        duplicateFrom: PresetBundle? = nil,
+        crossLanguageCollision: CrossLanguageCollisionBehavior = .overwrite
     ) throws -> Preset {
         let sanitized = sanitizeFilename(name)
         guard !sanitized.isEmpty else {
             throw PresetManagerError.invalidName
         }
 
-        let bundleURL = presetsURL.appendingPathComponent(
-            "\(sanitized).\(PresetBundle.bundleExtension)", isDirectory: true
+        // Resolve the target bundle URL, possibly re-routing to a
+        // suffixed name when the caller asked for `.autoSuffix` and the
+        // existing bundle would have been a cross-language collision.
+        // Only the `bundleExists` (in-place re-save) branch is affected
+        // by this — the `duplicateFrom` path already takes a fresh name
+        // by definition, and the no-collision path doesn't care.
+        var resolvedSanitized = sanitized
+        var bundleURL = presetsURL.appendingPathComponent(
+            "\(resolvedSanitized).\(PresetBundle.bundleExtension)", isDirectory: true
         )
+        var bundleExists = fileManager.fileExists(atPath: bundleURL.path)
 
-        let bundleExists = fileManager.fileExists(atPath: bundleURL.path)
+        if bundleExists,
+           duplicateFrom == nil,
+           case .autoSuffix = crossLanguageCollision
+        {
+            let manifestURL = bundleURL.appendingPathComponent(PresetManifest.filename)
+            let existingLanguage: ScriptLanguage? = {
+                guard let data = try? Data(contentsOf: manifestURL),
+                      let m = try? JSONDecoder().decode(PresetManifest.self, from: data) else {
+                    return nil
+                }
+                return m.resolvedLanguage
+            }()
+            if let existingLanguage, existingLanguage != language {
+                // Same name, different language → fresh bundle under a
+                // suffixed name. The unique-name helper already handles
+                // " 2" / " 3" suffixing against the in-memory `presets`
+                // list (refresh-driven, so it's accurate at call time).
+                let newName = uniqueName(baseName: sanitized)
+                resolvedSanitized = sanitizeFilename(newName)
+                bundleURL = presetsURL.appendingPathComponent(
+                    "\(resolvedSanitized).\(PresetBundle.bundleExtension)", isDirectory: true
+                )
+                bundleExists = fileManager.fileExists(atPath: bundleURL.path)
+                log.info("Cross-language collision on \(sanitized, privacy: .public) — auto-suffixing to \(resolvedSanitized, privacy: .public)")
+            }
+        }
+
+        let sanitizedForLookup = resolvedSanitized
 
         // Three branches:
         //
@@ -571,7 +622,7 @@ class PresetManager: ObservableObject {
 
         refreshPresets()
 
-        guard let preset = presets.first(where: { $0.id == "user:\(sanitized)" }) else {
+        guard let preset = presets.first(where: { $0.id == "user:\(sanitizedForLookup)" }) else {
             throw PresetManagerError.saveFailed
         }
         return preset
@@ -1315,6 +1366,24 @@ class PresetManager: ObservableObject {
             .joined(separator: "_")
             .trimmingCharacters(in: .whitespaces)
     }
+}
+
+/// Strategy for handling a same-name re-save where the existing
+/// bundle's manifest declares a *different* language than the incoming
+/// save. See `PresetManager.savePreset` doc-comment for the rationale.
+enum CrossLanguageCollisionBehavior {
+    /// In-place migrate: patch the existing manifest, delete the orphan
+    /// entry script, keep `manifest.params` and `ui/`. Legacy in-plugin
+    /// Save behavior — appropriate when the user explicitly chose to
+    /// save *over* the existing bundle (e.g. switching the editor's
+    /// language and pressing Save).
+    case overwrite
+    /// Auto-suffix: leave the existing other-language bundle intact,
+    /// route the new content to `name 2` / `name 3` / etc. Appropriate
+    /// for programmatic callers (MCP `save_preset`) where a name
+    /// collision is incidental rather than an explicit "replace this"
+    /// intent. Same-language re-saves still update in place.
+    case autoSuffix
 }
 
 enum PresetManagerError: LocalizedError {

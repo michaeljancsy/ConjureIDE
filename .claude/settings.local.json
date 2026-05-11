@@ -107,7 +107,12 @@
       "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__add_comment",
       "mcp__33ab5bad-ebbd-453e-9f3c-d373837c2b86__get_task",
       "Bash(mkdir -p /Users/michaeljancsy/Projects/ConjureDSP/conjuredsp-application/.claude/worktrees/reverent-neumann-2d07e0/.claude/preview/cdp-meter)",
-      "Bash(ln -sf ../../../ConjureDSPExtension/Resources/cdp-ui.js /Users/michaeljancsy/Projects/ConjureDSP/conjuredsp-application/.claude/worktrees/reverent-neumann-2d07e0/.claude/preview/cdp-meter/cdp-ui.js)"
+      "Bash(ln -sf ../../../ConjureDSPExtension/Resources/cdp-ui.js /Users/michaeljancsy/Projects/ConjureDSP/conjuredsp-application/.claude/worktrees/reverent-neumann-2d07e0/.claude/preview/cdp-meter/cdp-ui.js)",
+      "Bash([ -d \"$PRESETS_BACKUP/.git\" ])",
+      "Bash(mv '/Users/michaeljancsy/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/Presets-backup-223919/.git' '/Users/michaeljancsy/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/Presets/.git')",
+      "Bash([ -f \"$PRESETS_BACKUP/.gitignore\" ])",
+      "Bash(mv '/Users/michaeljancsy/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/Presets-backup-223919/.gitignore' '/Users/michaeljancsy/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/Presets/.gitignore')",
+      "Read(//Users/michaeljancsy/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/Presets/**)"
     ]
   }
 }

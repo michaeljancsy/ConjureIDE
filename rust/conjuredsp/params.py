@@ -33,6 +33,37 @@ def _reject_unknown_kwargs(builder: str, baked: dict, kwargs: dict) -> None:
     )
 
 
+def _resolve_default(
+    explicit: float | None,
+    min: float,
+    max: float,
+    curve: str,
+    static: float,
+) -> float:
+    """Resolve a builder's default value, falling back to in-range fallbacks.
+
+    When the caller didn't pass `default=` (i.e. `explicit is None`), the
+    builder's own static default (e.g. `freq()` → 1000.0, `time_ms()` →
+    100.0) is used IF it sits inside the user-supplied `[min, max]` range.
+    When the user customized `min`/`max` so the static default no longer
+    fits, fall back to a sensible midpoint:
+      - log curve: geometric mean of min and max.
+      - linear: arithmetic mean.
+
+    When the caller DID pass `default=` explicitly, return it unchanged so
+    the validation in `param()` runs and an explicitly-bad default still
+    raises a clear ValueError. The point of this helper is to make the
+    no-`default` path "just work" — explicit mistakes still get caught.
+    """
+    if explicit is not None:
+        return explicit
+    if min <= static <= max:
+        return static
+    if curve == "log" and min > 0.0 and max > 0.0:
+        return (min * max) ** 0.5
+    return (min + max) / 2.0
+
+
 def param(
     min: float,
     max: float,
@@ -74,49 +105,73 @@ def param(
 
 
 def freq(
-    min: float = 20.0, max: float = 20000.0, default: float = 1000.0, **kwargs
+    min: float = 20.0,
+    max: float = 20000.0,
+    default: float | None = None,
+    **kwargs,
 ) -> ParamSpec:
     """Frequency parameter with Hz unit and log curve.
 
-    Default range: 20 Hz to 20 kHz (audible spectrum). Unit and curve are
-    baked in — pass them explicitly to `param()` if you need overrides.
+    Default range: 20 Hz to 20 kHz (audible spectrum). Default value: 1000 Hz
+    when 1000 falls inside `[min, max]`, otherwise the geometric mean (so
+    `freq(50, 200)` defaults to ~100 Hz instead of failing on 1000). Pass
+    `default=` to override.
+
+    Unit and curve are baked in — pass them explicitly to `param()` if you
+    need overrides.
 
     For sub-audio rates (LFOs, tremolo speed, chorus rate), use `lfo_rate()`
     instead — same Hz unit and log curve, but with sub-audio defaults.
     """
     _reject_unknown_kwargs("freq", {"unit": "Hz", "curve": "log"}, kwargs)
-    return param(min, max, unit="Hz", default=default, curve="log")
+    resolved = _resolve_default(default, min, max, curve="log", static=1000.0)
+    return param(min, max, unit="Hz", default=resolved, curve="log")
 
 
 def lfo_rate(
-    min: float = 0.1, max: float = 20.0, default: float = 1.0, **kwargs
+    min: float = 0.1, max: float = 20.0, default: float | None = None, **kwargs
 ) -> ParamSpec:
     """LFO rate parameter (sub-audio Hz) with log curve.
 
-    Default range: 0.1–20 Hz, default 1 Hz. Use for tremolo / autopan /
-    chorus / vibrato rate parameters. For audio-rate frequencies (filter
+    Default range: 0.1–20 Hz. Default value: 1 Hz when 1 falls inside
+    `[min, max]`, otherwise the geometric mean. Use for tremolo / autopan
+    / chorus / vibrato rate parameters. For audio-rate frequencies (filter
     cutoff, oscillator pitch), use `freq()` instead.
     """
     _reject_unknown_kwargs("lfo_rate", {"unit": "Hz", "curve": "log"}, kwargs)
-    return param(min, max, unit="Hz", default=default, curve="log")
+    resolved = _resolve_default(default, min, max, curve="log", static=1.0)
+    return param(min, max, unit="Hz", default=resolved, curve="log")
 
 
-def db(min: float = -60.0, max: float = 12.0, default: float = 0.0, **kwargs) -> ParamSpec:
-    """Decibel parameter with dB unit and linear curve."""
+def db(
+    min: float = -60.0, max: float = 12.0, default: float | None = None, **kwargs
+) -> ParamSpec:
+    """Decibel parameter with dB unit and linear curve.
+
+    Default value: 0 dB when 0 falls inside `[min, max]`, otherwise the
+    arithmetic midpoint (so `db(min=6, max=24)` defaults to 15 instead of
+    failing on 0).
+    """
     _reject_unknown_kwargs("db", {"unit": "dB", "curve": "linear"}, kwargs)
-    return param(min, max, unit="dB", default=default)
+    resolved = _resolve_default(default, min, max, curve="linear", static=0.0)
+    return param(min, max, unit="dB", default=resolved)
 
 
 def time_ms(
-    min: float = 0.1, max: float = 1000.0, default: float = 100.0, **kwargs
+    min: float = 0.1, max: float = 1000.0, default: float | None = None, **kwargs
 ) -> ParamSpec:
     """Time parameter in milliseconds with log curve.
 
     Log curve gives fine control at short times (attack) and coarse
     control at long times (release).
+
+    Default value: 100 ms when 100 falls inside `[min, max]`, otherwise the
+    geometric mean (so `time_ms(0.5, 50)` defaults to ~5 ms instead of
+    failing on 100).
     """
     _reject_unknown_kwargs("time_ms", {"unit": "ms", "curve": "log"}, kwargs)
-    return param(min, max, unit="ms", default=default, curve="log")
+    resolved = _resolve_default(default, min, max, curve="log", static=100.0)
+    return param(min, max, unit="ms", default=resolved, curve="log")
 
 
 def pct(default: float = 50.0, **kwargs) -> ParamSpec:
@@ -172,10 +227,18 @@ def choice(*labels: str, default: str | None = None) -> ParamSpec:
     return spec
 
 
-def ratio(min: float = 1.0, max: float = 20.0, default: float = 4.0, **kwargs) -> ParamSpec:
-    """Compression/expansion ratio parameter."""
+def ratio(
+    min: float = 1.0, max: float = 20.0, default: float | None = None, **kwargs
+) -> ParamSpec:
+    """Compression/expansion ratio parameter.
+
+    Default value: 4 when 4 falls inside `[min, max]`, otherwise the
+    arithmetic midpoint (so `ratio(min=8, max=20)` defaults to 14 instead
+    of failing on 4).
+    """
     _reject_unknown_kwargs("ratio", {"unit": ":1", "curve": "linear"}, kwargs)
-    return param(min, max, unit=":1", default=default)
+    resolved = _resolve_default(default, min, max, curve="linear", static=4.0)
+    return param(min, max, unit=":1", default=resolved)
 
 
 def integer(
