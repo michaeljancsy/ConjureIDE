@@ -731,6 +731,7 @@ impl DSPKernel {
             Err(err_msg) => {
                 self.install_passthrough_after_failed_load();
                 self.update_last_error_blocking(Some(err_msg));
+                self.had_error_last_block.store(false, Ordering::Relaxed);
                 false
             }
         }
@@ -788,6 +789,7 @@ impl DSPKernel {
             Err(err_msg) => {
                 self.install_passthrough_after_failed_load();
                 self.update_last_error_blocking(Some(err_msg));
+                self.had_error_last_block.store(false, Ordering::Relaxed);
                 false
             }
         }
@@ -2996,6 +2998,59 @@ mod tests {
 
         std::fs::remove_file(bad_script).ok();
         std::fs::remove_file(good_script).ok();
+    }
+
+    /// PR #4: a failed reload must reset `had_error_last_block`. Without
+    /// this, the next passthrough block (which returns `ok=true`) would
+    /// see the stale `true` flag from the prior runtime failure and let
+    /// the recovery branch wipe the freshly-written load-error string.
+    #[test]
+    fn test_failed_reload_resets_had_error_flag() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let raising_script = write_temp_script(
+            "import numpy as np\ndef process(ctx):\n    raise ValueError('runtime boom')\n",
+        );
+        let bad_syntax_script = write_temp_script(
+            "this is not valid python at all\ndef process",
+        );
+
+        let mut kernel = DSPKernel::new();
+        assert!(kernel.load_script(&python_home, raising_script.to_str().unwrap()));
+        kernel.initialize(1, 4, 44100.0);
+
+        let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+        let mut output: [f32; 4] = [0.0; 4];
+        let ip: *const f32 = input.as_ptr();
+        let op: *mut f32 = output.as_mut_ptr();
+
+        // Render → runtime error sets had_error_last_block to true.
+        unsafe { kernel.process(&ip, &op, 1, 4); }
+        assert!(
+            kernel.had_error_last_block.load(Ordering::Relaxed),
+            "runtime error should set had_error_last_block"
+        );
+
+        // Failed reload — the fix wires `.store(false, …)` into the Err arm
+        // of `load_script`. Without it the flag would stay `true`.
+        let r = kernel.load_script(&python_home, bad_syntax_script.to_str().unwrap());
+        assert!(!r, "bad-syntax script should fail to load");
+        assert!(
+            !kernel.had_error_last_block.load(Ordering::Relaxed),
+            "failed reload must reset had_error_last_block"
+        );
+        assert!(
+            kernel.last_error().is_some(),
+            "failed reload should leave last_error set"
+        );
+
+        std::fs::remove_file(raising_script).ok();
+        std::fs::remove_file(bad_syntax_script).ok();
     }
 
     /// PR #4: re-setting the same error string (e.g. a script that raises
