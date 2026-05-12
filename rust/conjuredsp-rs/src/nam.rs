@@ -22,13 +22,11 @@
 //!
 //! process! { ctx =>
 //!     unsafe {
-//!         if let Some(model) = NAM_MODEL.as_mut() {
-//!             for c in 0..ctx.channels() {
-//!                 let n = ctx.frames();
-//!                 for i in 0..n { NAM_IN[i] = ctx.input(c, i); }
-//!                 model.process_buffer(&NAM_IN[..n], &mut NAM_OUT[..n], c);
-//!                 for i in 0..n { ctx.set_output(c, i, NAM_OUT[i]); }
-//!             }
+//!         for c in 0..ctx.channels() {
+//!             let n = ctx.frames();
+//!             for i in 0..n { NAM_IN[i] = ctx.input(c, i); }
+//!             nam_process(&NAM_IN[..n], &mut NAM_OUT[..n], c);
+//!             for i in 0..n { ctx.set_output(c, i, NAM_OUT[i]); }
 //!         }
 //!     }
 //! }
