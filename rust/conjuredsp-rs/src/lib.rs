@@ -280,18 +280,24 @@ macro_rules! params {
 ///
 /// # Example
 ///
+/// `process!` invokes `setup!()` internally — do NOT write `setup!();`
+/// alongside `process!` (you'll get a duplicate-static error). This
+/// example is also exercised in `tests/macro_smoke.rs`.
+///
 /// ```ignore
 /// use conjuredsp::*;
-/// setup!();
 /// params! { THRESHOLD = db().min(-60.0).max(0.0).default(-20.0) }
 /// telemetry! {
 ///     ENV_LEVEL = scalar_telemetry(),               // unitless 0..1
 ///     GR_DB     = scalar_telemetry().unit("dB"),    // formatted as "-3.2 dB"
 /// }
 ///
-/// // Inside process():
-/// ctx.set_telemetry_scalar(ENV_LEVEL, env);
-/// ctx.set_telemetry_scalar(GR_DB, gr_db);
+/// process! { ctx =>
+///     let env: f32 = 0.5; // …envelope follower output…
+///     let gr_db: f32 = -3.2;
+///     ctx.set_telemetry_scalar(ENV_LEVEL, env);
+///     ctx.set_telemetry_scalar(GR_DB, gr_db);
+/// }
 /// ```
 #[macro_export]
 macro_rules! telemetry {
@@ -456,17 +462,17 @@ macro_rules! latency {
 ///
 /// # Example
 ///
+/// `process!` invokes `setup!()` internally, so don't write `setup!();`
+/// alongside it. The macro-emitted `NAM_IN` / `NAM_OUT` scratch buffers
+/// are accessed inside an `unsafe { … }` block — that's the macro's
+/// contract, not the deprecated `static mut` user-state idiom. This
+/// example is also exercised in `tests/macro_smoke.rs`.
+///
 /// ```ignore
 /// use conjuredsp::*;
-/// setup!();
 /// nam!("tone3000://abc123/def456");
 ///
-/// #[no_mangle]
-/// pub extern "C" fn process(
-///     input: *const f32, output: *mut f32,
-///     channel_count: i32, frame_count: i32, sample_rate: f32,
-/// ) {
-///     let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+/// process! { ctx =>
 ///     unsafe {
 ///         for c in 0..ctx.channels() {
 ///             let n = ctx.frames();
@@ -538,21 +544,21 @@ macro_rules! nam {
 ///
 /// # Example
 ///
+/// `process!` invokes `setup!()` internally. The `nam_process_slot`
+/// call wraps a host import, so the call site needs `unsafe { … }` —
+/// that's the macro's contract, not the deprecated user-state
+/// `static mut` idiom. This example is also exercised in
+/// `tests/macro_smoke.rs`.
+///
 /// ```ignore
 /// use conjuredsp::*;
-/// setup!();
 ///
 /// nams! {
 ///     DRIVE = "tone3000://19/56",
 ///     CAB   = "tone3000://42/8",
 /// }
 ///
-/// #[no_mangle]
-/// pub extern "C" fn process(
-///     input: *const f32, output: *mut f32,
-///     channel_count: i32, frame_count: i32, sample_rate: f32,
-/// ) {
-///     let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+/// process! { ctx =>
 ///     let mut a = [0.0_f32; MAX_FR];
 ///     let mut b = [0.0_f32; MAX_FR];
 ///     unsafe {
@@ -683,15 +689,16 @@ pub const STATE_HEADER_BYTES: usize = 12;
 ///
 /// # Example
 ///
+/// `process!` invokes `setup!()` internally. The identifier on the
+/// left of `=>` becomes the `Context` binding — `cx` works as well as
+/// `ctx`. This example is also exercised in `tests/macro_smoke.rs`.
+///
 /// ```ignore
 /// use conjuredsp::*;
-/// setup!();
 /// params! { /* ... */ }
 /// state!();
 ///
-/// #[no_mangle]
-/// pub extern "C" fn process(/* … */) {
-///     let cx = ctx(/* … */);
+/// process! { cx =>
 ///     let bytes: &[u8] = cx.state_bytes();
 ///     let gen: u64 = cx.state_generation();
 ///     // Cache parsed value yourself; re-parse only when gen changes.

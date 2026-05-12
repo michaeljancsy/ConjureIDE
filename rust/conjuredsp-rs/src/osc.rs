@@ -11,19 +11,20 @@ pub enum Waveform {
 
 /// Low-frequency oscillator with multiple waveforms.
 ///
-/// Maintains phase across `process()` callbacks. Store in `static mut`.
+/// Maintains phase across callbacks via `persist!` (Lfo is `Copy`, so the
+/// `.get()` / `.set()` round-trip is cheap):
 ///
 /// ```ignore
-/// static mut LFO: Lfo = Lfo::new();
+/// persist!(LFO_STATE: Lfo = Lfo::new());
 ///
-/// // In process():
-/// unsafe {
-///     LFO.init(sample_rate as f64, rate_hz);
-///     for i in 0..frames {
-///         let mod_val = LFO.tick();
-///         // use mod_val
-///     }
+/// // Inside process! { ctx => … }:
+/// let mut lfo = LFO_STATE.get();
+/// lfo.init(ctx.sample_rate() as f64, rate_hz);
+/// for i in 0..ctx.frames() {
+///     let mod_val = lfo.tick();
+///     // use mod_val
 /// }
+/// LFO_STATE.set(lfo);
 /// ```
 #[derive(Clone, Copy)]
 pub struct Lfo {

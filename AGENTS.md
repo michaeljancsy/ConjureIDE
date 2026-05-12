@@ -124,10 +124,12 @@ The library shape:
 **Rust** (`rust/conjuredsp-rs/`): Compiled to an rlib for `wasm32-wasip1` by `setup-rustc.sh` (or auto-rebuilt during the "Copy Rust Compiler" Xcode build phase). Bundled at `rustc-dist/lib/libconjuredsp.rlib`. `RustCompiler.swift` passes `--extern conjuredsp=<path>` to rustc. User scripts `use conjuredsp::*;`.
 
 Rust API overview:
-- `setup!()` — declares INPUT/OUTPUT/PARAMS/TRANSPORT buffers, MAX_CH/MAX_FR, get_*_ptr exports, ctx() helper
+- `process! { ctx => /* body */ }` — entry point. Emits the zero-arg `extern "C" fn process()` the host calls and the buffer statics in one shot. Subsumes `setup!()` (do NOT write it separately — duplicate-static error). The identifier on the left of `=>` becomes the `Context` binding (`ctx` is canonical).
 - `params! { NAME = builder() }` — generates parameter index constants + METADATA JSON at compile time
 - Parameter builders: `freq()`, `db()`, `time_ms()`, `mix()`, `pct()`, `toggle()`, `ratio()`, `param(min, max)` — all support `.min()`, `.max()`, `.default()`, `.unit()`, `.curve()` modifiers
-- `ctx()` — safe buffer access: `ctx.input(ch, frame)`, `ctx.set_output(ch, frame, val)`, `ctx.param(INDEX)`
+- `persist!(NAME: T = init)` / `persist_buf!(NAME: T = init)` — persistent state across render blocks. Scalar / Copy values use `persist!` with `.get()` / `.set(v)` / `.replace(v)`; large arrays / non-Copy use `persist_buf!` with `.with_mut(|buf| …)` in-place mutation. Both replace the deprecated raw `static mut` + `unsafe` idiom.
+- `telemetry!`, `state!`, `nam!`, `nams!`, `latency!` — optional feature macros, all compose with `process!`
+- `Context` accessors (built by `process!`): `ctx.input(ch, frame)`, `ctx.set_output(ch, frame, val)`, `ctx.param(INDEX)`, `ctx.channels()`, `ctx.frames()`, `ctx.sample_rate()`, `ctx.sidechain(c, i)`, `ctx.sidechain_connected()`, `ctx.set_telemetry_scalar(slot, value)`. `setup!()` is invoked internally and not user-facing.
 - DSP utils: `db_to_gain`, `gain_to_db`, `smooth_coeff`, `ms_to_samples`, `soft_clip`, `lerp`, `crossfade`
 - `BiquadCoeffs` (8 filter types) + `Biquad` (stateful DF2T), `DelayLine<SIZE>`, `Lfo` + `Waveform`
 - `accel` module — hardware-accelerated vectorized math (Rust: `use conjuredsp::accel;`, Python: `from conjuredsp.accel import ...`). Functions: `matmul`, `vec_add`, `vec_mul`, `vec_tanh`, `vec_sigmoid`, `vec_add_scalar`. In WASM, these call Accelerate framework (vDSP/vecLib) via host imports for near-native performance. In Python, they wrap numpy. Used internally by NAM inference but available to any preset.

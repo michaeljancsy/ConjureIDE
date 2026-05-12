@@ -170,10 +170,10 @@ struct AIPromptHelperView: View {
             conventions = """
             ## Rust Conventions
 
-            - Declare all static state with `static mut` at module scope (e.g., filters, delay lines, LFO).
-            - Call `lfo.init(ctx.sample_rate() as f64, ctx.param(RATE) as f64)` at the start of each `process()` callback. Both args are f64; cast f32 values with `as f64`.
-            - Use `unsafe` blocks for `static mut` access.
-            - Initialize gain/envelope state to `1.0f32` (unity gain), not `0.0`.
+            - Entry point is **`process! { ctx => /* body */ }`** — emits the zero-arg `extern "C" fn process()` WASM export the host calls and sets up the buffer statics in one shot. Do **not** write `setup!();` separately (it triggers a duplicate-static error because `process!` invokes `setup!()` internally) and do **not** hand-roll an `extern "C" fn process(...)` — the host looks up the zero-arg `process` symbol; the legacy 5-arg shape is gone.
+            - Persistent state across blocks goes in **`persist!(NAME: T = init);`** (scalar / `Copy` values like envelope levels, filter history, `Biquad`, `Lfo`, write counters — access via `NAME.get()` / `NAME.set(v)`) or **`persist_buf!(NAME: T = init);`** (large arrays / non-`Copy` types like delay buffers, ring buffers — access in-place via `NAME.with_mut(|buf| buf[c][i] = v)`). Both eliminate the `unsafe` blocks the previous `static mut` idiom required.
+            - For LFO modulation, prefer building one full buffer of values per block — call `lfo.init(ctx.sample_rate() as f64, ctx.param(RATE) as f64)` once on the snapshot, then iterate. Both `init` args are f64; cast f32 values with `as f64`.
+            - Initialize gain/envelope state to `1.0f32` (unity gain), not `0.0`, so the first block isn't silent during smoothing ramp-in.
             """
         }
 
