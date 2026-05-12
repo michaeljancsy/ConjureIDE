@@ -74,7 +74,6 @@ macro-emitted method on `Context` (analogous to
 
 ```rust
 use conjuredsp::*;
-setup!();
 
 params! {
     DENSITY = freq().min(0.5).max(40.0).default(10.0).unit("Hz"),
@@ -85,12 +84,7 @@ telemetry! {
     GRAIN_PITCH  = events_telemetry().unit("st"),    // semitones
 }
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let mut grain_events: heapless::Vec<(u32, f32), 64> = heapless::Vec::new();
     // ... DSP loop, on each trigger:
     //   let _ = grain_events.push((frame_idx as u32, norm_pos));

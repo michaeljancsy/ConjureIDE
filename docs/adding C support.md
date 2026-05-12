@@ -29,8 +29,10 @@ enum ScriptLanguage: String, CaseIterable {
     case c
 
     static func detect(from source: String) -> ScriptLanguage {
-        // Rust: unambiguous markers
-        if source.contains("fn process(") || source.contains("#[no_mangle]") {
+        // Rust: unambiguous markers (modern process! + persist! / legacy markers)
+        if source.contains("process!") || source.contains("persist!") || source.contains("persist_buf!")
+            || source.contains("fn process(") || source.contains("#[no_mangle]")
+        {
             return .rust
         }
         // C: void process signature or C-specific includes

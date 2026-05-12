@@ -16,26 +16,26 @@ params! {
     DOWNSAMPLE = integer(1.0, 16.0).unit("x").default(1.0),
 }
 
-// Persistent held sample per channel for sample-rate reduction
-static mut HELD: [f32; MAX_CH] = [0.0; MAX_CH];
+// Persistent held sample per channel for sample-rate reduction.
+persist_buf!(HELD: [f32; MAX_CH] = [0.0; MAX_CH]);
 
 /// Bitcrush — bit depth reduction and sample rate reduction.
 process! { ctx =>
-    unsafe {
-        let bit_depth = ctx.param(BIT_DEPTH) as i32;       // truncate to match Python's int()
-        let downsample = ctx.param(DOWNSAMPLE) as usize;  // truncate to match Python's int()
-        let levels = (1 << bit_depth) as f32;
+    let bit_depth = ctx.param(BIT_DEPTH) as i32;       // truncate to match Python's int()
+    let downsample = ctx.param(DOWNSAMPLE) as usize;  // truncate to match Python's int()
+    let levels = (1 << bit_depth) as f32;
 
+    HELD.with_mut(|held| {
         for i in 0..ctx.frames() {
             for c in 0..ctx.channels() {
                 // Bit depth reduction: quantize to fewer levels
                 let crushed = (ctx.input(c, i) * levels).round() / levels;
                 // Sample rate reduction: hold every Nth sample
                 if i % downsample == 0 {
-                    HELD[c] = crushed;
+                    held[c] = crushed;
                 }
-                ctx.set_output(c, i, HELD[c]);
+                ctx.set_output(c, i, held[c]);
             }
         }
-    }
+    });
 }

@@ -1427,6 +1427,13 @@ impl Backend for WasmBackend {
         // sample_rate f32) before each process() call. The zero-arg
         // process!-emitted entry point reads these back from linear
         // memory to populate ctx.{frames(), channels(), sample_rate()}.
+        //
+        // block_info_offset was resolved at load time via the required
+        // get_block_info_ptr export; the buffer lives in module-lifetime
+        // static memory. If the bounds check below ever fired we'd be
+        // shipping a render block with stale frame_count/channel_count
+        // — way preferable to debug-assert and bail than to silently
+        // continue.
         let block_info = conjuredsp::BlockInfo {
             frame_count: frame_count as u32,
             channel_count: channel_count as u32,
@@ -1434,13 +1441,16 @@ impl Backend for WasmBackend {
         };
         let bi_offset = self.block_info_offset as usize;
         let bi_size = core::mem::size_of::<conjuredsp::BlockInfo>();
-        if bi_offset + bi_size <= mem_data.len() {
-            let src_bytes = core::slice::from_raw_parts(
-                &block_info as *const conjuredsp::BlockInfo as *const u8,
-                bi_size,
-            );
-            mem_data[bi_offset..bi_offset + bi_size].copy_from_slice(src_bytes);
-        }
+        debug_assert!(
+            bi_offset + bi_size <= mem_data.len(),
+            "BLOCK_INFO_BUF write out of bounds: offset {} + size {} > memory len {}",
+            bi_offset, bi_size, mem_data.len()
+        );
+        let src_bytes = core::slice::from_raw_parts(
+            &block_info as *const conjuredsp::BlockInfo as *const u8,
+            bi_size,
+        );
+        mem_data[bi_offset..bi_offset + bi_size].copy_from_slice(src_bytes);
 
         // Call the WASM process function (zero-arg ABI; scalars travel via BLOCK_INFO_BUF)
         let result = self.process_fn.call(&mut self.store, ());

@@ -16,45 +16,49 @@ params! {
     RATE = time_ms().min(10.0).max(500.0).default(100.0),
 }
 
-// Double buffers for record and playback
-static mut BUF_A: [[f32; MAX_CHUNK]; MAX_CH] = [[0.0; MAX_CHUNK]; MAX_CH];
-static mut BUF_B: [[f32; MAX_CHUNK]; MAX_CH] = [[0.0; MAX_CHUNK]; MAX_CH];
-static mut RECORDING_A: bool = true; // true = recording to A, playing from B
-static mut WRITE_POS: usize = 0;
+// Double buffers for record and playback.
+persist_buf!(BUF_A: [[f32; MAX_CHUNK]; MAX_CH] = [[0.0; MAX_CHUNK]; MAX_CH]);
+persist_buf!(BUF_B: [[f32; MAX_CHUNK]; MAX_CH] = [[0.0; MAX_CHUNK]; MAX_CH]);
+persist!(RECORDING_A: bool = true); // true = recording to A, playing from B
+persist!(WRITE_POS: usize = 0);
 
 process! { ctx =>
-    unsafe {
-        let chunk_ms = ctx.param(RATE);
-        let mut chunk_size = (chunk_ms * 0.001 * ctx.sample_rate()) as usize;
-        if chunk_size > MAX_CHUNK {
-            chunk_size = MAX_CHUNK;
-        }
+    let chunk_ms = ctx.param(RATE);
+    let mut chunk_size = (chunk_ms * 0.001 * ctx.sample_rate()) as usize;
+    if chunk_size > MAX_CHUNK {
+        chunk_size = MAX_CHUNK;
+    }
 
-        let mut wp = WRITE_POS;
+    let mut wp = WRITE_POS.get();
+    let mut recording_a = RECORDING_A.get();
 
-        for i in 0..ctx.frames() {
-            let read_pos = chunk_size - 1 - wp;
+    BUF_A.with_mut(|buf_a| {
+        BUF_B.with_mut(|buf_b| {
+            for i in 0..ctx.frames() {
+                let read_pos = chunk_size - 1 - wp;
 
-            for c in 0..ctx.channels() {
-                if RECORDING_A {
-                    // Record to A, play from B
-                    BUF_A[c][wp] = ctx.input(c, i);
-                    ctx.set_output(c, i, BUF_B[c][read_pos]);
-                } else {
-                    // Record to B, play from A
-                    BUF_B[c][wp] = ctx.input(c, i);
-                    ctx.set_output(c, i, BUF_A[c][read_pos]);
+                for c in 0..ctx.channels() {
+                    if recording_a {
+                        // Record to A, play from B
+                        buf_a[c][wp] = ctx.input(c, i);
+                        ctx.set_output(c, i, buf_b[c][read_pos]);
+                    } else {
+                        // Record to B, play from A
+                        buf_b[c][wp] = ctx.input(c, i);
+                        ctx.set_output(c, i, buf_a[c][read_pos]);
+                    }
+                }
+
+                wp += 1;
+                if wp >= chunk_size {
+                    // Swap buffers
+                    recording_a = !recording_a;
+                    wp = 0;
                 }
             }
+        });
+    });
 
-            wp += 1;
-            if wp >= chunk_size {
-                // Swap buffers
-                RECORDING_A = !RECORDING_A;
-                wp = 0;
-            }
-        }
-
-        WRITE_POS = wp;
-    }
+    WRITE_POS.set(wp);
+    RECORDING_A.set(recording_a);
 }

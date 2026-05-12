@@ -20,54 +20,56 @@ params! {
     MIX = mix(),
 }
 
-// Persistent state: separate left and right delay lines
-static mut LEFT_BUF: [f32; MAX_DELAY] = [0.0; MAX_DELAY];
-static mut RIGHT_BUF: [f32; MAX_DELAY] = [0.0; MAX_DELAY];
-static mut WRITE_POS: usize = 0;
+// Persistent state: separate left and right delay lines.
+persist_buf!(LEFT_BUF: [f32; MAX_DELAY] = [0.0; MAX_DELAY]);
+persist_buf!(RIGHT_BUF: [f32; MAX_DELAY] = [0.0; MAX_DELAY]);
+persist!(WRITE_POS: usize = 0);
 
 process! { ctx =>
-    unsafe {
-        let delay_ms = ctx.param(TIME);
-        let feedback = ctx.param(FEEDBACK);
-        let mix = ctx.param(MIX);
+    let delay_ms = ctx.param(TIME);
+    let feedback = ctx.param(FEEDBACK);
+    let mix = ctx.param(MIX);
 
-        let mut delay_samples = (delay_ms * 0.001 * ctx.sample_rate()) as usize;
-        if delay_samples >= MAX_DELAY {
-            delay_samples = MAX_DELAY - 1;
-        }
-
-        let mut wp = WRITE_POS;
-
-        if ctx.channels() < 2 {
-            // Mono: simple delay with feedback
-            for i in 0..ctx.frames() {
-                let rp = (wp + MAX_DELAY - delay_samples) % MAX_DELAY;
-                let delayed = LEFT_BUF[rp];
-                LEFT_BUF[wp] = ctx.input(0, i) + delayed * feedback;
-                ctx.set_output(0, i, ctx.input(0, i) * (1.0 - mix) + delayed * mix);
-                wp = (wp + 1) % MAX_DELAY;
-            }
-        } else {
-            // Stereo: ping-pong
-            for i in 0..ctx.frames() {
-                let rp = (wp + MAX_DELAY - delay_samples) % MAX_DELAY;
-
-                let left_delayed = LEFT_BUF[rp];
-                let right_delayed = RIGHT_BUF[rp];
-
-                // Input goes to left, left feeds right, right feeds back to left
-                let mono_in = (ctx.input(0, i) + ctx.input(1, i)) * 0.5;
-                LEFT_BUF[wp] = mono_in + right_delayed * feedback;
-                RIGHT_BUF[wp] = left_delayed * feedback;
-
-                // Mix dry + wet
-                ctx.set_output(0, i, ctx.input(0, i) * (1.0 - mix) + left_delayed * mix);
-                ctx.set_output(1, i, ctx.input(1, i) * (1.0 - mix) + right_delayed * mix);
-
-                wp = (wp + 1) % MAX_DELAY;
-            }
-        }
-
-        WRITE_POS = wp;
+    let mut delay_samples = (delay_ms * 0.001 * ctx.sample_rate()) as usize;
+    if delay_samples >= MAX_DELAY {
+        delay_samples = MAX_DELAY - 1;
     }
+
+    let mut wp = WRITE_POS.get();
+
+    LEFT_BUF.with_mut(|left_buf| {
+        RIGHT_BUF.with_mut(|right_buf| {
+            if ctx.channels() < 2 {
+                // Mono: simple delay with feedback
+                for i in 0..ctx.frames() {
+                    let rp = (wp + MAX_DELAY - delay_samples) % MAX_DELAY;
+                    let delayed = left_buf[rp];
+                    left_buf[wp] = ctx.input(0, i) + delayed * feedback;
+                    ctx.set_output(0, i, ctx.input(0, i) * (1.0 - mix) + delayed * mix);
+                    wp = (wp + 1) % MAX_DELAY;
+                }
+            } else {
+                // Stereo: ping-pong
+                for i in 0..ctx.frames() {
+                    let rp = (wp + MAX_DELAY - delay_samples) % MAX_DELAY;
+
+                    let left_delayed = left_buf[rp];
+                    let right_delayed = right_buf[rp];
+
+                    // Input goes to left, left feeds right, right feeds back to left
+                    let mono_in = (ctx.input(0, i) + ctx.input(1, i)) * 0.5;
+                    left_buf[wp] = mono_in + right_delayed * feedback;
+                    right_buf[wp] = left_delayed * feedback;
+
+                    // Mix dry + wet
+                    ctx.set_output(0, i, ctx.input(0, i) * (1.0 - mix) + left_delayed * mix);
+                    ctx.set_output(1, i, ctx.input(1, i) * (1.0 - mix) + right_delayed * mix);
+
+                    wp = (wp + 1) % MAX_DELAY;
+                }
+            }
+        });
+    });
+
+    WRITE_POS.set(wp);
 }

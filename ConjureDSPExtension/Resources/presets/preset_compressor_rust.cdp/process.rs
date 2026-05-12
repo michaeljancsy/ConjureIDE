@@ -38,37 +38,37 @@ telemetry! {
     GR_CURVE = vector_telemetry().unit("dB"),  // per-sample GR (≥0) — UI scope draws the envelope shape
 }
 
-// Persistent envelope follower state
-// Use f64 to match Python's float64 precision in the envelope feedback loop.
-static mut ENVELOPE: f64 = 0.0;
+// Persistent envelope follower state. f64 to match Python's float64
+// precision in the envelope feedback loop.
+persist!(ENVELOPE: f64 = 0.0);
 
 // Per-block GR scratch for vector telemetry. One f32 per audio frame in
 // the current block (length = frame_count, capped at MAX_FR by the
-// macro). Static so we don't heap-alloc per render callback.
-static mut GR_SCRATCH: [f32; MAX_FR] = [0.0; MAX_FR];
+// macro). Persistent so we don't heap-alloc per render callback.
+persist_buf!(GR_SCRATCH: [f32; MAX_FR] = [0.0; MAX_FR]);
 
 /// Compressor — dynamic range compression with envelope follower.
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
-    unsafe {
-        let threshold_db = ctx.param(THRESHOLD) as f64;
-        let ratio = ctx.param(RATIO) as f64;
-        let attack_ms = ctx.param(ATTACK) as f64;
-        let release_ms = ctx.param(RELEASE) as f64;
-        let makeup_db = ctx.param(MAKEUP) as f64;
+    let threshold_db = ctx.param(THRESHOLD) as f64;
+    let ratio = ctx.param(RATIO) as f64;
+    let attack_ms = ctx.param(ATTACK) as f64;
+    let release_ms = ctx.param(RELEASE) as f64;
+    let makeup_db = ctx.param(MAKEUP) as f64;
 
-        let threshold = db_to_gain(threshold_db);
-        let makeup = db_to_gain(makeup_db);
-        let attack_coeff = smooth_coeff(attack_ms, sr);
-        let release_coeff = smooth_coeff(release_ms, sr);
-        let mut env = ENVELOPE;
+    let threshold = db_to_gain(threshold_db);
+    let makeup = db_to_gain(makeup_db);
+    let attack_coeff = smooth_coeff(attack_ms, sr);
+    let release_coeff = smooth_coeff(release_ms, sr);
+    let mut env = ENVELOPE.get();
 
-        // Track the deepest GR over the block for the meter — that's
-        // the value users want to see ("how hard is this hitting?"),
-        // not the per-sample average.
-        let mut max_gr_db: f64 = 0.0;
+    // Track the deepest GR over the block for the meter — that's
+    // the value users want to see ("how hard is this hitting?"),
+    // not the per-sample average.
+    let mut max_gr_db: f64 = 0.0;
 
+    GR_SCRATCH.with_mut(|gr_scratch| {
         for i in 0..ctx.frames() {
             // Peak detect across all channel_count
             let mut peak: f64 = 0.0;
@@ -99,14 +99,12 @@ process! { ctx =>
                 max_gr_db = gr_db;
             }
 
-            GR_SCRATCH[i] = gr_db as f32;
+            gr_scratch[i] = gr_db as f32;
 
             for c in 0..ctx.channels() {
                 ctx.set_output(c, i, (ctx.input(c, i) as f64 * gain * makeup) as f32);
             }
         }
-
-        ENVELOPE = env;
 
         // Publish telemetry. UI reads frame.telemetry["Gr Db"] and
         // ["Env Db"]. The gain computer's actual decision lands here
@@ -115,6 +113,8 @@ process! { ctx =>
         let env_db = if env > 0.0 { gain_to_db(env) } else { -120.0 };
         ctx.set_telemetry_scalar(GR_DB, max_gr_db as f32);
         ctx.set_telemetry_scalar(ENV_DB, env_db as f32);
-        ctx.set_telemetry_vector(GR_CURVE, &GR_SCRATCH[..ctx.frames()]);
-    }
+        ctx.set_telemetry_vector(GR_CURVE, &gr_scratch[..ctx.frames()]);
+    });
+
+    ENVELOPE.set(env);
 }

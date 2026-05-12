@@ -13,6 +13,13 @@
 //   GRAVITY_SYNC  (choice) — lock pitch-shift grain phase to host beat
 //   COLLAPSE_SYNC (choice) — beat-locked decay envelope on the closing lowpass
 
+// Falls back to raw `static mut` under the plan's Plan B (see
+// plans/an-ai-had-this-starry-moler.md). Each preset on this fallback
+// gets a per-preset `persist!()` / `persist_buf!()` migration over time;
+// the lock-in test ConjureDSPLogicTests/PresetEntryPointLockInTests carries
+// the live allow-list and removes a name as each preset gets migrated.
+#![allow(static_mut_refs)]
+
 use conjuredsp::*;
 const SYNC_LABELS: &[&str] = &["Free", "1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars"];
 

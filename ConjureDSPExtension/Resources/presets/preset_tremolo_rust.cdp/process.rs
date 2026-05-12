@@ -21,9 +21,9 @@ params! {
 // Values are in beats (quarter notes)
 const DIVISIONS: [f64; 7] = [4.0, 2.0, 1.0, 0.5, 0.25, 2.0 / 3.0, 1.0 / 3.0];
 
-// Persistent phase across callbacks
-// Use f64 to match Python's float64 precision in the phase accumulator.
-static mut PHASE: f64 = 0.0;
+// Persistent phase across callbacks. f64 to match Python's float64
+// precision in the phase accumulator.
+persist!(PHASE: f64 = 0.0);
 
 /// Tremolo — sine-based amplitude modulation.
 ///
@@ -34,33 +34,31 @@ process! { ctx =>
     let sr = ctx.sample_rate() as f64;
     let two_pi = 2.0 * core::f64::consts::PI;
 
-    unsafe {
-        let sync = ctx.param(SYNC) as f64;
-        let depth = ctx.param(DEPTH) as f64;
-        let tempo = TRANSPORT_BUF[T_TEMPO] as f64;
+    let sync = ctx.param(SYNC) as f64;
+    let depth = ctx.param(DEPTH) as f64;
+    let tempo = unsafe { TRANSPORT_BUF[T_TEMPO] } as f64;
 
-        // Determine LFO rate
-        let rate_hz = if sync > 0.5 && tempo > 0.0 {
-            let div_idx_raw = ctx.param(DIVISION) as f64;
-            let div_idx = div_idx_raw.round() as usize;
-            let div_idx = if div_idx >= DIVISIONS.len() { DIVISIONS.len() - 1 } else { div_idx };
-            let beats = DIVISIONS[div_idx];
-            tempo / 60.0 / beats
-        } else {
-            ctx.param(RATE) as f64
-        };
+    // Determine LFO rate
+    let rate_hz = if sync > 0.5 && tempo > 0.0 {
+        let div_idx_raw = ctx.param(DIVISION) as f64;
+        let div_idx = div_idx_raw.round() as usize;
+        let div_idx = if div_idx >= DIVISIONS.len() { DIVISIONS.len() - 1 } else { div_idx };
+        let beats = DIVISIONS[div_idx];
+        tempo / 60.0 / beats
+    } else {
+        ctx.param(RATE) as f64
+    };
 
-        let phase_inc = two_pi * rate_hz / sr;
-        let mut phase = PHASE;
+    let phase_inc = two_pi * rate_hz / sr;
+    let mut phase = PHASE.get();
 
-        for i in 0..ctx.frames() {
-            let lfo = 1.0 - depth * 0.5 * (1.0 + phase.sin());
-            for c in 0..ctx.channels() {
-                ctx.set_output(c, i, (ctx.input(c, i) as f64 * lfo) as f32);
-            }
-            phase += phase_inc;
+    for i in 0..ctx.frames() {
+        let lfo = 1.0 - depth * 0.5 * (1.0 + phase.sin());
+        for c in 0..ctx.channels() {
+            ctx.set_output(c, i, (ctx.input(c, i) as f64 * lfo) as f32);
         }
-
-        PHASE = phase % two_pi;
+        phase += phase_inc;
     }
+
+    PHASE.set(phase % two_pi);
 }

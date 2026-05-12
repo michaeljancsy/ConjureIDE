@@ -74,8 +74,9 @@ enum ScriptLanguage: String, CaseIterable {
     case faust
 
     static func detect(from source: String) -> ScriptLanguage {
-        // Rust: unambiguous markers
-        if source.contains("fn process(") || source.contains("#[no_mangle]")
+        // Rust: unambiguous markers (modern process! + persist! / legacy setup!() / hand-rolled #[no_mangle])
+        if source.contains("process!") || source.contains("persist!") || source.contains("persist_buf!")
+            || source.contains("fn process(") || source.contains("#[no_mangle]")
             || source.contains("use conjuredsp") || source.contains("setup!()")
         {
             return .rust

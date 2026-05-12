@@ -7,26 +7,34 @@
 //!
 //! ```ignore
 //! use conjuredsp::*;
-//! setup!();
 //!
 //! params! {
 //!     CUTOFF = freq(),
 //!     RESONANCE = param(0.0, 1.0).default(0.5),
 //! }
 //!
-//! #[no_mangle]
-//! pub extern "C" fn process(
-//!     input: *const f32, output: *mut f32,
-//!     channel_count: i32, frame_count: i32, sample_rate: f32,
-//! ) {
-//!     let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+//! // Per-block state lives in `persist!` (scalar / Copy) or
+//! // `persist_buf!` (large arrays / non-Copy). Replaces `static mut`.
+//! persist!(ENVELOPE: f64 = 0.0);
+//!
+//! process! { ctx =>
+//!     let mut env = ENVELOPE.get();
 //!     for c in 0..ctx.channels() {
 //!         for i in 0..ctx.frames() {
-//!             ctx.set_output(c, i, ctx.input(c, i));
+//!             let s = ctx.input(c, i);
+//!             env = 0.99 * env + 0.01 * (s.abs() as f64);
+//!             ctx.set_output(c, i, s);
 //!         }
 //!     }
+//!     ENVELOPE.set(env);
 //! }
 //! ```
+//!
+//! The `process!` macro subsumes `setup!()` (buffers, exports), reads
+//! per-block scalars from a shared `BLOCK_INFO_BUF`, and emits the
+//! zero-arg `extern "C" fn process()` the host calls. Do not hand-roll
+//! an `extern "C" fn process(...)` — the host looks up a zero-arg
+//! `process` export and the legacy 5-arg shape fails to load.
 
 pub mod abi;
 pub mod accel;
@@ -184,35 +192,11 @@ macro_rules! setup {
             &raw const BLOCK_INFO_BUF as *const $crate::BlockInfo as i32
         }
 
-        /// Create a [`conjuredsp::Context`] for safe buffer access.
-        ///
-        /// Argument order matches the host's `process()` calling
-        /// convention: `(input, output, channel_count, frame_count,
-        /// sample_rate)`. Pass your `process()` parameters through in
-        /// the same positions and order.
-        #[inline]
-        #[allow(dead_code)]
-        fn ctx(
-            input: *const f32,
-            output: *mut f32,
-            channel_count: i32,
-            frame_count: i32,
-            sample_rate: f32,
-        ) -> conjuredsp::Context {
-            unsafe {
-                conjuredsp::Context::new_with_sidechain(
-                    input,
-                    output,
-                    channel_count,
-                    frame_count,
-                    sample_rate,
-                    &raw const PARAMS_BUF as *const f32,
-                    &raw mut TELEMETRY_BUF as *mut f32,
-                    &raw const SIDECHAIN_BUF as *const f32,
-                    &raw const SIDECHAIN_STATE as *const i32,
-                )
-            }
-        }
+        // Legacy 5-arg ctx() helper was removed when the zero-arg
+        // process! macro landed — process!() constructs the Context
+        // directly from BLOCK_INFO_BUF and the static buffer addresses.
+        // Anything reaching for ctx() today is on the old shape and
+        // should migrate to process! { ctx => /* body */ }.
     };
 }
 

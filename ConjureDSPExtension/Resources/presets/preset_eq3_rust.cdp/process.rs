@@ -12,6 +12,13 @@
 //   4 (Mid Bypass):  Bypass mid band — 0 = active, 1 = bypass
 //   5 (High Bypass): Bypass high band — 0 = active, 1 = bypass
 
+// Falls back to raw `static mut` under the plan's Plan B (see
+// plans/an-ai-had-this-starry-moler.md). Each preset on this fallback
+// gets a per-preset `persist!()` / `persist_buf!()` migration over time;
+// the lock-in test ConjureDSPLogicTests/PresetEntryPointLockInTests carries
+// the live allow-list and removes a name as each preset gets migrated.
+#![allow(static_mut_refs)]
+
 use conjuredsp::*;
 params! {
     LOW_GAIN = db().min(-12.0).max(12.0),

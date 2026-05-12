@@ -28,31 +28,31 @@ telemetry! {
 }
 
 // Persistent envelope follower state.
-static mut ENVELOPE: f64 = 0.0;
+persist!(ENVELOPE: f64 = 0.0);
 
 // Per-block GR scratch for vector telemetry.
-static mut GR_SCRATCH: [f32; MAX_FR] = [0.0; MAX_FR];
+persist_buf!(GR_SCRATCH: [f32; MAX_FR] = [0.0; MAX_FR]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
-    unsafe {
-        let threshold_db = ctx.param(THRESHOLD) as f64;
-        let ratio = ctx.param(RATIO) as f64;
-        let attack_ms = ctx.param(ATTACK) as f64;
-        let release_ms = ctx.param(RELEASE) as f64;
-        let makeup_db = ctx.param(MAKEUP) as f64;
+    let threshold_db = ctx.param(THRESHOLD) as f64;
+    let ratio = ctx.param(RATIO) as f64;
+    let attack_ms = ctx.param(ATTACK) as f64;
+    let release_ms = ctx.param(RELEASE) as f64;
+    let makeup_db = ctx.param(MAKEUP) as f64;
 
-        let threshold = db_to_gain(threshold_db);
-        let makeup = db_to_gain(makeup_db);
-        let attack_coeff = smooth_coeff(attack_ms, sr);
-        let release_coeff = smooth_coeff(release_ms, sr);
-        let mut env = ENVELOPE;
-        let mut max_gr_db: f64 = 0.0;
+    let threshold = db_to_gain(threshold_db);
+    let makeup = db_to_gain(makeup_db);
+    let attack_coeff = smooth_coeff(attack_ms, sr);
+    let release_coeff = smooth_coeff(release_ms, sr);
+    let mut env = ENVELOPE.get();
+    let mut max_gr_db: f64 = 0.0;
 
-        let sc_active = ctx.sidechain_connected();
-        let sc_channels = ctx.sidechain_channels();
+    let sc_active = ctx.sidechain_connected();
+    let sc_channels = ctx.sidechain_channels();
 
+    GR_SCRATCH.with_mut(|gr_scratch| {
         for i in 0..ctx.frames() {
             // Detection signal: prefer sidechain when host has one
             // routed; fall back to peak of main input across all
@@ -95,7 +95,7 @@ process! { ctx =>
                 max_gr_db = gr_db;
             }
 
-            GR_SCRATCH[i] = gr_db as f32;
+            gr_scratch[i] = gr_db as f32;
 
             // Always apply gain reduction to the MAIN input — the
             // sidechain is detection-only, never heard at the output.
@@ -104,12 +104,12 @@ process! { ctx =>
             }
         }
 
-        ENVELOPE = env;
-
         let env_db = if env > 0.0 { gain_to_db(env) } else { -120.0 };
         ctx.set_telemetry_scalar(GR_DB, max_gr_db as f32);
         ctx.set_telemetry_scalar(ENV_DB, env_db as f32);
         ctx.set_telemetry_scalar(SC_ACTIVE, if sc_active { 1.0 } else { 0.0 });
-        ctx.set_telemetry_vector(GR_CURVE, &GR_SCRATCH[..ctx.frames()]);
-    }
+        ctx.set_telemetry_vector(GR_CURVE, &gr_scratch[..ctx.frames()]);
+    });
+
+    ENVELOPE.set(env);
 }

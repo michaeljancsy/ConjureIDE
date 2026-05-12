@@ -11,6 +11,13 @@
 //   2 (Delay): Base delay — 2.0 to 30.0 ms
 //   3 (Mix):   Dry/wet mix — 0.0 to 1.0
 
+// Falls back to raw `static mut` under the plan's Plan B (see
+// plans/an-ai-had-this-starry-moler.md). Each preset on this fallback
+// gets a per-preset `persist!()` / `persist_buf!()` migration over time;
+// the lock-in test ConjureDSPLogicTests/PresetEntryPointLockInTests carries
+// the live allow-list and removes a name as each preset gets migrated.
+#![allow(static_mut_refs)]
+
 use conjuredsp::*;
 const MAX_DELAY: usize = 2048;
 

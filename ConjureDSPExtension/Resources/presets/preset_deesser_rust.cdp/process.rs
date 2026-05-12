@@ -13,6 +13,13 @@
 //   4 (Attack):    Envelope attack time — 0.1 to 10 ms (log)
 //   5 (Release):   Envelope release time — 10 to 200 ms (log)
 
+// Falls back to raw `static mut` under the plan's Plan B (see
+// plans/an-ai-had-this-starry-moler.md). Each preset on this fallback
+// gets a per-preset `persist!()` / `persist_buf!()` migration over time;
+// the lock-in test ConjureDSPLogicTests/PresetEntryPointLockInTests carries
+// the live allow-list and removes a name as each preset gets migrated.
+#![allow(static_mut_refs)]
+
 use conjuredsp::*;
 params! {
     FREQUENCY = freq().min(2000.0).max(12000.0).default(6000.0),
