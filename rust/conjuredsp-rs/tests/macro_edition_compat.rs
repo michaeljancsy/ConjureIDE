@@ -37,8 +37,6 @@ const FIXTURE: &str = r#"
 #![allow(unused, dead_code)]
 use conjuredsp::*;
 
-setup!();
-
 params! {
     GAIN = db().min(-24.0).max(12.0).default(0.0),
     MIX  = mix(),
@@ -58,25 +56,20 @@ nams! {
     CAB   = "tone3000://19/57",
 }
 
-// Legacy 5-arg entry — what every preset still uses today. Step 4
-// introduces the zero-arg process! macro; step 5 migrates each preset
-// onto it. Here we exercise the macros' emitted code under both
-// editions, not the entry-point shape. The `#[unsafe(no_mangle)]`
-// spelling works under both editions (accepted since Rust 1.82), so
-// the fixture itself doesn't have to fork on edition either.
-#[unsafe(no_mangle)]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let cx = ctx(input, output, channel_count, frame_count, sample_rate);
+persist!(SCALAR: f64 = 0.0);
+persist_buf!(BUF: [f32; 8] = [0.0; 8]);
+
+// Canonical zero-arg entry point via process!. The `#[unsafe(no_mangle)]`
+// attribute the macro emits works under both editions (accepted since
+// Rust 1.82), so the fixture doesn't need to fork on edition.
+process! { cx =>
     let _g = cx.param(GAIN);
     cx.set_telemetry_scalar(LEVEL, 0.0);
     let _bytes = cx.state_bytes();
     let _gen = cx.state_generation();
+    let _s = SCALAR.get();
+    SCALAR.set(_s + 1.0);
+    BUF.with_mut(|b| b[0] = 1.0);
 }
 "#;
 
