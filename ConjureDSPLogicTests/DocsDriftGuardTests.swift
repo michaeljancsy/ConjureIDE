@@ -178,4 +178,54 @@ struct DocsDriftGuardTests {
         let content = try Self.read("ConjureDSPExtension/UI/AIPromptHelperView.swift")
         Self.expectClean(content, in: "AIPromptHelperView.swift")
     }
+
+    /// (g) Bundled-resource gate for Step B (Bundle-load de-dup of
+    /// `newRustTemplate`). After Step B, `AudioUnitViewController`
+    /// reads `process.rs` out of the extension's Resources at runtime
+    /// instead of inlining the bytes. If the build phase silently
+    /// stops shipping `process.rs` into the `.appex` (renamed,
+    /// PBXFileSystemSynchronizedRootGroup misconfigured, build script
+    /// strips it, etc.), the runtime falls back to a minimal embedded
+    /// template and every new bundle gets near-empty source until
+    /// somebody notices. The hand-rolled file-content check above
+    /// can't catch this — the file would still be clean on disk.
+    ///
+    /// This test mirrors the precedent in
+    /// `ExportTemplateFreshnessTests.findBundledTemplate()` — locate
+    /// the built `.appex` relative to the test bundle's
+    /// `BUILT_PRODUCTS_DIR` and inspect its Resources directly.
+    @Test func processRsIsShippedInBuiltExtensionResources() throws {
+        let testBundle = Bundle(for: BundleLocator.self)
+        let buildProductsDir = testBundle.bundleURL.deletingLastPathComponent()
+        // Two layouts depending on whether the test was invoked via the
+        // host app's test action or the extension target's own:
+        //   1. xcodebuild test: ConjureDSP.app/Contents/PlugIns/<appex>/Contents/Resources/
+        //   2. extension-only:  <appex>/Contents/Resources/
+        let candidates: [URL] = [
+            buildProductsDir
+                .appendingPathComponent("ConjureDSP.app/Contents/PlugIns/ConjureDSPExtension.appex/Contents/Resources/process.rs"),
+            buildProductsDir
+                .appendingPathComponent("ConjureDSPExtension.appex/Contents/Resources/process.rs"),
+        ]
+        let resourceURL = try #require(
+            candidates.first { FileManager.default.fileExists(atPath: $0.path) },
+            """
+            process.rs not found in any built `.appex` Resources layout. Tried:
+            \(candidates.map { "  \($0.path)" }.joined(separator: "\n"))
+            AudioUnitViewController.newRustTemplate's Bundle.url() lookup would
+            return nil and silently seed new Rust bundles with the embedded fallback.
+            Check Resources/process.rs is still part of the ConjureDSPExtension
+            target's PBXFileSystemSynchronizedRootGroup.
+            """
+        )
+        let bundled = try String(contentsOf: resourceURL, encoding: .utf8)
+        #expect(bundled.count > 100,
+                "Bundled process.rs is only \(bundled.count) bytes — too short to be the real template")
+        #expect(bundled.contains("process!"),
+                "Bundled process.rs should teach `process! { ctx => … }`")
+    }
 }
+
+/// Empty class used solely to give `Bundle(for:)` a type anchor in this
+/// test bundle. Mirrors `ExportTemplateFreshnessTests.BundleLocator`.
+private final class BundleLocator {}
