@@ -3667,7 +3667,10 @@ mod tests {
                 continue;
             }
             // 2 channels, 512 frames, 48kHz — a typical DAW block size.
-            kernel.initialize(2, 512, 48000.0);
+            // initialize() takes (input_channels, _output_channels, sample_rate);
+            // max_frames_to_render has its own setter.
+            kernel.initialize(2, 2, 48000.0);
+            kernel.set_maximum_frames_to_render(512);
 
             let mut times_ms: Vec<f64> = Vec::with_capacity(5);
             for _ in 0..5 {
