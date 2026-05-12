@@ -3627,6 +3627,97 @@ mod tests {
         assert!(time > 0.0, "Benchmark time should be positive, got {}", time);
     }
 
+    /// Plan-spec perf gate from PR #305 (extended to also cover the
+    /// sister presets that have the same sample-outer / channel-inner
+    /// peak-detect shape — limiter, lookahead_limiter, noisegate, wah —
+    /// which were caught regressing post-#305 by the same +18% mechanism
+    /// the compressor did). #[ignore]'d so it doesn't run in normal CI —
+    /// invoke with
+    ///   cargo test --release -p conjure_dsp benchmark_perf_critical_presets \
+    ///     -- --ignored --nocapture --test-threads=1
+    /// Set CONJUREDSP_TONES_DIR to a path containing tone3000 .nam files
+    /// (see preset_nam.cdp's referenced model); the test eprintln-skips
+    /// NAM if its model can't load.
+    ///
+    /// Each preset: benchmark_process() is called 5 times. Each call does
+    /// 1 warmup + 5 timed process() iterations and returns the MAX of the
+    /// 5 timed runs (worst-case is what matters for a real-time render
+    /// deadline). The outer harness then reports the MEDIAN of those 5
+    /// max-times. Total: 30 process() calls per preset, reported as
+    /// "median of worst-case-of-5."
+    #[test]
+    #[ignore = "perf benchmark; invoke with --ignored --nocapture"]
+    fn benchmark_perf_critical_presets() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        if std::env::var_os("CONJUREDSP_TONES_DIR").is_none() {
+            eprintln!(
+                "warning: CONJUREDSP_TONES_DIR not set — preset_nam will fail to load \
+                 and be skipped (still measures the other 6 presets)."
+            );
+        }
+        let presets = [
+            "preset_compressor",
+            "preset_limiter",
+            "preset_lookahead_limiter",
+            "preset_noisegate",
+            "preset_wah",
+            "preset_eq3",
+            "preset_nam",
+        ];
+        for preset in &presets {
+            eprintln!(">>> benchmarking {}", preset);
+            let script_path = manifest_dir.join(format!(
+                "../../ConjureDSPExtension/Resources/presets/{}.cdp/process.py",
+                preset
+            ));
+            if !script_path.exists() {
+                eprintln!("Skip {}: script not found at {:?}", preset, script_path);
+                continue;
+            }
+            let mut kernel = DSPKernel::new();
+            if !kernel.load_script(&python_home, script_path.to_str().unwrap()) {
+                eprintln!("Skip {}: load_script failed", preset);
+                continue;
+            }
+            // 2 channels, 512 frames, 48kHz — a typical DAW block size.
+            // initialize() takes (input_channels, _output_channels, sample_rate);
+            // max_frames_to_render has its own setter.
+            kernel.initialize(2, 2, 48000.0);
+            kernel.set_maximum_frames_to_render(512);
+
+            let mut times_ms: Vec<f64> = Vec::with_capacity(5);
+            for _ in 0..5 {
+                if let Some(t) = kernel.benchmark_process() {
+                    times_ms.push(t * 1000.0);
+                }
+            }
+            if times_ms.is_empty() {
+                eprintln!("Skip {}: benchmark_process returned None", preset);
+                continue;
+            }
+            times_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let median = times_ms[times_ms.len() / 2];
+            let min = times_ms[0];
+            let max = times_ms[times_ms.len() - 1];
+            eprintln!(
+                "BENCH {:25} median={:.4}ms  min={:.4}ms  max={:.4}ms  n={}",
+                preset,
+                median,
+                min,
+                max,
+                times_ms.len()
+            );
+        }
+    }
+
     // --- WASM integration tests ---
 
     fn gain_half_wasm() -> Vec<u8> {

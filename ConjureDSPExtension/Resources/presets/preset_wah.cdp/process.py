@@ -1,3 +1,4 @@
+import numpy as np
 from conjuredsp.filters import Biquad, BiquadCoeffs
 from conjuredsp import freq, db, pct, param, time_ms
 from conjuredsp.dsp import db_to_gain, smooth_coeff
@@ -56,11 +57,21 @@ def process(ctx):
     freq_range = max_freq - min_freq
     env = _envelope
 
+    # Vectorized per-sample max-abs across channels, scaled by sensitivity.
+    # Replaces the inner `for ch in range(n_ch): peak = max(peak, abs(...) *
+    # sensitivity_gain)` — sensitivity_gain is always positive (db_to_gain
+    # on a real number), so scaling outside max is equivalent.
+    peak_per_sample = np.abs(ctx.inputs).max(axis=0) * sensitivity_gain
+
+    # Bind row views once per block so the inner filter loop reads/writes
+    # a 1D contiguous slice instead of allocating a row view per (sample,
+    # channel). Same dcblocker-style pattern; cuts per-sample overhead on
+    # the 2D ctx arrays.
+    row_ins = [ctx.inputs[ch] for ch in range(n_ch)]
+    row_outs = [ctx.outputs[ch] for ch in range(n_ch)]
+
     for i in range(frame_count):
-        # Peak detect across channels with sensitivity scaling
-        peak = 0.0
-        for ch in range(n_ch):
-            peak = max(peak, abs(float(ctx.inputs[ch][i])) * sensitivity_gain)
+        peak = peak_per_sample[i]
 
         # Envelope follower
         if peak > env:
@@ -77,6 +88,6 @@ def process(ctx):
 
         for ch in range(n_ch):
             _filters[ch].set_coeffs(coeffs)
-            ctx.outputs[ch][i] = _filters[ch].process_sample(float(ctx.inputs[ch][i]))
+            row_outs[ch][i] = _filters[ch].process_sample(float(row_ins[ch][i]))
 
     _envelope = env
