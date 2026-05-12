@@ -85,7 +85,10 @@ struct PresetManagerTests {
                 continue
             }
             if preset.language == .rust {
-                #expect(source.contains("fn process"), "Rust factory preset \(preset.name) should contain fn process")
+                #expect(
+                    source.contains("process!"),
+                    "Rust factory preset \(preset.name) should use the process! macro"
+                )
             } else {
                 #expect(source.contains("def process"), "Python factory preset \(preset.name) should contain def process")
             }
