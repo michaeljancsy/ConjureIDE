@@ -1051,19 +1051,27 @@ mod tests {
     }
 
     fn passthrough_wasm_bytes() -> Vec<u8> {
+        // Post-1cc3aff ABI: zero-arg process(), BlockInfo at offset 16,
+        // module-allocated input at 1024, output at 32768.
         wat::parse_str(r#"
             (module
               (memory (export "memory") 1)
-              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+              (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+              (func (export "get_output_ptr")     (result i32) (i32.const 32768))
+              (func (export "process")
                 (local $i i32)
                 (local $total i32)
-                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (local.set $total
+                  (i32.mul
+                    (i32.load (i32.const 16))
+                    (i32.load (i32.const 20))))
                 (block $break
                   (loop $loop
                     (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                     (f32.store
-                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
-                      (f32.load (i32.add (local.get $in) (i32.mul (local.get $i) (i32.const 4))))
+                      (i32.add (i32.const 32768) (i32.mul (local.get $i) (i32.const 4)))
+                      (f32.load (i32.add (i32.const 1024) (i32.mul (local.get $i) (i32.const 4))))
                     )
                     (local.set $i (i32.add (local.get $i) (i32.const 1)))
                     (br $loop)
@@ -1384,9 +1392,8 @@ mod tests {
             (module
               (memory (export "memory") 1)
               (data (i32.const 1024) "{hex}")
-              (func (export "process")
-                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
-              )
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+              (func (export "process"))
               (func (export "get_param_names_json") (result i32 i32)
                 (i32.const 1024)
                 (i32.const {len})
@@ -1550,8 +1557,8 @@ mod tests {
         let wat = r#"
             (module
               (memory (export "memory") 1)
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
               (func (export "process")
-                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
                 ;; Grow memory by 1 page (64KB) each call
                 (drop (memory.grow (i32.const 1)))
               )
@@ -1611,9 +1618,8 @@ mod tests {
         let wat = r#"
             (module
               (memory (export "memory") 1)
-              (func (export "process")
-                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
-              )
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+              (func (export "process"))
             )
         "#;
         let wasm = wat::parse_str(wat).expect("WAT parse failed");

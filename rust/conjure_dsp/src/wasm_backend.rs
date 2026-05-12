@@ -1430,10 +1430,11 @@ impl Backend for WasmBackend {
         //
         // block_info_offset was resolved at load time via the required
         // get_block_info_ptr export; the buffer lives in module-lifetime
-        // static memory. If the bounds check below ever fired we'd be
-        // shipping a render block with stale frame_count/channel_count
-        // — way preferable to debug-assert and bail than to silently
-        // continue.
+        // static memory. The runtime bounds check below stays in release
+        // builds — a buggy or malicious user module that returns an
+        // out-of-range offset from get_block_info_ptr would otherwise
+        // panic the AU extension via slice indexing, taking the host
+        // DAW down with it. Bail to a silent block instead.
         let block_info = conjuredsp::BlockInfo {
             frame_count: frame_count as u32,
             channel_count: channel_count as u32,
@@ -1441,16 +1442,21 @@ impl Backend for WasmBackend {
         };
         let bi_offset = self.block_info_offset as usize;
         let bi_size = core::mem::size_of::<conjuredsp::BlockInfo>();
-        debug_assert!(
-            bi_offset + bi_size <= mem_data.len(),
-            "BLOCK_INFO_BUF write out of bounds: offset {} + size {} > memory len {}",
-            bi_offset, bi_size, mem_data.len()
-        );
+        let bi_end = match bi_offset.checked_add(bi_size) {
+            Some(end) if end <= mem_data.len() => end,
+            _ => {
+                self.last_error = Some(format!(
+                    "BLOCK_INFO_BUF write out of bounds: offset {} + size {} > memory len {}",
+                    bi_offset, bi_size, mem_data.len()
+                ));
+                return false;
+            }
+        };
         let src_bytes = core::slice::from_raw_parts(
             &block_info as *const conjuredsp::BlockInfo as *const u8,
             bi_size,
         );
-        mem_data[bi_offset..bi_offset + bi_size].copy_from_slice(src_bytes);
+        mem_data[bi_offset..bi_end].copy_from_slice(src_bytes);
 
         // Call the WASM process function (zero-arg ABI; scalars travel via BLOCK_INFO_BUF)
         let result = self.process_fn.call(&mut self.store, ());
@@ -1605,21 +1611,35 @@ mod tests {
     use super::*;
 
     /// WAT module that applies 0.5x gain to all samples.
+    // Test-fixture ABI (post-1cc3aff zero-arg flip):
+    //   BlockInfo struct at memory offset 16 — { u32 frame_count @16,
+    //     u32 channel_count @20, f32 sample_rate @24 }, written by the
+    //     host before each process() call.
+    //   Input buffer at memory offset 1024.
+    //   Output buffer at memory offset 32768 (well clear of any
+    //     reasonable channels × frames worth of input).
+    //   Both buffer offsets are exposed via get_input_ptr /
+    //     get_output_ptr so the backend lands in ModuleAllocated mode.
     const GAIN_HALF_WAT: &str = r#"
         (module
           (memory (export "memory") 1)
+          (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+          (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+          (func (export "get_output_ptr")     (result i32) (i32.const 32768))
           (func (export "process")
-            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
             (local $i i32)
             (local $total i32)
-            (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+            (local.set $total
+              (i32.mul
+                (i32.load (i32.const 16))
+                (i32.load (i32.const 20))))
             (block $break
               (loop $loop
                 (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                 (f32.store
-                  (i32.add (local.get $out) (i32.shl (local.get $i) (i32.const 2)))
+                  (i32.add (i32.const 32768) (i32.shl (local.get $i) (i32.const 2)))
                   (f32.mul
-                    (f32.load (i32.add (local.get $in) (i32.shl (local.get $i) (i32.const 2))))
+                    (f32.load (i32.add (i32.const 1024) (i32.shl (local.get $i) (i32.const 2))))
                     (f32.const 0.5)
                   )
                 )
@@ -1635,17 +1655,22 @@ mod tests {
     const PASSTHROUGH_WAT: &str = r#"
         (module
           (memory (export "memory") 1)
+          (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+          (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+          (func (export "get_output_ptr")     (result i32) (i32.const 32768))
           (func (export "process")
-            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
             (local $i i32)
             (local $total i32)
-            (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+            (local.set $total
+              (i32.mul
+                (i32.load (i32.const 16))
+                (i32.load (i32.const 20))))
             (block $break
               (loop $loop
                 (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                 (f32.store
-                  (i32.add (local.get $out) (i32.shl (local.get $i) (i32.const 2)))
-                  (f32.load (i32.add (local.get $in) (i32.shl (local.get $i) (i32.const 2))))
+                  (i32.add (i32.const 32768) (i32.shl (local.get $i) (i32.const 2)))
+                  (f32.load (i32.add (i32.const 1024) (i32.shl (local.get $i) (i32.const 2))))
                 )
                 (local.set $i (i32.add (local.get $i) (i32.const 1)))
                 (br $loop)
@@ -1659,8 +1684,8 @@ mod tests {
     const INFINITE_LOOP_WAT: &str = r#"
         (module
           (memory (export "memory") 1)
+          (func (export "get_block_info_ptr") (result i32) (i32.const 16))
           (func (export "process")
-            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
             (loop $forever
               (br $forever)
             )
@@ -1668,23 +1693,21 @@ mod tests {
         )
     "#;
 
-    /// WAT module without memory export.
+    /// WAT module without memory export — load bails before the process
+    /// type check, so the process body shape doesn't matter here.
     const NO_MEMORY_WAT: &str = r#"
         (module
           (memory 1)
-          (func (export "process")
-            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
-          )
+          (func (export "process"))
         )
     "#;
 
-    /// WAT module without process export.
+    /// WAT module without process export — load bails at the process
+    /// lookup. The `not_process` stand-in's signature is irrelevant.
     const NO_PROCESS_WAT: &str = r#"
         (module
           (memory (export "memory") 1)
-          (func (export "not_process")
-            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
-          )
+          (func (export "not_process"))
         )
     "#;
 
@@ -1951,18 +1974,23 @@ mod tests {
           (import "wasi_snapshot_preview1" "fd_write"
             (func $fd_write (param i32 i32 i32 i32) (result i32)))
           (memory (export "memory") 1)
+          (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+          (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+          (func (export "get_output_ptr")     (result i32) (i32.const 32768))
           (func (export "process")
-            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
             ;; Just passthrough — the fd_write import exists but is not called
             (local $i i32)
             (local $total i32)
-            (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+            (local.set $total
+              (i32.mul
+                (i32.load (i32.const 16))
+                (i32.load (i32.const 20))))
             (block $break
               (loop $loop
                 (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                 (f32.store
-                  (i32.add (local.get $out) (i32.shl (local.get $i) (i32.const 2)))
-                  (f32.load (i32.add (local.get $in) (i32.shl (local.get $i) (i32.const 2))))
+                  (i32.add (i32.const 32768) (i32.shl (local.get $i) (i32.const 2)))
+                  (f32.load (i32.add (i32.const 1024) (i32.shl (local.get $i) (i32.const 2))))
                 )
                 (local.set $i (i32.add (local.get $i) (i32.const 1)))
                 (br $loop)
@@ -1973,25 +2001,32 @@ mod tests {
     "#;
 
     /// WAT module that imports and calls environ_sizes_get.
+    /// Writes the count/size return values to offsets 256/260 to avoid
+    /// clobbering BlockInfo at 16 or the input buffer at 1024.
     const WASI_ENVIRON_WAT: &str = r#"
         (module
           (import "wasi_snapshot_preview1" "environ_sizes_get"
             (func $environ_sizes_get (param i32 i32) (result i32)))
           (memory (export "memory") 1)
+          (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+          (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+          (func (export "get_output_ptr")     (result i32) (i32.const 32768))
           (func (export "process")
-            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
             (local $i i32)
             (local $total i32)
             ;; Call environ_sizes_get to verify the stub works
-            ;; Write count to offset 0, size to offset 4
-            (drop (call $environ_sizes_get (i32.const 0) (i32.const 4)))
-            (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+            ;; Write count to offset 256, size to offset 260 (clear of BlockInfo + I/O bufs)
+            (drop (call $environ_sizes_get (i32.const 256) (i32.const 260)))
+            (local.set $total
+              (i32.mul
+                (i32.load (i32.const 16))
+                (i32.load (i32.const 20))))
             (block $break
               (loop $loop
                 (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                 (f32.store
-                  (i32.add (local.get $out) (i32.shl (local.get $i) (i32.const 2)))
-                  (f32.load (i32.add (local.get $in) (i32.shl (local.get $i) (i32.const 2))))
+                  (i32.add (i32.const 32768) (i32.shl (local.get $i) (i32.const 2)))
+                  (f32.load (i32.add (i32.const 1024) (i32.shl (local.get $i) (i32.const 2))))
                 )
                 (local.set $i (i32.add (local.get $i) (i32.const 1)))
                 (br $loop)
@@ -2002,32 +2037,30 @@ mod tests {
     "#;
 
     /// WAT module with buffer getter exports (simulates a compiled Rust module).
-    /// Uses data segment at offset 256 for input buffer and 512 for output buffer.
+    /// Uses fixed offsets — BlockInfo at 16, input at 1024, output at 32768.
     const BUFFER_GETTERS_WAT: &str = r#"
         (module
           (memory (export "memory") 1)
 
-          ;; Buffer getter exports — return addresses of pre-allocated buffers
-          (func (export "get_input_ptr") (result i32)
-            (i32.const 256)
-          )
-          (func (export "get_output_ptr") (result i32)
-            (i32.const 512)
-          )
+          (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+          (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+          (func (export "get_output_ptr")     (result i32) (i32.const 32768))
 
           ;; 0.5x gain using the module's own buffer addresses
           (func (export "process")
-            (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
             (local $i i32)
             (local $total i32)
-            (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+            (local.set $total
+              (i32.mul
+                (i32.load (i32.const 16))
+                (i32.load (i32.const 20))))
             (block $break
               (loop $loop
                 (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                 (f32.store
-                  (i32.add (local.get $out) (i32.shl (local.get $i) (i32.const 2)))
+                  (i32.add (i32.const 32768) (i32.shl (local.get $i) (i32.const 2)))
                   (f32.mul
-                    (f32.load (i32.add (local.get $in) (i32.shl (local.get $i) (i32.const 2))))
+                    (f32.load (i32.add (i32.const 1024) (i32.shl (local.get $i) (i32.const 2))))
                     (f32.const 0.5)
                   )
                 )
@@ -2122,7 +2155,17 @@ mod tests {
 
     #[test]
     fn test_wasm_buffer_getters_not_detected_for_simple_modules() {
-        let wasm = wat_to_wasm(GAIN_HALF_WAT);
+        // A minimal module that exposes only memory + get_block_info_ptr +
+        // process — no get_input_ptr / get_output_ptr — must land in
+        // FixedOffset mode.
+        let no_getters_wat = r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+              (func (export "process"))
+            )
+        "#;
+        let wasm = wat_to_wasm(no_getters_wat);
         let backend = WasmBackend::load(&wasm).unwrap();
         assert!(
             backend.get_input_ptr_fn.is_none(),
@@ -2140,9 +2183,10 @@ mod tests {
         let mut backend = WasmBackend::load(&wasm).unwrap();
         backend.initialize(1, 44100.0, 1024);
 
-        // Verify offsets were set from getter functions (256 and 512)
-        assert_eq!(backend.input_offset, 256, "input should be at getter address");
-        assert_eq!(backend.output_offset, 512, "output should be at getter address");
+        // Verify offsets were set from getter functions (the updated
+        // BUFFER_GETTERS_WAT places input at 1024, output at 32768).
+        assert_eq!(backend.input_offset, 1024, "input should be at getter address");
+        assert_eq!(backend.output_offset, 32768, "output should be at getter address");
 
         let input: [f32; 4] = [1.0, 0.5, -1.0, 0.0];
         let mut output: [f32; 4] = [0.0; 4];
@@ -2185,8 +2229,8 @@ mod tests {
             (module
               (memory (export "memory") 1)
               (data (i32.const 1024) "{hex}")
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
               (func (export "process")
-                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
               )
               (func (export "get_param_names_json") (result i32 i32)
                 (i32.const 1024)
@@ -2214,8 +2258,8 @@ mod tests {
             (module
               (memory (export "memory") 1)
               (data (i32.const 1024) "{hex}")
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
               (func (export "process")
-                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
               )
               (func (export "get_param_names_json") (result i32 i32)
                 (i32.const 1024)
@@ -2242,8 +2286,8 @@ mod tests {
             (module
               (memory (export "memory") 1)
               (data (i32.const 1024) "{hex}")
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
               (func (export "process")
-                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
               )
               (func (export "get_param_metadata_ptr") (result i32)
                 (i32.const 1024)
@@ -2282,8 +2326,8 @@ mod tests {
             (module
               (memory (export "memory") 1)
               (data (i32.const 1024) "{hex}")
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
               (func (export "process")
-                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
               )
               (func (export "get_telemetry_metadata_ptr") (result i32) (i32.const 1024))
               (func (export "get_telemetry_metadata_len") (result i32) (i32.const {len}))
@@ -2314,8 +2358,8 @@ mod tests {
             (module
               (memory (export "memory") 1)
               (data (i32.const 1024) "{hex}")
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
               (func (export "process")
-                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
                 (f32.store (i32.const 2048) (f32.const 0.5))
                 (f32.store (i32.const 2052) (f32.const -3.25))
               )
@@ -2365,18 +2409,31 @@ mod tests {
 
     #[test]
     fn test_wasm_compiled_module_gets_higher_fuel() {
+        // Modules that expose get_input_ptr / get_output_ptr land in
+        // ModuleAllocated buffer mode → higher (COMPILED_FUEL) budget.
         let wasm = wat_to_wasm(BUFFER_GETTERS_WAT);
         let backend = WasmBackend::load(&wasm).unwrap();
         assert_eq!(
             backend.fuel_per_callback, COMPILED_FUEL,
-            "Compiled modules should get higher fuel budget"
+            "Modules with buffer getters should get the compiled fuel budget"
         );
 
-        let wasm = wat_to_wasm(GAIN_HALF_WAT);
+        // Modules without buffer getters fall back to FixedOffset →
+        // DEFAULT_FUEL budget. Use a minimal valid fixture (memory +
+        // process + the required get_block_info_ptr) so loading succeeds
+        // but no I/O getters are declared.
+        let no_getters_wat = r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+              (func (export "process"))
+            )
+        "#;
+        let wasm = wat_to_wasm(no_getters_wat);
         let backend = WasmBackend::load(&wasm).unwrap();
         assert_eq!(
             backend.fuel_per_callback, DEFAULT_FUEL,
-            "Simple modules should get default fuel budget"
+            "Modules without buffer getters should get the default fuel budget"
         );
     }
 
@@ -2394,8 +2451,8 @@ mod tests {
         let wat = r#"
             (module
               (memory (export "memory") 1)
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
               (func (export "process")
-                (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
                 (drop (memory.grow (i32.const 1)))
               )
             )
@@ -2461,15 +2518,9 @@ mod tests {
 
         let src = r#"
 use conjuredsp::*;
-setup!();
 nam!("tone3000://test/model");
 params! { GAIN = db().default(0.0), }
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     unsafe {
         for c in 0..ctx.channels() {
             let n = ctx.frames();
@@ -2596,17 +2647,11 @@ fn main() {}
 
         let src = r#"
 use conjuredsp::*;
-setup!();
 nams! {
     A = "tone3000://test/a",
     B = "tone3000://test/b",
 }
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let mut buf_a = [0.0_f32; MAX_FR];
     let mut buf_b = [0.0_f32; MAX_FR];
     unsafe {
