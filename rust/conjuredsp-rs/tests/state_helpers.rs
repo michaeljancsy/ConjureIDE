@@ -1,3 +1,7 @@
+// Test scaffolding pokes at macro-emitted static muts to verify the wire format;
+// suppress the edition-2024 lint since the test owns the unsafety here.
+#![allow(static_mut_refs)]
+
 //! Integration tests for the typed STATE accessors emitted by the
 //! `state!()` macro. The macro builds an extension trait on `Context`
 //! whose readers parse the kernel's JSON STATE buffer in place — these

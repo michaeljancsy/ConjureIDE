@@ -17,8 +17,6 @@
 //   MIX           — wet/dry blend
 
 use conjuredsp::*;
-setup!();
-
 params! {
     CAN = pct().default(65.0),
     STRING = pct().default(50.0),
@@ -30,9 +28,9 @@ params! {
 const BP_HZ: f64 = 1000.0;
 const DROPOUT_HZ: f64 = 0.37;
 
-static mut BP: [Biquad; 2] = [Biquad::new(); 2];
-static mut CROSS_FB: [f64; 2] = [0.0; 2];
-static mut DROPOUT_LFO: Lfo = Lfo::new();
+persist_buf!(BP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_buf!(CROSS_FB: [f64; 2] = [0.0; 2]);
+persist_buf!(DROPOUT_LFO: Lfo = Lfo::new());
 
 #[inline]
 fn asym_clip(x: f64, drive: f64) -> f64 {
@@ -43,76 +41,76 @@ fn asym_clip(x: f64, drive: f64) -> f64 {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
-    unsafe {
-        let can = ctx.param(CAN) as f64 / 100.0;
-        let string = ctx.param(STRING) as f64 / 100.0;
-        let clip = ctx.param(CLIP) as f64 / 100.0;
-        let dropout = ctx.param(DROPOUT) as f64 / 100.0;
-        let mx = ctx.param(MIX) as f64;
+    let can = ctx.param(CAN) as f64 / 100.0;
+    let string = ctx.param(STRING) as f64 / 100.0;
+    let clip = ctx.param(CLIP) as f64 / 100.0;
+    let dropout = ctx.param(DROPOUT) as f64 / 100.0;
+    let mx = ctx.param(MIX) as f64;
 
-        let bp_q = 5.0 + 12.0 * can;
-        let bp_c = BiquadCoeffs::bandpass(BP_HZ, bp_q, sr);
+    let bp_q = 5.0 + 12.0 * can;
+    let bp_c = BiquadCoeffs::bandpass(BP_HZ, bp_q, sr);
 
-        DROPOUT_LFO.init(sr, DROPOUT_HZ);
+    let nch = ctx.channels().min(2);
 
-        let nch = ctx.channels().min(2);
-        for ch in 0..nch {
-            BP[ch].set_coeffs(bp_c);
-        }
+    let fb_amt = 0.75 * string;
+    let drive = 1.0 + 5.0 * clip;
+    let drop_thresh = -0.6 + 1.2 * dropout;
 
-        let fb_amt = 0.75 * string;
-        let drive = 1.0 + 5.0 * clip;
-        let drop_thresh = -0.6 + 1.2 * dropout;
+    BP.with_mut(|bp| {
+        CROSS_FB.with_mut(|cross_fb| {
+            DROPOUT_LFO.with_mut(|dropout_lfo| {
+                dropout_lfo.init(sr, DROPOUT_HZ);
 
-        for f in 0..ctx.frames() {
-            let drop_val = DROPOUT_LFO.tick();
-            let gate = drop_val - drop_thresh;
-            let gate_val = if gate < 0.0 {
-                0.0
-            } else if gate > 0.3 {
-                1.0
-            } else {
-                gate / 0.3
-            };
+                for ch in 0..nch {
+                    bp[ch].set_coeffs(bp_c);
+                }
 
-            if nch >= 2 {
-                let l_dry = ctx.input(0, f) as f64;
-                let r_dry = ctx.input(1, f) as f64;
+                for f in 0..ctx.frames() {
+                    let drop_val = dropout_lfo.tick();
+                    let gate = drop_val - drop_thresh;
+                    let gate_val = if gate < 0.0 {
+                        0.0
+                    } else if gate > 0.3 {
+                        1.0
+                    } else {
+                        gate / 0.3
+                    };
 
-                let l_in = l_dry + CROSS_FB[1] * fb_amt;
-                let r_in = r_dry + CROSS_FB[0] * fb_amt;
+                    if nch >= 2 {
+                        let l_dry = ctx.input(0, f) as f64;
+                        let r_dry = ctx.input(1, f) as f64;
 
-                let l_bp = BP[0].process_sample(l_in);
-                let r_bp = BP[1].process_sample(r_in);
+                        let l_in = l_dry + cross_fb[1] * fb_amt;
+                        let r_in = r_dry + cross_fb[0] * fb_amt;
 
-                let l_clip = asym_clip(l_bp, drive);
-                let r_clip = asym_clip(r_bp, drive);
+                        let l_bp = bp[0].process_sample(l_in);
+                        let r_bp = bp[1].process_sample(r_in);
 
-                let l_wet = l_clip * gate_val;
-                let r_wet = r_clip * gate_val;
+                        let l_clip = asym_clip(l_bp, drive);
+                        let r_clip = asym_clip(r_bp, drive);
 
-                CROSS_FB[0] = l_wet;
-                CROSS_FB[1] = r_wet;
+                        let l_wet = l_clip * gate_val;
+                        let r_wet = r_clip * gate_val;
 
-                ctx.set_output(0, f, (l_dry * (1.0 - mx) + l_wet * mx) as f32);
-                ctx.set_output(1, f, (r_dry * (1.0 - mx) + r_wet * mx) as f32);
-            } else {
-                let dry = ctx.input(0, f) as f64;
-                let x_in = dry + CROSS_FB[0] * fb_amt;
-                let x_bp = BP[0].process_sample(x_in);
-                let x_clip = asym_clip(x_bp, drive);
-                let wet = x_clip * gate_val;
-                CROSS_FB[0] = wet;
-                ctx.set_output(0, f, (dry * (1.0 - mx) + wet * mx) as f32);
-            }
-        }
-    }
+                        cross_fb[0] = l_wet;
+                        cross_fb[1] = r_wet;
+
+                        ctx.set_output(0, f, (l_dry * (1.0 - mx) + l_wet * mx) as f32);
+                        ctx.set_output(1, f, (r_dry * (1.0 - mx) + r_wet * mx) as f32);
+                    } else {
+                        let dry = ctx.input(0, f) as f64;
+                        let x_in = dry + cross_fb[0] * fb_amt;
+                        let x_bp = bp[0].process_sample(x_in);
+                        let x_clip = asym_clip(x_bp, drive);
+                        let wet = x_clip * gate_val;
+                        cross_fb[0] = wet;
+                        ctx.set_output(0, f, (dry * (1.0 - mx) + wet * mx) as f32);
+                    }
+                }
+            });
+        });
+    });
 }

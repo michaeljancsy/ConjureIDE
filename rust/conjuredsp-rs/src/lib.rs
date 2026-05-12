@@ -7,27 +7,36 @@
 //!
 //! ```ignore
 //! use conjuredsp::*;
-//! setup!();
 //!
 //! params! {
 //!     CUTOFF = freq(),
 //!     RESONANCE = param(0.0, 1.0).default(0.5),
 //! }
 //!
-//! #[no_mangle]
-//! pub extern "C" fn process(
-//!     input: *const f32, output: *mut f32,
-//!     channel_count: i32, frame_count: i32, sample_rate: f32,
-//! ) {
-//!     let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+//! // Per-block state lives in `persist!` (scalar / Copy) or
+//! // `persist_buf!` (large arrays / non-Copy). Replaces `static mut`.
+//! persist!(ENVELOPE: f64 = 0.0);
+//!
+//! process! { ctx =>
+//!     let mut env = ENVELOPE.get();
 //!     for c in 0..ctx.channels() {
 //!         for i in 0..ctx.frames() {
-//!             ctx.set_output(c, i, ctx.input(c, i));
+//!             let s = ctx.input(c, i);
+//!             env = 0.99 * env + 0.01 * (s.abs() as f64);
+//!             ctx.set_output(c, i, s);
 //!         }
 //!     }
+//!     ENVELOPE.set(env);
 //! }
 //! ```
+//!
+//! The `process!` macro subsumes `setup!()` (buffers, exports), reads
+//! per-block scalars from a shared `BLOCK_INFO_BUF`, and emits the
+//! zero-arg `extern "C" fn process()` the host calls. Do not hand-roll
+//! an `extern "C" fn process(...)` — the host looks up a zero-arg
+//! `process` export and the legacy 5-arg shape fails to load.
 
+pub mod abi;
 pub mod accel;
 pub mod buffers;
 pub mod context;
@@ -37,11 +46,14 @@ pub mod json;
 pub mod nam;
 pub mod osc;
 pub mod params;
+pub mod persist;
 pub mod state_json;
 
 // Re-export everything at crate root for `use conjuredsp::*;`
+pub use abi::BlockInfo;
 pub use buffers::DelayLine;
 pub use context::{Context, TELEMETRY_LEN};
+pub use persist::{Persist, PersistBuf};
 pub use dsp::*;
 pub use filters::{Biquad, BiquadCoeffs};
 pub use osc::{advance_phase, saw, sine, triangle, Lfo, Waveform};
@@ -113,6 +125,13 @@ macro_rules! setup {
         // block before `process()`; script reads via
         // `Context::sidechain_connected`.
         static mut SIDECHAIN_STATE: [i32; 2] = [0; 2];
+        // Per-block scalars (frame_count, channel_count, sample_rate)
+        // written by the host before each `process()` call. The zero-arg
+        // `process!()` macro (step 4 of the modernization plan) reads
+        // them back from here so its caller can hold the C ABI stable
+        // even as new channels appear. The legacy 5-arg signature
+        // ignores this buffer.
+        static mut BLOCK_INFO_BUF: $crate::BlockInfo = $crate::BlockInfo::zeroed();
 
         const T_TEMPO: usize = 0;
         const T_BEAT: usize = 1;
@@ -121,82 +140,63 @@ macro_rules! setup {
         const T_TIME_SIG_DEN: usize = 4;
         const T_SAMPLE_POS: usize = 5;
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_input_ptr() -> i32 {
-            unsafe { INPUT_BUF.as_ptr() as i32 }
+            &raw const INPUT_BUF as *const f32 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_output_ptr() -> i32 {
-            unsafe { OUTPUT_BUF.as_ptr() as i32 }
+            &raw mut OUTPUT_BUF as *mut f32 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_params_ptr() -> i32 {
-            unsafe { PARAMS_BUF.as_ptr() as i32 }
+            &raw const PARAMS_BUF as *const f32 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_transport_ptr() -> i32 {
-            unsafe { TRANSPORT_BUF.as_ptr() as i32 }
+            &raw const TRANSPORT_BUF as *const f32 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_telemetry_buf_ptr() -> i32 {
-            unsafe { TELEMETRY_BUF.as_ptr() as i32 }
+            &raw const TELEMETRY_BUF as *const f32 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_telemetry_buf_len() -> i32 {
-            unsafe { TELEMETRY_BUF.len() as i32 }
+            conjuredsp::TELEMETRY_LEN as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_sidechain_ptr() -> i32 {
-            unsafe { SIDECHAIN_BUF.as_ptr() as i32 }
+            &raw const SIDECHAIN_BUF as *const f32 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_sidechain_buf_len() -> i32 {
             // Bytes, mirroring `get_telemetry_buf_len`. Host derives
             // MAX_CH from this value (`bytes / 4 / MAX_FR`).
-            unsafe { (SIDECHAIN_BUF.len() * core::mem::size_of::<f32>()) as i32 }
+            (MAX_CH * MAX_FR * core::mem::size_of::<f32>()) as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_sidechain_state_ptr() -> i32 {
-            unsafe { SIDECHAIN_STATE.as_ptr() as i32 }
+            &raw const SIDECHAIN_STATE as *const i32 as i32
         }
 
-        /// Create a [`conjuredsp::Context`] for safe buffer access.
-        ///
-        /// Argument order matches the host's `process()` calling
-        /// convention: `(input, output, channel_count, frame_count,
-        /// sample_rate)`. Pass your `process()` parameters through in
-        /// the same positions and order.
-        #[inline]
-        #[allow(dead_code)]
-        fn ctx(
-            input: *const f32,
-            output: *mut f32,
-            channel_count: i32,
-            frame_count: i32,
-            sample_rate: f32,
-        ) -> conjuredsp::Context {
-            unsafe {
-                conjuredsp::Context::new_with_sidechain(
-                    input,
-                    output,
-                    channel_count,
-                    frame_count,
-                    sample_rate,
-                    PARAMS_BUF.as_ptr(),
-                    TELEMETRY_BUF.as_mut_ptr(),
-                    SIDECHAIN_BUF.as_ptr(),
-                    SIDECHAIN_STATE.as_ptr(),
-                )
-            }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn get_block_info_ptr() -> i32 {
+            &raw const BLOCK_INFO_BUF as *const $crate::BlockInfo as i32
         }
+
+        // Legacy 5-arg ctx() helper was removed when the zero-arg
+        // process! macro landed — process!() constructs the Context
+        // directly from BLOCK_INFO_BUF and the static buffer addresses.
+        // Anything reaching for ctx() today is on the old shape and
+        // should migrate to process! { ctx => /* body */ }.
     };
 }
 
@@ -248,12 +248,12 @@ macro_rules! params {
             unsafe { core::str::from_utf8_unchecked(BYTES) }
         };
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_param_metadata_ptr() -> i32 {
             METADATA.as_ptr() as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_param_metadata_len() -> i32 {
             METADATA.len() as i32
         }
@@ -346,12 +346,12 @@ macro_rules! telemetry {
             [[f32; conjuredsp::MAX_FRAMES]; TELEMETRY_SLOT_COUNT] =
             [[0.0_f32; conjuredsp::MAX_FRAMES]; TELEMETRY_SLOT_COUNT];
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_telemetry_metadata_ptr() -> i32 {
             TELEMETRY_METADATA.as_ptr() as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_telemetry_metadata_len() -> i32 {
             TELEMETRY_METADATA.len() as i32
         }
@@ -364,13 +364,19 @@ macro_rules! telemetry {
         /// Returns 0 (null) for out-of-range indices. The buffer is
         /// `MAX_FRAMES` f32s long; the host reads exactly the current
         /// `frame_count` from the prefix.
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_telemetry_vec_ptr(slot: i32) -> i32 {
             let s = slot as usize;
             if s >= TELEMETRY_SLOT_COUNT {
                 return 0;
             }
-            unsafe { TELEMETRY_VEC_BUFS[s].as_mut_ptr() as i32 }
+            // Per-slot row of the 2D array. `&raw mut TELEMETRY_VEC_BUFS`
+            // is `*mut [[f32; MAX_FRAMES]; SLOT_COUNT]`; index the row
+            // with .add(s) on the f32-cast base pointer.
+            unsafe {
+                (&raw mut TELEMETRY_VEC_BUFS as *mut f32)
+                    .add(s * conjuredsp::MAX_FRAMES) as i32
+            }
         }
 
         /// Local extension trait that adds `set_telemetry_vector` to
@@ -401,11 +407,9 @@ macro_rules! telemetry {
                 }
                 let len = samples.len().min(conjuredsp::MAX_FRAMES);
                 unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        samples.as_ptr(),
-                        TELEMETRY_VEC_BUFS[slot].as_mut_ptr(),
-                        len,
-                    );
+                    let dst = (&raw mut TELEMETRY_VEC_BUFS as *mut f32)
+                        .add(slot * conjuredsp::MAX_FRAMES);
+                    core::ptr::copy_nonoverlapping(samples.as_ptr(), dst, len);
                 }
             }
         }
@@ -430,7 +434,7 @@ macro_rules! telemetry {
 #[macro_export]
 macro_rules! latency {
     ($samples:expr) => {
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_latency_samples() -> i32 {
             $samples as i32
         }
@@ -483,7 +487,7 @@ macro_rules! nam {
         // newline-separated paths, one per slot, in declaration order.
         static NAM_MANIFEST: &str = concat!($path, "\n");
 
-        extern "C" {
+        unsafe extern "C" {
             fn __conjuredsp_nam_process_slot(
                 slot: u32,
                 input_ptr: *const f32,
@@ -507,12 +511,12 @@ macro_rules! nam {
             ) == 1
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_nam_manifest_ptr() -> i32 {
             NAM_MANIFEST.as_ptr() as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_nam_manifest_len() -> i32 {
             NAM_MANIFEST.len() as i32
         }
@@ -571,7 +575,7 @@ macro_rules! nams {
         // Host parses by splitting on '\n' and dropping empty trailing entries.
         static NAM_MANIFEST: &str = concat!( $( $path, "\n", )+ );
 
-        extern "C" {
+        unsafe extern "C" {
             fn __conjuredsp_nam_process_slot(
                 slot: u32,
                 input_ptr: *const f32,
@@ -600,12 +604,12 @@ macro_rules! nams {
             ) == 1
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_nam_manifest_ptr() -> i32 {
             NAM_MANIFEST.as_ptr() as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_nam_manifest_len() -> i32 {
             NAM_MANIFEST.len() as i32
         }
@@ -715,12 +719,12 @@ macro_rules! state {
             buf
         };
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_state_buf_ptr() -> i32 {
-            unsafe { STATE_BUF.as_ptr() as i32 }
+            &raw const STATE_BUF as *const u8 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_state_buf_capacity() -> i32 {
             STATE_BUF_TOTAL as i32
         }
@@ -758,7 +762,7 @@ macro_rules! state {
             #[inline]
             fn state_bytes(&self) -> &'static [u8] {
                 unsafe {
-                    let buf_ptr = STATE_BUF.as_ptr();
+                    let buf_ptr = &raw const STATE_BUF as *const u8;
                     let mut len_bytes = [0u8; 4];
                     core::ptr::copy_nonoverlapping(
                         buf_ptr.add(8),
@@ -779,7 +783,7 @@ macro_rules! state {
             #[inline]
             fn state_generation(&self) -> u64 {
                 unsafe {
-                    let buf_ptr = STATE_BUF.as_ptr();
+                    let buf_ptr = &raw const STATE_BUF as *const u8;
                     let mut gen_bytes = [0u8; 8];
                     core::ptr::copy_nonoverlapping(
                         buf_ptr,
@@ -908,5 +912,150 @@ macro_rules! state {
                 self.state_array_f32::<N>(key).unwrap_or(default)
             }
         }
+    };
+}
+
+/// The DSP entry point — subsumes [`setup!`] and emits a zero-arg
+/// `extern "C" fn process()`.
+///
+/// The host writes the per-block scalars (`frame_count`,
+/// `channel_count`, `sample_rate`) into a shared `BLOCK_INFO_BUF`
+/// before each call; `process!` reads them back to build a
+/// [`Context`](crate::Context) bound to the user-named identifier on
+/// the left of `=>`. The body that follows runs as the function body
+/// of `process()`. Every preset's entry point becomes one line of
+/// boilerplate (the `process!` invocation) instead of nine lines of
+/// FFI plumbing.
+///
+/// # Why `ctx =>` instead of `|ctx|` (closure syntax)?
+///
+/// Both forms work hygienically — the user's chosen identifier is
+/// captured in caller hygiene context. The `=>` form is chosen because
+/// `|ctx|` pushes authors toward writing a real closure inside the
+/// macro, and WASM debug-build backtraces render closures as
+/// `process::{{closure}}::<hash>` synthetic names — harder to read in
+/// panics and `os_log` traces. The `=>` form expands to a straight
+/// `let ctx = …;` inside `extern "C" fn process()`, so the body's
+/// stack frame stays just `process`.
+///
+/// # Example
+///
+/// ```ignore
+/// use conjuredsp::*;
+///
+/// params! {
+///     GAIN = db().min(-24.0).max(12.0).default(0.0),
+///     MIX  = mix(),
+/// }
+///
+/// process! { ctx =>
+///     let gain = db_to_gain(ctx.param(GAIN));
+///     let mix  = ctx.param(MIX);
+///     for c in 0..ctx.channels() {
+///         for i in 0..ctx.frames() {
+///             let dry = ctx.input(c, i);
+///             ctx.set_output(c, i, dry * gain * mix + dry * (1.0 - mix));
+///         }
+///     }
+/// }
+/// ```
+///
+/// # No backwards-compatibility shim
+///
+/// `process!` subsumes `setup!()` — do NOT write `setup!();` alongside
+/// it (you'd get duplicate-static errors). The host calls the
+/// zero-arg `process()` produced here; the legacy
+/// `process(input, output, channel_count, frame_count, sample_rate)`
+/// shape from before this macro is gone.
+#[macro_export]
+macro_rules! process {
+    ( $ctx:ident => $($body:tt)* ) => {
+        $crate::setup!();
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn process() {
+            // SAFETY: WASM modules are single-threaded; INPUT_BUF /
+            // OUTPUT_BUF / PARAMS_BUF / etc. are module-lifetime, never
+            // dropped. The host writes BLOCK_INFO_BUF immediately
+            // before this call and never concurrently with it.
+            let block_info: $crate::BlockInfo = unsafe { *(&raw const BLOCK_INFO_BUF) };
+            let $ctx: $crate::Context = unsafe {
+                $crate::Context::new_with_sidechain(
+                    &raw const INPUT_BUF as *const f32,
+                    &raw mut OUTPUT_BUF as *mut f32,
+                    block_info.channel_count as i32,
+                    block_info.frame_count as i32,
+                    block_info.sample_rate,
+                    &raw const PARAMS_BUF as *const f32,
+                    &raw mut TELEMETRY_BUF as *mut f32,
+                    &raw const SIDECHAIN_BUF as *const f32,
+                    &raw const SIDECHAIN_STATE as *const i32,
+                )
+            };
+            $($body)*
+        }
+    };
+    ( $($_:tt)* ) => {
+        compile_error!(
+            "process! requires a context binding.\n\
+             Use: process! { ctx => /* body */ }\n\
+             (or any identifier in place of `ctx`)."
+        );
+    };
+}
+
+/// Declares a persistent scalar (or `Copy` value) that survives across
+/// render blocks. See [`Persist`](crate::Persist) for the access
+/// pattern (`get` / `set` / `replace`).
+///
+/// Read/write happens without `unsafe { … }` from the caller's side.
+///
+/// # Example
+///
+/// ```ignore
+/// use conjuredsp::*;
+///
+/// persist!(ENVELOPE: f64 = 0.0);
+/// persist!(WRITE_POS: usize = 0);
+///
+/// // Inside process():
+/// ENVELOPE.set(ENVELOPE.get() * 0.95 + sample.abs() as f64 * 0.05);
+/// WRITE_POS.set(WRITE_POS.get().wrapping_add(1));
+/// ```
+#[macro_export]
+macro_rules! persist {
+    ($(#[$attr:meta])* $name:ident : $ty:ty = $init:expr) => {
+        $(#[$attr])* static $name: $crate::Persist<$ty> = $crate::Persist::new($init);
+    };
+}
+
+/// Declares a persistent buffer (typically a large array) with in-place
+/// mutation via [`PersistBuf::with_mut`](crate::PersistBuf::with_mut).
+///
+/// Reach for `persist_buf!` only when the wrapped value is large
+/// enough that `Persist`'s `get` / `set` round-trips would regress
+/// performance — the 384 KB stereo delay buffer, multi-MB reverb
+/// networks, ring buffers in chorus/flanger/slicer/pingpong.
+///
+/// The closure passed to `with_mut` must not call any other method on
+/// the same `PersistBuf` (debug builds panic on reentrant access; see
+/// [`PersistBuf`](crate::PersistBuf) docs).
+///
+/// # Example
+///
+/// ```ignore
+/// use conjuredsp::*;
+///
+/// persist_buf!(DELAY_BUF: [[f32; 48_000]; 2] = [[0.0; 48_000]; 2]);
+///
+/// // Inside process():
+/// DELAY_BUF.with_mut(|buf| {
+///     buf[channel][write_pos] = sample;
+/// });
+/// ```
+#[macro_export]
+macro_rules! persist_buf {
+    ($(#[$attr:meta])* $name:ident : $ty:ty = $init:expr) => {
+        $(#[$attr])* static $name: $crate::PersistBuf<$ty> = $crate::PersistBuf::new($init);
     };
 }

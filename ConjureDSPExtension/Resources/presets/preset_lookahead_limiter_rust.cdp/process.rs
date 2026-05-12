@@ -10,8 +10,6 @@
 //   1 (Release):   Release time — 10 to 500 ms
 
 use conjuredsp::*;
-setup!();
-
 const LOOKAHEAD: usize = 256;
 
 latency!(LOOKAHEAD);
@@ -21,31 +19,22 @@ params! {
     RELEASE = time_ms().min(10.0).max(500.0).default(100.0),
 }
 
-// Persistent state
-// +1 to match Python's DelayLine(LATENCY + 1) sizing
-static mut DELAYS: [DelayLine<257>; 2] = [DelayLine::new(); 2];
-static mut GAIN: f64 = 1.0;
+// Persistent state. +1 to match Python's DelayLine(LATENCY + 1) sizing.
+persist_buf!(DELAYS: [DelayLine<257>; 2] = [DelayLine::new(); 2]);
+persist!(GAIN: f64 = 1.0);
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
-    unsafe {
-        let threshold_db = ctx.param(THRESHOLD) as f64;
-        let release_ms = ctx.param(RELEASE) as f64;
+    let threshold_db = ctx.param(THRESHOLD) as f64;
+    let release_ms = ctx.param(RELEASE) as f64;
 
-        let threshold = db_to_gain(threshold_db);
-        let release_coeff = smooth_coeff(release_ms, sr);
+    let threshold = db_to_gain(threshold_db);
+    let release_coeff = smooth_coeff(release_ms, sr);
 
-        let mut g = GAIN;
+    let mut g = GAIN.get();
 
+    DELAYS.with_mut(|delays| {
         for i in 0..ctx.frames() {
             // Peak detect from raw (non-delayed) input
             let mut peak: f64 = 0.0;
@@ -74,12 +63,12 @@ pub extern "C" fn process(
             let gain: f32 = g as f32;
 
             for c in 0..ctx.channels() {
-                DELAYS[c].write(ctx.input(c, i));
-                let delayed = DELAYS[c].tap(LOOKAHEAD);
+                delays[c].write(ctx.input(c, i));
+                let delayed = delays[c].tap(LOOKAHEAD);
                 ctx.set_output(c, i, delayed * gain);
             }
         }
+    });
 
-        GAIN = g;
-    }
+    GAIN.set(g);
 }

@@ -1,7 +1,7 @@
 [package]
 name = "conjure_dsp"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [lib]
 crate-type = ["staticlib"]
@@ -22,3 +22,6 @@ arc-swap = "1"
 ed25519-dalek = { version = "2", features = ["std", "rand_core"] }
 rand = "0.8"
 
+[[bench]]
+name = "process_call_overhead"
+harness = false

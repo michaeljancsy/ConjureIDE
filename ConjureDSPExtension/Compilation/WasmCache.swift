@@ -41,6 +41,11 @@ final class WasmCache {
         if let rlibDate = rlibModificationDate() {
             combined += "\(rlibDate.timeIntervalSince1970)"
         }
+        // Include the bundled rustc version so cache invalidates on a toolchain
+        // upgrade even if the rlib mtime happens to be unchanged.
+        if let rustcVer = rustcVersion() {
+            combined += rustcVer
+        }
         let digest = SHA256.hash(data: Data(combined.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
@@ -51,5 +56,14 @@ final class WasmCache {
         let rlibPath = (resourcePath as NSString)
             .appendingPathComponent("rustc-dist/lib/libconjuredsp.rlib")
         return (try? FileManager.default.attributesOfItem(atPath: rlibPath))?[.modificationDate] as? Date
+    }
+
+    /// Returns the bundled rustc version string (from rustc-dist/VERSION.txt), if found.
+    private func rustcVersion() -> String? {
+        guard let resourcePath = Bundle(for: WasmCache.self).resourcePath else { return nil }
+        let versionPath = (resourcePath as NSString)
+            .appendingPathComponent("rustc-dist/VERSION.txt")
+        return (try? String(contentsOfFile: versionPath, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

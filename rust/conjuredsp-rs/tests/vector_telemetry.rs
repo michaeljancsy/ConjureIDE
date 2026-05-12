@@ -1,3 +1,7 @@
+// Test scaffolding pokes at macro-emitted static muts to verify the wire format;
+// suppress the edition-2024 lint since the test owns the unsafety here.
+#![allow(static_mut_refs)]
+
 //! Integration tests for the vector telemetry path emitted by the
 //! `telemetry!` macro. Verifies that `set_telemetry_vector` on
 //! `Context` (provided via the macro's local extension trait):

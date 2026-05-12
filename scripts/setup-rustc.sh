@@ -8,7 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUSTC_DIR="${REPO_ROOT}/rustc-dist"
-RUST_VERSION="1.93.1"
+RUST_VERSION="1.95.0"
 HOST_TARGET="aarch64-apple-darwin"
 
 RUSTC_URL="https://static.rust-lang.org/dist/rustc-${RUST_VERSION}-${HOST_TARGET}.tar.xz"
@@ -16,10 +16,20 @@ CARGO_URL="https://static.rust-lang.org/dist/cargo-${RUST_VERSION}-${HOST_TARGET
 STD_URL="https://static.rust-lang.org/dist/rust-std-${RUST_VERSION}-wasm32-wasip1.tar.xz"
 HOST_STD_URL="https://static.rust-lang.org/dist/rust-std-${RUST_VERSION}-${HOST_TARGET}.tar.xz"
 
+VERSION_FILE="${RUSTC_DIR}/VERSION.txt"
 if [ -d "${RUSTC_DIR}" ]; then
-    echo "Rust compiler already exists at ${RUSTC_DIR}"
-    echo "Delete it first if you want to re-download: rm -rf ${RUSTC_DIR}"
-    exit 0
+    if [ -f "${VERSION_FILE}" ] && [ "$(cat "${VERSION_FILE}")" = "${RUST_VERSION}" ]; then
+        echo "Rust compiler ${RUST_VERSION} already installed at ${RUSTC_DIR}"
+        exit 0
+    fi
+    if [ -f "${VERSION_FILE}" ]; then
+        INSTALLED="$(cat "${VERSION_FILE}")"
+        echo "error: rustc-dist/ holds version ${INSTALLED}, but RUST_VERSION=${RUST_VERSION}" >&2
+    else
+        echo "error: rustc-dist/ exists but has no VERSION.txt; treat as stale" >&2
+    fi
+    echo "Delete it first to re-download: rm -rf ${RUSTC_DIR}" >&2
+    exit 1
 fi
 
 TMPDIR=$(mktemp -d)
@@ -102,7 +112,7 @@ if [ -f "${CONJUREDSP_SRC}" ]; then
     echo "Compiling conjuredsp library for wasm32-wasip1..."
     "${RUSTC_DIR}/bin/rustc" \
         --target wasm32-wasip1 \
-        --edition 2021 \
+        --edition 2024 \
         --crate-type rlib \
         --crate-name conjuredsp \
         -C opt-level=2 \
@@ -113,6 +123,9 @@ if [ -f "${CONJUREDSP_SRC}" ]; then
 else
     echo "warning: conjuredsp-rs source not found at ${CONJUREDSP_SRC}, skipping rlib build"
 fi
+
+# Pin the installed version so future re-runs detect stale state.
+echo "${RUST_VERSION}" > "${VERSION_FILE}"
 
 echo ""
 echo "Done! Minimal Rust compiler ${RUST_VERSION} installed at: ${RUSTC_DIR}"

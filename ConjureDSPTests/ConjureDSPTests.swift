@@ -449,7 +449,10 @@ struct ConjureDSPTests {
             let data = state?[Self.scriptSourceKey] as? Data
             #expect(data != nil, "Rust factory preset '\(rustPreset.name)' should set script source in fullState")
             let source = String(data: data!, encoding: .utf8) ?? ""
-            #expect(source.contains("fn process"), "Rust factory preset '\(rustPreset.name)' should contain Rust process function")
+            #expect(
+                source.contains("process!"),
+                "Rust factory preset '\(rustPreset.name)' should use the process! macro"
+            )
         }
     }
 

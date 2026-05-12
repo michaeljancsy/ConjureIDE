@@ -14,8 +14,6 @@
 //   5 (Release):   Envelope release time — 10 to 200 ms (log)
 
 use conjuredsp::*;
-setup!();
-
 params! {
     FREQUENCY = freq().min(2000.0).max(12000.0).default(6000.0),
     Q = param(0.5, 5.0).default(1.5),
@@ -25,48 +23,40 @@ params! {
     RELEASE = time_ms().min(10.0).max(200.0).default(50.0),
 }
 
-// Sidechain biquad state per channel
-static mut SC_FILTERS: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH];
+// Sidechain biquad state per channel.
+persist_buf!(SC_FILTERS: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH]);
 
-// Envelope follower
-static mut ENVELOPE: f64 = 0.0;
+// Envelope follower.
+persist!(ENVELOPE: f64 = 0.0);
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
-    unsafe {
-        let center_freq = ctx.param(FREQUENCY) as f64;
-        let q = ctx.param(Q) as f64;
-        let threshold_db = ctx.param(THRESHOLD) as f64;
-        let reduction_db = ctx.param(REDUCTION) as f64;
-        let attack_ms = ctx.param(ATTACK) as f64;
-        let release_ms = ctx.param(RELEASE) as f64;
+    let center_freq = ctx.param(FREQUENCY) as f64;
+    let q = ctx.param(Q) as f64;
+    let threshold_db = ctx.param(THRESHOLD) as f64;
+    let reduction_db = ctx.param(REDUCTION) as f64;
+    let attack_ms = ctx.param(ATTACK) as f64;
+    let release_ms = ctx.param(RELEASE) as f64;
 
-        let threshold_lin = db_to_gain(threshold_db);
-        let attack_coeff = smooth_coeff(attack_ms, sr);
-        let release_coeff = smooth_coeff(release_ms, sr);
+    let threshold_lin = db_to_gain(threshold_db);
+    let attack_coeff = smooth_coeff(attack_ms, sr);
+    let release_coeff = smooth_coeff(release_ms, sr);
 
-        let bp = BiquadCoeffs::bandpass(center_freq, q, sr);
+    let bp = BiquadCoeffs::bandpass(center_freq, q, sr);
+    let mut env = ENVELOPE.get();
+
+    SC_FILTERS.with_mut(|sc_filters| {
         for c in 0..ctx.channels() {
-            SC_FILTERS[c].set_coeffs(bp);
+            sc_filters[c].set_coeffs(bp);
         }
-
-        let mut env = ENVELOPE;
 
         for i in 0..ctx.frames() {
             // Sidechain: bandpass filter then peak detect across channel_count
             let mut sc_peak: f64 = 0.0;
             for c in 0..ctx.channels() {
                 let x = ctx.input(c, i) as f64;
-                let sc = SC_FILTERS[c].process_sample(x);
+                let sc = sc_filters[c].process_sample(x);
                 let abs_sc = sc.abs();
                 if abs_sc > sc_peak {
                     sc_peak = abs_sc;
@@ -99,7 +89,7 @@ pub extern "C" fn process(
                 ctx.set_output(c, i, (ctx.input(c, i) as f64 * gain) as f32);
             }
         }
+    });
 
-        ENVELOPE = env;
-    }
+    ENVELOPE.set(env);
 }

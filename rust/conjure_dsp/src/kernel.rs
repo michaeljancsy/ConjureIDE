@@ -351,7 +351,7 @@ pub(crate) fn process_resident_bytes() -> u64 {
         const MACH_TASK_BASIC_INFO: u32 = 20;
         const MACH_TASK_BASIC_INFO_COUNT: u32 = 12; // 48 bytes / 4 bytes per natural_t
 
-        extern "C" {
+        unsafe extern "C" {
             fn mach_task_self() -> u32;
             fn task_info(
                 target_task: u32,
@@ -878,9 +878,9 @@ impl DSPKernel {
     /// update the cache. Cheap in the steady state — one Acquire load +
     /// one Arc::clone on miss.
     pub fn snapshot_state(&self) -> (u64, Arc<Vec<u8>>) {
-        let gen = self.state_generation.load(Ordering::Acquire);
+        let generation = self.state_generation.load(Ordering::Acquire);
         let buf = self.state_buffer.load_full();
-        (gen, buf)
+        (generation, buf)
     }
 
     /// Read the current generation counter without taking the buffer.
@@ -3721,20 +3721,28 @@ mod tests {
     // --- WASM integration tests ---
 
     fn gain_half_wasm() -> Vec<u8> {
+        // Post-1cc3aff ABI: zero-arg process(), BlockInfo at offset 16,
+        // module-allocated input at 1024, output at 32768.
         wat::parse_str(r#"
             (module
               (memory (export "memory") 1)
-              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+              (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+              (func (export "get_output_ptr")     (result i32) (i32.const 32768))
+              (func (export "process")
                 (local $i i32)
                 (local $total i32)
-                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (local.set $total
+                  (i32.mul
+                    (i32.load (i32.const 16))
+                    (i32.load (i32.const 20))))
                 (block $break
                   (loop $loop
                     (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                     (f32.store
-                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (i32.add (i32.const 32768) (i32.mul (local.get $i) (i32.const 4)))
                       (f32.mul
-                        (f32.load (i32.add (local.get $in) (i32.mul (local.get $i) (i32.const 4))))
+                        (f32.load (i32.add (i32.const 1024) (i32.mul (local.get $i) (i32.const 4))))
                         (f32.const 0.5)
                       )
                     )
@@ -3826,16 +3834,22 @@ mod tests {
         let passthrough_wasm = wat::parse_str(r#"
             (module
               (memory (export "memory") 1)
-              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+              (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+              (func (export "get_output_ptr")     (result i32) (i32.const 32768))
+              (func (export "process")
                 (local $i i32)
                 (local $total i32)
-                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (local.set $total
+                  (i32.mul
+                    (i32.load (i32.const 16))
+                    (i32.load (i32.const 20))))
                 (block $break
                   (loop $loop
                     (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                     (f32.store
-                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
-                      (f32.load (i32.add (local.get $in) (i32.mul (local.get $i) (i32.const 4))))
+                      (i32.add (i32.const 32768) (i32.mul (local.get $i) (i32.const 4)))
+                      (f32.load (i32.add (i32.const 1024) (i32.mul (local.get $i) (i32.const 4))))
                     )
                     (local.set $i (i32.add (local.get $i) (i32.const 1)))
                     (br $loop)
@@ -3916,17 +3930,23 @@ mod tests {
         wat::parse_str(r#"
             (module
               (memory (export "memory") 1)
-              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+              (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+              (func (export "get_output_ptr")     (result i32) (i32.const 32768))
+              (func (export "process")
                 (local $i i32)
                 (local $total i32)
-                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (local.set $total
+                  (i32.mul
+                    (i32.load (i32.const 16))
+                    (i32.load (i32.const 20))))
                 (block $break
                   (loop $loop
                     (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                     (f32.store
-                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (i32.add (i32.const 32768) (i32.mul (local.get $i) (i32.const 4)))
                       (f32.mul
-                        (f32.load (i32.add (local.get $in) (i32.mul (local.get $i) (i32.const 4))))
+                        (f32.load (i32.add (i32.const 1024) (i32.mul (local.get $i) (i32.const 4))))
                         (f32.const 10.0)
                       )
                     )
@@ -4095,15 +4115,21 @@ mod tests {
         let wasm_b = wat::parse_str(r#"
             (module
               (memory (export "memory") 1)
-              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+              (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+              (func (export "get_output_ptr")     (result i32) (i32.const 32768))
+              (func (export "process")
                 (local $i i32)
                 (local $total i32)
-                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (local.set $total
+                  (i32.mul
+                    (i32.load (i32.const 16))
+                    (i32.load (i32.const 20))))
                 (block $break
                   (loop $loop
                     (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                     (f32.store
-                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (i32.add (i32.const 32768) (i32.mul (local.get $i) (i32.const 4)))
                       (f32.const 0.0)
                     )
                     (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -4202,15 +4228,21 @@ mod tests {
                 r#"
                 (module
                   (memory (export "memory") 1)
-                  (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+                  (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+                  (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+                  (func (export "get_output_ptr")     (result i32) (i32.const 32768))
+                  (func (export "process")
                     (local $i i32)
                     (local $total i32)
-                    (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                    (local.set $total
+                      (i32.mul
+                        (i32.load (i32.const 16))
+                        (i32.load (i32.const 20))))
                     (block $break
                       (loop $loop
                         (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                         (f32.store
-                          (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                          (i32.add (i32.const 32768) (i32.mul (local.get $i) (i32.const 4)))
                           (f32.const {c})
                         )
                         (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -4524,15 +4556,21 @@ mod tests {
         let wasm_b = wat::parse_str(r#"
             (module
               (memory (export "memory") 1)
-              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+              (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+              (func (export "get_output_ptr")     (result i32) (i32.const 32768))
+              (func (export "process")
                 (local $i i32)
                 (local $total i32)
-                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (local.set $total
+                  (i32.mul
+                    (i32.load (i32.const 16))
+                    (i32.load (i32.const 20))))
                 (block $break
                   (loop $loop
                     (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                     (f32.store
-                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (i32.add (i32.const 32768) (i32.mul (local.get $i) (i32.const 4)))
                       (f32.const 0.0)
                     )
                     (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -4985,15 +5023,21 @@ mod tests {
         let wasm_b = wat::parse_str(r#"
             (module
               (memory (export "memory") 1)
-              (func (export "process") (param $in i32) (param $out i32) (param $ch i32) (param $frames i32) (param $sr f32)
+              (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+              (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+              (func (export "get_output_ptr")     (result i32) (i32.const 32768))
+              (func (export "process")
                 (local $i i32)
                 (local $total i32)
-                (local.set $total (i32.mul (local.get $ch) (local.get $frames)))
+                (local.set $total
+                  (i32.mul
+                    (i32.load (i32.const 16))
+                    (i32.load (i32.const 20))))
                 (block $break
                   (loop $loop
                     (br_if $break (i32.ge_u (local.get $i) (local.get $total)))
                     (f32.store
-                      (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4)))
+                      (i32.add (i32.const 32768) (i32.mul (local.get $i) (i32.const 4)))
                       (f32.const 0.0)
                     )
                     (local.set $i (i32.add (local.get $i) (i32.const 1)))

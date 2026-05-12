@@ -14,8 +14,6 @@
 //   4 (Mix):      Dry/wet mix — 0.0 to 1.0
 
 use conjuredsp::*;
-setup!();
-
 const MAX_STAGES: usize = 6;
 
 params! {
@@ -28,64 +26,58 @@ params! {
 
 // Persistent state per channel per stage: [x_prev, y_prev]
 // Use f64 to match Python's float64 precision in the allpass feedback.
-static mut AP_X_PREV: [[f64; MAX_STAGES]; MAX_CH] = [[0.0; MAX_STAGES]; MAX_CH];
-static mut AP_Y_PREV: [[f64; MAX_STAGES]; MAX_CH] = [[0.0; MAX_STAGES]; MAX_CH];
-static mut LFO_PHASE: f64 = 0.0;
+persist_buf!(AP_X_PREV: [[f64; MAX_STAGES]; MAX_CH] = [[0.0; MAX_STAGES]; MAX_CH]);
+persist_buf!(AP_Y_PREV: [[f64; MAX_STAGES]; MAX_CH] = [[0.0; MAX_STAGES]; MAX_CH]);
+persist!(LFO_PHASE: f64 = 0.0);
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
-    let sr = sample_rate as f64;
+process! { ctx =>
+    let sr = ctx.sample_rate() as f64;
     let two_pi = 2.0 * core::f64::consts::PI;
 
-    unsafe {
-        let rate_hz = ctx.param(RATE) as f64;
-        let min_freq = ctx.param(MIN_FREQ) as f64;
-        let max_freq = ctx.param(MAX_FREQ) as f64;
-        let stages = (ctx.param(STAGES) as f64).round() as usize;
-        let mix = ctx.param(MIX) as f64;
+    let rate_hz = ctx.param(RATE) as f64;
+    let min_freq = ctx.param(MIN_FREQ) as f64;
+    let max_freq = ctx.param(MAX_FREQ) as f64;
+    let stages = (ctx.param(STAGES) as f64).round() as usize;
+    let mix = ctx.param(MIX) as f64;
 
-        let lfo_inc = two_pi * rate_hz / sr;
-        let mut phase = LFO_PHASE;
+    let lfo_inc = two_pi * rate_hz / sr;
+    let mut phase = LFO_PHASE.get();
 
-        let num_stages = if stages > MAX_STAGES { MAX_STAGES } else { stages };
+    let num_stages = if stages > MAX_STAGES { MAX_STAGES } else { stages };
 
-        for i in 0..ctx.frames() {
-            // LFO sweeps the allpass frequency between min_freq and max_freq
-            let lfo = 0.5 * (1.0 + phase.sin());
-            let freq = min_freq + (max_freq - min_freq) * lfo;
+    AP_X_PREV.with_mut(|ap_x_prev| {
+        AP_Y_PREV.with_mut(|ap_y_prev| {
+            for i in 0..ctx.frames() {
+                // LFO sweeps the allpass frequency between min_freq and max_freq
+                let lfo = 0.5 * (1.0 + phase.sin());
+                let freq = min_freq + (max_freq - min_freq) * lfo;
 
-            // Compute allpass coefficient
-            let tan_val = (core::f64::consts::PI * freq / sr).tan();
-            let a = (tan_val - 1.0) / (tan_val + 1.0);
+                // Compute allpass coefficient
+                let tan_val = (core::f64::consts::PI * freq / sr).tan();
+                let a = (tan_val - 1.0) / (tan_val + 1.0);
 
-            for c in 0..ctx.channels() {
-                let x = ctx.input(c, i) as f64;
+                for c in 0..ctx.channels() {
+                    let x = ctx.input(c, i) as f64;
 
-                // Pass through allpass cascade
-                let mut signal = x;
-                for s in 0..num_stages {
-                    let x_prev = AP_X_PREV[c][s];
-                    let y_prev = AP_Y_PREV[c][s];
-                    let y = a * signal + x_prev - a * y_prev;
-                    AP_X_PREV[c][s] = signal;
-                    AP_Y_PREV[c][s] = y;
-                    signal = y;
+                    // Pass through allpass cascade
+                    let mut signal = x;
+                    for s in 0..num_stages {
+                        let x_prev = ap_x_prev[c][s];
+                        let y_prev = ap_y_prev[c][s];
+                        let y = a * signal + x_prev - a * y_prev;
+                        ap_x_prev[c][s] = signal;
+                        ap_y_prev[c][s] = y;
+                        signal = y;
+                    }
+
+                    // Mix dry + wet
+                    ctx.set_output(c, i, (x * (1.0 - mix) + signal * mix) as f32);
                 }
 
-                // Mix dry + wet
-                ctx.set_output(c, i, (x * (1.0 - mix) + signal * mix) as f32);
+                phase += lfo_inc;
             }
+        });
+    });
 
-            phase += lfo_inc;
-        }
-
-        LFO_PHASE = phase % two_pi;
-    }
+    LFO_PHASE.set(phase % two_pi);
 }

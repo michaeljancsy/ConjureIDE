@@ -13,8 +13,6 @@
 //                 the whole point of telemetry.
 
 use conjuredsp::*;
-setup!();
-
 params! {
     DRIVE = param(1.0, 10.0).default(1.0).unit("x"),
 }
@@ -26,17 +24,9 @@ telemetry! {
 
 // Persistent envelope state. f32 here is fine; the smoke preset doesn't
 // need the f64 precision of the production compressor.
-static mut ENVELOPE: f32 = 0.0;
+persist!(ENVELOPE: f32 = 0.0);
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let drive = ctx.param(DRIVE).max(1.0);
 
     // Block peak (linear) across all channels — used both to drive the
@@ -45,9 +35,10 @@ pub extern "C" fn process(
 
     // 50ms attack, 200ms release smoothing. Coefficients computed once
     // per block from the live sample rate.
-    let attack_coeff = (-1.0 / (0.050 * sample_rate)).exp();
-    let release_coeff = (-1.0 / (0.200 * sample_rate)).exp();
+    let attack_coeff = (-1.0 / (0.050 * ctx.sample_rate())).exp();
+    let release_coeff = (-1.0 / (0.200 * ctx.sample_rate())).exp();
 
+    let mut env = ENVELOPE.get();
     for f in 0..ctx.frames() {
         for c in 0..ctx.channels() {
             let x = ctx.input(c, f);
@@ -59,22 +50,20 @@ pub extern "C" fn process(
             // Per-sample envelope follower (linked across channels —
             // last channel wins for the per-sample update, fine for a
             // smoke test). soft_clip imported from conjuredsp::dsp.
-            unsafe {
-                let target = abs * drive;
-                let coeff = if target > ENVELOPE { attack_coeff } else { release_coeff };
-                ENVELOPE = target + coeff * (ENVELOPE - target);
-            }
+            let target = abs * drive;
+            let coeff = if target > env { attack_coeff } else { release_coeff };
+            env = target + coeff * (env - target);
 
             ctx.set_output(c, f, soft_clip(x as f64, drive as f64) as f32);
         }
     }
+    ENVELOPE.set(env);
 
     // dB conversion. -120 floor keeps the UI from drawing log(0).
     fn lin_to_db(x: f32) -> f32 {
         if x <= 1e-6 { -120.0 } else { 20.0 * x.log10() }
     }
 
-    let env = unsafe { ENVELOPE };
     ctx.set_telemetry_scalar(PEAK_DB, lin_to_db(block_peak));
     ctx.set_telemetry_scalar(ENVELOPE_DB, lin_to_db(env));
 }

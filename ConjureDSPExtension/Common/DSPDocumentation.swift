@@ -161,32 +161,23 @@ enum DSPDocumentation {
       `ConjureDSP.state.set(...)` (JS) or the MCP `set_state` tool. See
       the `state` topic.
 
-    ## Rust process() signature — copy this verbatim
+    ## Rust process! macro — copy this verbatim
 
-    The `setup!()` macro provides the buffers + helpers, but the
-    `process()` extern function is YOUR responsibility. The host calls
-    it with this EXACT shape, including the parameter names. Use this
-    template — do not rename the parameters:
+    Every Rust preset's entry point is the `process! { ctx => /* body */ }`
+    macro. It subsumes `setup!()` (buffers, exports), constructs the
+    `Context`, and emits the zero-arg `extern "C" fn process()` the host
+    expects. Do NOT hand-roll an `extern "C" fn process(...)` — the host
+    looks for a zero-arg `process` export and modules with the legacy
+    5-arg signature fail to load.
 
       use conjuredsp::*;
-
-      setup!();
 
       params! {
           DRIVE = db().min(0.0).max(24.0).default(6.0),
           MIX   = mix().default(0.5),
       }
 
-      #[no_mangle]
-      pub extern "C" fn process(
-          input: *const f32,
-          output: *mut f32,
-          channel_count: i32,
-          frame_count: i32,
-          sample_rate: f32,
-      ) {
-          let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
-
+      process! { ctx =>
           let drive_gain = db_to_gain(ctx.param(DRIVE) as f64) as f32;
           let mix_val    = ctx.param(MIX);
 
@@ -199,26 +190,28 @@ enum DSPDocumentation {
           }
       }
 
-    Why the names matter, even though Rust doesn't care:
+    The identifier on the left of `=>` is the name your body uses for
+    the `Context`. `ctx` is the canonical name (every factory preset
+    uses it), but any identifier works — `process! { c => for f in
+    0..c.frames() { … } }` is valid. The `=>` form was chosen over a
+    closure-style `|ctx|` so the body's stack frame stays `process`
+    instead of `process::{{closure}}::<hash>` in panic / `os_log`
+    traces.
 
-    The host's WASM bridge calls `process` with positional args
-    `(input, output, channel_count, frame_count, sample_rate)`. If you
-    rename the third arg to anything that suggests "frames" — or the
-    fourth to anything that suggests "channels" — it's very easy to
-    write a loop that uses your local var names as bounds and ends up
-    walking the buffer with the wrong stride. Both args are `i32`, so
-    the compiler can't catch the swap. Most `ctx.set_output` calls
-    then write past the end of OUTPUT_BUF into adjacent WASM memory,
-    the kernel reads leftover/zero output, and the audio looks
-    unchanged or intermittently silent. No compile error, no runtime
-    panic, just silently wrong output.
+    A common mistake — leaving out the `ctx =>` binding entirely —
+    triggers a friendly compile error:
 
-    Every factory Rust preset uses these exact parameter names. Match
-    them, and the loop pattern below is guaranteed to be correct:
-    `for c in 0..ctx.channels() { for i in 0..ctx.frames() { ... } }`
-    — using `ctx.channels()` and `ctx.frames()` (NOT the raw
-    `channel_count` / `frame_count` parameters) means the loop can
-    never disagree with what Context thinks the buffer shape is.
+      process! { /* body */ }
+      // error: process! requires a context binding.
+      //        Use: process! { ctx => /* body */ }
+      //        (or any identifier in place of `ctx`).
+
+    Per-block state belongs in `persist!(NAME: T = init)` (scalar /
+    `Copy` values, accessed via `.get()` / `.set()` / `.replace()`) or
+    `persist_buf!(NAME: T = init)` (large arrays / non-Copy types,
+    accessed via `.with_mut(|buf| …)`). Both replace raw `static mut`
+    and the `unsafe { … }` boilerplate that used to surround it. See
+    the `state` topic.
 
     ## Rust ctx accessors
 
@@ -753,16 +746,16 @@ enum DSPDocumentation {
     ## Rust API — single model
 
       use conjuredsp::*;
-      setup!();
       nam!("tone3000://TONE_ID/MODEL_ID");
 
-      // In process():
-      unsafe {
-          for c in 0..ctx.channels() {
-              let n = ctx.frames();
-              for i in 0..n { NAM_IN[i] = ctx.input(c, i); }
-              nam_process(&NAM_IN[..n], &mut NAM_OUT[..n], c);
-              for i in 0..n { ctx.set_output(c, i, NAM_OUT[i]); }
+      process! { ctx =>
+          unsafe {
+              for c in 0..ctx.channels() {
+                  let n = ctx.frames();
+                  for i in 0..n { NAM_IN[i] = ctx.input(c, i); }
+                  nam_process(&NAM_IN[..n], &mut NAM_OUT[..n], c);
+                  for i in 0..n { ctx.set_output(c, i, NAM_OUT[i]); }
+              }
           }
       }
 
@@ -783,23 +776,24 @@ enum DSPDocumentation {
     constant (`pub const NAME: u32`) you pass to `nam_process_slot`.
 
       use conjuredsp::*;
-      setup!();
 
       nams! {
           DRIVE = "tone3000://19/56",
           CAB   = "tone3000://42/8",
       }
 
-      // In process(): cascade DRIVE -> CAB
-      let mut a = [0.0_f32; MAX_FR];
-      let mut b = [0.0_f32; MAX_FR];
-      unsafe {
-          for c in 0..ctx.channels() {
-              let n = ctx.frames();
-              for i in 0..n { a[i] = ctx.input(c, i); }
-              nam_process_slot(DRIVE, &a[..n], &mut b[..n], c);
-              nam_process_slot(CAB,   &b[..n], &mut a[..n], c);
-              for i in 0..n { ctx.set_output(c, i, a[i]); }
+      process! { ctx =>
+          // cascade DRIVE -> CAB
+          let mut a = [0.0_f32; MAX_FR];
+          let mut b = [0.0_f32; MAX_FR];
+          unsafe {
+              for c in 0..ctx.channels() {
+                  let n = ctx.frames();
+                  for i in 0..n { a[i] = ctx.input(c, i); }
+                  nam_process_slot(DRIVE, &a[..n], &mut b[..n], c);
+                  nam_process_slot(CAB,   &b[..n], &mut a[..n], c);
+                  for i in 0..n { ctx.set_output(c, i, a[i]); }
+              }
           }
       }
 
@@ -887,31 +881,24 @@ enum DSPDocumentation {
 
     ```rust
     use conjuredsp::*;
-    setup!();
     state!();
     // Optional: bump the cap (default 64 KiB). Clamped to 1 MiB.
     // state!(max_bytes = 131_072);
 
-    static mut CACHED_GEN: u64 = u64::MAX;
-    static mut PATTERN: [u8; 16] = [1; 16];
-    static mut SELECTED: i32 = 0;
-    static mut FROZEN: bool = false;
+    persist!(CACHED_GEN: u64 = u64::MAX);
+    persist!(PATTERN: [u8; 16] = [1; 16]);
+    persist!(SELECTED: i32 = 0);
+    persist!(FROZEN: bool = false);
 
-    #[no_mangle] pub extern "C" fn process(
-        input: *const f32, output: *mut f32,
-        channel_count: i32, frame_count: i32, sample_rate: f32,
-    ) {
-        let cx = ctx(input, output, channel_count, frame_count, sample_rate);
-        unsafe {
-            let gen = cx.state_generation();
-            if gen != CACHED_GEN {
-                PATTERN = cx.state_array_u8_or::<16>("pattern", [1; 16]);
-                SELECTED = cx.state_int_or("selected", 0);
-                FROZEN = cx.state_bool_or("frozen", false);
-                CACHED_GEN = gen;
-            }
+    process! { cx =>
+        let g = cx.state_generation();
+        if g != CACHED_GEN.get() {
+            PATTERN.set(cx.state_array_u8_or::<16>("pattern", [1; 16]));
+            SELECTED.set(cx.state_int_or("selected", 0));
+            FROZEN.set(cx.state_bool_or("frozen", false));
+            CACHED_GEN.set(g);
         }
-        // … apply PATTERN / SELECTED / FROZEN to ctx.input / ctx.set_output …
+        // … apply PATTERN.get() / SELECTED.get() / FROZEN.get() to ctx.input / ctx.set_output …
     }
     ```
 
@@ -1417,14 +1404,15 @@ enum DSPDocumentation {
 
     ```rust
     use conjuredsp::*;
-    setup!();
     telemetry! {
         GR_DB  = scalar_telemetry().unit("dB"),
         ENV_DB = scalar_telemetry().unit("dB"),
     }
-    // inside process():
-    ctx.set_telemetry_scalar(GR_DB, max_gr_db_this_block);
-    ctx.set_telemetry_scalar(ENV_DB, env_db);
+    process! { ctx =>
+        // … DSP …
+        ctx.set_telemetry_scalar(GR_DB, max_gr_db_this_block);
+        ctx.set_telemetry_scalar(ENV_DB, env_db);
+    }
     ```
 
     The macro must be invoked with at least one slot — either fill it in
@@ -1497,15 +1485,16 @@ enum DSPDocumentation {
 
     ```rust
     use conjuredsp::*;
-    setup!();
     const TAPS: usize = 6;
     telemetry! {
         BAR_ENERGY = vector_telemetry(),
     }
-    // inside process(): write one energy value per tap.
-    let mut bars = [0.0f32; TAPS];
-    for t in 0..TAPS { bars[t] = comb[t].rms(); }
-    ctx.set_telemetry_vector(BAR_ENERGY, &bars);
+    process! { ctx =>
+        // … your per-tap DSP …
+        let mut bars = [0.0f32; TAPS];
+        for t in 0..TAPS { bars[t] = comb[t].rms(); }
+        ctx.set_telemetry_vector(BAR_ENERGY, &bars);
+    }
     ```
 
     Python:
@@ -1558,18 +1547,20 @@ enum DSPDocumentation {
 
     ```rust
     use conjuredsp::*;
-    setup!();
     telemetry! {
         SCOPE = vector_telemetry(),
     }
-    // inside process(): write your per-frame samples (e.g. the wet
-    // signal post-saturation) into the slot:
-    for i in 0..frame_count {
-        let y = saturator.process(ctx.input(0, i));
-        ctx.set_output(0, i, y);
-        scope_buf[i] = y;
+    persist_buf!(SCOPE_BUF: [f32; MAX_FR] = [0.0; MAX_FR]);
+    process! { ctx =>
+        SCOPE_BUF.with_mut(|scope_buf| {
+            for i in 0..ctx.frames() {
+                let y = saturator.process(ctx.input(0, i));
+                ctx.set_output(0, i, y);
+                scope_buf[i] = y;
+            }
+            ctx.set_telemetry_vector(SCOPE, &scope_buf[..ctx.frames()]);
+        });
     }
-    ctx.set_telemetry_vector(SCOPE, &scope_buf[..frame_count]);
     ```
 
     Python:

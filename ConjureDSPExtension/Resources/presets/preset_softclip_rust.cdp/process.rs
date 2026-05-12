@@ -9,8 +9,6 @@
 //   0 (Drive): Saturation amount — 1.0 to 15.0
 
 use conjuredsp::*;
-setup!();
-
 params! {
     DRIVE = param(1.0, 15.0).default(3.0),
 }
@@ -20,15 +18,7 @@ fn tanh_f32(x: f32) -> f32 {
     (e2x - 1.0) / (e2x + 1.0)
 }
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    _sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, _sample_rate);
+process! { ctx =>
     let drive = ctx.param(DRIVE);
     let norm = 1.0 / tanh_f32(drive);
 

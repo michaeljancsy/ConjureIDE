@@ -1,5 +1,14 @@
 # Host-Side NAM Inference for WASM Presets
 
+> **Note:** This document captures the design from before the
+> modernization plan landed; the macro emissions sketched below
+> (`#[no_mangle] pub extern "C" fn get_nam_path_ptr() -> i32`) are
+> historical. The shipped crate emits `#[unsafe(no_mangle)]` and the
+> author-facing entry point is `process! { ctx => … }` instead of a
+> hand-rolled `extern "C" fn process(...)`. The design intent — host
+> routes WASM-side `nam_process` calls to a native `NamModel` — is
+> unchanged.
+
 ## Context
 
 WASM NAM presets are significantly slower than Python NAM presets despite using the same model and algorithm. The Python path calls NAM inference as native ARM64 code (pyo3 → numpy), while the Rust/WASM path runs NAM inference *inside* the wasmtime sandbox. The fix: when WASM calls `model.process_buffer()`, route it to a host-provided import function that runs NAM inference natively.

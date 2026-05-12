@@ -156,7 +156,6 @@ from the audio whenever you tweak the script.
 
 ```rust
 use conjuredsp::*;
-setup!();
 
 params! { THRESHOLD = db().min(-40.0).max(-3.0).default(-20.0) }
 telemetry! {
@@ -164,8 +163,7 @@ telemetry! {
     ENV_DB = telemetry().unit("dB"),
 }
 
-#[no_mangle] pub extern "C" fn process(...) {
-    let ctx = ctx(...);
+process! { ctx =>
     // …compute envelope follower, gain computer…
     ctx.set_telemetry(GR_DB, max_gr_db);
     ctx.set_telemetry(ENV_DB, env_db);

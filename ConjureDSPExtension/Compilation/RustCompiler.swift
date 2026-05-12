@@ -79,8 +79,9 @@ final class RustCompiler: ScriptCompiler {
 
         var args = [
             "--target", "wasm32-wasip1",
-            "--edition", "2021",
+            "--edition", "2024",
             "-C", "opt-level=2",
+            "-C", "panic=abort",
             "--crate-type", "cdylib",
             "-o", outputFile.path,
             inputFile.path,

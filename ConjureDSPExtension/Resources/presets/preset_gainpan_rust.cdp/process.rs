@@ -7,22 +7,13 @@
 //   1 (Pan):  Stereo position — 0.0 = hard left, 0.5 = center, 1.0 = hard right
 
 use conjuredsp::*;
-setup!();
 
 params! {
     GAIN = db().min(-24.0).max(12.0),
     PAN = param(0.0, 1.0).default(0.5),
 }
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    _sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, _sample_rate);
+process! { ctx =>
     let half_pi = core::f32::consts::PI * 0.5;
 
     let gain_db = ctx.param(GAIN);
