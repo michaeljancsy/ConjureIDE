@@ -22,3 +22,6 @@ arc-swap = "1"
 ed25519-dalek = { version = "2", features = ["std", "rand_core"] }
 rand = "0.8"
 
+[[bench]]
+name = "process_call_overhead"
+harness = false
