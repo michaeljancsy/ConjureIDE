@@ -9,13 +9,6 @@
 // insects and distance. Input itself is rarely heard directly — only as
 // the mockingbird's interpretation of it.
 
-// Falls back to raw `static mut` under the plan's Plan B (see
-// plans/an-ai-had-this-starry-moler.md). Each preset on this fallback
-// gets a per-preset `persist!()` / `persist_buf!()` migration over time;
-// the lock-in test ConjureDSPLogicTests/PresetEntryPointLockInTests carries
-// the live allow-list and removes a name as each preset gets migrated.
-#![allow(static_mut_refs)]
-
 use conjuredsp::*;
 params! {
     DENSITY   = pct().default(40.0),                     // how often it speaks
@@ -34,56 +27,56 @@ const REC_SIZE:   usize = 96000;                         // ≥2 s @ 48 k
 const GRAIN_SIZE: usize = 48000;                         // ≤1 s captured phrase
 const REV_SIZE:   usize = 16384;                         // ≥170 ms @ 96 k
 
-static mut RECORD: [DelayLine<REC_SIZE>; N_CHANS] = [DelayLine::new(); N_CHANS];
-static mut GRAIN:  [f32; GRAIN_SIZE] = [0.0; GRAIN_SIZE];
+persist_buf!(RECORD: [DelayLine<REC_SIZE>; N_CHANS] = [DelayLine::new(); N_CHANS]);
+persist_buf!(GRAIN:  [f32; GRAIN_SIZE] = [0.0; GRAIN_SIZE]);
 
 // ── State machine ───────────────────────────────────────────────────────
 #[derive(Copy, Clone, PartialEq)]
 enum BirdState { Waiting, Sounding, Gap }
 
-static mut BIRD_STATE:     BirdState = BirdState::Waiting;
-static mut STATE_REMAIN:   u32 = 48000;                  // samples left in state
-static mut REPEATS_LEFT:   u32 = 0;                      // remaining syllables in phrase
-static mut SYLL_LEN:       u32 = 0;                      // grain length in samples
-static mut PLAY_DURATION:  u32 = 0;                      // output samples for current syllable
-static mut PLAY_POS:       f64 = 0.0;                    // fractional read position in GRAIN
-static mut PLAY_RATE:      f64 = 1.5;                    // current pitch ratio
-static mut BASE_RATE:      f64 = 1.5;                    // phrase-level base rate
+persist!(BIRD_STATE:     BirdState = BirdState::Waiting);
+persist!(STATE_REMAIN:   u32 = 48000);                  // samples left in state
+persist!(REPEATS_LEFT:   u32 = 0);                      // remaining syllables in phrase
+persist!(SYLL_LEN:       u32 = 0);                      // grain length in samples
+persist!(PLAY_DURATION:  u32 = 0);                      // output samples for current syllable
+persist!(PLAY_POS:       f64 = 0.0);                    // fractional read position in GRAIN
+persist!(PLAY_RATE:      f64 = 1.5);                    // current pitch ratio
+persist!(BASE_RATE:      f64 = 1.5);                    // phrase-level base rate
 
 // ── Filters ─────────────────────────────────────────────────────────────
-static mut BP:       [Biquad; N_CHANS] = [Biquad::new(); N_CHANS];
-static mut NIGHT_HP: [Biquad; N_CHANS] = [Biquad::new(); N_CHANS];
-static mut NIGHT_LP: [Biquad; N_CHANS] = [Biquad::new(); N_CHANS];
+persist_buf!(BP:       [Biquad; N_CHANS] = [Biquad::new(); N_CHANS]);
+persist_buf!(NIGHT_HP: [Biquad; N_CHANS] = [Biquad::new(); N_CHANS]);
+persist_buf!(NIGHT_LP: [Biquad; N_CHANS] = [Biquad::new(); N_CHANS]);
 
 // ── Reverb: 2 combs + 1 allpass per channel, different tunings for stereo ──
 const N_COMBS: usize = 2;
 const COMB_MS: [[f64; N_COMBS]; N_CHANS] = [[71.0, 113.0], [97.0, 149.0]];
 const AP_MS:   [f64; N_CHANS] = [5.3, 7.1];
-static mut COMBS: [[DelayLine<REV_SIZE>; N_COMBS]; N_CHANS] =
-    [[DelayLine::new(); N_COMBS]; N_CHANS];
-static mut AP:    [DelayLine<REV_SIZE>; N_CHANS] = [DelayLine::new(); N_CHANS];
+persist_buf!(COMBS: [[DelayLine<REV_SIZE>; N_COMBS]; N_CHANS] =
+    [[DelayLine::new(); N_COMBS]; N_CHANS]);
+persist_buf!(AP:    [DelayLine<REV_SIZE>; N_CHANS] = [DelayLine::new(); N_CHANS]);
 
-static mut RNG: u32 = 0xC0DE_F00D;
+persist!(RNG: u32 = 0xC0DE_F00D);
 
 #[inline]
-unsafe fn rand_f() -> f32 {
-    RNG ^= RNG << 13;
-    RNG ^= RNG >> 17;
-    RNG ^= RNG << 5;
-    (RNG as f32) / 4_294_967_296.0f32                    // [0, 1)
+fn rand_f(rng: &mut u32) -> f32 {
+    *rng ^= *rng << 13;
+    *rng ^= *rng >> 17;
+    *rng ^= *rng << 5;
+    (*rng as f32) / 4_294_967_296.0f32                    // [0, 1)
 }
 
 #[inline]
-unsafe fn rand_bi() -> f32 { rand_f() * 2.0 - 1.0 }
+fn rand_bi(rng: &mut u32) -> f32 { rand_f(rng) * 2.0 - 1.0 }
 
 #[inline]
-unsafe fn grain_read(pos: f64, len: u32) -> f32 {
+fn grain_read(grain: &[f32; GRAIN_SIZE], pos: f64, len: u32) -> f32 {
     let maxp = (len as f64) - 1.0;
     let p = if pos < 0.0 { 0.0 } else if pos > maxp { maxp } else { pos };
     let i = p as usize;
     let frac = (p - i as f64) as f32;
-    let a = GRAIN[i];
-    let b = if i + 1 < len as usize { GRAIN[i + 1] } else { a };
+    let a = grain[i];
+    let b = if i + 1 < len as usize { grain[i + 1] } else { a };
     a * (1.0 - frac) + b * frac
 }
 
@@ -130,121 +123,153 @@ process! { ctx =>
 
     let rev_fb = 0.55 + (rev_amt as f32) * 0.40;         // 0.55 → 0.95
 
-    unsafe {
-        for c in 0..N_CHANS {
-            BP[c].set_coeffs(bp_c);
-            NIGHT_HP[c].set_coeffs(nhp_c);
-            NIGHT_LP[c].set_coeffs(nlp_c);
-        }
+    let mut bird_state = BIRD_STATE.get();
+    let mut state_remain = STATE_REMAIN.get();
+    let mut repeats_left = REPEATS_LEFT.get();
+    let mut syll_len = SYLL_LEN.get();
+    let mut play_duration = PLAY_DURATION.get();
+    let mut play_pos = PLAY_POS.get();
+    let mut play_rate = PLAY_RATE.get();
+    let mut base_rate = BASE_RATE.get();
+    let mut rng = RNG.get();
 
-        let n_ch = ctx.channels().min(N_CHANS);
+    RECORD.with_mut(|record| {
+        GRAIN.with_mut(|grain| {
+            BP.with_mut(|bp| {
+                NIGHT_HP.with_mut(|night_hp| {
+                    NIGHT_LP.with_mut(|night_lp| {
+                        COMBS.with_mut(|combs| {
+                            AP.with_mut(|ap| {
+                                for c in 0..N_CHANS {
+                                    bp[c].set_coeffs(bp_c);
+                                    night_hp[c].set_coeffs(nhp_c);
+                                    night_lp[c].set_coeffs(nlp_c);
+                                }
 
-        for f in 0..ctx.frames() {
-            // Always record input — the bird's memory of what it just heard
-            for c in 0..n_ch {
-                RECORD[c].write(ctx.input(c, f));
-            }
+                                let n_ch = ctx.channels().min(N_CHANS);
 
-            // Advance state machine (once per frame)
-            let mut bird_mono = 0.0_f32;
-            match BIRD_STATE {
-                BirdState::Waiting => {
-                    if STATE_REMAIN == 0 {
-                        // ── Start new phrase ──
-                        let vary = 1.0 + rand_bi() * 0.3;
-                        let mut sl = (syll_samples as f32 * vary) as u32;
-                        if sl < 128 { sl = 128; }
-                        if sl > GRAIN_SIZE as u32 { sl = GRAIN_SIZE as u32; }
-                        SYLL_LEN = sl;
+                                for f in 0..ctx.frames() {
+                                    // Always record input — the bird's memory of what it just heard
+                                    for c in 0..n_ch {
+                                        record[c].write(ctx.input(c, f));
+                                    }
 
-                        // Capture recent audio as mono grain
-                        let n = sl as usize;
-                        for i in 0..n {
-                            let delay = n - i;
-                            GRAIN[i] = (RECORD[0].tap(delay) + RECORD[1].tap(delay)) * 0.5;
-                        }
+                                    // Advance state machine (once per frame)
+                                    let mut bird_mono = 0.0_f32;
+                                    match bird_state {
+                                        BirdState::Waiting => {
+                                            if state_remain == 0 {
+                                                // ── Start new phrase ──
+                                                let vary = 1.0 + rand_bi(&mut rng) * 0.3;
+                                                let mut sl = (syll_samples as f32 * vary) as u32;
+                                                if sl < 128 { sl = 128; }
+                                                if sl > GRAIN_SIZE as u32 { sl = GRAIN_SIZE as u32; }
+                                                syll_len = sl;
 
-                        BASE_RATE = 1.0 + rand_f() as f64 * pitch_range;
-                        PLAY_RATE = BASE_RATE * (1.0 + rand_bi() as f64 * pitch_var);
-                        PLAY_POS = 0.0;
+                                                // Capture recent audio as mono grain
+                                                let n = sl as usize;
+                                                for i in 0..n {
+                                                    let delay = n - i;
+                                                    grain[i] = (record[0].tap(delay) + record[1].tap(delay)) * 0.5;
+                                                }
 
-                        let rep_max = 1 + (repeats_p * 5.0) as u32;          // up to 6
-                        let total_rep = 1 + (rand_f() * rep_max as f32) as u32;
-                        REPEATS_LEFT = total_rep - 1;                        // this one is the first
+                                                base_rate = 1.0 + rand_f(&mut rng) as f64 * pitch_range;
+                                                play_rate = base_rate * (1.0 + rand_bi(&mut rng) as f64 * pitch_var);
+                                                play_pos = 0.0;
 
-                        let pd = (SYLL_LEN as f64 / PLAY_RATE) as u32;
-                        PLAY_DURATION = if pd == 0 { 1 } else { pd };
-                        STATE_REMAIN = PLAY_DURATION;
-                        BIRD_STATE = BirdState::Sounding;
-                    } else {
-                        STATE_REMAIN -= 1;
-                    }
-                }
-                BirdState::Sounding => {
-                    let pos = PLAY_DURATION - STATE_REMAIN;
-                    let env = syllable_env(pos, PLAY_DURATION);
-                    bird_mono = grain_read(PLAY_POS, SYLL_LEN) * env;
-                    PLAY_POS += PLAY_RATE;
-                    STATE_REMAIN -= 1;
-                    if STATE_REMAIN == 0 {
-                        if REPEATS_LEFT > 0 {
-                            REPEATS_LEFT -= 1;
-                            BIRD_STATE = BirdState::Gap;
-                            let gap = gap_min + rand_f() as f64 * (gap_max - gap_min);
-                            STATE_REMAIN = gap as u32;
-                        } else {
-                            BIRD_STATE = BirdState::Waiting;
-                            let pause = pause_min + rand_f() as f64 * (pause_max - pause_min);
-                            STATE_REMAIN = pause as u32;
-                        }
-                    }
-                }
-                BirdState::Gap => {
-                    if STATE_REMAIN == 0 {
-                        // ── Start next syllable in the phrase ──
-                        BIRD_STATE = BirdState::Sounding;
-                        PLAY_POS = 0.0;
-                        PLAY_RATE = BASE_RATE * (1.0 + rand_bi() as f64 * pitch_var);
-                        let pd = (SYLL_LEN as f64 / PLAY_RATE) as u32;
-                        PLAY_DURATION = if pd == 0 { 1 } else { pd };
-                        STATE_REMAIN = PLAY_DURATION;
-                    } else {
-                        STATE_REMAIN -= 1;
-                    }
-                }
-            }
+                                                let rep_max = 1 + (repeats_p * 5.0) as u32;          // up to 6
+                                                let total_rep = 1 + (rand_f(&mut rng) * rep_max as f32) as u32;
+                                                repeats_left = total_rep - 1;                        // this one is the first
 
-            // ── Per-channel mix ──
-            for c in 0..n_ch {
-                let dry = ctx.input(c, f);
+                                                let pd = (syll_len as f64 / play_rate) as u32;
+                                                play_duration = if pd == 0 { 1 } else { pd };
+                                                state_remain = play_duration;
+                                                bird_state = BirdState::Sounding;
+                                            } else {
+                                                state_remain -= 1;
+                                            }
+                                        }
+                                        BirdState::Sounding => {
+                                            let pos = play_duration - state_remain;
+                                            let env = syllable_env(pos, play_duration);
+                                            bird_mono = grain_read(grain, play_pos, syll_len) * env;
+                                            play_pos += play_rate;
+                                            state_remain -= 1;
+                                            if state_remain == 0 {
+                                                if repeats_left > 0 {
+                                                    repeats_left -= 1;
+                                                    bird_state = BirdState::Gap;
+                                                    let gap = gap_min + rand_f(&mut rng) as f64 * (gap_max - gap_min);
+                                                    state_remain = gap as u32;
+                                                } else {
+                                                    bird_state = BirdState::Waiting;
+                                                    let pause = pause_min + rand_f(&mut rng) as f64 * (pause_max - pause_min);
+                                                    state_remain = pause as u32;
+                                                }
+                                            }
+                                        }
+                                        BirdState::Gap => {
+                                            if state_remain == 0 {
+                                                // ── Start next syllable in the phrase ──
+                                                bird_state = BirdState::Sounding;
+                                                play_pos = 0.0;
+                                                play_rate = base_rate * (1.0 + rand_bi(&mut rng) as f64 * pitch_var);
+                                                let pd = (syll_len as f64 / play_rate) as u32;
+                                                play_duration = if pd == 0 { 1 } else { pd };
+                                                state_remain = play_duration;
+                                            } else {
+                                                state_remain -= 1;
+                                            }
+                                        }
+                                    }
 
-                // Shape the bird's voice with a bandpass
-                let bird_bp = BP[c].process_sample(bird_mono as f64) as f32;
+                                    // ── Per-channel mix ──
+                                    for c in 0..n_ch {
+                                        let dry = ctx.input(c, f);
 
-                // Night-air reverb: parallel combs → allpass diffuser
-                let mut rev = 0.0_f32;
-                for i in 0..N_COMBS {
-                    let d = COMB_MS[c][i] * 0.001 * sr;
-                    let del = COMBS[c][i].read(d);
-                    COMBS[c][i].write(bird_bp + del * rev_fb);
-                    rev += del * 0.5;
-                }
-                let ap_d = AP_MS[c] * 0.001 * sr;
-                let ap_del = AP[c].read(ap_d);
-                let ap_g: f32 = 0.5;
-                let ap_v = rev + ap_g * ap_del;
-                AP[c].write(ap_v);
-                let rev_out = -ap_g * ap_v + ap_del;
+                                        // Shape the bird's voice with a bandpass
+                                        let bird_bp = bp[c].process_sample(bird_mono as f64) as f32;
 
-                // Faint insect-band noise bed
-                let noise = rand_bi() * 0.15;
-                let night = NIGHT_LP[c]
-                    .process_sample(NIGHT_HP[c].process_sample(noise as f64)) as f32;
+                                        // Night-air reverb: parallel combs → allpass diffuser
+                                        let mut rev = 0.0_f32;
+                                        for i in 0..N_COMBS {
+                                            let d = COMB_MS[c][i] * 0.001 * sr;
+                                            let del = combs[c][i].read(d);
+                                            combs[c][i].write(bird_bp + del * rev_fb);
+                                            rev += del * 0.5;
+                                        }
+                                        let ap_d = AP_MS[c] * 0.001 * sr;
+                                        let ap_del = ap[c].read(ap_d);
+                                        let ap_g: f32 = 0.5;
+                                        let ap_v = rev + ap_g * ap_del;
+                                        ap[c].write(ap_v);
+                                        let rev_out = -ap_g * ap_v + ap_del;
 
-                let wet_sig = bird_bp * 0.85 + rev_out * rev_amt + night * night_amt;
-                let out = dry * (1.0 - wet) + wet_sig * wet;
-                ctx.set_output(c, f, out);
-            }
-        }
-    }
+                                        // Faint insect-band noise bed
+                                        let noise = rand_bi(&mut rng) * 0.15;
+                                        let night = night_lp[c]
+                                            .process_sample(night_hp[c].process_sample(noise as f64)) as f32;
+
+                                        let wet_sig = bird_bp * 0.85 + rev_out * rev_amt + night * night_amt;
+                                        let out = dry * (1.0 - wet) + wet_sig * wet;
+                                        ctx.set_output(c, f, out);
+                                    }
+                                }
+                            });
+                        });
+                    });
+                });
+            });
+        });
+    });
+
+    BIRD_STATE.set(bird_state);
+    STATE_REMAIN.set(state_remain);
+    REPEATS_LEFT.set(repeats_left);
+    SYLL_LEN.set(syll_len);
+    PLAY_DURATION.set(play_duration);
+    PLAY_POS.set(play_pos);
+    PLAY_RATE.set(play_rate);
+    BASE_RATE.set(base_rate);
+    RNG.set(rng);
 }

@@ -17,13 +17,6 @@
 //   BREATH  (pct) — slow LFO depth on the glass layer
 //   MIX           — wet/dry blend
 
-// Suppresses static_mut_refs (deny under edition 2024) for this preset.
-// The DSP holds several Lfo/Biquad/DelayLine statics whose methods take
-// &mut self; converting each call site to PersistBuf::with_mut is mechanical
-// but verbose for a preset that compiles + runs correctly under WASM (single-
-// threaded; no aliasing risk). Reconsider if the lint catches a real bug.
-#![allow(static_mut_refs)]
-
 use conjuredsp::*;
 params! {
     ICE = pct().default(70.0),
@@ -41,103 +34,118 @@ const GRAIN_MS: f64 = 80.0;
 const BP_HZ: [f64; 3] = [2500.0, 3700.0, 5100.0];
 const BREATH_HZ: f64 = 0.09;
 
-static mut TAIL_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2];
-static mut TAIL_LP: [Biquad; 2] = [Biquad::new(); 2];
-static mut SHIFT_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2];
-static mut GLASS_BP: [[Biquad; 3]; 2] = [[Biquad::new(); 3]; 2];
-static mut HP: [Biquad; 2] = [Biquad::new(); 2];
-static mut GRAIN_PHASE: f64 = 0.0;
-static mut BREATH_LFO: Lfo = Lfo::new();
+persist_buf!(TAIL_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_buf!(TAIL_LP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_buf!(SHIFT_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_buf!(GLASS_BP: [[Biquad; 3]; 2] = [[Biquad::new(); 3]; 2]);
+persist_buf!(HP: [Biquad; 2] = [Biquad::new(); 2]);
+persist!(GRAIN_PHASE: f64 = 0.0);
+persist_buf!(BREATH_LFO: Lfo = Lfo::new());
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
-    unsafe {
-        let ice = ctx.param(ICE) as f64 / 100.0;
-        let shimmer = ctx.param(SHIMMER) as f64 / 100.0;
-        let glass = ctx.param(GLASS) as f64 / 100.0;
-        let breath = ctx.param(BREATH) as f64 / 100.0;
-        let mx = ctx.param(MIX) as f64;
+    let ice = ctx.param(ICE) as f64 / 100.0;
+    let shimmer = ctx.param(SHIMMER) as f64 / 100.0;
+    let glass = ctx.param(GLASS) as f64 / 100.0;
+    let breath = ctx.param(BREATH) as f64 / 100.0;
+    let mx = ctx.param(MIX) as f64;
 
-        let glass_q = 6.0 + 6.0 * glass;
-        let tail_lpc = BiquadCoeffs::lowpass(2800.0, 0.707, sr);
-        let bp_c: [BiquadCoeffs; 3] = [
-            BiquadCoeffs::bandpass(BP_HZ[0], glass_q, sr),
-            BiquadCoeffs::bandpass(BP_HZ[1], glass_q, sr),
-            BiquadCoeffs::bandpass(BP_HZ[2], glass_q, sr),
-        ];
-        let hpc = BiquadCoeffs::highpass(400.0, 0.707, sr);
+    let glass_q = 6.0 + 6.0 * glass;
+    let tail_lpc = BiquadCoeffs::lowpass(2800.0, 0.707, sr);
+    let bp_c: [BiquadCoeffs; 3] = [
+        BiquadCoeffs::bandpass(BP_HZ[0], glass_q, sr),
+        BiquadCoeffs::bandpass(BP_HZ[1], glass_q, sr),
+        BiquadCoeffs::bandpass(BP_HZ[2], glass_q, sr),
+    ];
+    let hpc = BiquadCoeffs::highpass(400.0, 0.707, sr);
 
-        BREATH_LFO.init(sr, BREATH_HZ);
+    let nch = ctx.channels().min(2);
 
-        let nch = ctx.channels().min(2);
-        for ch in 0..nch {
-            TAIL_LP[ch].set_coeffs(tail_lpc);
-            for k in 0..3 {
-                GLASS_BP[ch][k].set_coeffs(bp_c[k]);
-            }
-            HP[ch].set_coeffs(hpc);
-        }
+    let tail_d = TAIL_MS * 0.001 * sr;
+    let tail_fb_amt = 0.55 + 0.30 * ice;
+    let shimmer_amt = 0.70 * shimmer;
 
-        let tail_d = TAIL_MS * 0.001 * sr;
-        let tail_fb_amt = 0.55 + 0.30 * ice;
-        let shimmer_amt = 0.70 * shimmer;
+    let base_d = SHIFT_BASE_MS * 0.001 * sr;
+    let grain_samples = GRAIN_MS * 0.001 * sr;
+    let grain_rate = 1.0 / grain_samples;
 
-        let base_d = SHIFT_BASE_MS * 0.001 * sr;
-        let grain_samples = GRAIN_MS * 0.001 * sr;
-        let grain_rate = 1.0 / grain_samples;
+    let glass_gain = 0.30 + 0.70 * glass;
+    let breath_depth = 0.40 * breath;
 
-        let glass_gain = 0.30 + 0.70 * glass;
-        let breath_depth = 0.40 * breath;
+    let mut grain_phase = GRAIN_PHASE.get();
 
-        for f in 0..ctx.frames() {
-            let ph0 = GRAIN_PHASE;
-            let ph1 = (GRAIN_PHASE + 0.5) % 1.0;
-            let w0_ = (core::f64::consts::PI * ph0).sin();
-            let w0 = w0_ * w0_;
-            let w1_ = (core::f64::consts::PI * ph1).sin();
-            let w1 = w1_ * w1_;
-            let mut read0 = base_d - ph0 * grain_samples;
-            if read0 < 1.0 {
-                read0 = 1.0;
-            }
-            let mut read1 = base_d - ph1 * grain_samples;
-            if read1 < 1.0 {
-                read1 = 1.0;
-            }
-            GRAIN_PHASE = (GRAIN_PHASE + grain_rate) % 1.0;
+    TAIL_DL.with_mut(|tail_dl| {
+        TAIL_LP.with_mut(|tail_lp| {
+            SHIFT_DL.with_mut(|shift_dl| {
+                GLASS_BP.with_mut(|glass_bp| {
+                    HP.with_mut(|hp| {
+                        BREATH_LFO.with_mut(|breath_lfo| {
+                            breath_lfo.init(sr, BREATH_HZ);
 
-            let b = BREATH_LFO.tick();
-            let breath_mod = 1.0 - breath_depth + breath_depth * (0.5 + 0.5 * b);
+                            for ch in 0..nch {
+                                tail_lp[ch].set_coeffs(tail_lpc);
+                                for k in 0..3 {
+                                    glass_bp[ch][k].set_coeffs(bp_c[k]);
+                                }
+                                hp[ch].set_coeffs(hpc);
+                            }
 
-            for ch in 0..nch {
-                let dry = ctx.input(ch, f) as f64;
+                            for f in 0..ctx.frames() {
+                                let ph0 = grain_phase;
+                                let ph1 = (grain_phase + 0.5) % 1.0;
+                                let w0_ = (core::f64::consts::PI * ph0).sin();
+                                let w0 = w0_ * w0_;
+                                let w1_ = (core::f64::consts::PI * ph1).sin();
+                                let w1 = w1_ * w1_;
+                                let mut read0 = base_d - ph0 * grain_samples;
+                                if read0 < 1.0 {
+                                    read0 = 1.0;
+                                }
+                                let mut read1 = base_d - ph1 * grain_samples;
+                                if read1 < 1.0 {
+                                    read1 = 1.0;
+                                }
+                                grain_phase = (grain_phase + grain_rate) % 1.0;
 
-                // Stage A: read tail, LP, pitch-shift inside feedback loop
-                let tail_raw = TAIL_DL[ch].read(tail_d) as f64;
-                let tail_lp_out = TAIL_LP[ch].process_sample(tail_raw);
+                                let b = breath_lfo.tick();
+                                let breath_mod = 1.0 - breath_depth + breath_depth * (0.5 + 0.5 * b);
 
-                SHIFT_DL[ch].write(tail_lp_out as f32);
-                let g0 = SHIFT_DL[ch].read(read0) as f64;
-                let g1 = SHIFT_DL[ch].read(read1) as f64;
-                let shifted = w0 * g0 + w1 * g1;
+                                for ch in 0..nch {
+                                    let dry = ctx.input(ch, f) as f64;
 
-                // Stage B: feedback composition (dry + shimmer + LP'd tail)
-                let fb_in = dry + shifted * shimmer_amt + tail_lp_out * tail_fb_amt;
-                TAIL_DL[ch].write(fb_in as f32);
+                                    // Stage A: read tail, LP, pitch-shift inside feedback loop
+                                    let tail_raw = tail_dl[ch].read(tail_d) as f64;
+                                    let tail_lp_out = tail_lp[ch].process_sample(tail_raw);
 
-                // Stage C: glassy bandpass cluster on raw tail
-                let mut glass_sum: f64 = 0.0;
-                for k in 0..3 {
-                    glass_sum += GLASS_BP[ch][k].process_sample(tail_raw);
-                }
-                let glass_voice = glass_sum * glass_gain * breath_mod;
+                                    shift_dl[ch].write(tail_lp_out as f32);
+                                    let g0 = shift_dl[ch].read(read0) as f64;
+                                    let g1 = shift_dl[ch].read(read1) as f64;
+                                    let shifted = w0 * g0 + w1 * g1;
 
-                // Stage D: high-pass
-                let wet = HP[ch].process_sample(tail_raw + glass_voice);
+                                    // Stage B: feedback composition (dry + shimmer + LP'd tail)
+                                    let fb_in = dry + shifted * shimmer_amt + tail_lp_out * tail_fb_amt;
+                                    tail_dl[ch].write(fb_in as f32);
 
-                ctx.set_output(ch, f, (dry * (1.0 - mx) + wet * mx) as f32);
-            }
-        }
-    }
+                                    // Stage C: glassy bandpass cluster on raw tail
+                                    let mut glass_sum: f64 = 0.0;
+                                    for k in 0..3 {
+                                        glass_sum += glass_bp[ch][k].process_sample(tail_raw);
+                                    }
+                                    let glass_voice = glass_sum * glass_gain * breath_mod;
+
+                                    // Stage D: high-pass
+                                    let wet = hp[ch].process_sample(tail_raw + glass_voice);
+
+                                    ctx.set_output(ch, f, (dry * (1.0 - mx) + wet * mx) as f32);
+                                }
+                            }
+                        });
+                    });
+                });
+            });
+        });
+    });
+
+    GRAIN_PHASE.set(grain_phase);
 }

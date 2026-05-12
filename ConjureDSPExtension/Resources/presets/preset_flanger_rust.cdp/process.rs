@@ -12,13 +12,6 @@
 //   3 (Feedback): Feedback amount — 0.0 to 1.0
 //   4 (Mix):      Dry/wet mix — 0.0 to 1.0
 
-// Falls back to raw `static mut` under the plan's Plan B (see
-// plans/an-ai-had-this-starry-moler.md). Each preset on this fallback
-// gets a per-preset `persist!()` / `persist_buf!()` migration over time;
-// the lock-in test ConjureDSPLogicTests/PresetEntryPointLockInTests carries
-// the live allow-list and removes a name as each preset gets migrated.
-#![allow(static_mut_refs)]
-
 use conjuredsp::*;
 const MAX_DELAY: usize = 1024;
 
@@ -31,26 +24,26 @@ params! {
 }
 
 // Persistent state
-static mut DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH];
-static mut WRITE_POS: usize = 0;
+persist_buf!(DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH]);
+persist!(WRITE_POS: usize = 0);
 // Use f64 to match Python's float64 precision in the phase accumulator.
-static mut LFO_PHASE: f64 = 0.0;
+persist!(LFO_PHASE: f64 = 0.0);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
     let two_pi = 2.0 * core::f64::consts::PI;
 
-    unsafe {
-        let rate_hz = ctx.param(RATE) as f64;
-        let depth_ms = ctx.param(DEPTH) as f64;
-        let base_delay_ms = ctx.param(DELAY) as f64;
-        let feedback = ctx.param(FEEDBACK) as f64;
-        let mix = ctx.param(MIX) as f64;
+    let rate_hz = ctx.param(RATE) as f64;
+    let depth_ms = ctx.param(DEPTH) as f64;
+    let base_delay_ms = ctx.param(DELAY) as f64;
+    let feedback = ctx.param(FEEDBACK) as f64;
+    let mix = ctx.param(MIX) as f64;
 
-        let lfo_inc = two_pi * rate_hz / sr;
-        let mut phase = LFO_PHASE;
-        let mut wp = WRITE_POS;
+    let lfo_inc = two_pi * rate_hz / sr;
+    let mut phase = LFO_PHASE.get();
+    let mut wp = WRITE_POS.get();
 
+    DELAY_BUF.with_mut(|delay_buf| {
         for i in 0..ctx.frames() {
             let delay_samples = (base_delay_ms + depth_ms * phase.sin()) * sr / 1000.0;
 
@@ -63,11 +56,11 @@ process! { ctx =>
                 let idx0 = (read_pos as usize) % MAX_DELAY;
                 let idx1 = (idx0 + 1) % MAX_DELAY;
                 let frac = read_pos - read_pos.floor();
-                let delayed = DELAY_BUF[c][idx0] as f64 * (1.0 - frac)
-                    + DELAY_BUF[c][idx1] as f64 * frac;
+                let delayed = delay_buf[c][idx0] as f64 * (1.0 - frac)
+                    + delay_buf[c][idx1] as f64 * frac;
 
                 // Write input + feedback to delay line
-                DELAY_BUF[c][wp] = (ctx.input(c, i) as f64 + delayed * feedback) as f32;
+                delay_buf[c][wp] = (ctx.input(c, i) as f64 + delayed * feedback) as f32;
 
                 // Mix dry + wet
                 ctx.set_output(c, i, (ctx.input(c, i) as f64 * (1.0 - mix) + delayed * mix) as f32);
@@ -76,8 +69,8 @@ process! { ctx =>
             phase += lfo_inc;
             wp = (wp + 1) % MAX_DELAY;
         }
+    });
 
-        LFO_PHASE = phase % two_pi;
-        WRITE_POS = wp;
-    }
+    LFO_PHASE.set(phase % two_pi);
+    WRITE_POS.set(wp);
 }

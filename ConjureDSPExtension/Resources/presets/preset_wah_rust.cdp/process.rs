@@ -14,13 +14,6 @@
 //   5 (Attack):      Envelope attack time — 0.5 to 50 ms (log)
 //   6 (Release):     Envelope release time — 10 to 500 ms (log)
 
-// Falls back to raw `static mut` under the plan's Plan B (see
-// plans/an-ai-had-this-starry-moler.md). Each preset on this fallback
-// gets a per-preset `persist!()` / `persist_buf!()` migration over time;
-// the lock-in test ConjureDSPLogicTests/PresetEntryPointLockInTests carries
-// the live allow-list and removes a name as each preset gets migrated.
-#![allow(static_mut_refs)]
-
 use conjuredsp::*;
 params! {
     SENSITIVITY = db().min(-40.0).max(0.0).default(-20.0),
@@ -32,31 +25,31 @@ params! {
     RELEASE = time_ms().min(10.0).max(500.0).default(50.0),
 }
 
-// Biquad state per channel
-static mut FILTERS: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH];
+// Biquad state per channel.
+persist_buf!(FILTERS: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH]);
 
-// Envelope follower
-static mut ENVELOPE: f64 = 0.0;
+// Envelope follower.
+persist!(ENVELOPE: f64 = 0.0);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
-    unsafe {
-        let sensitivity_gain = db_to_gain(ctx.param(SENSITIVITY) as f64);
-        let depth = ctx.param(DEPTH) as f64 / 100.0;
-        let min_freq = ctx.param(MIN_FREQ) as f64;
-        let max_freq = ctx.param(MAX_FREQ) as f64;
-        let q = ctx.param(Q) as f64;
-        let attack_ms = ctx.param(ATTACK) as f64;
-        let release_ms = ctx.param(RELEASE) as f64;
+    let sensitivity_gain = db_to_gain(ctx.param(SENSITIVITY) as f64);
+    let depth = ctx.param(DEPTH) as f64 / 100.0;
+    let min_freq = ctx.param(MIN_FREQ) as f64;
+    let max_freq = ctx.param(MAX_FREQ) as f64;
+    let q = ctx.param(Q) as f64;
+    let attack_ms = ctx.param(ATTACK) as f64;
+    let release_ms = ctx.param(RELEASE) as f64;
 
-        let attack_coeff = smooth_coeff(attack_ms, sr);
-        let release_coeff = smooth_coeff(release_ms, sr);
+    let attack_coeff = smooth_coeff(attack_ms, sr);
+    let release_coeff = smooth_coeff(release_ms, sr);
 
-        let freq_range = max_freq - min_freq;
+    let freq_range = max_freq - min_freq;
 
-        let mut env = ENVELOPE;
+    let mut env = ENVELOPE.get();
 
+    FILTERS.with_mut(|filters| {
         for i in 0..ctx.frames() {
             // Peak detect across channel_count with sensitivity scaling
             let mut peak_val: f64 = 0.0;
@@ -89,11 +82,11 @@ process! { ctx =>
 
             for c in 0..ctx.channels() {
                 let x = ctx.input(c, i) as f64;
-                FILTERS[c].set_coeffs(bp);
-                ctx.set_output(c, i, FILTERS[c].process_sample(x) as f32);
+                filters[c].set_coeffs(bp);
+                ctx.set_output(c, i, filters[c].process_sample(x) as f32);
             }
         }
+    });
 
-        ENVELOPE = env;
-    }
+    ENVELOPE.set(env);
 }

@@ -17,13 +17,6 @@
 //   TUBE     (pct) — asymmetric tanh drive
 //   MIX            — wet/dry blend
 
-// Suppresses static_mut_refs (deny under edition 2024) for this preset.
-// The DSP holds several Lfo/Biquad/DelayLine statics whose methods take
-// &mut self; converting each call site to PersistBuf::with_mut is mechanical
-// but verbose for a preset that compiles + runs correctly under WASM (single-
-// threaded; no aliasing risk). Reconsider if the lint catches a real bug.
-#![allow(static_mut_refs)]
-
 use conjuredsp::*;
 params! {
     CALLIOPE = pct().default(60.0),
@@ -40,93 +33,104 @@ const CHORUS_LFO_HZ: [f64; 5] = [0.17, 0.23, 0.29, 0.37, 0.41];
 const WALTZ_HZ: f64 = 1.2;
 const PIPE_HZ: f64 = 110.0;
 
-static mut CHORUS_DL: [[DelayLine<MAX_DL>; 5]; 2] = [[DelayLine::new(); 5]; 2];
-static mut CHORUS_LFO: [Lfo; 5] = [Lfo::new(); 5];
-static mut WALTZ_LFO: Lfo = Lfo::new();
-static mut PIPE_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2];
-static mut PIPE_FB: [f64; 2] = [0.0; 2];
-static mut PIPE_LP: [Biquad; 2] = [Biquad::new(); 2];
+persist_buf!(CHORUS_DL: [[DelayLine<MAX_DL>; 5]; 2] = [[DelayLine::new(); 5]; 2]);
+persist_buf!(CHORUS_LFO: [Lfo; 5] = [Lfo::new(); 5]);
+persist_buf!(WALTZ_LFO: Lfo = Lfo::new());
+persist_buf!(PIPE_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_buf!(PIPE_FB: [f64; 2] = [0.0; 2]);
+persist_buf!(PIPE_LP: [Biquad; 2] = [Biquad::new(); 2]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
-    unsafe {
-        let calliope = ctx.param(CALLIOPE) as f64 / 100.0;
-        let waltz = ctx.param(WALTZ) as f64 / 100.0;
-        let organ = ctx.param(ORGAN) as f64 / 100.0;
-        let tube = ctx.param(TUBE) as f64 / 100.0;
-        let mx = ctx.param(MIX) as f64;
+    let calliope = ctx.param(CALLIOPE) as f64 / 100.0;
+    let waltz = ctx.param(WALTZ) as f64 / 100.0;
+    let organ = ctx.param(ORGAN) as f64 / 100.0;
+    let tube = ctx.param(TUBE) as f64 / 100.0;
+    let mx = ctx.param(MIX) as f64;
 
-        let pipe_lpc = BiquadCoeffs::lowpass(2800.0, 0.707, sr);
+    let pipe_lpc = BiquadCoeffs::lowpass(2800.0, 0.707, sr);
 
-        for k in 0..5 {
-            CHORUS_LFO[k].init(sr, CHORUS_LFO_HZ[k]);
-        }
-        WALTZ_LFO.init(sr, WALTZ_HZ);
-        WALTZ_LFO.set_waveform(Waveform::Triangle);
+    let nch = ctx.channels().min(2);
 
-        let nch = ctx.channels().min(2);
-        for ch in 0..nch {
-            PIPE_LP[ch].set_coeffs(pipe_lpc);
-        }
+    let chorus_base: [f64; 5] = [
+        CHORUS_MS[0] * 0.001 * sr,
+        CHORUS_MS[1] * 0.001 * sr,
+        CHORUS_MS[2] * 0.001 * sr,
+        CHORUS_MS[3] * 0.001 * sr,
+        CHORUS_MS[4] * 0.001 * sr,
+    ];
+    let chorus_depth = (0.8 + 1.8 * calliope) * 0.001 * sr;
+    let waltz_depth = 0.65 * waltz;
+    let pipe_d = (1.0 / PIPE_HZ) * sr;
+    let pipe_fb_amt = 0.50 + 0.40 * organ;
 
-        let chorus_base: [f64; 5] = [
-            CHORUS_MS[0] * 0.001 * sr,
-            CHORUS_MS[1] * 0.001 * sr,
-            CHORUS_MS[2] * 0.001 * sr,
-            CHORUS_MS[3] * 0.001 * sr,
-            CHORUS_MS[4] * 0.001 * sr,
-        ];
-        let chorus_depth = (0.8 + 1.8 * calliope) * 0.001 * sr;
-        let waltz_depth = 0.65 * waltz;
-        let pipe_d = (1.0 / PIPE_HZ) * sr;
-        let pipe_fb_amt = 0.50 + 0.40 * organ;
+    let drive_pos = 1.0 + 3.0 * tube;
+    let drive_neg = 1.0 + 1.5 * tube;
 
-        let drive_pos = 1.0 + 3.0 * tube;
-        let drive_neg = 1.0 + 1.5 * tube;
+    let chorus_gain: f64 = 1.0 / 5.0;
 
-        let chorus_gain: f64 = 1.0 / 5.0;
+    CHORUS_DL.with_mut(|chorus_dl| {
+        CHORUS_LFO.with_mut(|chorus_lfo| {
+            WALTZ_LFO.with_mut(|waltz_lfo| {
+                PIPE_DL.with_mut(|pipe_dl| {
+                    PIPE_FB.with_mut(|pipe_fb| {
+                        PIPE_LP.with_mut(|pipe_lp| {
+                            for k in 0..5 {
+                                chorus_lfo[k].init(sr, CHORUS_LFO_HZ[k]);
+                            }
+                            waltz_lfo.init(sr, WALTZ_HZ);
+                            waltz_lfo.set_waveform(Waveform::Triangle);
 
-        for f in 0..ctx.frames() {
-            let cm: [f64; 5] = [
-                CHORUS_LFO[0].tick(),
-                CHORUS_LFO[1].tick(),
-                CHORUS_LFO[2].tick(),
-                CHORUS_LFO[3].tick(),
-                CHORUS_LFO[4].tick(),
-            ];
-            let w_tri = WALTZ_LFO.tick();
-            let waltz_mod = (1.0 - waltz_depth) + waltz_depth * w_tri.abs();
+                            for ch in 0..nch {
+                                pipe_lp[ch].set_coeffs(pipe_lpc);
+                            }
 
-            for ch in 0..nch {
-                let dry = ctx.input(ch, f) as f64;
+                            for f in 0..ctx.frames() {
+                                let cm: [f64; 5] = [
+                                    chorus_lfo[0].tick(),
+                                    chorus_lfo[1].tick(),
+                                    chorus_lfo[2].tick(),
+                                    chorus_lfo[3].tick(),
+                                    chorus_lfo[4].tick(),
+                                ];
+                                let w_tri = waltz_lfo.tick();
+                                let waltz_mod = (1.0 - waltz_depth) + waltz_depth * w_tri.abs();
 
-                let mut chorus_sum: f64 = 0.0;
-                for k in 0..5 {
-                    let mut d = chorus_base[k] + cm[k] * chorus_depth;
-                    if d < 1.0 {
-                        d = 1.0;
-                    }
-                    CHORUS_DL[ch][k].write(dry as f32);
-                    chorus_sum += CHORUS_DL[ch][k].read(d) as f64;
-                }
-                chorus_sum *= chorus_gain;
+                                for ch in 0..nch {
+                                    let dry = ctx.input(ch, f) as f64;
 
-                let pulsed = chorus_sum * waltz_mod;
+                                    let mut chorus_sum: f64 = 0.0;
+                                    for k in 0..5 {
+                                        let mut d = chorus_base[k] + cm[k] * chorus_depth;
+                                        if d < 1.0 {
+                                            d = 1.0;
+                                        }
+                                        chorus_dl[ch][k].write(dry as f32);
+                                        chorus_sum += chorus_dl[ch][k].read(d) as f64;
+                                    }
+                                    chorus_sum *= chorus_gain;
 
-                let f_in = PIPE_LP[ch].process_sample(PIPE_FB[ch]);
-                PIPE_DL[ch].write((pulsed + pipe_fb_amt * f_in) as f32);
-                PIPE_FB[ch] = PIPE_DL[ch].read(pipe_d) as f64;
+                                    let pulsed = chorus_sum * waltz_mod;
 
-                let x = pulsed + PIPE_FB[ch] * 0.6;
-                let wet = if x >= 0.0 {
-                    (x * drive_pos).tanh() / drive_pos
-                } else {
-                    (x * drive_neg).tanh() / drive_neg
-                };
+                                    let f_in = pipe_lp[ch].process_sample(pipe_fb[ch]);
+                                    pipe_dl[ch].write((pulsed + pipe_fb_amt * f_in) as f32);
+                                    pipe_fb[ch] = pipe_dl[ch].read(pipe_d) as f64;
 
-                ctx.set_output(ch, f, (dry * (1.0 - mx) + wet * mx) as f32);
-            }
-        }
-    }
+                                    let x = pulsed + pipe_fb[ch] * 0.6;
+                                    let wet = if x >= 0.0 {
+                                        (x * drive_pos).tanh() / drive_pos
+                                    } else {
+                                        (x * drive_neg).tanh() / drive_neg
+                                    };
+
+                                    ctx.set_output(ch, f, (dry * (1.0 - mx) + wet * mx) as f32);
+                                }
+                            }
+                        });
+                    });
+                });
+            });
+        });
+    });
 }

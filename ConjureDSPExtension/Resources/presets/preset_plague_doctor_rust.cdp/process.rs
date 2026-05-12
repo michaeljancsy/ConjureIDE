@@ -16,13 +16,6 @@
 //   PRESENCE (pct) — midrange presence peak gain
 //   MIX            — wet/dry blend
 
-// Suppresses static_mut_refs (deny under edition 2024) for this preset.
-// The DSP holds several Lfo/Biquad/DelayLine statics whose methods take
-// &mut self; converting each call site to PersistBuf::with_mut is mechanical
-// but verbose for a preset that compiles + runs correctly under WASM (single-
-// threaded; no aliasing risk). Reconsider if the lint catches a real bug.
-#![allow(static_mut_refs)]
-
 use conjuredsp::*;
 params! {
     MASK = pct().default(65.0),
@@ -36,64 +29,69 @@ const FORMANT_HZ: [f64; 3] = [250.0, 700.0, 2200.0];
 const BREATH_HZ: f64 = 0.3;
 const PRESENCE_HZ: f64 = 1200.0;
 
-static mut FORMANT: [[Biquad; 3]; 2] = [[Biquad::new(); 3]; 2];
-static mut PRESENCE_F: [Biquad; 2] = [Biquad::new(); 2];
-static mut BREATH_LFO: Lfo = Lfo::new();
+persist_buf!(FORMANT: [[Biquad; 3]; 2] = [[Biquad::new(); 3]; 2]);
+persist_buf!(PRESENCE_F: [Biquad; 2] = [Biquad::new(); 2]);
+persist_buf!(BREATH_LFO: Lfo = Lfo::new());
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
-    unsafe {
-        let mask = ctx.param(MASK) as f64 / 100.0;
-        let breath = ctx.param(BREATH) as f64 / 100.0;
-        let rasp = ctx.param(RASP) as f64 / 100.0;
-        let presence = ctx.param(PRESENCE) as f64 / 100.0;
-        let mx = ctx.param(MIX) as f64;
+    let mask = ctx.param(MASK) as f64 / 100.0;
+    let breath = ctx.param(BREATH) as f64 / 100.0;
+    let rasp = ctx.param(RASP) as f64 / 100.0;
+    let presence = ctx.param(PRESENCE) as f64 / 100.0;
+    let mx = ctx.param(MIX) as f64;
 
-        let formant_gain = 4.0 + 8.0 * mask;
-        let formant_c: [BiquadCoeffs; 3] = [
-            BiquadCoeffs::peak(FORMANT_HZ[0], 4.0, formant_gain, sr),
-            BiquadCoeffs::peak(FORMANT_HZ[1], 4.0, formant_gain, sr),
-            BiquadCoeffs::peak(FORMANT_HZ[2], 4.0, formant_gain, sr),
-        ];
-        let presence_gain = 2.0 + 6.0 * presence;
-        let presence_c = BiquadCoeffs::peak(PRESENCE_HZ, 2.0, presence_gain, sr);
+    let formant_gain = 4.0 + 8.0 * mask;
+    let formant_c: [BiquadCoeffs; 3] = [
+        BiquadCoeffs::peak(FORMANT_HZ[0], 4.0, formant_gain, sr),
+        BiquadCoeffs::peak(FORMANT_HZ[1], 4.0, formant_gain, sr),
+        BiquadCoeffs::peak(FORMANT_HZ[2], 4.0, formant_gain, sr),
+    ];
+    let presence_gain = 2.0 + 6.0 * presence;
+    let presence_c = BiquadCoeffs::peak(PRESENCE_HZ, 2.0, presence_gain, sr);
 
-        BREATH_LFO.init(sr, BREATH_HZ);
-        BREATH_LFO.set_waveform(Waveform::Triangle);
+    let nch = ctx.channels().min(2);
 
-        let nch = ctx.channels().min(2);
-        for ch in 0..nch {
-            for k in 0..3 {
-                FORMANT[ch][k].set_coeffs(formant_c[k]);
-            }
-            PRESENCE_F[ch].set_coeffs(presence_c);
-        }
+    let breath_depth = 0.60 * breath;
+    let drive = 1.0 + 3.5 * rasp;
 
-        let breath_depth = 0.60 * breath;
-        let drive = 1.0 + 3.5 * rasp;
+    FORMANT.with_mut(|formant| {
+        PRESENCE_F.with_mut(|presence_f| {
+            BREATH_LFO.with_mut(|breath_lfo| {
+                breath_lfo.init(sr, BREATH_HZ);
+                breath_lfo.set_waveform(Waveform::Triangle);
 
-        for f in 0..ctx.frames() {
-            let tri = BREATH_LFO.tick();
-            let env = 0.5 + 0.5 * tri;
-            let breath_mod = (1.0 - breath_depth) + breath_depth * env * env;
-
-            for ch in 0..nch {
-                let dry = ctx.input(ch, f) as f64;
-
-                let mut x = dry;
-                for k in 0..3 {
-                    x = FORMANT[ch][k].process_sample(x);
+                for ch in 0..nch {
+                    for k in 0..3 {
+                        formant[ch][k].set_coeffs(formant_c[k]);
+                    }
+                    presence_f[ch].set_coeffs(presence_c);
                 }
 
-                x = PRESENCE_F[ch].process_sample(x);
+                for f in 0..ctx.frames() {
+                    let tri = breath_lfo.tick();
+                    let env = 0.5 + 0.5 * tri;
+                    let breath_mod = (1.0 - breath_depth) + breath_depth * env * env;
 
-                x *= breath_mod;
+                    for ch in 0..nch {
+                        let dry = ctx.input(ch, f) as f64;
 
-                let wet = (x * drive).tanh() / drive;
+                        let mut x = dry;
+                        for k in 0..3 {
+                            x = formant[ch][k].process_sample(x);
+                        }
 
-                ctx.set_output(ch, f, (dry * (1.0 - mx) + wet * mx) as f32);
-            }
-        }
-    }
+                        x = presence_f[ch].process_sample(x);
+
+                        x *= breath_mod;
+
+                        let wet = (x * drive).tanh() / drive;
+
+                        ctx.set_output(ch, f, (dry * (1.0 - mx) + wet * mx) as f32);
+                    }
+                }
+            });
+        });
+    });
 }

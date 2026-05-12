@@ -16,13 +16,6 @@
 //   HALL   (pct) — reverb feedback (dark hall tail)
 //   MIX          — wet/dry blend
 
-// Falls back to raw `static mut` under the plan's Plan B (see
-// plans/an-ai-had-this-starry-moler.md). Each preset on this fallback
-// gets a per-preset `persist!()` / `persist_buf!()` migration over time;
-// the lock-in test ConjureDSPLogicTests/PresetEntryPointLockInTests carries
-// the live allow-list and removes a name as each preset gets migrated.
-#![allow(static_mut_refs)]
-
 use conjuredsp::*;
 params! {
     IMPACT = pct().default(65.0),
@@ -38,100 +31,117 @@ const AP_MS: [f64; 2] = [7.3, 11.1];
 const AP_G: f64 = 0.55;
 const COMB_MS: [f64; 2] = [113.0, 167.0];
 
-static mut ENV: [f64; 2] = [0.0; 2];
-static mut SUB_LP: [Biquad; 2] = [Biquad::new(); 2];
-static mut AP: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2];
-static mut APS: [[f64; 2]; 2] = [[0.0; 2]; 2];
-static mut COMBS: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2];
-static mut COMB_LP: [[Biquad; 2]; 2] = [[Biquad::new(); 2]; 2];
-static mut COMB_FB_BUF: [[f64; 2]; 2] = [[0.0; 2]; 2];
-static mut LCG_STATE: u64 = 0x13579BDF;
+persist_buf!(ENV: [f64; 2] = [0.0; 2]);
+persist_buf!(SUB_LP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_buf!(AP: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2]);
+persist_buf!(APS: [[f64; 2]; 2] = [[0.0; 2]; 2]);
+persist_buf!(COMBS: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2]);
+persist_buf!(COMB_LP: [[Biquad; 2]; 2] = [[Biquad::new(); 2]; 2]);
+persist_buf!(COMB_FB_BUF: [[f64; 2]; 2] = [[0.0; 2]; 2]);
+persist!(LCG_STATE: u64 = 0x13579BDF);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
-    unsafe {
-        let impact = ctx.param(IMPACT) as f64 / 100.0;
-        let patter = ctx.param(PATTER) as f64 / 100.0;
-        let subpad = ctx.param(SUBPAD) as f64 / 100.0;
-        let hall = ctx.param(HALL) as f64 / 100.0;
-        let mx = ctx.param(MIX) as f64;
+    let impact = ctx.param(IMPACT) as f64 / 100.0;
+    let patter = ctx.param(PATTER) as f64 / 100.0;
+    let subpad = ctx.param(SUBPAD) as f64 / 100.0;
+    let hall = ctx.param(HALL) as f64 / 100.0;
+    let mx = ctx.param(MIX) as f64;
 
-        let sub_lpc = BiquadCoeffs::lowpass(80.0, 0.707, sr);
-        let comb_lpc = BiquadCoeffs::lowpass(1800.0, 0.707, sr);
-        let nch = ctx.channels().min(2);
-        for ch in 0..nch {
-            SUB_LP[ch].set_coeffs(sub_lpc);
-            for k in 0..2 {
-                COMB_LP[ch][k].set_coeffs(comb_lpc);
-            }
-        }
+    let sub_lpc = BiquadCoeffs::lowpass(80.0, 0.707, sr);
+    let comb_lpc = BiquadCoeffs::lowpass(1800.0, 0.707, sr);
+    let nch = ctx.channels().min(2);
 
-        let attack_alpha = 1.0 - (-1.0 / (0.002 * sr)).exp();
-        let release_alpha = 1.0 - (-1.0 / (0.080 * sr)).exp();
+    let attack_alpha = 1.0 - (-1.0 / (0.002 * sr)).exp();
+    let release_alpha = 1.0 - (-1.0 / (0.080 * sr)).exp();
 
-        let ap_d: [f64; 2] = [
-            (AP_MS[0] * 0.001 * sr).max(1.0),
-            (AP_MS[1] * 0.001 * sr).max(1.0),
-        ];
-        let comb_d: [f64; 2] = [
-            COMB_MS[0] * 0.001 * sr,
-            COMB_MS[1] * 0.001 * sr,
-        ];
-        let comb_fb_amt = 0.55 + 0.30 * hall;
+    let ap_d: [f64; 2] = [
+        (AP_MS[0] * 0.001 * sr).max(1.0),
+        (AP_MS[1] * 0.001 * sr).max(1.0),
+    ];
+    let comb_d: [f64; 2] = [
+        COMB_MS[0] * 0.001 * sr,
+        COMB_MS[1] * 0.001 * sr,
+    ];
+    let comb_fb_amt = 0.55 + 0.30 * hall;
 
-        let thresh = 0.02 + 0.25 * (1.0 - patter);
-        let hail_gain = 2.0 + 4.0 * impact;
-        let sub_gain = 0.6 + 1.4 * subpad;
+    let thresh = 0.02 + 0.25 * (1.0 - patter);
+    let hail_gain = 2.0 + 4.0 * impact;
+    let sub_gain = 0.6 + 1.4 * subpad;
 
-        for f in 0..ctx.frames() {
-            LCG_STATE = (LCG_STATE.wrapping_mul(1103515245).wrapping_add(12345)) & 0x7FFFFFFF;
-            let noise = (LCG_STATE as f64 / 2147483647.0) * 2.0 - 1.0;
+    let mut lcg_state = LCG_STATE.get();
 
-            for ch in 0..nch {
-                let dry = ctx.input(ch, f) as f64;
+    ENV.with_mut(|env_buf| {
+        SUB_LP.with_mut(|sub_lp| {
+            AP.with_mut(|ap| {
+                APS.with_mut(|aps| {
+                    COMBS.with_mut(|combs| {
+                        COMB_LP.with_mut(|comb_lp| {
+                            COMB_FB_BUF.with_mut(|comb_fb_buf| {
+                                for ch in 0..nch {
+                                    sub_lp[ch].set_coeffs(sub_lpc);
+                                    for k in 0..2 {
+                                        comb_lp[ch][k].set_coeffs(comb_lpc);
+                                    }
+                                }
 
-                let absx = dry.abs();
-                if absx > ENV[ch] {
-                    ENV[ch] += (absx - ENV[ch]) * attack_alpha;
-                } else {
-                    ENV[ch] += (absx - ENV[ch]) * release_alpha;
-                }
-                let env = ENV[ch];
+                                for f in 0..ctx.frames() {
+                                    lcg_state = (lcg_state.wrapping_mul(1103515245).wrapping_add(12345)) & 0x7FFFFFFF;
+                                    let noise = (lcg_state as f64 / 2147483647.0) * 2.0 - 1.0;
 
-                let hail = if env > thresh {
-                    noise * env * hail_gain
-                } else {
-                    0.0
-                };
+                                    for ch in 0..nch {
+                                        let dry = ctx.input(ch, f) as f64;
 
-                let sub_voice = SUB_LP[ch].process_sample(absx) * sub_gain;
+                                        let absx = dry.abs();
+                                        if absx > env_buf[ch] {
+                                            env_buf[ch] += (absx - env_buf[ch]) * attack_alpha;
+                                        } else {
+                                            env_buf[ch] += (absx - env_buf[ch]) * release_alpha;
+                                        }
+                                        let env = env_buf[ch];
 
-                let mut sig = hail + sub_voice * 0.3;
-                for k in 0..2 {
-                    let vd = APS[ch][k];
-                    let vn = sig + AP_G * vd;
-                    AP[ch][k].write(vn as f32);
-                    APS[ch][k] = AP[ch][k].read(ap_d[k]) as f64;
-                    sig = vd - AP_G * vn;
-                }
+                                        let hail = if env > thresh {
+                                            noise * env * hail_gain
+                                        } else {
+                                            0.0
+                                        };
 
-                let mut tail_sum: f64 = 0.0;
-                for k in 0..2 {
-                    let f_in = COMB_LP[ch][k].process_sample(COMB_FB_BUF[ch][k]);
-                    COMBS[ch][k].write((sig + comb_fb_amt * f_in) as f32);
-                    COMB_FB_BUF[ch][k] = COMBS[ch][k].read(comb_d[k]) as f64;
-                    tail_sum += COMB_FB_BUF[ch][k];
-                }
-                tail_sum *= 0.5;
+                                        let sub_voice = sub_lp[ch].process_sample(absx) * sub_gain;
 
-                let env_scaled = env * 3.0;
-                let env_clamped = if env_scaled > 1.0 { 1.0 } else { env_scaled };
-                let gate_amt = 0.25 + 0.75 * env_clamped;
-                let wet = hail + sub_voice + tail_sum * gate_amt;
+                                        let mut sig = hail + sub_voice * 0.3;
+                                        for k in 0..2 {
+                                            let vd = aps[ch][k];
+                                            let vn = sig + AP_G * vd;
+                                            ap[ch][k].write(vn as f32);
+                                            aps[ch][k] = ap[ch][k].read(ap_d[k]) as f64;
+                                            sig = vd - AP_G * vn;
+                                        }
 
-                ctx.set_output(ch, f, (dry * (1.0 - mx) + wet * mx) as f32);
-            }
-        }
-    }
+                                        let mut tail_sum: f64 = 0.0;
+                                        for k in 0..2 {
+                                            let f_in = comb_lp[ch][k].process_sample(comb_fb_buf[ch][k]);
+                                            combs[ch][k].write((sig + comb_fb_amt * f_in) as f32);
+                                            comb_fb_buf[ch][k] = combs[ch][k].read(comb_d[k]) as f64;
+                                            tail_sum += comb_fb_buf[ch][k];
+                                        }
+                                        tail_sum *= 0.5;
+
+                                        let env_scaled = env * 3.0;
+                                        let env_clamped = if env_scaled > 1.0 { 1.0 } else { env_scaled };
+                                        let gate_amt = 0.25 + 0.75 * env_clamped;
+                                        let wet = hail + sub_voice + tail_sum * gate_amt;
+
+                                        ctx.set_output(ch, f, (dry * (1.0 - mx) + wet * mx) as f32);
+                                    }
+                                }
+                            });
+                        });
+                    });
+                });
+            });
+        });
+    });
+
+    LCG_STATE.set(lcg_state);
 }

@@ -95,33 +95,29 @@ struct PresetEntryPointLockInTests {
         // reviewer sign-off — they're an explicit step backward from
         // the modernization goal.
         let bypassAllowList: Set<String> = [
-            "preset_acid_sermon_rust", "preset_alien_radio_rust",
-            "preset_astronauts_garden_rust",
-            "preset_black_hole_vespers_rust", "preset_broken_fax_lullaby_rust",
-            "preset_burial_at_sea_rust", "preset_chorus_rust",
-            "preset_dying_star_rust",
-            "preset_eq3_rust", "preset_flanger_rust",
-            "preset_geiger_bells_rust", "preset_ghost_choir_rust",
-            "preset_glass_smash_rust", "preset_hailstorm_lullaby_rust",
-            "preset_haunted_cathedral_rust", "preset_last_transmission_rust",
-            "preset_lookahead_limiter_rust",
-            "preset_methane_sea_rust", "preset_mockingbird_at_night_rust",
-            "preset_morphine_drip_rust", "preset_mothlight_rust",
-            "preset_permafrost_dream_rust", "preset_phaser_rust",
-            "preset_plague_doctor_rust",
-            "preset_rusted_carousel_rust",
-            "preset_sunbaked_cassette_rust",
-            "preset_termite_cathedral_rust",
-            "preset_tin_can_telephone_rust", "preset_underwater_spy_rust",
-            "preset_wah_rust", "preset_whalebone_organ_rust",
-            "preset_deesser_rust",
             // Migrated to persist! / persist_buf!:
-            //   preset_bitcrush_rust, preset_compressor_rust,
-            //   preset_compressor_sidechain_rust, preset_dcblocker_rust,
-            //   preset_delay_rust, preset_lowpass_rust, preset_pingpong_rust,
-            //   preset_svf_rust, preset_telemetry_smoke, preset_tremolo_rust
-            //   (plus the prior wave: preset_limiter_rust, preset_noisegate_rust,
-            //   preset_ringmod_rust, preset_whitenoise_rust)
+            //   preset_acid_sermon_rust, preset_alien_radio_rust,
+            //   preset_astronauts_garden_rust, preset_bitcrush_rust,
+            //   preset_black_hole_vespers_rust, preset_broken_fax_lullaby_rust,
+            //   preset_burial_at_sea_rust, preset_chorus_rust,
+            //   preset_compressor_rust, preset_compressor_sidechain_rust,
+            //   preset_dcblocker_rust, preset_deesser_rust, preset_delay_rust,
+            //   preset_dying_star_rust, preset_eq3_rust, preset_flanger_rust,
+            //   preset_geiger_bells_rust, preset_ghost_choir_rust,
+            //   preset_glass_smash_rust, preset_hailstorm_lullaby_rust,
+            //   preset_haunted_cathedral_rust, preset_last_transmission_rust,
+            //   preset_limiter_rust, preset_lookahead_limiter_rust,
+            //   preset_lowpass_rust, preset_methane_sea_rust,
+            //   preset_mockingbird_at_night_rust, preset_morphine_drip_rust,
+            //   preset_mothlight_rust, preset_noisegate_rust,
+            //   preset_permafrost_dream_rust, preset_phaser_rust,
+            //   preset_pingpong_rust, preset_plague_doctor_rust,
+            //   preset_ringmod_rust, preset_rusted_carousel_rust,
+            //   preset_sunbaked_cassette_rust, preset_svf_rust,
+            //   preset_telemetry_smoke, preset_termite_cathedral_rust,
+            //   preset_tin_can_telephone_rust, preset_tremolo_rust,
+            //   preset_underwater_spy_rust, preset_wah_rust,
+            //   preset_whalebone_organ_rust, preset_whitenoise_rust
         ]
 
         for entry in entries where entry.pathExtension == "cdp" {
