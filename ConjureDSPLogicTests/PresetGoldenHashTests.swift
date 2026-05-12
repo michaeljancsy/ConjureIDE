@@ -6,8 +6,7 @@
 //  See plans/an-ai-had-this-starry-moler.md.
 //
 //  Pre-migration: capture goldens (one-time). Post-migration: every
-//  preset's hash must still match (or be within ULP tolerance — see the
-//  step-5 verification logic).
+//  preset's hash must still match bit-for-bit.
 //
 //  These tests compile all 54 factory Rust presets via the bundled rustc
 //  (~100s end to end), so they're gated behind `RUN_GOLDEN_HASH_TESTS=1`.
