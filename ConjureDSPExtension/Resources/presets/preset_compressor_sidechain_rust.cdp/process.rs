@@ -12,8 +12,6 @@
 //   4 (Makeup):    Makeup gain — 0 to 20 dB
 
 use conjuredsp::*;
-setup!();
-
 params! {
     THRESHOLD = db().min(-40.0).max(-3.0).default(-20.0),
     RATIO = ratio().min(2.0).max(20.0).default(4.0),
@@ -35,15 +33,7 @@ static mut ENVELOPE: f64 = 0.0;
 // Per-block GR scratch for vector telemetry.
 static mut GR_SCRATCH: [f32; MAX_FR] = [0.0; MAX_FR];
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

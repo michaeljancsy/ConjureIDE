@@ -10,8 +10,6 @@
 //   1 (Resonance): Resonance Q — 0.5 to 10.0
 
 use conjuredsp::*;
-setup!();
-
 params! {
     CUTOFF = freq(),
     RESONANCE = param(0.5, 10.0).default(1.0).unit("Q"),
@@ -24,15 +22,7 @@ const MODE: usize = 0; // 0=LP, 1=HP, 2=BP, 3=Notch
 static mut IC1EQ: [f64; MAX_CH] = [0.0; MAX_CH];
 static mut IC2EQ: [f64; MAX_CH] = [0.0; MAX_CH];
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

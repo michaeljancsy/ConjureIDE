@@ -12,8 +12,6 @@
 //   MIX           — wet/dry blend
 
 use conjuredsp::*;
-setup!();
-
 params! {
     WOW = time_ms().min(0.0).max(6.0).default(3.0),
     FLUTTER = time_ms().min(0.0).max(3.0).default(1.2),
@@ -43,12 +41,7 @@ static mut COMB_FB: [f64; 2] = [0.0; 2];
 static mut LFO_WOW: Lfo = Lfo::new();
 static mut LFO_FLUTTER: Lfo = Lfo::new();
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

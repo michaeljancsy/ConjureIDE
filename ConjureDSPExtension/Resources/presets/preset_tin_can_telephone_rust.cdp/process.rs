@@ -17,8 +17,6 @@
 //   MIX           — wet/dry blend
 
 use conjuredsp::*;
-setup!();
-
 params! {
     CAN = pct().default(65.0),
     STRING = pct().default(50.0),
@@ -43,12 +41,7 @@ fn asym_clip(x: f64, drive: f64) -> f64 {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

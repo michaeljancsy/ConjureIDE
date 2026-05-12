@@ -11,8 +11,6 @@
 //   2 (Mix):      Dry/wet mix — 0.0 to 1.0
 
 use conjuredsp::*;
-setup!();
-
 const MAX_DELAY: usize = 48000;
 
 params! {
@@ -25,22 +23,13 @@ params! {
 static mut DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH];
 static mut WRITE_POS: usize = 0;
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
-
+process! { ctx =>
     unsafe {
         let delay_ms = ctx.param(TIME);
         let feedback = ctx.param(FEEDBACK);
         let mix = ctx.param(MIX);
 
-        let mut delay_samples = (delay_ms * 0.001 * sample_rate) as usize;
+        let mut delay_samples = (delay_ms * 0.001 * ctx.sample_rate()) as usize;
         if delay_samples >= MAX_DELAY {
             delay_samples = MAX_DELAY - 1;
         }

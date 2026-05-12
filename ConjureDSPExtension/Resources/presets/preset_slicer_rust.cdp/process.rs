@@ -10,8 +10,6 @@
 //   0 (Rate): Chunk length — 10 to 500 ms
 
 use conjuredsp::*;
-setup!();
-
 const MAX_CHUNK: usize = 19200;
 
 params! {
@@ -24,19 +22,10 @@ static mut BUF_B: [[f32; MAX_CHUNK]; MAX_CH] = [[0.0; MAX_CHUNK]; MAX_CH];
 static mut RECORDING_A: bool = true; // true = recording to A, playing from B
 static mut WRITE_POS: usize = 0;
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
-
+process! { ctx =>
     unsafe {
         let chunk_ms = ctx.param(RATE);
-        let mut chunk_size = (chunk_ms * 0.001 * sample_rate) as usize;
+        let mut chunk_size = (chunk_ms * 0.001 * ctx.sample_rate()) as usize;
         if chunk_size > MAX_CHUNK {
             chunk_size = MAX_CHUNK;
         }

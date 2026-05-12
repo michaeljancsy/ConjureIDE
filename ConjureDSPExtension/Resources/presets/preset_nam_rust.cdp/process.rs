@@ -1,7 +1,5 @@
 use conjuredsp::*;
 
-setup!();
-
 // Fender Super Reverb 1977
 // https://www.tone3000.com/tones/fender-super-reverb-1977-19
 //
@@ -25,15 +23,7 @@ params! {
 /// Runs a downloaded NAM tone model (guitar amp, pedal, or full rig
 /// emulation) on the input signal. Use the Tones browser to download
 /// models from tone3000.com, then update the nam!() path above.
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     unsafe {
         let gain = db_to_gain(ctx.param(INPUT_GAIN) as f64) as f32;
         let mix_val = ctx.param(MIX);

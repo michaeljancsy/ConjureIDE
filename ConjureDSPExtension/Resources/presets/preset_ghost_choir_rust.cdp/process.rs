@@ -14,8 +14,6 @@
 //   MIX           — wet/dry blend
 
 use conjuredsp::*;
-setup!();
-
 params! {
     VOICES = time_ms().min(0.5).max(6.0).default(2.5),
     AIR = freq().min(1500.0).max(6000.0).default(3500.0),
@@ -56,12 +54,7 @@ static mut LFO_CHORUS: [Lfo; 8] = [Lfo::new(); 8];
 static mut LFO_COMBS: [Lfo; 4] = [Lfo::new(); 4];
 static mut LFO_TREM: Lfo = Lfo::new();
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

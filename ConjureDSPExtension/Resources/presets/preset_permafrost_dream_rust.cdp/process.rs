@@ -18,8 +18,6 @@
 //   MIX           — wet/dry blend
 
 use conjuredsp::*;
-setup!();
-
 params! {
     ICE = pct().default(70.0),
     SHIMMER = pct().default(55.0),
@@ -44,12 +42,7 @@ static mut HP: [Biquad; 2] = [Biquad::new(); 2];
 static mut GRAIN_PHASE: f64 = 0.0;
 static mut BREATH_LFO: Lfo = Lfo::new();
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

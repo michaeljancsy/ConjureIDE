@@ -7,8 +7,6 @@
 //   0 (Cutoff): Cutoff frequency — 20 to 20000 Hz (log curve)
 
 use conjuredsp::*;
-setup!();
-
 params! {
     CUTOFF = freq(),
 }
@@ -17,15 +15,7 @@ params! {
 // Use f64 to match Python's float64 precision in the feedback loop.
 static mut PREV_OUT: [f64; MAX_CH] = [0.0; MAX_CH];
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
     let two_pi = 2.0 * core::f64::consts::PI;
 

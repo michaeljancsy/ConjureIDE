@@ -12,8 +12,6 @@
 //   MIX          — wet/dry blend
 
 use conjuredsp::*;
-setup!();
-
 params! {
     DEPTH = freq().min(300.0).max(2000.0).default(900.0),
     BUBBLE = time_ms().min(0.5).max(8.0).default(3.0),
@@ -49,12 +47,7 @@ static mut LFO_VIB: Lfo = Lfo::new();
 static mut LFOS_CH: [Lfo; 4] = [Lfo::new(); 4];
 static mut LFO_TREM: Lfo = Lfo::new();
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

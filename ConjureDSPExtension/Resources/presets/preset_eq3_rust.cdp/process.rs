@@ -13,8 +13,6 @@
 //   5 (High Bypass): Bypass high band — 0 = active, 1 = bypass
 
 use conjuredsp::*;
-setup!();
-
 params! {
     LOW_GAIN = db().min(-12.0).max(12.0),
     MID_GAIN = db().min(-12.0).max(12.0),
@@ -35,15 +33,7 @@ static mut LOW: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH];
 static mut MID: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH];
 static mut HIGH: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH];
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

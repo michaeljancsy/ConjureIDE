@@ -14,8 +14,6 @@
 //   5 (Release):   Envelope release time — 10 to 200 ms (log)
 
 use conjuredsp::*;
-setup!();
-
 params! {
     FREQUENCY = freq().min(2000.0).max(12000.0).default(6000.0),
     Q = param(0.5, 5.0).default(1.5),
@@ -31,15 +29,7 @@ static mut SC_FILTERS: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH];
 // Envelope follower
 static mut ENVELOPE: f64 = 0.0;
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

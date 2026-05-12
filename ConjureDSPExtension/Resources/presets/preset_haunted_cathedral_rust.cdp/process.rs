@@ -1,7 +1,5 @@
 
 use conjuredsp::*;
-setup!();
-
 params! {
     DECAY = pct().default(85.0),
     DARKNESS = freq().min(200.0).max(16000.0).default(1800.0),
@@ -26,12 +24,7 @@ static mut APS: [[f64; 2]; 2] = [[0.0; 2]; 2];
 static mut HP: [Biquad; 2] = [Biquad::new(); 2];
 static mut LFOS: [Lfo; 4] = [Lfo::new(); 4];
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

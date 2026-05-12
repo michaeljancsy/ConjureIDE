@@ -18,8 +18,6 @@
 //   MIX            — wet/dry blend
 
 use conjuredsp::*;
-setup!();
-
 params! {
     CALLIOPE = pct().default(60.0),
     WALTZ = pct().default(55.0),
@@ -42,12 +40,7 @@ static mut PIPE_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2];
 static mut PIPE_FB: [f64; 2] = [0.0; 2];
 static mut PIPE_LP: [Biquad; 2] = [Biquad::new(); 2];
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

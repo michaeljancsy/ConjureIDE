@@ -14,8 +14,6 @@
 //   COLLAPSE_SYNC (choice) — beat-locked decay envelope on the closing lowpass
 
 use conjuredsp::*;
-setup!();
-
 const SYNC_LABELS: &[&str] = &["Free", "1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars"];
 
 params! {
@@ -59,12 +57,7 @@ static mut CLOSE_LP: [f64; 2] = [0.0; 2];
 static mut RING: [Biquad; 2] = [Biquad::new(); 2];
 static mut GRAIN_PHASE: f64 = 0.0;
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

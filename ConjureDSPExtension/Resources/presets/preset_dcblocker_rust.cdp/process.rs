@@ -10,8 +10,6 @@
 //   0 (Cutoff): High-pass cutoff — 4 to 70 Hz
 
 use conjuredsp::*;
-setup!();
-
 params! {
     CUTOFF = freq().min(4.0).max(70.0).default(4.0),
 }
@@ -22,18 +20,9 @@ params! {
 static mut PREV_X: [f64; MAX_CH] = [0.0; MAX_CH];
 static mut PREV_Y: [f64; MAX_CH] = [0.0; MAX_CH];
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
-
+process! { ctx =>
     let cutoff_hz = ctx.param(CUTOFF) as f64;
-    let r = (-2.0 * core::f64::consts::PI * cutoff_hz / (sample_rate as f64)).exp();
+    let r = (-2.0 * core::f64::consts::PI * cutoff_hz / (ctx.sample_rate() as f64)).exp();
 
     unsafe {
         for c in 0..ctx.channels() {

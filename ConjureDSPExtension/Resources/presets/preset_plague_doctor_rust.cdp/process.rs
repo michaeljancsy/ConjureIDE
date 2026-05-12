@@ -17,8 +17,6 @@
 //   MIX            — wet/dry blend
 
 use conjuredsp::*;
-setup!();
-
 params! {
     MASK = pct().default(65.0),
     BREATH = pct().default(55.0),
@@ -35,12 +33,7 @@ static mut FORMANT: [[Biquad; 3]; 2] = [[Biquad::new(); 3]; 2];
 static mut PRESENCE_F: [Biquad; 2] = [Biquad::new(); 2];
 static mut BREATH_LFO: Lfo = Lfo::new();
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

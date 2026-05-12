@@ -94,15 +94,18 @@ enum BufferMode {
 /// Audio data is copied into/out of WASM linear memory each render callback.
 ///
 /// The WASM `process` function signature:
-///   `(input_ptr: i32, output_ptr: i32, channel_count: i32, frame_count: i32, sample_rate: f32) -> ()`
+///   `() -> ()`
 ///
-/// Memory layout at input_ptr / output_ptr:
-///   Channels laid out sequentially, each `frame_count` floats.
+/// Per-block scalars (frame_count, channel_count, sample_rate) travel
+/// through a shared `BLOCK_INFO_BUF` written by the host before each
+/// call, addressed by the module's `get_block_info_ptr()` export. The
+/// audio buffers themselves are addressed by `get_input_ptr()` /
+/// `get_output_ptr()` — channel-sequential, each `frame_count` floats:
 ///   `[ch0_f0, ch0_f1, ..., ch1_f0, ch1_f1, ...]`
 ///
-/// Compiled modules (Rust/C targeting wasm32-wasip1) should export `get_input_ptr()` and
-/// `get_output_ptr()` functions that return the addresses of pre-allocated static buffers.
-/// This avoids memory layout conflicts with the compiler's stack/heap.
+/// Compiled modules (Rust/C targeting wasm32-wasip1) emit all of these
+/// via the `setup!()` macro (subsumed by `process!()`); the host writes
+/// into them rather than passing pointers through register args.
 /// Host-side state accessible from WASM import functions via `Caller<'_, HostState>`.
 pub struct HostState {
     /// Native NAM models for host-side inference (avoids running NAM inside WASM sandbox).
@@ -116,7 +119,7 @@ pub struct HostState {
 pub struct WasmBackend {
     store: Store<HostState>,
     memory: Memory,
-    process_fn: TypedFunc<(i32, i32, i32, i32, f32), ()>,
+    process_fn: TypedFunc<(), ()>,
     get_input_ptr_fn: Option<TypedFunc<(), i32>>,
     get_output_ptr_fn: Option<TypedFunc<(), i32>>,
     get_params_ptr_fn: Option<TypedFunc<(), i32>>,
@@ -126,6 +129,13 @@ pub struct WasmBackend {
     output_offset: i32,
     params_offset: i32,
     transport_offset: i32,
+    /// Offset of the script's `BLOCK_INFO_BUF: BlockInfo` in WASM linear
+    /// memory, resolved once via `get_block_info_ptr` at load time. The
+    /// host writes `{frame_count, channel_count, sample_rate}` here
+    /// before every `process()` call — the zero-arg `process!` macro
+    /// reads them back. All currently-supported modules emit this
+    /// buffer via `setup!()`; loads fail when the export is missing.
+    block_info_offset: i32,
     channel_count: usize,
     max_frames: u32,
     fuel_per_callback: u64,
@@ -209,11 +219,12 @@ impl WasmBackend {
     ///
     /// The module must export:
     /// - `memory`: linear memory
-    /// - `process(i32, i32, i32, i32, f32) -> ()`: DSP function
-    ///
-    /// Optionally, the module may export:
-    /// - `get_input_ptr() -> i32`: returns address of pre-allocated input buffer
-    /// - `get_output_ptr() -> i32`: returns address of pre-allocated output buffer
+    /// - `process() -> ()`: DSP function (zero-arg; reads block scalars from
+    ///   the shared `BLOCK_INFO_BUF`)
+    /// - `get_input_ptr() -> i32`, `get_output_ptr() -> i32`: addresses of
+    ///   pre-allocated audio buffers
+    /// - `get_block_info_ptr() -> i32`: address of the `BlockInfo` struct
+    ///   the host writes before each call.
     ///
     /// WASI preview1 imports are automatically stubbed for compiled modules.
     pub fn load(wasm_bytes: &[u8]) -> Result<Self, String> {
@@ -245,7 +256,7 @@ impl WasmBackend {
             .ok_or_else(|| "Module does not export 'memory'".to_string())?;
 
         let process_fn = instance
-            .get_typed_func::<(i32, i32, i32, i32, f32), ()>(&mut store, "process")
+            .get_typed_func::<(), ()>(&mut store, "process")
             .map_err(|e| format!("Module does not export a valid 'process' function: {}", e))?;
 
         // Detect module-allocated buffers
@@ -261,6 +272,20 @@ impl WasmBackend {
         let get_transport_ptr_fn = instance
             .get_typed_func::<(), i32>(&mut store, "get_transport_ptr")
             .ok();
+        // Required: every module compiled against the current conjuredsp
+        // crate emits BLOCK_INFO_BUF + get_block_info_ptr via setup!().
+        // The host writes block scalars (frame_count, channel_count,
+        // sample_rate) here before each process() call; the zero-arg
+        // process!-emitted entry point reads them back.
+        let block_info_offset = instance
+            .get_typed_func::<(), i32>(&mut store, "get_block_info_ptr")
+            .map_err(|e| format!(
+                "Module does not export 'get_block_info_ptr'. Recompile against \
+                 a current conjuredsp crate (one that uses process! / setup!): {}",
+                e
+            ))?
+            .call(&mut store, ())
+            .map_err(|e| format!("get_block_info_ptr trapped: {}", e))?;
 
         let buffer_mode =
             if get_input_ptr_fn.is_some() && get_output_ptr_fn.is_some() {
@@ -474,6 +499,7 @@ impl WasmBackend {
             output_offset: 0,
             params_offset: 0,
             transport_offset: 0,
+            block_info_offset,
             channel_count: 0,
             max_frames: 0,
             fuel_per_callback,
@@ -1397,17 +1423,27 @@ impl Backend for WasmBackend {
             }
         }
 
-        // Call the WASM process function
-        let result = self.process_fn.call(
-            &mut self.store,
-            (
-                self.input_offset,
-                self.output_offset,
-                channel_count as i32,
-                frame_count as i32,
-                sample_rate as f32,
-            ),
-        );
+        // Write BLOCK_INFO_BUF (frame_count u32, channel_count u32,
+        // sample_rate f32) before each process() call. The zero-arg
+        // process!-emitted entry point reads these back from linear
+        // memory to populate ctx.{frames(), channels(), sample_rate()}.
+        let block_info = conjuredsp::BlockInfo {
+            frame_count: frame_count as u32,
+            channel_count: channel_count as u32,
+            sample_rate: sample_rate as f32,
+        };
+        let bi_offset = self.block_info_offset as usize;
+        let bi_size = core::mem::size_of::<conjuredsp::BlockInfo>();
+        if bi_offset + bi_size <= mem_data.len() {
+            let src_bytes = core::slice::from_raw_parts(
+                &block_info as *const conjuredsp::BlockInfo as *const u8,
+                bi_size,
+            );
+            mem_data[bi_offset..bi_offset + bi_size].copy_from_slice(src_bytes);
+        }
+
+        // Call the WASM process function (zero-arg ABI; scalars travel via BLOCK_INFO_BUF)
+        let result = self.process_fn.call(&mut self.store, ());
 
         if let Err(e) = result {
             self.last_error = Some(format!("WASM process error: {}", e));

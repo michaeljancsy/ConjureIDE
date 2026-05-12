@@ -8,21 +8,12 @@
 //   0 (Drive): Amplification factor — 1.0 to 20.0
 
 use conjuredsp::*;
-setup!();
 
 params! {
     DRIVE = param(1.0, 20.0).default(5.0),
 }
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    _sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, _sample_rate);
+process! { ctx =>
     let drive = ctx.param(DRIVE);
 
     for c in 0..ctx.channels() {

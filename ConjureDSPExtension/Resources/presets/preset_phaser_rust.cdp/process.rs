@@ -14,8 +14,6 @@
 //   4 (Mix):      Dry/wet mix — 0.0 to 1.0
 
 use conjuredsp::*;
-setup!();
-
 const MAX_STAGES: usize = 6;
 
 params! {
@@ -32,16 +30,8 @@ static mut AP_X_PREV: [[f64; MAX_STAGES]; MAX_CH] = [[0.0; MAX_STAGES]; MAX_CH];
 static mut AP_Y_PREV: [[f64; MAX_STAGES]; MAX_CH] = [[0.0; MAX_STAGES]; MAX_CH];
 static mut LFO_PHASE: f64 = 0.0;
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
-    let sr = sample_rate as f64;
+process! { ctx =>
+    let sr = ctx.sample_rate() as f64;
     let two_pi = 2.0 * core::f64::consts::PI;
 
     unsafe {

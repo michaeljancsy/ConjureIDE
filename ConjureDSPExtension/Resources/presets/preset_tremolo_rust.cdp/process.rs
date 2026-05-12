@@ -10,8 +10,6 @@
 //   3 (Depth):    Tremolo depth — 0.0 to 1.0
 
 use conjuredsp::*;
-setup!();
-
 params! {
     SYNC = toggle(),
     RATE = param(0.5, 20.0).unit("Hz").default(5.0),
@@ -32,16 +30,8 @@ static mut PHASE: f64 = 0.0;
 /// Computes a per-sample LFO gain using a sine wave, then multiplies
 /// each input sample by that gain. The phase accumulates across callbacks so the
 /// modulation is seamless between audio buffers. All channel_count share the same LFO.
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
-    let sr = sample_rate as f64;
+process! { ctx =>
+    let sr = ctx.sample_rate() as f64;
     let two_pi = 2.0 * core::f64::consts::PI;
 
     unsafe {

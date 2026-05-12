@@ -13,8 +13,6 @@
 //   4 (Mix):      Dry/wet mix — 0.0 to 1.0
 
 use conjuredsp::*;
-setup!();
-
 const MAX_DELAY: usize = 1024;
 
 params! {
@@ -31,16 +29,8 @@ static mut WRITE_POS: usize = 0;
 // Use f64 to match Python's float64 precision in the phase accumulator.
 static mut LFO_PHASE: f64 = 0.0;
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
-    let sr = sample_rate as f64;
+process! { ctx =>
+    let sr = ctx.sample_rate() as f64;
     let two_pi = 2.0 * core::f64::consts::PI;
 
     unsafe {

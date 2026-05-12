@@ -10,8 +10,6 @@
 // the mockingbird's interpretation of it.
 
 use conjuredsp::*;
-setup!();
-
 params! {
     DENSITY   = pct().default(40.0),                     // how often it speaks
     PITCH     = pct().default(55.0),                     // how high it mimics
@@ -100,16 +98,8 @@ fn syllable_env(pos: u32, total: u32) -> f32 {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
-    let sr = sample_rate as f64;
+process! { ctx =>
+    let sr = ctx.sample_rate() as f64;
 
     let density     = (ctx.param(DENSITY) / 100.0).clamp(0.0, 1.0) as f64;
     let pitch_range = (ctx.param(PITCH) / 100.0 * 1.5) as f64;      // 0..1.5 above 1×

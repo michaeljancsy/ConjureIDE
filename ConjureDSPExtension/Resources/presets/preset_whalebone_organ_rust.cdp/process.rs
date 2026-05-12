@@ -20,8 +20,6 @@
 //   MIX          — wet/dry blend
 
 use conjuredsp::*;
-setup!();
-
 params! {
     PIPES = pct().default(60.0),
     BREATH = pct().default(55.0),
@@ -47,12 +45,7 @@ static mut COMBS: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2];
 static mut COMB_LP: [[Biquad; 2]; 2] = [[Biquad::new(); 2]; 2];
 static mut COMB_FB_BUF: [[f64; 2]; 2] = [[0.0; 2]; 2];
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

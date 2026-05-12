@@ -19,8 +19,6 @@
 //   MIX          — wet/dry blend
 
 use conjuredsp::*;
-setup!();
-
 params! {
     RIPPLE = pct().default(60.0),
     BUBBLE = pct().default(55.0),
@@ -41,12 +39,7 @@ static mut WET_LP: [Biquad; 2] = [Biquad::new(); 2];
 static mut TAP_LFO: [Lfo; 2] = [Lfo::new(); 2];
 static mut SWEEP_LFO: Lfo = Lfo::new();
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32, output: *mut f32,
-    channel_count: i32, frame_count: i32, sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let sr = ctx.sample_rate() as f64;
 
     unsafe {

@@ -13,8 +13,6 @@
 //                 the whole point of telemetry.
 
 use conjuredsp::*;
-setup!();
-
 params! {
     DRIVE = param(1.0, 10.0).default(1.0).unit("x"),
 }
@@ -28,15 +26,7 @@ telemetry! {
 // need the f64 precision of the production compressor.
 static mut ENVELOPE: f32 = 0.0;
 
-#[no_mangle]
-pub extern "C" fn process(
-    input: *const f32,
-    output: *mut f32,
-    channel_count: i32,
-    frame_count: i32,
-    sample_rate: f32,
-) {
-    let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+process! { ctx =>
     let drive = ctx.param(DRIVE).max(1.0);
 
     // Block peak (linear) across all channels — used both to drive the
@@ -45,8 +35,8 @@ pub extern "C" fn process(
 
     // 50ms attack, 200ms release smoothing. Coefficients computed once
     // per block from the live sample rate.
-    let attack_coeff = (-1.0 / (0.050 * sample_rate)).exp();
-    let release_coeff = (-1.0 / (0.200 * sample_rate)).exp();
+    let attack_coeff = (-1.0 / (0.050 * ctx.sample_rate())).exp();
+    let release_coeff = (-1.0 / (0.200 * ctx.sample_rate())).exp();
 
     for f in 0..ctx.frames() {
         for c in 0..ctx.channels() {
