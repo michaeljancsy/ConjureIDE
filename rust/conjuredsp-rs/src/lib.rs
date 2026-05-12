@@ -931,6 +931,95 @@ macro_rules! state {
     };
 }
 
+/// The DSP entry point — subsumes [`setup!`] and emits a zero-arg
+/// `extern "C" fn process()`.
+///
+/// The host writes the per-block scalars (`frame_count`,
+/// `channel_count`, `sample_rate`) into a shared `BLOCK_INFO_BUF`
+/// before each call; `process!` reads them back to build a
+/// [`Context`](crate::Context) bound to the user-named identifier on
+/// the left of `=>`. The body that follows runs as the function body
+/// of `process()`. Every preset's entry point becomes one line of
+/// boilerplate (the `process!` invocation) instead of nine lines of
+/// FFI plumbing.
+///
+/// # Why `ctx =>` instead of `|ctx|` (closure syntax)?
+///
+/// Both forms work hygienically — the user's chosen identifier is
+/// captured in caller hygiene context. The `=>` form is chosen because
+/// `|ctx|` pushes authors toward writing a real closure inside the
+/// macro, and WASM debug-build backtraces render closures as
+/// `process::{{closure}}::<hash>` synthetic names — harder to read in
+/// panics and `os_log` traces. The `=>` form expands to a straight
+/// `let ctx = …;` inside `extern "C" fn process()`, so the body's
+/// stack frame stays just `process`.
+///
+/// # Example
+///
+/// ```ignore
+/// use conjuredsp::*;
+///
+/// params! {
+///     GAIN = db().min(-24.0).max(12.0).default(0.0),
+///     MIX  = mix(),
+/// }
+///
+/// process! { ctx =>
+///     let gain = db_to_gain(ctx.param(GAIN));
+///     let mix  = ctx.param(MIX);
+///     for c in 0..ctx.channels() {
+///         for i in 0..ctx.frames() {
+///             let dry = ctx.input(c, i);
+///             ctx.set_output(c, i, dry * gain * mix + dry * (1.0 - mix));
+///         }
+///     }
+/// }
+/// ```
+///
+/// # No backwards-compatibility shim
+///
+/// `process!` subsumes `setup!()` — do NOT write `setup!();` alongside
+/// it (you'd get duplicate-static errors). The host calls the
+/// zero-arg `process()` produced here; the legacy
+/// `process(input, output, channel_count, frame_count, sample_rate)`
+/// shape from before this macro is gone.
+#[macro_export]
+macro_rules! process {
+    ( $ctx:ident => $($body:tt)* ) => {
+        $crate::setup!();
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn process() {
+            // SAFETY: WASM modules are single-threaded; INPUT_BUF /
+            // OUTPUT_BUF / PARAMS_BUF / etc. are module-lifetime, never
+            // dropped. The host writes BLOCK_INFO_BUF immediately
+            // before this call and never concurrently with it.
+            let block_info: $crate::BlockInfo = unsafe { *(&raw const BLOCK_INFO_BUF) };
+            let $ctx: $crate::Context = unsafe {
+                $crate::Context::new_with_sidechain(
+                    &raw const INPUT_BUF as *const f32,
+                    &raw mut OUTPUT_BUF as *mut f32,
+                    block_info.channel_count as i32,
+                    block_info.frame_count as i32,
+                    block_info.sample_rate,
+                    &raw const PARAMS_BUF as *const f32,
+                    &raw mut TELEMETRY_BUF as *mut f32,
+                    &raw const SIDECHAIN_BUF as *const f32,
+                    &raw const SIDECHAIN_STATE as *const i32,
+                )
+            };
+            $($body)*
+        }
+    };
+    ( $($_:tt)* ) => {
+        compile_error!(
+            "process! requires a context binding.\n\
+             Use: process! { ctx => /* body */ }\n\
+             (or any identifier in place of `ctx`)."
+        );
+    };
+}
+
 /// Declares a persistent scalar (or `Copy` value) that survives across
 /// render blocks. See [`Persist`](crate::Persist) for the access
 /// pattern (`get` / `set` / `replace`).
