@@ -42,8 +42,9 @@ Edit `ConjureDSPExtension/Resources/process.py`. The `process()` function is cal
 import numpy as np
 
 def process(ctx):
-    for ch_in, ch_out in zip(ctx.inputs, ctx.outputs):
-        ch_out[:ctx.frame_count] = ch_in[:ctx.frame_count] * 0.5
+    # ctx.inputs / ctx.outputs are 2D numpy arrays sliced to
+    # (channels, frame_count). Whole-array ops broadcast across channels.
+    np.multiply(ctx.inputs, 0.5, out=ctx.outputs)
 ```
 
 The single accepted signature is `def process(ctx):`. The host calls
@@ -51,15 +52,15 @@ The single accepted signature is `def process(ctx):`. The host calls
 audio buffers and host state.
 
 **`ctx` fields:**
-- `ctx.inputs` — list of numpy float32 arrays (one per channel, pre-allocated to `max_frames`)
-- `ctx.outputs` — list of numpy float32 arrays (one per channel, pre-allocated to `max_frames`)
-- `ctx.frame_count` — number of valid samples this callback (may be less than array length)
+- `ctx.inputs` — 2D `numpy.ndarray[float32]` of shape `(channel_count, frame_count)`. Whole-array ops (`np.tanh(ctx.inputs, out=ctx.outputs)`, `ctx.outputs[:] = ctx.inputs * gain`) broadcast across channels in a single SIMD-vectorized call. Per-channel access via `ctx.inputs[ch]` returns a contiguous 1D row view.
+- `ctx.outputs` — same shape and access pattern as `ctx.inputs`. Writes go in-place via `ctx.outputs[:] = …`, `out=ctx.outputs`, or row-index assignment `ctx.outputs[ch] = …`. Only rebinding the attribute itself (`ctx.outputs = …`) is silently discarded — that one points the local name at a fresh array Rust never reads.
+- `ctx.frame_count` — number of samples in this block. The 2D arrays are already sliced to `[:, :frame_count]`, so explicit `[:frame_count]` slicing is unnecessary.
 - `ctx.sample_rate` — current sample rate (e.g. 44100.0)
-- `ctx.params` — dict keyed by parameter name (when a `PARAMS` dict is declared)
-- `ctx.transport` — read-only mapping with `bpm`, `beat`, `is_playing`, `time_sig_numerator`, `time_sig_denominator`, `sample_position`
+- `ctx.params` — read-only view supporting both `ctx.params["name"]` and `ctx.params.name` access when a `PARAMS` dict is declared
+- `ctx.transport` — read-only namespace with `bpm`, `beat`, `is_playing`, `time_sig_numerator`, `time_sig_denominator`, `sample_position`
 - `ctx.telemetry` — write per-block scalar readouts (when a `TELEMETRY` dict is declared)
 - `ctx.state` — read-only mapping over the bundle-private STATE channel
-- `ctx.sidechain` — sidechain input arrays (when a sidechain bus is connected)
+- `ctx.sidechain` — 2D `numpy.ndarray[float32]` mirroring `ctx.inputs`'s shape; zero-filled when the host hasn't connected a sidechain bus
 
 ## Project structure
 

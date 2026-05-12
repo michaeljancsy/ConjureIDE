@@ -56,7 +56,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -101,7 +101,7 @@ def process(ctx):
     modal_gain = 2.0
     sub_gain = 0.8
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         # Advance shimmer phase (octave up: read approaches write)
         sh_ph0 = s.shim_phase
         sh_ph1 = (s.shim_phase + 0.5) % 1.0

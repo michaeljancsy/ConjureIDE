@@ -9,28 +9,25 @@ def process(ctx):
     """
     Process audio buffers.
 
-    Called once per audio render callback with pre-allocated numpy arrays.
-    Write your processed audio into ctx.outputs[ch][:ctx.frame_count].
+    Called once per audio render callback. Whole-array numpy ops broadcast
+    across channels and frames in one SIMD pass — prefer them over per-channel
+    Python loops.
 
     `ctx` exposes:
-        ctx.inputs       list of numpy.float32 arrays, one per channel
-        ctx.outputs      list of numpy.float32 arrays, one per channel
-        ctx.sidechain    list of numpy.float32 arrays (always populated;
-                         zero-filled when host has nothing routed)
-        ctx.params       read-only dict of actual parameter values keyed by PARAMS name
+        ctx.inputs       2D numpy.float32 array, shape (channels, frame_count)
+        ctx.outputs      2D numpy.float32 array, shape (channels, frame_count)
+        ctx.sidechain    2D numpy.float32 array, same shape; zero-filled when
+                         the host has nothing routed
+        ctx.params       read-only view; ctx.params["gain"] or ctx.params.gain
         ctx.state        read-only dict over the bundle-private state buffer
         ctx.telemetry    writable dict — write per-block readouts the UI can show
         ctx.transport    read-only namespace: bpm / beat / is_playing /
                          time_sig_numerator / time_sig_denominator / sample_position
         ctx.sample_rate  current sample rate in Hz (e.g. 44100.0)
-        ctx.frame_count  number of valid samples this callback
+        ctx.frame_count  number of valid samples this callback (the 2D arrays
+                         are already sliced to this length)
     """
     gain_db = ctx.params["gain"]
     gain = 10.0 ** (gain_db / 20.0)
 
-    for ch in range(len(ctx.inputs)):
-        np.multiply(
-            ctx.inputs[ch][:ctx.frame_count],
-            gain,
-            out=ctx.outputs[ch][:ctx.frame_count],
-        )
+    np.multiply(ctx.inputs, gain, out=ctx.outputs)

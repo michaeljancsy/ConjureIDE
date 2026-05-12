@@ -37,7 +37,7 @@ def process(ctx):
     feedback = ctx.params["feedback"]
     mix = ctx.params["mix"]
 
-    n_ch = len(ctx.inputs)
+    n_ch, frame_count = ctx.inputs.shape
 
     if _left_dl is None:
         _left_dl = DelayLine(MAX_DELAY)
@@ -49,13 +49,13 @@ def process(ctx):
 
     if n_ch < 2:
         # Mono: simple delay with feedback
-        for i in range(ctx.frame_count):
+        for i in range(frame_count):
             delayed = _left_dl.tap(delay_samples)
             _left_dl.write(ctx.inputs[0][i] + delayed * feedback)
             ctx.outputs[0][i] = ctx.inputs[0][i] * (1.0 - mix) + delayed * mix
     else:
         # Stereo: ping-pong
-        for i in range(ctx.frame_count):
+        for i in range(frame_count):
             left_delayed = _left_dl.tap(delay_samples)
             right_delayed = _right_dl.tap(delay_samples)
 

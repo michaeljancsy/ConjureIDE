@@ -45,7 +45,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -70,7 +70,7 @@ def process(ctx):
     breath_depth = 0.60 * breath
     drive = 1.0 + 3.5 * rasp
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         tri = s.breath_lfo.tick()
         # Asymmetric breath: (0.5+0.5*tri)^1.5-ish via squaring
         env = 0.5 + 0.5 * tri

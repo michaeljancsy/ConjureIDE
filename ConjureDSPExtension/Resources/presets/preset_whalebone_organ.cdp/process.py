@@ -57,7 +57,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -89,7 +89,7 @@ def process(ctx):
     pipe_base_gain = 1.0 / 8.0
     breath_depth = 0.50 * breath
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         bm = [s.breath_lfo[k].tick() for k in range(8)]
 
         for ch in range(nch):

@@ -101,28 +101,35 @@ enum DSPDocumentation {
       }
 
       def process(ctx):
-          drive = ctx.params["drive"]
+          drive = ctx.params["drive"]    # also: ctx.params.drive
           mix_v = ctx.params["mix"]
-          for ch in range(len(ctx.inputs)):
-              # IMPORTANT: slice with [:ctx.frame_count] on BOTH sides.
-              # inputs/outputs are pre-allocated to maximumFramesToRender
-              # (often larger than ctx.frame_count); reading or writing
-              # past ctx.frame_count gives stale or zero samples.
-              x = ctx.inputs[ch][:ctx.frame_count]
-              wet = np.tanh(x * drive)
-              ctx.outputs[ch][:ctx.frame_count] = (1.0 - mix_v) * x + mix_v * wet
+          # ctx.inputs / ctx.outputs are 2D numpy arrays, shape
+          # (channels, frame_count), pre-sliced to this block's length.
+          # Whole-array ops broadcast across channels — no per-channel
+          # Python loop, no [:ctx.frame_count] slicing required.
+          wet = np.tanh(ctx.inputs * drive)
+          ctx.outputs[:] = (1.0 - mix_v) * ctx.inputs + mix_v * wet
 
     What hangs off `ctx`:
 
-    - `ctx.inputs` / `ctx.outputs` — lists of numpy float32 arrays, one
-      per channel. `len(ctx.inputs)` IS the channel count. Both arrays
-      are sized to the AU's `maximumFramesToRender`, NOT
-      `ctx.frame_count` — always slice with `[:ctx.frame_count]`.
-    - `ctx.frame_count` — int, samples in this block.
+    - `ctx.inputs` / `ctx.outputs` — 2D `numpy.ndarray[float32]` of shape
+      `(channel_count, frame_count)`, pre-sliced to the current block.
+      `ctx.inputs.shape[0]` is the channel count. Whole-array ops
+      (`np.tanh(ctx.inputs, out=ctx.outputs)`, `ctx.outputs[:] = ctx.inputs * gain`)
+      broadcast across both axes; per-channel access via
+      `ctx.inputs[ch]` returns a contiguous 1D row view. Writes go
+      in-place via `ctx.outputs[:] = …`, `out=ctx.outputs`, or
+      row-index assignment `ctx.outputs[ch] = …` — only rebinding
+      the attribute itself (`ctx.outputs = …`) is silently
+      discarded.
+    - `ctx.frame_count` — int, samples in this block. Explicit
+      `[:ctx.frame_count]` slicing is unnecessary; the 2D arrays
+      already are that slice.
     - `ctx.sample_rate` — float, Hz.
-    - `ctx.params` — read-only mapping keyed by parameter name when a
-      `PARAMS` dict is declared (the recommended path), or by integer
-      index in legacy mode (no PARAMS dict).
+    - `ctx.params` — read-only `ParamsView` when a `PARAMS` dict is
+      declared (supports both `ctx.params["name"]` and
+      `ctx.params.name` styles; writes raise). Legacy scripts with no
+      `PARAMS` dict get a positional list of 0–1 floats.
     - `ctx.transport` — namespace from the host's transport state.
       **Canonical keys** (the kernel publishes them with these exact
       names; pre-rename keys are gone):
@@ -144,9 +151,10 @@ enum DSPDocumentation {
       `audio.onFrame`. **Reading telemetry from JS also requires
       `manifest.ui.audioFrames: true`** — see the `ui` topic for the
       manifest snippet.
-    - `ctx.sidechain` — list of float32 arrays, same shape as
-      `ctx.inputs`. Empty when the host hasn't connected a sidechain
-      bus; check `len(ctx.sidechain)` before reading.
+    - `ctx.sidechain` — 2D `numpy.ndarray[float32]` mirroring
+      `ctx.inputs`'s shape. Always allocated; zero-filled when the
+      host hasn't connected a sidechain bus, so it's safe to read
+      unconditionally.
     - `ctx.state` — read-only mapping over the bundle-private STATE
       channel (UI / MCP-writable, audio-readable). Mutating it inside
       `process()` raises AttributeError — write only via
@@ -314,13 +322,16 @@ enum DSPDocumentation {
       _filters = None
       def process(ctx):
           global _filters
+          n_ch, frame_count = ctx.inputs.shape
           if _filters is None:
-              _filters = [Biquad() for _ in range(len(ctx.inputs))]
+              _filters = [Biquad() for _ in range(n_ch)]
           coeffs = BiquadCoeffs.lowpass(ctx.params["cutoff"], 0.707, ctx.sample_rate)
-          for ch in range(len(ctx.inputs)):
+          for ch in range(n_ch):
               _filters[ch].set_coeffs(coeffs)
-              for i in range(ctx.frame_count):
-                  ctx.outputs[ch][i] = _filters[ch].process_sample(ctx.inputs[ch][i])
+              row_in = ctx.inputs[ch]
+              row_out = ctx.outputs[ch]
+              for i in range(frame_count):
+                  row_out[i] = _filters[ch].process_sample(row_in[i])
 
     Rust:
       static mut FILTERS: [Biquad; 2] = [Biquad::new(); 2];
@@ -414,10 +425,13 @@ enum DSPDocumentation {
 
     Frames-outer loop (most common — call tick() unconditionally every frame, no if-condition):
       Python:
+        n_ch, frame_count = ctx.inputs.shape
         for i in range(frame_count):
             mod = lfo.tick()          # tick every iteration, no condition
-            for ch in range(len(inputs)):
-                outputs[ch][i] = inputs[ch][i] * mod   # placeholder — see "Common applications"
+            # ctx.outputs[:, i] is a length-n_ch column; broadcasting mod
+            # across it covers all channels in one assignment. Placeholder
+            # body — see "Common applications" below for the real shapes.
+            ctx.outputs[:, i] = ctx.inputs[:, i] * mod
       Rust:
         for f in 0..ctx.frames() {
             let mod_val = unsafe { LFO.tick() };       // tick once per frame
@@ -447,9 +461,9 @@ enum DSPDocumentation {
       Python:
         lfo = _lfo.tick_n(ctx.frame_count)                       # bipolar [-1, 1] array
         gain = (1.0 - depth) + depth * (lfo * 0.5 + 0.5)         # unipolar [0, 1] envelope
-        for ch in range(len(ctx.inputs)):
-            np.multiply(ctx.inputs[ch][:ctx.frame_count], gain,
-                        out=ctx.outputs[ch][:ctx.frame_count])
+        # gain is shape (frame_count,); numpy broadcasts it across the
+        # channel axis of the 2D ctx.inputs in one vectorized call.
+        np.multiply(ctx.inputs, gain, out=ctx.outputs)
       Rust:
         for f in 0..ctx.frames() {
             let mod_val = unsafe { LFO.tick() } as f32;
@@ -474,10 +488,9 @@ enum DSPDocumentation {
         pan = lfo * depth
         gain_l = 1.0 - np.maximum(pan, 0.0)
         gain_r = 1.0 + np.minimum(pan, 0.0)
-        np.multiply(ctx.inputs[0][:ctx.frame_count], gain_l,
-                    out=ctx.outputs[0][:ctx.frame_count])
-        np.multiply(ctx.inputs[1][:ctx.frame_count], gain_r,
-                    out=ctx.outputs[1][:ctx.frame_count])
+        # ctx.inputs[ch] is a contiguous 1D row view of the 2D array.
+        np.multiply(ctx.inputs[0], gain_l, out=ctx.outputs[0])
+        np.multiply(ctx.inputs[1], gain_r, out=ctx.outputs[1])
       Rust:
         for f in 0..ctx.frames() {
             let mod_val = unsafe { LFO.tick() } as f32;
@@ -723,9 +736,12 @@ enum DSPDocumentation {
       def process(ctx):
           gain = 10 ** (ctx.params["input_gain"] / 20.0)
           mix_val = ctx.params["mix"]
-          for ch in range(len(ctx.inputs)):
-              wet = model.process(ctx.inputs[ch][:ctx.frame_count] * gain, ch)
-              ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count] * (1 - mix_val) + wet * mix_val
+          # NAM inference is per-channel (stateful), so the channel loop
+          # stays. Rows are 1D views of the 2D ctx.inputs / ctx.outputs.
+          for ch in range(ctx.inputs.shape[0]):
+              row = ctx.inputs[ch]
+              wet = model.process(row * gain, ch)
+              ctx.outputs[ch] = row * (1 - mix_val) + wet * mix_val
 
     ## Rust API — single model
 
@@ -1552,9 +1568,11 @@ enum DSPDocumentation {
     ```python
     TELEMETRY = {"scope": {"shape": "vector"}}
     def process(ctx):
-        # Run your per-frame DSP into ctx.outputs[0]; then publish a
-        # slice of length ctx.frame_count into the slot.
-        ctx.telemetry["scope"][:ctx.frame_count] = ctx.outputs[0][:ctx.frame_count]
+        # Run your per-frame DSP into ctx.outputs[0]; then publish into
+        # the telemetry slot. ctx.outputs[0] is already a length-frame_count
+        # row view; the telemetry slot is sized to MAX_FRAMES, so this side
+        # still needs [:ctx.frame_count].
+        ctx.telemetry["scope"][:ctx.frame_count] = ctx.outputs[0]
     ```
 
     `<cdp-scope>` decimates long vectors to one min+max pair per pixel
@@ -1617,16 +1635,18 @@ enum DSPDocumentation {
         rate_hz = (bpm / 60.0) / beats_per_cycle
         gain_floor = 10.0 ** (-depth_db / 20.0)
 
+        n_ch, frame_count = ctx.inputs.shape
         max_gr_db = 0.0
-        for i in range(ctx.frame_count):
+        for i in range(frame_count):
             _phase = (_phase + rate_hz / ctx.sample_rate) % 1.0
             # Triangle envelope: peaks at depth at phase=0, returns to 1.0 at 0.5
             env = gain_floor + (1.0 - gain_floor) * abs(2.0 * _phase - 1.0)
             gr_db_now = -20.0 * math.log10(max(env, 1e-9))
             if gr_db_now > max_gr_db:
                 max_gr_db = gr_db_now
-            for ch in range(len(ctx.inputs)):
-                ctx.outputs[ch][i] = ctx.inputs[ch][i] * env
+            # env is a scalar this sample, so write to the i-th column
+            # of every channel in one slice assignment.
+            ctx.outputs[:, i] = ctx.inputs[:, i] * env
 
         ctx.telemetry["gr_db"] = max_gr_db        # peak GR over the block
     ```
@@ -2160,13 +2180,16 @@ enum DSPDocumentation {
       _filters = None
       def process(ctx):
           global _filters
+          n_ch, frame_count = ctx.inputs.shape
           if _filters is None:
-              _filters = [Biquad() for _ in range(len(ctx.inputs))]
+              _filters = [Biquad() for _ in range(n_ch)]
           coeffs = BiquadCoeffs.lowpass(ctx.params["cutoff"], 0.707, ctx.sample_rate)
-          for ch in range(len(ctx.inputs)):
+          for ch in range(n_ch):
               _filters[ch].set_coeffs(coeffs)
-              for i in range(ctx.frame_count):
-                  ctx.outputs[ch][i] = _filters[ch].process_sample(ctx.inputs[ch][i])
+              row_in = ctx.inputs[ch]
+              row_out = ctx.outputs[ch]
+              for i in range(frame_count):
+                  row_out[i] = _filters[ch].process_sample(row_in[i])
     """
 
     private static let rustFilters = """
@@ -2314,10 +2337,10 @@ enum DSPDocumentation {
     Do NOT call tick() once per channel — that would advance the phase too fast.
 
     Frames-outer loop (most common — call tick() unconditionally every frame):
+      n_ch, frame_count = ctx.inputs.shape
       for i in range(frame_count):
           mod = lfo.tick()          # tick every iteration, no condition
-          for ch in range(len(inputs)):
-              outputs[ch][i] = inputs[ch][i] * mod
+          ctx.outputs[:, i] = ctx.inputs[:, i] * mod   # broadcasts mod across all channels
 
     Channels-outer loop (tick on channel 0, use .value for others):
       mod = lfo.tick() if ch == 0 else lfo.value

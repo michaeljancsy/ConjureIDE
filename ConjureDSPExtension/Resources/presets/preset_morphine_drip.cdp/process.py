@@ -50,7 +50,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -73,7 +73,7 @@ def process(ctx):
     delay_d = DELAY_MS * 0.001 * ctx.sample_rate
     delay_fb_amt = 0.55 + 0.30 * bleed
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         tri = s.drip_lfo.tick()
         pulse = (0.5 + 0.5 * tri)
         drip_env = (1.0 - drip_depth) + drip_depth * pulse * pulse

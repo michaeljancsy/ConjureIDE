@@ -17,22 +17,25 @@ class DelayLine:
 
         _delays = None
 
-        def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+        def process(ctx):
             global _delays
-            if _delays is None:
-                max_samples = int(0.5 * sample_rate)  # 500ms max
-                _delays = [DelayLine(max_samples) for _ in range(len(inputs))]
+            n_ch, frame_count = ctx.inputs.shape
+            if _delays is None or len(_delays) != n_ch:
+                max_samples = int(0.5 * ctx.sample_rate)  # 500ms max
+                _delays = [DelayLine(max_samples) for _ in range(n_ch)]
 
-            delay_samples = params["time"] * 0.001 * sample_rate
-            feedback = params["feedback"]
-            mix = params["mix"]
+            delay_samples = ctx.params["time"] * 0.001 * ctx.sample_rate
+            feedback = ctx.params["feedback"]
+            mix = ctx.params["mix"]
 
-            for ch in range(len(inputs)):
+            for ch in range(n_ch):
                 dl = _delays[ch]
+                row_in = ctx.inputs[ch]
+                row_out = ctx.outputs[ch]
                 for i in range(frame_count):
                     delayed = dl.read(delay_samples)
-                    dl.write(inputs[ch][i] + delayed * feedback)
-                    outputs[ch][i] = inputs[ch][i] * (1 - mix) + delayed * mix
+                    dl.write(row_in[i] + delayed * feedback)
+                    row_out[i] = row_in[i] * (1 - mix) + delayed * mix
     """
 
     __slots__ = ("_buf", "_size", "_write_pos")

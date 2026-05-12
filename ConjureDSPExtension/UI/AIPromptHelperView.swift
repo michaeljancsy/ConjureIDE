@@ -164,7 +164,7 @@ struct AIPromptHelperView: View {
             - Initialize gain/envelope state variables to `1.0` (unity gain), not `0.0`.
             - For LFO modulation, prefer `lfo.tick_n(frame_count)` to generate a full buffer of modulation values at once, then apply with numpy. Avoid calling `lfo.tick()` in a per-sample loop.
             - Use numpy vectorized operations over per-sample Python loops wherever the algorithm allows it.
-            - `inputs` and `outputs` are **lists of 1D numpy float32 arrays**, one per channel — NOT a 2D array. Use `len(inputs)` for channel count, `inputs[ch][i]` for per-sample access, and `inputs[ch][:frame_count]` for channel slices.
+            - `ctx.inputs` and `ctx.outputs` are **2D numpy float32 arrays** of shape `(channels, frame_count)`, pre-sliced to the current block. Prefer whole-array ops (`np.multiply(ctx.inputs, gain, out=ctx.outputs)`, `ctx.outputs[:] = ctx.inputs * gain`) — they broadcast across both axes via SIMD. Use `ctx.inputs.shape[0]` for channel count and `ctx.inputs[ch]` for a contiguous 1D row view when per-channel state (stateful filters, IIR feedback) forces a loop. Explicit `[:ctx.frame_count]` slicing is unnecessary on these arrays.
             """
         case .rust:
             conventions = """

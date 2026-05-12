@@ -54,7 +54,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -81,7 +81,7 @@ def process(ctx):
     # Dropout threshold: higher dropout → higher threshold → more silence
     drop_thresh = -0.4 + 1.2 * dropout
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         d0 = s.dropout_lfo[0].tick()
         d1 = s.dropout_lfo[1].tick()
         d2 = s.dropout_lfo[2].tick()

@@ -26,10 +26,14 @@ def process(ctx):
     a = math.exp(-2.0 * math.pi * cutoff_hz / ctx.sample_rate)
     b = 1.0 - a
 
-    for ch in range(len(ctx.inputs)):
+    n_ch, frame_count = ctx.inputs.shape
+
+    for ch in range(n_ch):
         y = _prev_out[ch] if ch < len(_prev_out) else 0.0
-        for i in range(ctx.frame_count):
-            y = b * ctx.inputs[ch][i] + a * y
-            ctx.outputs[ch][i] = y
+        row_in = ctx.inputs[ch]
+        row_out = ctx.outputs[ch]
+        for i in range(frame_count):
+            y = b * row_in[i] + a * y
+            row_out[i] = y
         if ch < len(_prev_out):
             _prev_out[ch] = y

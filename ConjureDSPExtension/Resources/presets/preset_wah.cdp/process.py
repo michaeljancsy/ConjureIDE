@@ -37,7 +37,7 @@ def process(ctx):
     """
     global _filters, _envelope
 
-    n_ch = len(ctx.inputs)
+    n_ch, frame_count = ctx.inputs.shape
 
     if _filters is None or len(_filters) != n_ch:
         _filters = [Biquad() for _ in range(n_ch)]
@@ -56,7 +56,7 @@ def process(ctx):
     freq_range = max_freq - min_freq
     env = _envelope
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         # Peak detect across channels with sensitivity scaling
         peak = 0.0
         for ch in range(n_ch):

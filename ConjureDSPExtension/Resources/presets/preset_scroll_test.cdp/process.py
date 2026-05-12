@@ -1,3 +1,4 @@
 def process(ctx):
-    for ch in range(len(ctx.inputs)):
-        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count]
+    n_ch = ctx.inputs.shape[0]
+    for ch in range(n_ch):
+        ctx.outputs[ch] = ctx.inputs[ch]

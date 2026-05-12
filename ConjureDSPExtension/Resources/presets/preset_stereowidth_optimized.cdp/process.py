@@ -27,22 +27,22 @@ def process(ctx):
 
     width = ctx.params["width"]
 
-    n_ch = len(ctx.inputs)
+    n_ch, frame_count = ctx.inputs.shape
 
     if n_ch < 2:
         # Mono: passthrough
-        ctx.outputs[0][:ctx.frame_count] = ctx.inputs[0][:ctx.frame_count]
+        ctx.outputs[0] = ctx.inputs[0]
         return
 
     # Ensure scratch buffers are large enough
-    if _scratch_mid is None or len(_scratch_mid) < ctx.frame_count:
-        _scratch_mid = np.empty(ctx.frame_count, dtype=np.float32)
-        _scratch_side = np.empty(ctx.frame_count, dtype=np.float32)
+    if _scratch_mid is None or len(_scratch_mid) < frame_count:
+        _scratch_mid = np.empty(frame_count, dtype=np.float32)
+        _scratch_side = np.empty(frame_count, dtype=np.float32)
 
-    left = ctx.inputs[0][:ctx.frame_count]
-    right = ctx.inputs[1][:ctx.frame_count]
-    mid = _scratch_mid[:ctx.frame_count]
-    side = _scratch_side[:ctx.frame_count]
+    left = ctx.inputs[0]
+    right = ctx.inputs[1]
+    mid = _scratch_mid[:frame_count]
+    side = _scratch_side[:frame_count]
 
     # Encode to mid/side
     np.add(left, right, out=mid)
@@ -54,5 +54,5 @@ def process(ctx):
     np.multiply(side, width, out=side)
 
     # Decode back to L/R
-    np.add(mid, side, out=ctx.outputs[0][:ctx.frame_count])
-    np.subtract(mid, side, out=ctx.outputs[1][:ctx.frame_count])
+    np.add(mid, side, out=ctx.outputs[0])
+    np.subtract(mid, side, out=ctx.outputs[1])

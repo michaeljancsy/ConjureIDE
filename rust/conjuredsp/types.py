@@ -8,11 +8,10 @@ from typing import TypedDict, Literal
 import numpy as np
 import numpy.typing as npt
 
-# Audio buffer type — what process() receives and writes to
+# Audio buffer type — what process() receives via ctx.inputs / ctx.outputs /
+# ctx.sidechain. Shape is (channel_count, frame_count); per-channel rows are
+# 1D views obtained with `ctx.inputs[ch]` and are C-contiguous.
 AudioBuffer = npt.NDArray[np.float32]
-
-# Channel list type — list of audio buffers, one per channel
-ChannelList = list[AudioBuffer]
 
 
 class ParamSpec(TypedDict, total=False):

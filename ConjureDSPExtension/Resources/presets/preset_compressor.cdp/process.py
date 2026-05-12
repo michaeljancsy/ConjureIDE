@@ -47,14 +47,16 @@ def process(ctx):
     attack_coeff = smooth_coeff(attack_ms, ctx.sample_rate)
     release_coeff = smooth_coeff(release_ms, ctx.sample_rate)
 
+    n_ch, frame_count = ctx.inputs.shape
+
     # Compute gain reduction per sample using peak envelope across channels
-    gain = np.ones(ctx.frame_count, dtype=np.float32)
+    gain = np.ones(frame_count, dtype=np.float32)
     env = _envelope
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         # Peak detect across all channels
         peak = 0.0
-        for ch in range(len(ctx.inputs)):
+        for ch in range(n_ch):
             peak = max(peak, abs(ctx.inputs[ch][i]))
 
         # Envelope follower
@@ -71,5 +73,5 @@ def process(ctx):
 
     _envelope = env
 
-    for ch in range(len(ctx.inputs)):
-        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count] * gain * makeup
+    for ch in range(n_ch):
+        ctx.outputs[ch] = ctx.inputs[ch] * gain * makeup

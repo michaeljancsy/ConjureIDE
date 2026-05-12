@@ -59,7 +59,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -99,7 +99,7 @@ def process(ctx):
 
     hum_gain = 0.079  # ≈ −22 dB
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         # Tick all LFOs once per sample
         c_lfo = s.lfo_chorus.tick()
         car0 = s.lfo_carriers[0].tick()

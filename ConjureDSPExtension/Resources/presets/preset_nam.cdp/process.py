@@ -31,7 +31,8 @@ def process(ctx):
     gain = 10 ** (ctx.params["input_gain"] / 20.0)
     mix_val = ctx.params["mix"]
 
-    for ch in range(len(ctx.inputs)):
-        dry = ctx.inputs[ch][:ctx.frame_count]
+    n_ch = ctx.inputs.shape[0]
+    for ch in range(n_ch):
+        dry = ctx.inputs[ch]
         wet = model.process(dry * gain, ch)
-        ctx.outputs[ch][:ctx.frame_count] = dry * (1.0 - mix_val) + wet * mix_val
+        ctx.outputs[ch] = dry * (1.0 - mix_val) + wet * mix_val

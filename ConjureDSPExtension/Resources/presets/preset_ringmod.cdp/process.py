@@ -33,5 +33,6 @@ def process(ctx):
 
     carrier = _lfo.tick_n(ctx.frame_count)
 
-    for ch in range(len(ctx.inputs)):
-        np.multiply(ctx.inputs[ch][:ctx.frame_count], carrier, out=ctx.outputs[ch][:ctx.frame_count])
+    n_ch = ctx.inputs.shape[0]
+    for ch in range(n_ch):
+        np.multiply(ctx.inputs[ch], carrier, out=ctx.outputs[ch])

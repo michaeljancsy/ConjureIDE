@@ -42,7 +42,7 @@ def process(ctx):
     feedback = ctx.params["feedback"]
     mix = ctx.params["mix"]
 
-    n_ch = len(ctx.inputs)
+    n_ch, frame_count = ctx.inputs.shape
 
     if _delays is None or len(_delays) != n_ch:
         _delays = [DelayLine(MAX_DELAY) for _ in range(n_ch)]
@@ -51,7 +51,7 @@ def process(ctx):
     lfo_inc = two_pi * rate_hz / ctx.sample_rate
     phase = _lfo_phase
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         delay_samples = (base_delay_ms + depth_ms * math.sin(phase)) * ctx.sample_rate / 1000.0
 
         for ch in range(n_ch):

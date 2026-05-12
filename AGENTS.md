@@ -102,8 +102,8 @@ Scripts can be written in Python (instant load) or Rust (compiled to WASM). `Scr
 ### Python DSP pipeline
 1. On AU init, Swift calls `dsp_kernel_load_script()` with the default preset path and Python home (resolved from the App Group container, provisioned by ConjureDSPTerminal)
 2. Rust sets `PYTHONHOME`, initializes the free-threaded Python 3.14 interpreter via pyo3, and caches the script's `process()` function
-3. On `allocateRenderResources()`, Rust pre-allocates numpy float32 arrays (one per channel, sized to `maximumFramesToRender`)
-4. Each render callback: Rust copies input audio into numpy arrays, calls `process(ctx)` (the only accepted signature — legacy positional forms now fail at script load), copies output back. The `ctx` object exposes `inputs`, `outputs`, `frame_count`, `sample_rate`, `params` (dict keyed by name when PARAMS metadata exists), `transport`, `telemetry`, `sidechain`, and `state` (read-only mapping over the bundle-private STATE channel).
+3. On `allocateRenderResources()`, Rust pre-allocates one 2D `numpy.ndarray[float32]` per role (inputs, outputs, sidechain) of shape `(channel_count, maximumFramesToRender)`. Rows are C-contiguous.
+4. Each render callback: Rust copies input audio into the rows of the 2D input array, rebinds `ctx.inputs` / `ctx.outputs` / `ctx.sidechain` to pre-built `[:, :frame_count]` slice views, calls `process(ctx)`, then copies the output rows back. The `ctx` object exposes `inputs`, `outputs`, `frame_count`, `sample_rate`, `params` (a `ParamsView` supporting `ctx.params["name"]` and `ctx.params.name` when `PARAMS` metadata exists), `transport`, `telemetry`, `sidechain`, and `state` (read-only mapping over the bundle-private STATE channel). Out-of-bounds writes past `frame_count` raise `IndexError` (scalar index, `ctx.outputs[ch][N] = v`) or `ValueError` (shape-mismatched slice assignment, `ctx.outputs[ch][:N] = arr`) on the sliced view, surfacing bugs that would have silently corrupted the next block under the unsliced shape.
 5. If Python fails to load or errors at runtime, Rust falls back to passthrough (copies input to output)
 
 ### WASM DSP pipeline
@@ -364,13 +364,13 @@ let mode = PARAMS_BUF[MODE] as usize;    // choice: 0, 1, or 2
 Implementation across layers:
 
 1. **Rust** (`params.rs`) — `ParamMetadata` struct (name, key, min, max, default, unit, curve, style, options) with `denormalize()`/`normalize()` methods. `PARAM_COUNT = 16`
-2. **Rust** (`python_backend.rs`) — Extracts `PARAMS` dict from Python module, builds `PyDict` with denormalized values for `process()`. Falls back to `PARAM_NAMES` dict or `PyList` of 0–1 floats.
+2. **Rust** (`python_backend.rs`) — Extracts `PARAMS` dict from Python module, builds a `PyDict` with denormalized values, wraps it in `conjuredsp._ctx.ParamsView` (supporting both `ctx.params["name"]` and `ctx.params.name` access), and exposes it as `ctx.params`. Legacy scripts with no `PARAMS` dict see a `PyList` of 0–1 floats indexed positionally.
 3. **Rust** (`kernel.rs`) — Stores normalized 0–1 via `AtomicU32` array. Caches metadata as JSON. Sets defaults from metadata on script load.
 4. **Rust** (`lib.rs`) — `dsp_kernel_param_metadata_json()` FFI returns metadata JSON to Swift.
 5. **Swift** (`ConjureDSPExtensionAudioUnit.swift`) — `rebuildParameterTree(metadata:)` creates `AUParameter`s with real ranges. `implementorValueObserver` normalizes actual → 0–1 for kernel. `implementorValueProvider` denormalizes 0–1 → actual for DAW. `formatParamValue` displays values with units.
 6. **WASM** (`wasm_backend.rs`) — Extracts metadata from `get_param_metadata_ptr`/`get_param_metadata_len` WASM exports. When metadata exists, WASM scripts receive denormalized actual values in `PARAMS_BUF` (same as Python). Two separate exports are used instead of a tuple return to avoid WASM multi-value return ABI issues with Rust's `extern "C"`.
 
-Parameters are exposed to Python scripts as `ctx.params` (dict keyed by name when `PARAMS` metadata exists, list of normalized floats otherwise) and to WASM modules via `get_params_ptr()`.
+Parameters are exposed to Python scripts as `ctx.params` (a `ParamsView` keyed by declared name when `PARAMS` metadata exists; a positional list of 0–1 floats otherwise) and to WASM modules via `get_params_ptr()`.
 
 **Known Logic Pro quirk:** On the master channel strip, Logic's "Automatic Smart Controls" layout has fewer knob slots than on regular channel strips, so some parameters may not get mapped to knobs. All parameters are still registered and automatable — this is a Logic Smart Controls grid limitation, not an AU bug.
 
