@@ -118,12 +118,16 @@ python/
 `python/gain.py`:
 ```python
 import numpy as np
+from conjuredsp.params import db
+from conjuredsp.dsp import db_to_gain
 
-# Parameters:
-GAIN = 0
+PARAMS = {
+    "gain": db(-24, 12, default=0),
+}
 
 def process(ctx):
-    gain = ctx.params[GAIN] * 2.0
-    for ch_in, ch_out in zip(ctx.inputs, ctx.outputs):
-        np.multiply(ch_in[:ctx.frame_count], gain, out=ch_out[:ctx.frame_count])
+    gain = db_to_gain(ctx.params["gain"])
+    # ctx.inputs / ctx.outputs are 2D (channels, frame_count) arrays
+    # pre-sliced to frame_count; numpy broadcasts the scalar across both axes.
+    np.multiply(ctx.inputs, gain, out=ctx.outputs)
 ```

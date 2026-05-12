@@ -28,7 +28,7 @@ Quick start::
 """
 
 # Types
-from .types import AudioBuffer, ChannelList, ParamDict, ParamSpec, ParamValues
+from .types import AudioBuffer, ParamDict, ParamSpec, ParamValues
 
 # Parameter helpers
 from .params import choice, db, freq, integer, lfo_rate, mix, param, pct, ratio, time_ms, toggle
@@ -63,7 +63,6 @@ from .nam import NamModel, load_model
 __all__ = [
     # Types
     "AudioBuffer",
-    "ChannelList",
     "ParamDict",
     "ParamSpec",
     "ParamValues",
