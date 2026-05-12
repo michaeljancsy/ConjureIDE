@@ -38,12 +38,14 @@ pub mod json;
 pub mod nam;
 pub mod osc;
 pub mod params;
+pub mod persist;
 pub mod state_json;
 
 // Re-export everything at crate root for `use conjuredsp::*;`
 pub use abi::BlockInfo;
 pub use buffers::DelayLine;
 pub use context::{Context, TELEMETRY_LEN};
+pub use persist::{Persist, PersistBuf};
 pub use dsp::*;
 pub use filters::{Biquad, BiquadCoeffs};
 pub use osc::{advance_phase, saw, sine, triangle, Lfo, Waveform};
@@ -926,5 +928,61 @@ macro_rules! state {
                 self.state_array_f32::<N>(key).unwrap_or(default)
             }
         }
+    };
+}
+
+/// Declares a persistent scalar (or `Copy` value) that survives across
+/// render blocks. See [`Persist`](crate::Persist) for the access
+/// pattern (`get` / `set` / `replace`).
+///
+/// Read/write happens without `unsafe { … }` from the caller's side.
+///
+/// # Example
+///
+/// ```ignore
+/// use conjuredsp::*;
+///
+/// persist!(ENVELOPE: f64 = 0.0);
+/// persist!(WRITE_POS: usize = 0);
+///
+/// // Inside process():
+/// ENVELOPE.set(ENVELOPE.get() * 0.95 + sample.abs() as f64 * 0.05);
+/// WRITE_POS.set(WRITE_POS.get().wrapping_add(1));
+/// ```
+#[macro_export]
+macro_rules! persist {
+    ($(#[$attr:meta])* $name:ident : $ty:ty = $init:expr) => {
+        $(#[$attr])* static $name: $crate::Persist<$ty> = $crate::Persist::new($init);
+    };
+}
+
+/// Declares a persistent buffer (typically a large array) with in-place
+/// mutation via [`PersistBuf::with_mut`](crate::PersistBuf::with_mut).
+///
+/// Reach for `persist_buf!` only when the wrapped value is large
+/// enough that `Persist`'s `get` / `set` round-trips would regress
+/// performance — the 384 KB stereo delay buffer, multi-MB reverb
+/// networks, ring buffers in chorus/flanger/slicer/pingpong.
+///
+/// The closure passed to `with_mut` must not call any other method on
+/// the same `PersistBuf` (debug builds panic on reentrant access; see
+/// [`PersistBuf`](crate::PersistBuf) docs).
+///
+/// # Example
+///
+/// ```ignore
+/// use conjuredsp::*;
+///
+/// persist_buf!(DELAY_BUF: [[f32; 48_000]; 2] = [[0.0; 48_000]; 2]);
+///
+/// // Inside process():
+/// DELAY_BUF.with_mut(|buf| {
+///     buf[channel][write_pos] = sample;
+/// });
+/// ```
+#[macro_export]
+macro_rules! persist_buf {
+    ($(#[$attr:meta])* $name:ident : $ty:ty = $init:expr) => {
+        $(#[$attr])* static $name: $crate::PersistBuf<$ty> = $crate::PersistBuf::new($init);
     };
 }
