@@ -118,8 +118,9 @@ enum DSPDocumentation {
       (`np.tanh(ctx.inputs, out=ctx.outputs)`, `ctx.outputs[:] = ctx.inputs * gain`)
       broadcast across both axes; per-channel access via
       `ctx.inputs[ch]` returns a contiguous 1D row view. Writes go
-      in-place via `ctx.outputs[:] = …` or `out=ctx.outputs` —
-      rebinding the attribute (`ctx.outputs = …`) is silently
+      in-place via `ctx.outputs[:] = …`, `out=ctx.outputs`, or
+      row-index assignment `ctx.outputs[ch] = …` — only rebinding
+      the attribute itself (`ctx.outputs = …`) is silently
       discarded.
     - `ctx.frame_count` — int, samples in this block. Explicit
       `[:ctx.frame_count]` slicing is unnecessary; the 2D arrays

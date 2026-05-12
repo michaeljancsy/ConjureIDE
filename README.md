@@ -53,7 +53,7 @@ audio buffers and host state.
 
 **`ctx` fields:**
 - `ctx.inputs` — 2D `numpy.ndarray[float32]` of shape `(channel_count, frame_count)`. Whole-array ops (`np.tanh(ctx.inputs, out=ctx.outputs)`, `ctx.outputs[:] = ctx.inputs * gain`) broadcast across channels in a single SIMD-vectorized call. Per-channel access via `ctx.inputs[ch]` returns a contiguous 1D row view.
-- `ctx.outputs` — same shape and access pattern as `ctx.inputs`. Writes go in-place via `ctx.outputs[:] = …` or `out=ctx.outputs`; rebinding the attribute (`ctx.outputs = …`) is silently discarded.
+- `ctx.outputs` — same shape and access pattern as `ctx.inputs`. Writes go in-place via `ctx.outputs[:] = …`, `out=ctx.outputs`, or row-index assignment `ctx.outputs[ch] = …`. Only rebinding the attribute itself (`ctx.outputs = …`) is silently discarded — that one points the local name at a fresh array Rust never reads.
 - `ctx.frame_count` — number of samples in this block. The 2D arrays are already sliced to `[:, :frame_count]`, so explicit `[:frame_count]` slicing is unnecessary.
 - `ctx.sample_rate` — current sample rate (e.g. 44100.0)
 - `ctx.params` — read-only view supporting both `ctx.params["name"]` and `ctx.params.name` access when a `PARAMS` dict is declared
