@@ -49,15 +49,18 @@ def process(ctx):
 
     n_ch, frame_count = ctx.inputs.shape
 
+    # Peak detect across channels in one vectorized pass: per-sample max of
+    # |ctx.inputs| over axis 0 (channels). This replaces the inner per-sample
+    # `for ch in range(n_ch): peak = max(peak, abs(ctx.inputs[ch][i]))` which
+    # on a 2D ctx.inputs allocates a row view every iteration.
+    peak_per_sample = np.abs(ctx.inputs).max(axis=0)
+
     # Compute gain reduction per sample using peak envelope across channels
     gain = np.ones(frame_count, dtype=np.float32)
     env = _envelope
 
     for i in range(frame_count):
-        # Peak detect across all channels
-        peak = 0.0
-        for ch in range(n_ch):
-            peak = max(peak, abs(ctx.inputs[ch][i]))
+        peak = peak_per_sample[i]
 
         # Envelope follower
         if peak > env:
