@@ -654,18 +654,26 @@ final class PTYManager {
 
     def process(ctx):
         # The single accepted signature. `ctx` exposes:
-        #   ctx.inputs / ctx.outputs — list of numpy.float32 arrays (per channel)
-        #   ctx.frame_count          — valid samples this callback
+        #   ctx.inputs / ctx.outputs — 2D numpy.float32 arrays, shape
+        #                              (channels, frame_count); pre-sliced to
+        #                              the current block. Whole-array ops
+        #                              (np.multiply(ctx.inputs, g, out=ctx.outputs))
+        #                              broadcast across both axes. Use
+        #                              ctx.inputs[ch] for a 1D row view when
+        #                              per-channel state forces a loop.
+        #   ctx.frame_count          — valid samples this callback (the 2D
+        #                              arrays already slice to this length)
         #   ctx.sample_rate          — Hz
-        #   ctx.params               — dict keyed by PARAMS names (ctx.params["cutoff"])
+        #   ctx.params               — read-only view: ctx.params["cutoff"]
+        #                              or ctx.params.cutoff
         #   ctx.transport            — read-only mapping (bpm, beat, is_playing, ...)
         #   ctx.telemetry            — write per-block scalar readouts
         #   ctx.state                — read-only mapping over the bundle's STATE channel
-        #   ctx.sidechain            — sidechain input arrays (when bus is connected)
+        #   ctx.sidechain            — 2D numpy.float32 array mirroring inputs;
+        #                              zero-filled when no sidechain bus is connected
         # The legacy 7-arg form (inputs, outputs, frame_count, ...) is rejected at
         # script load — kernel logs "process() must take exactly one argument (ctx)".
-        for ch_in, ch_out in zip(ctx.inputs, ctx.outputs):
-            ch_out[:ctx.frame_count] = ch_in[:ctx.frame_count]  # passthrough
+        np.copyto(ctx.outputs, ctx.inputs)  # passthrough
     ```
 
     Persistent state: module-level globals (e.g. `_filters = None`, initialized on first call). \

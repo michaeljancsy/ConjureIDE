@@ -59,25 +59,27 @@ def process(ctx):
     \"""
     Process audio buffers.
 
-    Called once per audio render callback with pre-allocated numpy arrays.
-    Write your processed audio into ctx.outputs[ch][:ctx.frame_count].
+    Called once per audio render callback. Whole-array numpy ops broadcast
+    across channels and frames in one SIMD pass — prefer them over per-channel
+    Python loops.
 
     `ctx` exposes:
-        ctx.inputs       list of numpy.float32 arrays, one per channel
-        ctx.outputs      list of numpy.float32 arrays, one per channel
-        ctx.frame_count  number of valid samples this callback
+        ctx.inputs       2D numpy.float32 array, shape (channels, frame_count)
+        ctx.outputs      2D numpy.float32 array, shape (channels, frame_count)
+        ctx.frame_count  number of valid samples this callback (arrays are
+                         already sliced to this length — no extra [:n] needed)
         ctx.sample_rate  current sample rate in Hz (e.g. 44100.0)
-        ctx.params       dict of actual parameter values keyed by PARAMS name
+        ctx.params       read-only view; ctx.params["gain"] or ctx.params.gain
         ctx.transport    read-only mapping (bpm, beat, is_playing, ...)
         ctx.telemetry    write per-block scalar readouts the UI can show
         ctx.state        read-only mapping over the bundle's STATE channel
-        ctx.sidechain    sidechain input arrays (when a sidechain bus is connected)
+        ctx.sidechain    2D numpy.float32 array, same shape as inputs; zero-
+                         filled when no sidechain bus is connected
     \"""
     gain_db = ctx.params["gain"]
     gain = 10.0 ** (gain_db / 20.0)
 
-    for ch_in, ch_out in zip(ctx.inputs, ctx.outputs):
-        np.multiply(ch_in[:ctx.frame_count], gain, out=ch_out[:ctx.frame_count])
+    np.multiply(ctx.inputs, gain, out=ctx.outputs)
 """
 
     static let newRustTemplate = """
