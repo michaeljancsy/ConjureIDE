@@ -8,7 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUSTC_DIR="${REPO_ROOT}/rustc-dist"
-RUST_VERSION="1.93.1"
+RUST_VERSION="1.95.0"
 HOST_TARGET="aarch64-apple-darwin"
 
 RUSTC_URL="https://static.rust-lang.org/dist/rustc-${RUST_VERSION}-${HOST_TARGET}.tar.xz"
