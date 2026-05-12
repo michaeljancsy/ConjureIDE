@@ -86,11 +86,12 @@ pub struct PythonBackend {
     /// The same dict object exposed as `ctx.telemetry` — pre-seeded with
     /// `0.0` for each declared slot so script writes are dict updates.
     py_telemetry_dict: Option<Py<PyAny>>,
-    /// The dict that `ctx.params`'s MappingProxyType wraps (rich-metadata
-    /// mode only). Cached so the per-block update mutates this dict in
-    /// place instead of allocating a fresh dict + proxy each callback.
-    /// The proxy on `ctx.params` shares the same Python ref, so script
-    /// reads see updated values without us touching the proxy.
+    /// The dict that `ctx.params`'s `conjuredsp._ctx.ParamsView` wraps
+    /// (rich-metadata mode only). Cached so the per-block update mutates
+    /// this dict in place instead of allocating a fresh dict + view each
+    /// callback. The `ParamsView` on `ctx.params` holds the same dict by
+    /// reference, so script reads see updated values without us touching
+    /// the view object.
     py_params_dict: Option<Py<PyAny>>,
     /// Per-block telemetry snapshot the kernel reads via `read_telemetry`.
     telemetry_buf: [f32; TELEMETRY_LEN],
@@ -787,10 +788,10 @@ impl PythonBackend {
 
             // Update params (denormalize via metadata when present).
             if let Some(ref metadata) = self.param_metadata {
-                // Mutate the cached dict in place. The MappingProxyType
+                // Mutate the cached dict in place. The `ParamsView`
                 // already on `ctx.params` shares this dict by Python ref,
                 // so script reads see updated values without us
-                // allocating a fresh dict + proxy each block.
+                // allocating a fresh dict + view each block.
                 let dict_handle = self
                     .py_params_dict
                     .as_ref()

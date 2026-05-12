@@ -3627,6 +3627,73 @@ mod tests {
         assert!(time > 0.0, "Benchmark time should be positive, got {}", time);
     }
 
+    /// Plan-spec perf gate from PR #305: measure dsp_kernel_benchmark_process
+    /// on the three presets most sensitive to ctx-shape changes
+    /// (compressor: envelope follower across channels per sample; eq3:
+    /// 3× Biquad per channel per sample; nam: only factory preset that
+    /// calls conjuredsp.accel from inside process()). #[ignore]'d so it
+    /// doesn't run in normal CI — invoke with
+    ///   cargo test --release -p conjure_dsp benchmark_perf_critical_presets \
+    ///     -- --ignored --nocapture --test-threads=1
+    /// Runs benchmark_process() 5 times per preset (each does 5 inner
+    /// timed iterations after 1 warmup → 30 process() calls per preset)
+    /// and prints median / min / max across the 5 measurements.
+    #[test]
+    #[ignore = "perf benchmark; invoke with --ignored --nocapture"]
+    fn benchmark_perf_critical_presets() {
+        let (python_home, _) = match test_python_paths() {
+            Some(paths) => paths,
+            None => {
+                eprintln!("Skipping: bundled Python runtime not found");
+                return;
+            }
+        };
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        let presets = ["preset_compressor", "preset_eq3", "preset_nam"];
+        for preset in &presets {
+            eprintln!(">>> benchmarking {}", preset);
+            let script_path = manifest_dir.join(format!(
+                "../../ConjureDSPExtension/Resources/presets/{}.cdp/process.py",
+                preset
+            ));
+            if !script_path.exists() {
+                eprintln!("Skip {}: script not found at {:?}", preset, script_path);
+                continue;
+            }
+            let mut kernel = DSPKernel::new();
+            if !kernel.load_script(&python_home, script_path.to_str().unwrap()) {
+                eprintln!("Skip {}: load_script failed", preset);
+                continue;
+            }
+            // 2 channels, 512 frames, 48kHz — a typical DAW block size.
+            kernel.initialize(2, 512, 48000.0);
+
+            let mut times_ms: Vec<f64> = Vec::with_capacity(5);
+            for _ in 0..5 {
+                if let Some(t) = kernel.benchmark_process() {
+                    times_ms.push(t * 1000.0);
+                }
+            }
+            if times_ms.is_empty() {
+                eprintln!("Skip {}: benchmark_process returned None", preset);
+                continue;
+            }
+            times_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let median = times_ms[times_ms.len() / 2];
+            let min = times_ms[0];
+            let max = times_ms[times_ms.len() - 1];
+            eprintln!(
+                "BENCH {:25} median={:.4}ms  min={:.4}ms  max={:.4}ms  n={}",
+                preset,
+                median,
+                min,
+                max,
+                times_ms.len()
+            );
+        }
+    }
+
     // --- WASM integration tests ---
 
     fn gain_half_wasm() -> Vec<u8> {
