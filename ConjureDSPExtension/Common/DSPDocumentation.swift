@@ -334,13 +334,18 @@ enum DSPDocumentation {
                   row_out[i] = _filters[ch].process_sample(row_in[i])
 
     Rust:
-      static mut FILTERS: [Biquad; 2] = [Biquad::new(); 2];
-      // in process():
+      persist!(BIQUADS: [Biquad; 2] = [Biquad::new(); 2]);
+      // Inside process! { ctx => ... }:
       let coeffs = BiquadCoeffs::lowpass(ctx.param(CUTOFF) as f64, 0.707, ctx.sample_rate() as f64);
-      unsafe {
-          FILTERS[c].set_coeffs(coeffs);
-          ctx.set_output(c, i, FILTERS[c].process_sample(ctx.input(c, i) as f64) as f32);
+      let mut biquads = BIQUADS.get();
+      for c in 0..ctx.channels() {
+          biquads[c].set_coeffs(coeffs);
+          for i in 0..ctx.frames() {
+              let y = biquads[c].process_sample(ctx.input(c, i) as f64) as f32;
+              ctx.set_output(c, i, y);
+          }
       }
+      BIQUADS.set(biquads);
     """
 
     static let delays = """
@@ -356,7 +361,10 @@ enum DSPDocumentation {
 
     Rust: DelayLine::<SIZE>::new() — const generic, compile-time size
       SIZE must be a const. Example: DelayLine::<48000>::new()
-      Stored in static mut for persistence: static mut DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2];
+      Stored across blocks via persist_buf! (in-place mutation, avoids the multi-KB get/set round-trip):
+        persist_buf!(DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2]);
+        // Inside process! { ctx => ... }:
+        DELAYS.with_mut(|d| { d[c].write(sample); let wet = d[c].read(delay_samples as f64); });
 
     ## Methods
 
@@ -2233,13 +2241,17 @@ enum DSPDocumentation {
 
     ## Typical usage pattern
 
-      static mut FILTERS: [Biquad; 2] = [Biquad::new(); 2];
-      // in process():
+      persist!(BIQUADS: [Biquad; 2] = [Biquad::new(); 2]);
+      // Inside process! { ctx => ... }:
       let coeffs = BiquadCoeffs::lowpass(ctx.param(CUTOFF) as f64, 0.707, ctx.sample_rate() as f64);
-      unsafe {
-          FILTERS[c].set_coeffs(coeffs);
-          ctx.set_output(c, i, FILTERS[c].process_sample(ctx.input(c, i) as f64) as f32);
+      let mut biquads = BIQUADS.get();
+      for c in 0..ctx.channels() {
+          biquads[c].set_coeffs(coeffs);
+          for i in 0..ctx.frames() {
+              ctx.set_output(c, i, biquads[c].process_sample(ctx.input(c, i) as f64) as f32);
+          }
       }
+      BIQUADS.set(biquads);
     """
 
     private static let pythonDelays = """
@@ -2283,7 +2295,8 @@ enum DSPDocumentation {
 
     DelayLine::<SIZE>::new() — const generic, compile-time size
       SIZE must be a const. Example: DelayLine::<48000>::new()
-      Stored in static mut for persistence: static mut DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2];
+      Stored across blocks via persist_buf! (in-place via .with_mut, avoids the multi-KB get/set round-trip):
+        persist_buf!(DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2]);
 
     ## Methods
 

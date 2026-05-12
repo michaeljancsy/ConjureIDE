@@ -1,10 +1,21 @@
 /// Fixed-size circular delay buffer.
 ///
-/// `SIZE` must be a compile-time constant. Store in `static mut` for persistence
-/// across callbacks.
+/// `SIZE` must be a compile-time constant. Per-sample mutation across
+/// callbacks goes through `persist_buf!` (in-place via `.with_mut(|b| …)` —
+/// avoids the `.get()` / `.set()` round-trip cost on the multi-KB buffer):
 ///
 /// ```ignore
-/// static mut DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2];
+/// persist_buf!(DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2]);
+///
+/// // Inside process! { ctx => … }:
+/// DELAYS.with_mut(|d| {
+///     for c in 0..ctx.channels() {
+///         for i in 0..ctx.frames() {
+///             d[c].write(ctx.input(c, i));
+///             ctx.set_output(c, i, d[c].read(delay_samples));
+///         }
+///     }
+/// });
 /// ```
 #[derive(Clone, Copy)]
 pub struct DelayLine<const SIZE: usize> {

@@ -91,20 +91,20 @@ void init(uint32_t max_frames, uint32_t channel_count, float sample_rate);
 For simplicity, use a flat buffer layout in WASM linear memory. The host allocates input/output regions in the module's memory and passes offsets.
 
 ### Rust (compiled to WASM)
+
+> **Note**: this RFC predates PR #308's modernization. The live shape now
+> uses the `process! { ctx => … }` macro that emits a zero-arg
+> `extern "C" fn process()` — the 5-arg signature shown below is gone.
+> See `get_docs("all")` for the current API.
+
 ```rust
-#[no_mangle]
-pub extern "C" fn process(
-    input_ptr: *mut f32,
-    output_ptr: *mut f32,
-    channel_count: u32,
-    frame_count: u32,
-    sample_rate: f32,
-) {
-    let frames = frame_count as usize;
-    let channels = channel_count as usize;
-    let input = unsafe { std::slice::from_raw_parts(input_ptr, channels * frames) };
-    let output = unsafe { std::slice::from_raw_parts_mut(output_ptr, channels * frames) };
-    // DSP processing here
+use conjuredsp::*;
+process! { ctx =>
+    for c in 0..ctx.channels() {
+        for i in 0..ctx.frames() {
+            ctx.set_output(c, i, ctx.input(c, i));
+        }
+    }
 }
 ```
 

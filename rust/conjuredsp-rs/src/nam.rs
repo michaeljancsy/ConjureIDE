@@ -5,9 +5,14 @@
 //!
 //! # Quick start
 //!
+//! `process!` invokes `setup!()` internally, so don't write `setup!();`
+//! alongside it. The `NAM_IN` / `NAM_OUT` scratch buffers are emitted
+//! by the `nam!` macro and accessed inside `unsafe { … }` — that's the
+//! macro's contract for host-import calls, not the deprecated
+//! `static mut` user-state idiom.
+//!
 //! ```ignore
 //! use conjuredsp::*;
-//! setup!();
 //! nam!("tone3000://abc123/def456");
 //!
 //! params! {
@@ -15,12 +20,7 @@
 //!     MIX = mix(),
 //! }
 //!
-//! #[no_mangle]
-//! pub extern "C" fn process(
-//!     input: *const f32, output: *mut f32,
-//!     channel_count: i32, frame_count: i32, sample_rate: f32,
-//! ) {
-//!     let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
+//! process! { ctx =>
 //!     unsafe {
 //!         if let Some(model) = NAM_MODEL.as_mut() {
 //!             for c in 0..ctx.channels() {
