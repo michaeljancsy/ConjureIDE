@@ -3627,17 +3627,24 @@ mod tests {
         assert!(time > 0.0, "Benchmark time should be positive, got {}", time);
     }
 
-    /// Plan-spec perf gate from PR #305: measure dsp_kernel_benchmark_process
-    /// on the three presets most sensitive to ctx-shape changes
-    /// (compressor: envelope follower across channels per sample; eq3:
-    /// 3× Biquad per channel per sample; nam: only factory preset that
-    /// calls conjuredsp.accel from inside process()). #[ignore]'d so it
-    /// doesn't run in normal CI — invoke with
+    /// Plan-spec perf gate from PR #305 (extended to also cover the
+    /// sister presets that have the same sample-outer / channel-inner
+    /// peak-detect shape — limiter, lookahead_limiter, noisegate, wah —
+    /// which were caught regressing post-#305 by the same +18% mechanism
+    /// the compressor did). #[ignore]'d so it doesn't run in normal CI —
+    /// invoke with
     ///   cargo test --release -p conjure_dsp benchmark_perf_critical_presets \
     ///     -- --ignored --nocapture --test-threads=1
-    /// Runs benchmark_process() 5 times per preset (each does 5 inner
-    /// timed iterations after 1 warmup → 30 process() calls per preset)
-    /// and prints median / min / max across the 5 measurements.
+    /// Set CONJUREDSP_TONES_DIR to a path containing tone3000 .nam files
+    /// (see preset_nam.cdp's referenced model); the test eprintln-skips
+    /// NAM if its model can't load.
+    ///
+    /// Each preset: benchmark_process() is called 5 times. Each call does
+    /// 1 warmup + 5 timed process() iterations and returns the MAX of the
+    /// 5 timed runs (worst-case is what matters for a real-time render
+    /// deadline). The outer harness then reports the MEDIAN of those 5
+    /// max-times. Total: 30 process() calls per preset, reported as
+    /// "median of worst-case-of-5."
     #[test]
     #[ignore = "perf benchmark; invoke with --ignored --nocapture"]
     fn benchmark_perf_critical_presets() {
@@ -3650,7 +3657,21 @@ mod tests {
         };
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-        let presets = ["preset_compressor", "preset_eq3", "preset_nam"];
+        if std::env::var_os("CONJUREDSP_TONES_DIR").is_none() {
+            eprintln!(
+                "warning: CONJUREDSP_TONES_DIR not set — preset_nam will fail to load \
+                 and be skipped (still measures the other 6 presets)."
+            );
+        }
+        let presets = [
+            "preset_compressor",
+            "preset_limiter",
+            "preset_lookahead_limiter",
+            "preset_noisegate",
+            "preset_wah",
+            "preset_eq3",
+            "preset_nam",
+        ];
         for preset in &presets {
             eprintln!(">>> benchmarking {}", preset);
             let script_path = manifest_dir.join(format!(

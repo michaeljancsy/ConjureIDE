@@ -46,11 +46,12 @@ def process(ctx):
     gain_arr = np.ones(frame_count, dtype=np.float32)
     g = _gain
 
+    # Vectorized per-sample max-abs across channels (from raw, non-delayed
+    # input); one numpy call replaces the inner per-sample loop.
+    peak_per_sample = np.abs(ctx.inputs).max(axis=0)
+
     for i in range(frame_count):
-        # Peak detect from raw (non-delayed) input
-        peak = 0.0
-        for ch in range(n_ch):
-            peak = max(peak, abs(ctx.inputs[ch][i]))
+        peak = peak_per_sample[i]
 
         # Compute target gain
         if peak > threshold:
