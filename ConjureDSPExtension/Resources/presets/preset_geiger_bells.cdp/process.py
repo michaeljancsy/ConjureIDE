@@ -46,7 +46,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -72,7 +72,7 @@ def process(ctx):
     bell_gain = 2.0 + 4.0 * bloom
     sub_gain = 0.6 + 1.2 * subpad
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         s.countdown -= 1.0
         impulse = 0.0
         if s.countdown <= 0.0:

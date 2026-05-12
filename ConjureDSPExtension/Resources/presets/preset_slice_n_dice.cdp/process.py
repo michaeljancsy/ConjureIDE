@@ -95,8 +95,7 @@ def _ensure_buffers(channel_count, sample_rate):
 
 def process(ctx):
     sr = float(ctx.sample_rate)
-    n = ctx.frame_count
-    channels = len(ctx.outputs)
+    channels, n = ctx.outputs.shape
     _ensure_buffers(channels, sr)
 
     bpm = ctx.transport.bpm if ctx.transport.bpm > 0 else 120.0

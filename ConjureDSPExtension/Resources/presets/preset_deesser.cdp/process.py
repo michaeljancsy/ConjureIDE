@@ -35,7 +35,7 @@ def process(ctx):
     """
     global _sc_filters, _envelope
 
-    n_ch = len(ctx.inputs)
+    n_ch, frame_count = ctx.inputs.shape
 
     if _sc_filters is None or len(_sc_filters) != n_ch:
         _sc_filters = [Biquad() for _ in range(n_ch)]
@@ -58,7 +58,7 @@ def process(ctx):
 
     env = _envelope
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         # Sidechain: bandpass filter then peak detect across channels
         sc_peak = 0.0
         for ch in range(n_ch):

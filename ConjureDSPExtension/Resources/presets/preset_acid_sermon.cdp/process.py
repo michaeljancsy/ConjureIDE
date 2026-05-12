@@ -46,7 +46,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -73,7 +73,7 @@ def process(ctx):
     # Hard clip ceiling — more crust → lower ceiling → more clipping
     clip_ceil = 1.0 - 0.7 * crust
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         lm = [s.formant_lfo[k].tick() for k in range(3)]
         fm = [(1.0 - formant_depth) + formant_depth * (0.5 + 0.5 * lm[k])
               for k in range(3)]

@@ -52,7 +52,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -79,7 +79,7 @@ def process(ctx):
 
     chorus_gain = 1.0 / 5.0
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         cm = [s.chorus_lfo[k].tick() for k in range(5)]
         w_tri = s.waltz_lfo.tick()
         waltz_mod = (1.0 - waltz_depth) + waltz_depth * abs(w_tri)

@@ -40,7 +40,7 @@ def process(ctx):
     base_delay_ms = ctx.params["delay"]
     mix = ctx.params["mix"]
 
-    n_ch = len(ctx.inputs)
+    n_ch, frame_count = ctx.inputs.shape
 
     # Initialize delay buffer on first call
     if _delay_buf is None or len(_delay_buf) != n_ch:
@@ -51,7 +51,7 @@ def process(ctx):
     phase = _lfo_phase
     wp = _write_pos
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         # LFO modulates delay time
         delay_samples = (base_delay_ms + depth_ms * math.sin(phase)) * ctx.sample_rate / 1000.0
 

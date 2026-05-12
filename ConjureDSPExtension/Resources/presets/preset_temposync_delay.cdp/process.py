@@ -39,7 +39,7 @@ def process(ctx):
     mix = ctx.params["mix"]
 
     tempo = ctx.transport.bpm
-    n_ch = len(ctx.inputs)
+    n_ch, frame_count = ctx.inputs.shape
 
     if _delay_buf is None or len(_delay_buf) != n_ch:
         _delay_buf = [np.zeros(MAX_DELAY, dtype=np.float32) for _ in range(n_ch)]
@@ -55,7 +55,7 @@ def process(ctx):
     delay_samples = max(1, min(delay_samples, MAX_DELAY - 1))
     wp = _write_pos
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         rp = (wp - delay_samples + MAX_DELAY) % MAX_DELAY
 
         for ch in range(n_ch):

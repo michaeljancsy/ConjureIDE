@@ -43,7 +43,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -64,7 +64,7 @@ def process(ctx):
     drive = 1.0 + 5.0 * clip
     drop_thresh = -0.6 + 1.2 * dropout
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         drop_val = s.dropout_lfo.tick()
         gate = drop_val - drop_thresh
         if gate < 0.0:

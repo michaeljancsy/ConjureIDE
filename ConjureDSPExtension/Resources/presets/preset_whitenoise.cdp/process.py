@@ -30,7 +30,9 @@ def process(ctx):
     """
     amplitude = ctx.params["level"]
 
-    for i in range(ctx.frame_count):
+    n_ch, frame_count = ctx.outputs.shape
+
+    for i in range(frame_count):
         sample = _next_f32() * amplitude
-        for ch in range(len(ctx.outputs)):
+        for ch in range(n_ch):
             ctx.outputs[ch][i] = sample

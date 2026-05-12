@@ -32,7 +32,7 @@ def process(ctx):
 
     chunk_ms = ctx.params["rate"]
 
-    n_ch = len(ctx.inputs)
+    n_ch, frame_count = ctx.inputs.shape
     chunk_size = int(chunk_ms * 0.001 * ctx.sample_rate)
     if chunk_size > MAX_CHUNK:
         chunk_size = MAX_CHUNK
@@ -46,7 +46,7 @@ def process(ctx):
 
     wp = _write_pos
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         for ch in range(n_ch):
             # Record into record buffer
             _record_buf[ch][wp] = ctx.inputs[ch][i]

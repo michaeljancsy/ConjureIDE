@@ -38,7 +38,7 @@ def process(ctx):
     """
     global _filters
 
-    n_ch = len(ctx.inputs)
+    n_ch, frame_count = ctx.inputs.shape
 
     if _filters is None or len(_filters) != n_ch:
         _filters = [[Biquad(), Biquad(), Biquad()] for _ in range(n_ch)]
@@ -60,8 +60,10 @@ def process(ctx):
         _filters[ch][1].set_coeffs(mid_coeffs)
         _filters[ch][2].set_coeffs(high_coeffs)
 
-        for i in range(ctx.frame_count):
-            x = float(ctx.inputs[ch][i])
+        row_in = ctx.inputs[ch]
+        row_out = ctx.outputs[ch]
+        for i in range(frame_count):
+            x = float(row_in[i])
 
             if not low_bypass:
                 x = _filters[ch][0].process_sample(x)
@@ -78,4 +80,4 @@ def process(ctx):
             else:
                 _filters[ch][2].process_sample(x)
 
-            ctx.outputs[ch][i] = x
+            row_out[i] = x

@@ -64,7 +64,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -98,7 +98,7 @@ def process(ctx):
     tank_fb_amt = 0.85 * spring
     slap_fb_amt = 0.4
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         v = s.lfo_vib.tick()
         m0 = s.lfos_ch[0].tick()
         m1 = s.lfos_ch[1].tick()

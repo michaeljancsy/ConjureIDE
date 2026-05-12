@@ -38,12 +38,16 @@ def process(ctx):
     a2 = g * a1
     a3 = g * a2
 
-    for ch in range(len(ctx.inputs)):
+    n_ch, frame_count = ctx.inputs.shape
+
+    for ch in range(n_ch):
         ic1eq = _state[ch][0] if ch < len(_state) else 0.0
         ic2eq = _state[ch][1] if ch < len(_state) else 0.0
 
-        for i in range(ctx.frame_count):
-            x = ctx.inputs[ch][i]
+        row_in = ctx.inputs[ch]
+        row_out = ctx.outputs[ch]
+        for i in range(frame_count):
+            x = row_in[i]
             v3 = x - ic2eq
             v1 = a1 * ic1eq + a2 * v3
             v2 = ic2eq + a2 * ic1eq + a3 * v3
@@ -55,13 +59,13 @@ def process(ctx):
             high = x - k * v1 - v2
 
             if MODE == "low":
-                ctx.outputs[ch][i] = low
+                row_out[i] = low
             elif MODE == "high":
-                ctx.outputs[ch][i] = high
+                row_out[i] = high
             elif MODE == "band":
-                ctx.outputs[ch][i] = band
+                row_out[i] = band
             else:  # notch
-                ctx.outputs[ch][i] = low + high
+                row_out[i] = low + high
 
         if ch < len(_state):
             _state[ch][0] = ic1eq

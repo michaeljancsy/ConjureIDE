@@ -36,7 +36,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -64,7 +64,7 @@ def process(ctx):
     cb_d = [COMB_MS[c] * sz * 0.001 * ctx.sample_rate for c in range(4)]
     ap_d = [max(AP_MS[a] * sz * 0.001 * ctx.sample_rate, 1.0) for a in range(2)]
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         m = [lfo.tick() for lfo in s.lfos]
 
         for ch in range(nch):
