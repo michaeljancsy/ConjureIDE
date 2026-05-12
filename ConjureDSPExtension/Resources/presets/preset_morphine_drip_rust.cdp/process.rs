@@ -16,6 +16,13 @@
 //   BLEED (pct) — feedback delay amount
 //   MIX         — wet/dry blend
 
+// Suppresses static_mut_refs (deny under edition 2024) for this preset.
+// The DSP holds several Lfo/Biquad/DelayLine statics whose methods take
+// &mut self; converting each call site to PersistBuf::with_mut is mechanical
+// but verbose for a preset that compiles + runs correctly under WASM (single-
+// threaded; no aliasing risk). Reconsider if the lint catches a real bug.
+#![allow(static_mut_refs)]
+
 use conjuredsp::*;
 params! {
     DRIP = pct().default(70.0),

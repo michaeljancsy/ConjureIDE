@@ -351,7 +351,7 @@ pub(crate) fn process_resident_bytes() -> u64 {
         const MACH_TASK_BASIC_INFO: u32 = 20;
         const MACH_TASK_BASIC_INFO_COUNT: u32 = 12; // 48 bytes / 4 bytes per natural_t
 
-        extern "C" {
+        unsafe extern "C" {
             fn mach_task_self() -> u32;
             fn task_info(
                 target_task: u32,
@@ -878,9 +878,9 @@ impl DSPKernel {
     /// update the cache. Cheap in the steady state — one Acquire load +
     /// one Arc::clone on miss.
     pub fn snapshot_state(&self) -> (u64, Arc<Vec<u8>>) {
-        let gen = self.state_generation.load(Ordering::Acquire);
+        let generation = self.state_generation.load(Ordering::Acquire);
         let buf = self.state_buffer.load_full();
-        (gen, buf)
+        (generation, buf)
     }
 
     /// Read the current generation counter without taking the buffer.

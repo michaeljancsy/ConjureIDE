@@ -112,7 +112,7 @@ if [ -f "${CONJUREDSP_SRC}" ]; then
     echo "Compiling conjuredsp library for wasm32-wasip1..."
     "${RUSTC_DIR}/bin/rustc" \
         --target wasm32-wasip1 \
-        --edition 2021 \
+        --edition 2024 \
         --crate-type rlib \
         --crate-name conjuredsp \
         -C opt-level=2 \

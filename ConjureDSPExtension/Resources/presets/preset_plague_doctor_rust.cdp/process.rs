@@ -16,6 +16,13 @@
 //   PRESENCE (pct) — midrange presence peak gain
 //   MIX            — wet/dry blend
 
+// Suppresses static_mut_refs (deny under edition 2024) for this preset.
+// The DSP holds several Lfo/Biquad/DelayLine statics whose methods take
+// &mut self; converting each call site to PersistBuf::with_mut is mechanical
+// but verbose for a preset that compiles + runs correctly under WASM (single-
+// threaded; no aliasing risk). Reconsider if the lint catches a real bug.
+#![allow(static_mut_refs)]
+
 use conjuredsp::*;
 params! {
     MASK = pct().default(65.0),

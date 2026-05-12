@@ -22,7 +22,7 @@ const STATE_HEADER_BYTES: usize = 12;
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-extern "C" {
+unsafe extern "C" {
     /// C = A * B where A is m×k, B is k×n, C is m×n. Stride params are element strides.
     fn vDSP_mmul(
         a: *const f32, a_stride: i32,

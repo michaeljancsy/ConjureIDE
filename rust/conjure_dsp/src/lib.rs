@@ -1,3 +1,12 @@
+// FFI entry points and the C-callable kernel surface are studded with
+// `unsafe fn` bodies that perform raw pointer reads / writes. Edition
+// 2024 promotes `unsafe_op_in_unsafe_fn` to a deny, which would force
+// inner `unsafe { … }` blocks at every callsite (62 here, mechanical
+// noise). Allow at the crate level instead — the entire surface
+// already has its safety contract documented in the trailing `# Safety`
+// section of each fn.
+#![allow(unsafe_op_in_unsafe_fn)]
+
 mod backend;
 mod kernel;
 mod license;
@@ -19,14 +28,14 @@ static TONES_DIR_INIT: OnceLock<()> = OnceLock::new();
 /// Opaque handle to the DSP kernel. Swift sees this as `OpaquePointer`.
 pub type DSPKernelRef = *mut DSPKernel;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn dsp_kernel_create() -> DSPKernelRef {
     Box::into_raw(Box::new(DSPKernel::new()))
 }
 
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_destroy(kernel: DSPKernelRef) {
     if !kernel.is_null() {
         drop(Box::from_raw(kernel));
@@ -35,7 +44,7 @@ pub unsafe extern "C" fn dsp_kernel_destroy(kernel: DSPKernelRef) {
 
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_initialize(
     kernel: DSPKernelRef,
     input_channel_count: i32,
@@ -57,14 +66,14 @@ pub unsafe extern "C" fn dsp_kernel_initialize(
 
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_deinitialize(kernel: DSPKernelRef) {
     (*kernel).deinitialize();
 }
 
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_set_bypassed(kernel: DSPKernelRef, bypass: bool) {
     (*kernel).set_bypassed(bypass);
 }
@@ -80,7 +89,7 @@ pub unsafe extern "C" fn dsp_kernel_set_bypassed(kernel: DSPKernelRef, bypass: b
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_begin_preset_transition(kernel: DSPKernelRef) {
     (*kernel).begin_preset_transition();
 }
@@ -91,7 +100,7 @@ pub unsafe extern "C" fn dsp_kernel_begin_preset_transition(kernel: DSPKernelRef
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_end_preset_transition(kernel: DSPKernelRef) {
     (*kernel).end_preset_transition();
 }
@@ -102,21 +111,21 @@ pub unsafe extern "C" fn dsp_kernel_end_preset_transition(kernel: DSPKernelRef) 
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_swap_phase(kernel: DSPKernelRef) -> u8 {
     (*kernel).swap_phase()
 }
 
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_is_bypassed(kernel: DSPKernelRef) -> bool {
     (*kernel).is_bypassed()
 }
 
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_set_parameter(
     kernel: DSPKernelRef,
     address: u64,
@@ -127,21 +136,21 @@ pub unsafe extern "C" fn dsp_kernel_set_parameter(
 
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_get_parameter(kernel: DSPKernelRef, address: u64) -> f32 {
     (*kernel).get_parameter(address)
 }
 
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_get_max_frames(kernel: DSPKernelRef) -> u32 {
     (*kernel).maximum_frames_to_render()
 }
 
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_set_max_frames(kernel: DSPKernelRef, max_frames: u32) {
     (*kernel).set_maximum_frames_to_render(max_frames);
 }
@@ -153,7 +162,7 @@ pub unsafe extern "C" fn dsp_kernel_set_max_frames(kernel: DSPKernelRef, max_fra
 /// - `input_buffers` must point to `channel_count` valid `*const f32` pointers.
 /// - `output_buffers` must point to `channel_count` valid `*mut f32` pointers.
 /// - Each channel buffer must contain at least `frame_count` samples.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_process(
     kernel: DSPKernelRef,
     input_buffers: *const *const f32,
@@ -184,7 +193,7 @@ pub unsafe extern "C" fn dsp_kernel_process(
 /// - When `sidechain_connected` is true and `sidechain_buffers` is non-null,
 ///   it must point to `sidechain_channel_count` valid `*const f32` pointers,
 ///   each with at least `frame_count` samples.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_process_with_sidechain(
     kernel: DSPKernelRef,
     input_buffers: *const *const f32,
@@ -211,7 +220,7 @@ pub unsafe extern "C" fn dsp_kernel_process_with_sidechain(
 ///
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_set_transport(
     kernel: DSPKernelRef,
     tempo: f64,
@@ -241,7 +250,7 @@ pub unsafe extern "C" fn dsp_kernel_set_transport(
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `python_home` and `script_path` must be valid null-terminated C strings.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_load_script(
     kernel: DSPKernelRef,
     python_home: *const c_char,
@@ -265,7 +274,7 @@ pub unsafe extern "C" fn dsp_kernel_load_script(
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `path` must be a valid null-terminated C string, or null.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_set_extra_site_packages(
     kernel: DSPKernelRef,
     path: *const c_char,
@@ -287,7 +296,7 @@ pub unsafe extern "C" fn dsp_kernel_set_extra_site_packages(
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `path` must be a valid null-terminated C string, or null.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_set_tones_dir(
     _kernel: DSPKernelRef,
     path: *const c_char,
@@ -296,7 +305,13 @@ pub unsafe extern "C" fn dsp_kernel_set_tones_dir(
         if let Ok(s) = CStr::from_ptr(path).to_str() {
             let owned = s.to_string();
             TONES_DIR_INIT.get_or_init(|| {
-                std::env::set_var("CONJUREDSP_TONES_DIR", &owned);
+                // SAFETY: get_or_init guarantees this runs exactly once,
+                // and dsp_kernel_set_tones_dir is called from the Swift
+                // main thread before any pyo3 init or worker spawn —
+                // no concurrent env mutation possible.
+                unsafe {
+                    std::env::set_var("CONJUREDSP_TONES_DIR", &owned);
+                }
             });
         }
     }
@@ -313,7 +328,7 @@ pub unsafe extern "C" fn dsp_kernel_set_tones_dir(
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `wasm_bytes` must point to `len` valid bytes of a WASM module.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_load_wasm(
     kernel: DSPKernelRef,
     wasm_bytes: *const u8,
@@ -331,7 +346,7 @@ pub unsafe extern "C" fn dsp_kernel_load_wasm(
 ///
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_nam_path_count(kernel: DSPKernelRef) -> u32 {
     (*kernel).nam_paths().len() as u32
 }
@@ -342,7 +357,7 @@ pub unsafe extern "C" fn dsp_kernel_nam_path_count(kernel: DSPKernelRef) -> u32 
 ///
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_nam_path_at(
     kernel: DSPKernelRef,
     idx: u32,
@@ -369,7 +384,7 @@ pub unsafe extern "C" fn dsp_kernel_nam_path_at(
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `data` must point to `len` valid bytes.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_inject_nam_slot(
     kernel: DSPKernelRef,
     slot: u32,
@@ -395,7 +410,7 @@ pub unsafe extern "C" fn dsp_kernel_inject_nam_slot(
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_benchmark_process(kernel: DSPKernelRef) -> f64 {
     (*kernel).benchmark_process().unwrap_or(-1.0)
 }
@@ -419,7 +434,7 @@ pub unsafe extern "C" fn dsp_kernel_error_generation(kernel: DSPKernelRef) -> u6
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_last_error(kernel: DSPKernelRef) -> *const c_char {
     thread_local! {
         static LAST_ERR: std::cell::RefCell<Option<std::ffi::CString>> = const { std::cell::RefCell::new(None) };
@@ -444,7 +459,7 @@ pub unsafe extern "C" fn dsp_kernel_last_error(kernel: DSPKernelRef) -> *const c
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_param_names_json(kernel: DSPKernelRef) -> *const c_char {
     (*kernel).param_names_json_ptr()
 }
@@ -456,7 +471,7 @@ pub unsafe extern "C" fn dsp_kernel_param_names_json(kernel: DSPKernelRef) -> *c
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_param_metadata_json(kernel: DSPKernelRef) -> *const c_char {
     (*kernel).param_metadata_json_ptr()
 }
@@ -467,7 +482,7 @@ pub unsafe extern "C" fn dsp_kernel_param_metadata_json(kernel: DSPKernelRef) ->
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_latency_samples(kernel: DSPKernelRef) -> u32 {
     (*kernel).latency_samples()
 }
@@ -484,7 +499,7 @@ pub unsafe extern "C" fn dsp_kernel_latency_samples(kernel: DSPKernelRef) -> u32
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_telemetry_metadata_json(
     kernel: DSPKernelRef,
 ) -> *const c_char {
@@ -501,7 +516,7 @@ pub unsafe extern "C" fn dsp_kernel_telemetry_metadata_json(
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `out` must point to at least `max` writable f32 values.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_read_telemetry(
     kernel: DSPKernelRef,
     out: *mut f32,
@@ -524,7 +539,7 @@ pub unsafe extern "C" fn dsp_kernel_read_telemetry(
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `out` must point to at least `max` writable f32 values.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_read_telemetry_vec(
     kernel: DSPKernelRef,
     slot_index: u32,
@@ -540,7 +555,7 @@ pub unsafe extern "C" fn dsp_kernel_read_telemetry_vec(
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_set_capture_enabled(kernel: DSPKernelRef, enabled: bool) {
     (*kernel).set_capture_enabled(enabled);
 }
@@ -552,7 +567,7 @@ pub unsafe extern "C" fn dsp_kernel_set_capture_enabled(kernel: DSPKernelRef, en
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `out` must point to at least `max_samples` writable f32 values.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_read_input_ring(
     kernel: DSPKernelRef,
     out: *mut f32,
@@ -569,7 +584,7 @@ pub unsafe extern "C" fn dsp_kernel_read_input_ring(
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `out` must point to at least `max_samples` writable f32 values.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_read_output_ring(
     kernel: DSPKernelRef,
     out: *mut f32,
@@ -588,7 +603,7 @@ pub unsafe extern "C" fn dsp_kernel_read_output_ring(
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `token` must be a valid null-terminated C string.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_verify_token(
     kernel: DSPKernelRef,
     token: *const c_char,
@@ -622,7 +637,7 @@ pub unsafe extern "C" fn dsp_kernel_verify_token(
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_is_licensed(kernel: DSPKernelRef) -> bool {
     (*kernel).is_licensed()
 }
@@ -632,7 +647,7 @@ pub unsafe extern "C" fn dsp_kernel_is_licensed(kernel: DSPKernelRef) -> bool {
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_demo_seconds_remaining(
     kernel: DSPKernelRef,
     sample_rate: f64,
@@ -647,7 +662,7 @@ pub unsafe extern "C" fn dsp_kernel_demo_seconds_remaining(
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_set_subscription_status(kernel: DSPKernelRef, status: u8) {
     let s = license::SubscriptionStatus::from_u8(status);
     (*kernel).set_subscription_status(s);
@@ -659,7 +674,7 @@ pub unsafe extern "C" fn dsp_kernel_set_subscription_status(kernel: DSPKernelRef
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_subscription_status(kernel: DSPKernelRef) -> u8 {
     (*kernel).subscription_status() as u8
 }
@@ -669,7 +684,7 @@ pub unsafe extern "C" fn dsp_kernel_subscription_status(kernel: DSPKernelRef) ->
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_grace_deadline_unix(kernel: DSPKernelRef) -> i64 {
     (*kernel).grace_deadline_unix()
 }
@@ -678,7 +693,7 @@ pub unsafe extern "C" fn dsp_kernel_grace_deadline_unix(kernel: DSPKernelRef) ->
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_set_licensed(kernel: DSPKernelRef, licensed: bool) {
     (*kernel).set_licensed(licensed);
 }
@@ -687,14 +702,14 @@ pub unsafe extern "C" fn dsp_kernel_set_licensed(kernel: DSPKernelRef, licensed:
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_reset_demo(kernel: DSPKernelRef) {
     (*kernel).reset_demo();
 }
 
 /// Return a pointer to the embedded Ed25519 public key (32 bytes).
 /// Only available in debug builds for diagnostics. Returns null in release.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn dsp_kernel_public_key() -> *const u8 {
     #[cfg(debug_assertions)]
     {
@@ -713,7 +728,7 @@ pub extern "C" fn dsp_kernel_public_key() -> *const u8 {
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_profiler_current_us(kernel: DSPKernelRef) -> u32 {
     (*kernel).profiler_current_us.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -723,7 +738,7 @@ pub unsafe extern "C" fn dsp_kernel_profiler_current_us(kernel: DSPKernelRef) ->
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_profiler_avg_us(kernel: DSPKernelRef) -> u32 {
     (*kernel).profiler_avg_us.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -733,7 +748,7 @@ pub unsafe extern "C" fn dsp_kernel_profiler_avg_us(kernel: DSPKernelRef) -> u32
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_profiler_peak_us(kernel: DSPKernelRef) -> u32 {
     (*kernel).profiler_peak_us.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -743,7 +758,7 @@ pub unsafe extern "C" fn dsp_kernel_profiler_peak_us(kernel: DSPKernelRef) -> u3
 /// Get the current process resident memory in bytes via mach task_info.
 /// Does not require a kernel — measures process-wide RSS.
 /// Returns 0 on failure. Safe to call from any thread (~1µs).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn dsp_kernel_process_resident_bytes() -> u64 {
     kernel::process_resident_bytes()
 }
@@ -752,7 +767,7 @@ pub extern "C" fn dsp_kernel_process_resident_bytes() -> u64 {
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_memory_baseline_bytes(kernel: DSPKernelRef) -> u64 {
     (*kernel).memory_baseline_bytes()
 }
@@ -762,7 +777,7 @@ pub unsafe extern "C" fn dsp_kernel_memory_baseline_bytes(kernel: DSPKernelRef) 
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_wasm_memory_bytes(kernel: DSPKernelRef) -> u64 {
     (*kernel).wasm_memory_bytes()
 }
@@ -776,7 +791,7 @@ pub unsafe extern "C" fn dsp_kernel_wasm_memory_bytes(kernel: DSPKernelRef) -> u
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_last_render_frame_count(kernel: DSPKernelRef) -> u32 {
     (*kernel).last_render_frame_count()
 }
@@ -797,7 +812,7 @@ pub unsafe extern "C" fn dsp_kernel_last_render_frame_count(kernel: DSPKernelRef
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_set_state_cap(kernel: DSPKernelRef, max_bytes: usize) {
     (*kernel).set_state_cap(max_bytes);
 }
@@ -806,7 +821,7 @@ pub unsafe extern "C" fn dsp_kernel_set_state_cap(kernel: DSPKernelRef, max_byte
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_state_cap(kernel: DSPKernelRef) -> usize {
     (*kernel).state_cap()
 }
@@ -819,7 +834,7 @@ pub unsafe extern "C" fn dsp_kernel_state_cap(kernel: DSPKernelRef) -> usize {
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `bytes` must be a valid pointer to `len` bytes (or null when len==0).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_set_state_json(
     kernel: DSPKernelRef,
     bytes: *const u8,
@@ -841,7 +856,7 @@ pub unsafe extern "C" fn dsp_kernel_set_state_json(
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - When `max_len > 0`, `out` must be valid for `max_len` bytes.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_get_state_json(
     kernel: DSPKernelRef,
     out: *mut u8,
@@ -861,7 +876,7 @@ pub unsafe extern "C" fn dsp_kernel_get_state_json(
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_state_generation(kernel: DSPKernelRef) -> u64 {
     (*kernel).state_generation()
 }
@@ -873,7 +888,7 @@ pub unsafe extern "C" fn dsp_kernel_state_generation(kernel: DSPKernelRef) -> u6
 ///
 /// # Safety
 /// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dsp_kernel_state_defaults_json(kernel: DSPKernelRef) -> *const c_char {
     (*kernel).state_defaults_json_ptr()
 }

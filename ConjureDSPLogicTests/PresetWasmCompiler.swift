@@ -73,7 +73,7 @@ enum PresetWasmCompiler {
             "--sysroot", sysroot.path,
             "--extern", "conjuredsp=\(rlib.path)",
             "--target", "wasm32-wasip1",
-            "--edition", "2021",
+            "--edition", "2024",
             "-C", "opt-level=2",
             "--crate-type", "cdylib",
             "-o", outputFile.path,
@@ -145,7 +145,7 @@ enum PresetWasmCompiler {
         process.executableURL = bundledRustcURL
         process.arguments = [
             "--target", "wasm32-wasip1",
-            "--edition", "2021",
+            "--edition", "2024",
             "--crate-type", "rlib",
             "--crate-name", "conjuredsp",
             "-C", "opt-level=2",

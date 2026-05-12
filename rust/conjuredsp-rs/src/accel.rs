@@ -37,7 +37,7 @@ unsafe extern "C" {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[link(name = "Accelerate", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn vDSP_mmul(
         a: *const f32, a_stride: i32,
         b: *const f32, b_stride: i32,

@@ -166,8 +166,14 @@ impl PythonBackend {
 
         let python_home_owned = python_home.to_string();
         PYTHON_ENV_INIT.get_or_init(|| {
-            std::env::set_var("PYTHONHOME", &python_home_owned);
-            std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
+            // SAFETY: edition 2024 makes set_var unsafe because mutating
+            // the process env across threads is racy. PYTHON_ENV_INIT
+            // ensures this block runs exactly once, before any pyo3
+            // interpreter init that might spawn helper threads.
+            unsafe {
+                std::env::set_var("PYTHONHOME", &python_home_owned);
+                std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
+            }
         });
 
         struct LoadResult {
