@@ -20,16 +20,18 @@ class LFO:
 
         _lfo = None
 
-        def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+        def process(ctx):
             global _lfo
             if _lfo is None:
-                _lfo = LFO(sample_rate)
-            _lfo.set_freq(params["rate"])
+                _lfo = LFO(ctx.sample_rate)
+            _lfo.set_freq(ctx.params["rate"])
 
-            for ch in range(len(inputs)):
-                for i in range(frame_count):
-                    mod = _lfo.tick() if ch == 0 else _lfo.value
-                    outputs[ch][i] = inputs[ch][i] * (0.5 + 0.5 * mod)
+            # Frames-outer: tick() advances phase once per sample so every
+            # channel sees the same mod value at the same sample i.
+            n_ch, frame_count = ctx.inputs.shape
+            for i in range(frame_count):
+                mod = _lfo.tick()
+                ctx.outputs[:, i] = ctx.inputs[:, i] * (0.5 + 0.5 * mod)
     """
 
     __slots__ = ("_sample_rate", "_freq", "_phase", "_waveform", "value")
