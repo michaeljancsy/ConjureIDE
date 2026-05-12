@@ -32,8 +32,10 @@ def process(ctx):
     """
     global _delay_lines, _gain
 
+    n_ch, frame_count = ctx.inputs.shape
+
     if _delay_lines is None:
-        _delay_lines = [DelayLine(LATENCY + 1) for _ in range(len(ctx.inputs))]
+        _delay_lines = [DelayLine(LATENCY + 1) for _ in range(n_ch)]
 
     threshold_db = ctx.params["threshold"]
     release_ms = ctx.params["release"]
@@ -41,13 +43,13 @@ def process(ctx):
     threshold = db_to_gain(threshold_db)
     release_coeff = smooth_coeff(release_ms, ctx.sample_rate)
 
-    gain_arr = np.ones(ctx.frame_count, dtype=np.float32)
+    gain_arr = np.ones(frame_count, dtype=np.float32)
     g = _gain
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         # Peak detect from raw (non-delayed) input
         peak = 0.0
-        for ch in range(len(ctx.inputs)):
+        for ch in range(n_ch):
             peak = max(peak, abs(ctx.inputs[ch][i]))
 
         # Compute target gain
@@ -67,9 +69,11 @@ def process(ctx):
 
     _gain = g
 
-    for ch in range(len(ctx.inputs)):
+    for ch in range(n_ch):
         dl = _delay_lines[ch]
-        for i in range(ctx.frame_count):
-            dl.write(ctx.inputs[ch][i])
+        row_in = ctx.inputs[ch]
+        row_out = ctx.outputs[ch]
+        for i in range(frame_count):
+            dl.write(row_in[i])
             delayed = dl.tap(LATENCY)
-            ctx.outputs[ch][i] = delayed * gain_arr[i]
+            row_out[i] = delayed * gain_arr[i]

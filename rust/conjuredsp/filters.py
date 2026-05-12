@@ -169,16 +169,21 @@ class Biquad:
 
         _filters = None
 
-        def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
+        def process(ctx):
             global _filters
-            if _filters is None:
-                _filters = [Biquad() for _ in range(len(inputs))]
+            n_ch, frame_count = ctx.inputs.shape
+            if _filters is None or len(_filters) != n_ch:
+                _filters = [Biquad() for _ in range(n_ch)]
 
-            coeffs = BiquadCoeffs.lowpass(params["cutoff"], params["resonance"], sample_rate)
-            for ch in range(len(inputs)):
+            coeffs = BiquadCoeffs.lowpass(
+                ctx.params["cutoff"], ctx.params["resonance"], ctx.sample_rate
+            )
+            for ch in range(n_ch):
                 _filters[ch].set_coeffs(coeffs)
+                row_in = ctx.inputs[ch]
+                row_out = ctx.outputs[ch]
                 for i in range(frame_count):
-                    outputs[ch][i] = _filters[ch].process_sample(inputs[ch][i])
+                    row_out[i] = _filters[ch].process_sample(row_in[i])
     """
 
     __slots__ = ("b0", "b1", "b2", "a1", "a2", "z1", "z2")

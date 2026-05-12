@@ -42,14 +42,16 @@ def process(ctx):
     release_coeff = smooth_coeff(release_ms, ctx.sample_rate)
     hold_samples = int(hold_ms * 0.001 * ctx.sample_rate)
 
-    gain = np.ones(ctx.frame_count, dtype=np.float32)
+    n_ch, frame_count = ctx.inputs.shape
+
+    gain = np.ones(frame_count, dtype=np.float32)
     env = _envelope
     hold = _hold_counter
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         # Peak detect across all channels
         peak = 0.0
-        for ch in range(len(ctx.inputs)):
+        for ch in range(n_ch):
             peak = max(peak, abs(ctx.inputs[ch][i]))
 
         if peak > threshold:
@@ -69,5 +71,5 @@ def process(ctx):
     _envelope = env
     _hold_counter = hold
 
-    for ch in range(len(ctx.inputs)):
-        ctx.outputs[ch][:ctx.frame_count] = ctx.inputs[ch][:ctx.frame_count] * gain
+    for ch in range(n_ch):
+        ctx.outputs[ch] = ctx.inputs[ch] * gain

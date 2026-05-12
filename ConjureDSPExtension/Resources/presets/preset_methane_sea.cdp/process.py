@@ -51,7 +51,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -75,7 +75,7 @@ def process(ctx):
     fb_amt = 0.45 + 0.45 * ripple
     drone_gain = 0.5 + 1.2 * drone
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         tl = s.tap_lfo[0].tick()
         tr = s.tap_lfo[1].tick()
         sw = s.sweep_lfo.tick()

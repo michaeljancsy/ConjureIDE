@@ -67,7 +67,7 @@ def _resolve_sync(idx, time_sig_num):
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -123,7 +123,7 @@ def process(ctx):
     rumble_gain = sub * 1.5
     ring_gain = 0.4
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         # Pitch-shifter grain phase: free-running by default, beat-locked when synced.
         if grav_synced:
             beat_now = beat + i * beats_per_sample

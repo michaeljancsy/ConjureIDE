@@ -21,10 +21,11 @@ def process(ctx):
     """
     drive = ctx.params["drive"]
 
-    for ch in range(len(ctx.inputs)):
-        x = ctx.outputs[ch][:ctx.frame_count]
-        np.multiply(ctx.inputs[ch][:ctx.frame_count], drive, out=x)
+    n_ch = ctx.inputs.shape[0]
+    for ch in range(n_ch):
+        x = ctx.outputs[ch]
+        np.multiply(ctx.inputs[ch], drive, out=x)
         # Triangle-wave fold: maps any value into [-1, 1]
         t = (x + 1.0) * 0.25
         t = t - np.floor(t)
-        ctx.outputs[ch][:ctx.frame_count] = 1.0 - np.abs(t * 4.0 - 2.0)
+        ctx.outputs[ch] = 1.0 - np.abs(t * 4.0 - 2.0)

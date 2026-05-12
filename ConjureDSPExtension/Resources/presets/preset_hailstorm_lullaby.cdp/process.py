@@ -51,7 +51,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -82,7 +82,7 @@ def process(ctx):
     hail_gain = 2.0 + 4.0 * impact
     sub_gain = 0.6 + 1.4 * subpad
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         # Deterministic LCG noise, shared across channels
         s.lcg_state = (s.lcg_state * 1103515245 + 12345) & 0x7FFFFFFF
         noise = (s.lcg_state / 2147483647.0) * 2.0 - 1.0

@@ -9,9 +9,9 @@ Quick start::
 
     model = load_model("tone3000://abc123/def456")
 
-    def process(inputs, outputs, frame_count, sample_rate, params, _transport, _telemetry):
-        for ch in range(len(inputs)):
-            outputs[ch][:frame_count] = model.process(inputs[ch][:frame_count], ch)
+    def process(ctx):
+        for ch in range(ctx.inputs.shape[0]):
+            ctx.outputs[ch] = model.process(ctx.inputs[ch], ch)
 
 Path schemes:
     - ``tone3000://tone_id/model_id`` — downloaded via tone browser

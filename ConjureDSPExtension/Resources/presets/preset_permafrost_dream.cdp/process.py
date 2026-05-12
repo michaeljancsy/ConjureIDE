@@ -53,7 +53,7 @@ class _S:
 
 def process(ctx):
     global _st, _sr
-    nch = len(ctx.inputs)
+    nch, frame_count = ctx.inputs.shape
     if _st is None or _sr != ctx.sample_rate:
         _st = _S(ctx.sample_rate, nch)
         _sr = ctx.sample_rate
@@ -87,7 +87,7 @@ def process(ctx):
     glass_gain = 0.30 + 0.70 * glass
     breath_depth = 0.40 * breath
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         ph0 = s.grain_phase
         ph1 = (s.grain_phase + 0.5) % 1.0
         w0 = math.sin(math.pi * ph0)

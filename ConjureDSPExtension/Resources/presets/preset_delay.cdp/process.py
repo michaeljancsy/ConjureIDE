@@ -35,7 +35,7 @@ def process(ctx):
     feedback = ctx.params["feedback"]
     mix = ctx.params["mix"]
 
-    n_ch = len(ctx.inputs)
+    n_ch, frame_count = ctx.inputs.shape
 
     if _delays is None or len(_delays) != n_ch:
         _delays = [DelayLine(MAX_DELAY) for _ in range(n_ch)]
@@ -44,7 +44,7 @@ def process(ctx):
     if delay_samples >= MAX_DELAY:
         delay_samples = MAX_DELAY - 1
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         for ch in range(n_ch):
             delayed = _delays[ch].tap(delay_samples)
             _delays[ch].write(ctx.inputs[ch][i] + delayed * feedback)

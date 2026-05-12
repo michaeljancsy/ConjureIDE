@@ -53,5 +53,6 @@ def process(ctx):
     # Convert bipolar [-1, 1] to unipolar amplitude modulation
     mod = 1.0 - depth * 0.5 * (1.0 + lfo)
 
-    for ch in range(len(ctx.inputs)):
-        np.multiply(ctx.inputs[ch][:ctx.frame_count], mod, out=ctx.outputs[ch][:ctx.frame_count])
+    n_ch = ctx.inputs.shape[0]
+    for ch in range(n_ch):
+        np.multiply(ctx.inputs[ch], mod, out=ctx.outputs[ch])

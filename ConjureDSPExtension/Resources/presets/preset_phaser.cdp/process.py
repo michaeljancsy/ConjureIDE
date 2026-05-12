@@ -42,12 +42,12 @@ def process(ctx):
     stages = int(ctx.params["stages"])
     mix = ctx.params["mix"]
 
-    n_ch = len(ctx.inputs)
+    n_ch, frame_count = ctx.inputs.shape
     two_pi = 2.0 * math.pi
     lfo_inc = two_pi * rate_hz / ctx.sample_rate
     phase = _lfo_phase
 
-    for i in range(ctx.frame_count):
+    for i in range(frame_count):
         # LFO sweeps the allpass frequency between min_freq and max_freq
         lfo = 0.5 * (1.0 + math.sin(phase))
         freq = min_freq + (max_freq - min_freq) * lfo
