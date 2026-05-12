@@ -53,15 +53,17 @@ fn nested_2d_array_buffer_supports_per_cell_mutation() {
 }
 
 // Reentrancy: debug builds enforce the contract via a RAII guard that
-// panics on re-entry. Release builds skip the check (silent UB if the
-// author violates the contract; the test runs under debug so the
-// assertion fires).
+// panics on re-entry (wasm32) or via `std::sync::Mutex` which deadlocks
+// on re-entry (host). The wasm panic shape is testable; the host
+// deadlock shape is not (it would hang the runner), so the explicit
+// reentrancy test below is wasm-only. Host coverage for the guarantee
+// comes from `Mutex`'s well-documented semantics.
 //
 // Use a dedicated `static` so a flaky run doesn't poison BUF_4 for
 // other tests.
 persist_buf!(REENTRY_PROBE: [u8; 4] = [0u8; 4]);
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, target_arch = "wasm32"))]
 #[test]
 #[should_panic(expected = "reentrant PersistBuf::with_mut")]
 fn reentrant_with_mut_panics_in_debug() {
@@ -70,12 +72,11 @@ fn reentrant_with_mut_panics_in_debug() {
     });
 }
 
-#[cfg(debug_assertions)]
 #[test]
-fn guard_resets_after_normal_return_so_repeated_calls_are_fine() {
-    // The RAII guard must reset `in_use` on Drop so a non-reentrant
-    // call pattern works for the next invocation.
+fn repeated_non_reentrant_with_mut_calls_are_fine() {
+    // The guard (wasm Cell or host Mutex) must release after Drop so
+    // sequential non-reentrant calls work.
     BUF_4.with_mut(|_| {});
-    BUF_4.with_mut(|_| {}); // would panic if guard didn't reset
+    BUF_4.with_mut(|_| {});
     BUF_4.with_mut(|_| {});
 }

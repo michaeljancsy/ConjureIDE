@@ -19,9 +19,16 @@
 //!   builds enforce that contract with a RAII guard, release builds
 //!   trust the author.
 //!
-//! Both are wrapped in [`UnsafeCell`] and assert `Sync` unconditionally,
-//! justified by WASM's single-threaded execution model — the AU host
-//! never calls `process()` reentrantly on the same instance.
+//! Storage shape is cfg-gated by target:
+//!
+//! - **wasm32** (the only target that ships to users): a bare
+//!   [`UnsafeCell`] with an `unsafe impl Sync` that's sound because the
+//!   AU host never calls `process()` reentrantly on the same instance.
+//! - **host** (cargo test on aarch64/x86_64): a [`std::sync::Mutex`]
+//!   so the integration tests under `tests/persist*.rs` stay sound when
+//!   `cargo test` runs test functions in parallel. The lock is held for
+//!   exactly the duration of the closure / scalar access; no
+//!   cross-block contention exists since each test owns its own static.
 //!
 //! `static mut` remains a viable fallback under edition 2024 if either
 //! primitive ever hits a limitation, via `&raw mut X` / `&raw const X`.
@@ -29,7 +36,10 @@
 //! they're 2024-clean by construction and read more cleanly at the call
 //! site.
 
+#[cfg(target_arch = "wasm32")]
 use core::cell::UnsafeCell;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Mutex;
 
 /// Persistent scalar (or other `Copy` type) state between render blocks.
 ///
@@ -68,12 +78,20 @@ use core::cell::UnsafeCell;
 /// static X: Persist<f64> = Persist::new(0.0);
 /// X.with_mut(|v| *v = 1.0);  // E0599: method `with_mut` not found
 /// ```
+#[cfg(target_arch = "wasm32")]
 pub struct Persist<T: Copy>(UnsafeCell<T>);
 
+#[cfg(not(target_arch = "wasm32"))]
+pub struct Persist<T: Copy + Send>(Mutex<T>);
+
 // SAFETY: WASM modules are single-threaded; the host never calls
-// `process()` reentrantly on the same instance.
+// `process()` reentrantly on the same instance. On non-wasm targets
+// Mutex<T> already provides `Sync` (for `T: Send`), so no manual impl
+// is needed.
+#[cfg(target_arch = "wasm32")]
 unsafe impl<T: Copy> Sync for Persist<T> {}
 
+#[cfg(target_arch = "wasm32")]
 impl<T: Copy> Persist<T> {
     /// Wrap an initial value. `const` so it can sit in a `static`.
     pub const fn new(v: T) -> Self {
@@ -101,6 +119,35 @@ impl<T: Copy> Persist<T> {
     pub fn replace(&self, v: T) -> T {
         let old = self.get();
         self.set(v);
+        old
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Copy + Send> Persist<T> {
+    /// Wrap an initial value. `const` so it can sit in a `static`.
+    pub const fn new(v: T) -> Self {
+        Self(Mutex::new(v))
+    }
+
+    /// Read the current value.
+    #[inline]
+    pub fn get(&self) -> T {
+        *self.0.lock().expect("Persist Mutex poisoned")
+    }
+
+    /// Overwrite the stored value.
+    #[inline]
+    pub fn set(&self, v: T) {
+        *self.0.lock().expect("Persist Mutex poisoned") = v;
+    }
+
+    /// Replace and return the old value.
+    #[inline]
+    pub fn replace(&self, v: T) -> T {
+        let mut g = self.0.lock().expect("Persist Mutex poisoned");
+        let old = *g;
+        *g = v;
         old
     }
 }
@@ -135,16 +182,24 @@ impl<T: Copy> Persist<T> {
 ///     buf[channel][write_pos] = sample;
 /// });
 /// ```
+#[cfg(target_arch = "wasm32")]
 pub struct PersistBuf<T> {
     inner: UnsafeCell<T>,
     #[cfg(debug_assertions)]
     in_use: core::cell::Cell<bool>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub struct PersistBuf<T: Send>(Mutex<T>);
+
 // SAFETY: WASM modules are single-threaded; the host never calls
-// `process()` reentrantly on the same instance.
+// `process()` reentrantly on the same instance. On non-wasm targets
+// Mutex<T> already provides `Sync` (for `T: Send`), so no manual impl
+// is needed.
+#[cfg(target_arch = "wasm32")]
 unsafe impl<T> Sync for PersistBuf<T> {}
 
+#[cfg(target_arch = "wasm32")]
 impl<T> PersistBuf<T> {
     /// Wrap an initial value. `const` so it can sit in a `static`.
     pub const fn new(v: T) -> Self {
@@ -183,5 +238,25 @@ impl<T> PersistBuf<T> {
         // SAFETY: We hold &self; the reentrancy guard (debug) or the
         // documented contract (release) prevents aliased &mut T.
         unsafe { f(&mut *self.inner.get()) }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Send> PersistBuf<T> {
+    /// Wrap an initial value. `const` so it can sit in a `static`.
+    pub const fn new(v: T) -> Self {
+        Self(Mutex::new(v))
+    }
+
+    /// Run `f` with exclusive access to the wrapped value.
+    ///
+    /// On host the Mutex itself is the reentrancy contract: a recursive
+    /// `with_mut` on the same instance will deadlock rather than alias
+    /// `&mut T`. The wasm32 variant uses an explicit `Cell<bool>` guard
+    /// instead since `std::sync::Mutex` isn't appropriate there.
+    #[inline]
+    pub fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        let mut guard = self.0.lock().expect("PersistBuf Mutex poisoned");
+        f(&mut *guard)
     }
 }
