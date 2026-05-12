@@ -21,7 +21,7 @@
 
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "conjuredsp")]
-extern "C" {
+unsafe extern "C" {
     fn host_matmul(a: *const f32, b: *const f32, out: *mut f32, m: i32, k: i32, n: i32);
     fn host_matmul_acc(a: *const f32, b: *const f32, c: *mut f32, m: i32, k: i32, n: i32);
     fn host_vec_add(a: *const f32, b: *const f32, out: *mut f32, len: i32);

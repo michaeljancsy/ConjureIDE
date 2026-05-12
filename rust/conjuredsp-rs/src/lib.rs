@@ -28,6 +28,7 @@
 //! }
 //! ```
 
+pub mod abi;
 pub mod accel;
 pub mod buffers;
 pub mod context;
@@ -40,6 +41,7 @@ pub mod params;
 pub mod state_json;
 
 // Re-export everything at crate root for `use conjuredsp::*;`
+pub use abi::BlockInfo;
 pub use buffers::DelayLine;
 pub use context::{Context, TELEMETRY_LEN};
 pub use dsp::*;
@@ -113,6 +115,13 @@ macro_rules! setup {
         // block before `process()`; script reads via
         // `Context::sidechain_connected`.
         static mut SIDECHAIN_STATE: [i32; 2] = [0; 2];
+        // Per-block scalars (frame_count, channel_count, sample_rate)
+        // written by the host before each `process()` call. The zero-arg
+        // `process!()` macro (step 4 of the modernization plan) reads
+        // them back from here so its caller can hold the C ABI stable
+        // even as new channels appear. The legacy 5-arg signature
+        // ignores this buffer.
+        static mut BLOCK_INFO_BUF: $crate::BlockInfo = $crate::BlockInfo::zeroed();
 
         const T_TEMPO: usize = 0;
         const T_BEAT: usize = 1;
@@ -121,51 +130,56 @@ macro_rules! setup {
         const T_TIME_SIG_DEN: usize = 4;
         const T_SAMPLE_POS: usize = 5;
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_input_ptr() -> i32 {
-            unsafe { INPUT_BUF.as_ptr() as i32 }
+            &raw const INPUT_BUF as *const f32 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_output_ptr() -> i32 {
-            unsafe { OUTPUT_BUF.as_ptr() as i32 }
+            &raw mut OUTPUT_BUF as *mut f32 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_params_ptr() -> i32 {
-            unsafe { PARAMS_BUF.as_ptr() as i32 }
+            &raw const PARAMS_BUF as *const f32 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_transport_ptr() -> i32 {
-            unsafe { TRANSPORT_BUF.as_ptr() as i32 }
+            &raw const TRANSPORT_BUF as *const f32 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_telemetry_buf_ptr() -> i32 {
-            unsafe { TELEMETRY_BUF.as_ptr() as i32 }
+            &raw const TELEMETRY_BUF as *const f32 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_telemetry_buf_len() -> i32 {
-            unsafe { TELEMETRY_BUF.len() as i32 }
+            conjuredsp::TELEMETRY_LEN as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_sidechain_ptr() -> i32 {
-            unsafe { SIDECHAIN_BUF.as_ptr() as i32 }
+            &raw const SIDECHAIN_BUF as *const f32 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_sidechain_buf_len() -> i32 {
             // Bytes, mirroring `get_telemetry_buf_len`. Host derives
             // MAX_CH from this value (`bytes / 4 / MAX_FR`).
-            unsafe { (SIDECHAIN_BUF.len() * core::mem::size_of::<f32>()) as i32 }
+            (MAX_CH * MAX_FR * core::mem::size_of::<f32>()) as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_sidechain_state_ptr() -> i32 {
-            unsafe { SIDECHAIN_STATE.as_ptr() as i32 }
+            &raw const SIDECHAIN_STATE as *const i32 as i32
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn get_block_info_ptr() -> i32 {
+            &raw const BLOCK_INFO_BUF as *const $crate::BlockInfo as i32
         }
 
         /// Create a [`conjuredsp::Context`] for safe buffer access.
@@ -190,10 +204,10 @@ macro_rules! setup {
                     channel_count,
                     frame_count,
                     sample_rate,
-                    PARAMS_BUF.as_ptr(),
-                    TELEMETRY_BUF.as_mut_ptr(),
-                    SIDECHAIN_BUF.as_ptr(),
-                    SIDECHAIN_STATE.as_ptr(),
+                    &raw const PARAMS_BUF as *const f32,
+                    &raw mut TELEMETRY_BUF as *mut f32,
+                    &raw const SIDECHAIN_BUF as *const f32,
+                    &raw const SIDECHAIN_STATE as *const i32,
                 )
             }
         }
@@ -248,12 +262,12 @@ macro_rules! params {
             unsafe { core::str::from_utf8_unchecked(BYTES) }
         };
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_param_metadata_ptr() -> i32 {
             METADATA.as_ptr() as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_param_metadata_len() -> i32 {
             METADATA.len() as i32
         }
@@ -346,12 +360,12 @@ macro_rules! telemetry {
             [[f32; conjuredsp::MAX_FRAMES]; TELEMETRY_SLOT_COUNT] =
             [[0.0_f32; conjuredsp::MAX_FRAMES]; TELEMETRY_SLOT_COUNT];
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_telemetry_metadata_ptr() -> i32 {
             TELEMETRY_METADATA.as_ptr() as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_telemetry_metadata_len() -> i32 {
             TELEMETRY_METADATA.len() as i32
         }
@@ -364,13 +378,19 @@ macro_rules! telemetry {
         /// Returns 0 (null) for out-of-range indices. The buffer is
         /// `MAX_FRAMES` f32s long; the host reads exactly the current
         /// `frame_count` from the prefix.
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_telemetry_vec_ptr(slot: i32) -> i32 {
             let s = slot as usize;
             if s >= TELEMETRY_SLOT_COUNT {
                 return 0;
             }
-            unsafe { TELEMETRY_VEC_BUFS[s].as_mut_ptr() as i32 }
+            // Per-slot row of the 2D array. `&raw mut TELEMETRY_VEC_BUFS`
+            // is `*mut [[f32; MAX_FRAMES]; SLOT_COUNT]`; index the row
+            // with .add(s) on the f32-cast base pointer.
+            unsafe {
+                (&raw mut TELEMETRY_VEC_BUFS as *mut f32)
+                    .add(s * conjuredsp::MAX_FRAMES) as i32
+            }
         }
 
         /// Local extension trait that adds `set_telemetry_vector` to
@@ -401,11 +421,9 @@ macro_rules! telemetry {
                 }
                 let len = samples.len().min(conjuredsp::MAX_FRAMES);
                 unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        samples.as_ptr(),
-                        TELEMETRY_VEC_BUFS[slot].as_mut_ptr(),
-                        len,
-                    );
+                    let dst = (&raw mut TELEMETRY_VEC_BUFS as *mut f32)
+                        .add(slot * conjuredsp::MAX_FRAMES);
+                    core::ptr::copy_nonoverlapping(samples.as_ptr(), dst, len);
                 }
             }
         }
@@ -430,7 +448,7 @@ macro_rules! telemetry {
 #[macro_export]
 macro_rules! latency {
     ($samples:expr) => {
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_latency_samples() -> i32 {
             $samples as i32
         }
@@ -483,7 +501,7 @@ macro_rules! nam {
         // newline-separated paths, one per slot, in declaration order.
         static NAM_MANIFEST: &str = concat!($path, "\n");
 
-        extern "C" {
+        unsafe extern "C" {
             fn __conjuredsp_nam_process_slot(
                 slot: u32,
                 input_ptr: *const f32,
@@ -507,12 +525,12 @@ macro_rules! nam {
             ) == 1
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_nam_manifest_ptr() -> i32 {
             NAM_MANIFEST.as_ptr() as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_nam_manifest_len() -> i32 {
             NAM_MANIFEST.len() as i32
         }
@@ -571,7 +589,7 @@ macro_rules! nams {
         // Host parses by splitting on '\n' and dropping empty trailing entries.
         static NAM_MANIFEST: &str = concat!( $( $path, "\n", )+ );
 
-        extern "C" {
+        unsafe extern "C" {
             fn __conjuredsp_nam_process_slot(
                 slot: u32,
                 input_ptr: *const f32,
@@ -600,12 +618,12 @@ macro_rules! nams {
             ) == 1
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_nam_manifest_ptr() -> i32 {
             NAM_MANIFEST.as_ptr() as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_nam_manifest_len() -> i32 {
             NAM_MANIFEST.len() as i32
         }
@@ -715,12 +733,12 @@ macro_rules! state {
             buf
         };
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_state_buf_ptr() -> i32 {
-            unsafe { STATE_BUF.as_ptr() as i32 }
+            &raw const STATE_BUF as *const u8 as i32
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub extern "C" fn get_state_buf_capacity() -> i32 {
             STATE_BUF_TOTAL as i32
         }
@@ -758,7 +776,7 @@ macro_rules! state {
             #[inline]
             fn state_bytes(&self) -> &'static [u8] {
                 unsafe {
-                    let buf_ptr = STATE_BUF.as_ptr();
+                    let buf_ptr = &raw const STATE_BUF as *const u8;
                     let mut len_bytes = [0u8; 4];
                     core::ptr::copy_nonoverlapping(
                         buf_ptr.add(8),
@@ -779,7 +797,7 @@ macro_rules! state {
             #[inline]
             fn state_generation(&self) -> u64 {
                 unsafe {
-                    let buf_ptr = STATE_BUF.as_ptr();
+                    let buf_ptr = &raw const STATE_BUF as *const u8;
                     let mut gen_bytes = [0u8; 8];
                     core::ptr::copy_nonoverlapping(
                         buf_ptr,
