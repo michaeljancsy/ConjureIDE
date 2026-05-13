@@ -3,7 +3,7 @@
 //  ConjureDSPLogicTests
 //
 //  Pins the symmetric-with-bypass smoother used by the spectrogram column
-//  path. α=0.3 one-pole on small steps; snap on |Δ| > 20 dB so note-ons
+//  path. α=0.15 one-pole on small steps; snap on |Δ| > 20 dB so note-ons
 //  and note-offs render in a single column.
 //
 
@@ -50,10 +50,10 @@ struct SpectrogramSmoothingTests {
 
     @Test func stationaryWobbleConvergesTowardMean() {
         // The canonical use case: a sidelobe bin oscillating between two
-        // close values from one hop to the next. Symmetric α=0.3 converges
+        // close values from one hop to the next. Symmetric α=0.15 converges
         // toward the mean (-11), oscillating ±0.something around it.
-        // Asymmetric attack-snap would have left ±0.5 around -10.5; this
-        // is strictly tighter.
+        // (For comparison: an earlier asymmetric attack-snap design would
+        // have left ±0.5 swing around -10.5; the symmetric rule is tighter.)
         let trace = runSequence([-10, -12, -10, -12, -10, -12, -10, -12,
                                   -10, -12, -10, -12, -10, -12, -10, -12,
                                   -10, -12, -10, -12], initialState: -11)
@@ -71,8 +71,8 @@ struct SpectrogramSmoothingTests {
     }
 
     @Test func largerStationaryWobbleStillDamps() {
-        // 5 dB raw wobble around -12.5. Symmetric α=0.3 should still
-        // converge to within ~1 dB of the mean.
+        // 5 dB raw wobble around -12.5. Symmetric α=0.15 should still
+        // converge to within ~1.5 dB of the mean.
         let inputs: [Float] = Array(repeating: [Float(-10), Float(-15)], count: 30).flatMap { $0 }
         let trace = runSequence(inputs, initialState: -12)
         let tail = trace.suffix(10)

@@ -317,11 +317,12 @@ final class AudioCaptureManager: ObservableObject {
     // Damps the small phase-dependent magnitude cross-term that windowed-sine
     // FFT produces between hops — visible in the screenshot as vertical
     // striping in sidelobe bins even after the rendering-interpolation fix.
-    // The smoother is asymmetric (attack-snap, gentle-release on small drops,
-    // hard-step bypass on large drops) so transients still render as sharp
-    // single-column events; only quasi-stationary wobble gets averaged.
-    // `fftInputScratch` / `fftOutputScratch` stay un-smoothed so the diff and
-    // normDiff channels (and the audioFramePublisher) continue to see raw dB.
+    // The smoother is symmetric (α=0.15 one-pole on small dB steps) with a
+    // 20 dB hard-step bypass so note-ons / note-offs / signal start-stop
+    // render as sharp single-column events; only quasi-stationary wobble
+    // gets averaged. `fftInputScratch` / `fftOutputScratch` stay un-smoothed
+    // so the diff and normDiff channels (and the audioFramePublisher)
+    // continue to see raw dB.
     private var fftInputEMA:  [Float] = []
     private var fftOutputEMA: [Float] = []
 
@@ -420,8 +421,8 @@ final class AudioCaptureManager: ObservableObject {
         fftOutputScratch = [Float](repeating: 0, count: halfN)
 
         // EMA state for spectrogram smoothing — init to floorDB so the first
-        // column post-resize attack-snaps to actual signal instead of ramping
-        // up from 0 dB.
+        // column post-resize bypass-snaps to actual signal (state→signal step
+        // exceeds the 20 dB bypass threshold) instead of ramping up from 0 dB.
         fftInputEMA  = [Float](repeating: Self.floorDB, count: halfN)
         fftOutputEMA = [Float](repeating: Self.floorDB, count: halfN)
 
@@ -560,8 +561,8 @@ final class AudioCaptureManager: ObservableObject {
             // smoothed values to the spectrogram column rings. The diff /
             // normDiff path below continues to consume the un-smoothed
             // `fftInputScratch` / `fftOutputScratch`, so the passthrough-
-            // zero-diff invariant is preserved. See `fftInputEMA` docstring
-            // above for the asymmetric-smoother rationale.
+            // zero-diff invariant is preserved. See `applySpectrogramSmoothing`
+            // for the symmetric-with-bypass rule details.
             applySpectrogramSmoothing(scratch: fftInputScratch,  state: &fftInputEMA)
             applySpectrogramSmoothing(scratch: fftOutputScratch, state: &fftOutputEMA)
 
