@@ -1642,7 +1642,9 @@ struct BundleUIValidatorTests {
     @Test func htmlBodyComboSelectorCovered() throws {
         // `html, body { width: ... }` is a common idiom. `isPageLevelSelector`
         // already treats it as page-level for the contrast cascade; the
-        // size check should too.
+        // size check should too. The message should reference the actual
+        // selector (`html, body`) — earlier drafts hardcoded `body` and
+        // misdirected agents looking at the source CSS.
         let ui = """
         <!doctype html><html><head><style>
           html, body { width: 360px; height: 200px; margin: 0; }
@@ -1650,14 +1652,17 @@ struct BundleUIValidatorTests {
         """
         let bundle = try makeBundle(manifest: bodySizeManifest, uiHTML: ui)
         let report = BundleUIValidator.validate(bundle)
-        #expect(report.issues.contains { $0.check == "body_smaller_than_manifest" },
-                "html, body combo selector should be recognized; issues: \(report.issues)")
+        let issue = report.issues.first { $0.check == "body_smaller_than_manifest" }
+        #expect(issue != nil, "html, body combo selector should be recognized; issues: \(report.issues)")
+        #expect(issue?.message.contains("html, body") == true,
+                "message should name the actual selector `html, body`; got: \(issue?.message ?? "")")
     }
 
     @Test func inlineBodyStyleCovered() throws {
         // `<body style="width: 360px">` bypasses <style>-block parsing.
         // The check pulls the body's inline `style` attr and applies the
-        // same px comparison.
+        // same px comparison. Message should attribute the dim to the
+        // inline-style source, not a phantom `body` rule.
         let ui = """
         <!doctype html><html><body style="width: 360px; height: 200px;">
         <cdp-slider param="cutoff"></cdp-slider>
@@ -1665,8 +1670,31 @@ struct BundleUIValidatorTests {
         """
         let bundle = try makeBundle(manifest: bodySizeManifest, uiHTML: ui)
         let report = BundleUIValidator.validate(bundle)
-        #expect(report.issues.contains { $0.check == "body_smaller_than_manifest" },
-                "inline body style should be covered; issues: \(report.issues)")
+        let issue = report.issues.first { $0.check == "body_smaller_than_manifest" }
+        #expect(issue != nil, "inline body style should be covered; issues: \(report.issues)")
+        #expect(issue?.message.contains("<body style") == true,
+                "message should name the inline-style source; got: \(issue?.message ?? "")")
+    }
+
+    @Test func htmlSelectorOnlyAttributesToHtmlNotBody() throws {
+        // Seer-flagged case: `html { width: ... }` without `body` is enough
+        // to trigger the bug (html sizes the page, body inherits viewport),
+        // but the warning message used to hardcode `body has explicit ...`
+        // which misdirects the author. The message must reference the
+        // actual selector (`html`).
+        let ui = """
+        <!doctype html><html><head><style>
+          html { width: 360px; height: 200px; margin: 0; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: bodySizeManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let issue = report.issues.first { $0.check == "body_smaller_than_manifest" }
+        #expect(issue != nil, "html-only size rule should still fire; got: \(report.issues)")
+        #expect(issue?.message.contains("`html`") == true,
+                "message should name `html` as the source selector; got: \(issue?.message ?? "")")
+        #expect(issue?.message.contains("`body`") == false,
+                "message should NOT blame body when the rule targets html only; got: \(issue?.message ?? "")")
     }
 
     @Test func bodyOneAxisShortOnlyMentionsThatAxis() throws {

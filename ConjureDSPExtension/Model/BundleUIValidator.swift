@@ -1062,7 +1062,6 @@ enum BundleUIValidator {
         ]
     }
 
-
     /// Tolerance (pt) for the static body-vs-manifest size comparison.
     /// Mirrors the runtime smoke tester's `overflowToleranceP` so the
     /// two layers agree on what "matches" means and authors don't get
@@ -1092,19 +1091,34 @@ enum BundleUIValidator {
         }
 
         // First page-level declaration wins for each axis (cascade
-        // approximation; mirrors `resolvePageLevelColors`). Inline
-        // `<body style=…>` then overrides if it also specifies a value.
+        // approximation; mirrors `resolvePageLevelColors`). Track which
+        // selector contributed each dimension so the warning message
+        // points the author at the actual CSS rule — `html { width: Npx }`
+        // alone is enough to trigger the bug, so blaming `body` would
+        // misdirect them. Inline `<body style=…>` then overrides if it
+        // also specifies a value.
         var bodyW: Double?
         var bodyH: Double?
+        var widthSource: String?
+        var heightSource: String?
         for rule in extractCSSRules(from: html) where isPageLevelSelector(rule.selector) {
             let decls = parseDeclarations(rule.declarations)
-            if bodyW == nil, let w = pxValue(decls["width"]) { bodyW = w }
-            if bodyH == nil, let h = pxValue(decls["height"]) { bodyH = h }
+            let sel = rule.selector.trimmingCharacters(in: .whitespacesAndNewlines)
+            if bodyW == nil, let w = pxValue(decls["width"]) {
+                bodyW = w; widthSource = sel
+            }
+            if bodyH == nil, let h = pxValue(decls["height"]) {
+                bodyH = h; heightSource = sel
+            }
         }
         if let inlineStyle = inlineBodyStyleAttr(html: html) {
             let decls = parseDeclarations(inlineStyle)
-            if let w = pxValue(decls["width"]) { bodyW = w }
-            if let h = pxValue(decls["height"]) { bodyH = h }
+            if let w = pxValue(decls["width"]) {
+                bodyW = w; widthSource = "<body style=\"…\">"
+            }
+            if let h = pxValue(decls["height"]) {
+                bodyH = h; heightSource = "<body style=\"…\">"
+            }
         }
 
         let tol = bodySizeToleranceP
@@ -1112,20 +1126,34 @@ enum BundleUIValidator {
         let heightUnder = bodyH.map { Double(manifestH) - $0 > tol } ?? false
         guard widthUnder || heightUnder else { return [] }
 
-        var parts: [String] = []
-        if widthUnder, let w = bodyW {
-            parts.append("width \(formatPx(w))px vs manifest \(manifestW)pt")
+        // Compose "selector `X` sets width 360px..." per offending dim,
+        // joining same-source dims under one selector clause. Same source
+        // for both axes → one clause; different sources → one clause each.
+        var dimsBySource: [(source: String, parts: [String])] = []
+        func appendDim(source: String, part: String) {
+            if let idx = dimsBySource.firstIndex(where: { $0.source == source }) {
+                dimsBySource[idx].parts.append(part)
+            } else {
+                dimsBySource.append((source, [part]))
+            }
         }
-        if heightUnder, let h = bodyH {
-            parts.append("height \(formatPx(h))px vs manifest \(manifestH)pt")
+        if widthUnder, let w = bodyW, let src = widthSource {
+            appendDim(source: src, part: "width \(formatPx(w))px vs manifest \(manifestW)pt")
         }
+        if heightUnder, let h = bodyH, let src = heightSource {
+            appendDim(source: src, part: "height \(formatPx(h))px vs manifest \(manifestH)pt")
+        }
+        let clauses = dimsBySource.map { entry in
+            "selector `\(entry.source)` sets explicit \(entry.parts.joined(separator: " and "))"
+        }
+        let prose = clauses.joined(separator: "; ")
         return [
             Issue(
                 severity: .warn,
                 check: "body_smaller_than_manifest",
                 file: "ui/index.html",
-                message: "body has explicit \(parts.joined(separator: " and ")) — the webview is sized by manifest.ui, so the rendered content will sit in a corner with whitespace around it.",
-                suggestion: "Either remove the explicit width/height from `body` (let it fill the manifest-sized viewport) or update `manifest.ui.width`/`height` to match the intended UI size."
+                message: "\(prose) — the webview is sized by manifest.ui, so the rendered content will sit in a corner with whitespace around it.",
+                suggestion: "Either remove the explicit width/height from the page-level rule (let body fill the manifest-sized viewport) or update `manifest.ui.width`/`height` to match the intended UI size."
             )
         ]
     }

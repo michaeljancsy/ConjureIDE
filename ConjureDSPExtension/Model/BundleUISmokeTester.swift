@@ -1418,12 +1418,6 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         return w < minW || h < minH
     }
 
-    /// Measures the rendered content extent on both the body and the
-    /// document element (some pages put their main content on body,
-    /// some on documentElement). The Swift side takes the max along
-    /// each axis and compares to manifest.ui.{width,height}. Returns a
-    /// 4-element number array — `evaluateJavaScript`'s portable subset
-    /// of return types.
     /// Measures rendered dimensions for the layout-mismatch checks.
     /// Returns a 6-element number array:
     ///   [0] body.scrollWidth   — content extent (includes horizontal overflow)
