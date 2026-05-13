@@ -179,20 +179,26 @@ Codex emits `{"type":"turn.completed", "usage":{...}}` and `{"type":"item.comple
 
 **Gemini** — has two pitfalls.
 
-1. **MCP URL is read from a persistent global config** (`gemini mcp add` writes `~/.gemini/settings.json`), not a per-call flag. If the AU was rebuilt since the config was last set, the URL is stale and the agent silently sees zero MCP tools — it'll then fall back to shell-curl probes or just give up. **Always refresh immediately before every gemini invocation:**
+1. **MCP URL is read from a persistent project-scope config** (`gemini mcp add` writes `<cwd>/.gemini/settings.json` — project scope is the default), not a per-call flag. If the AU was rebuilt since the config was last set, the URL is stale and the agent silently sees zero MCP tools — it'll then fall back to shell-curl probes or just give up. **Always refresh immediately before every gemini invocation, from `$WORKSPACE` so the project-scope file the dispatched subprocess will read is the one we write:**
 
    ```bash
-   gemini mcp remove conjuredsp 2>/dev/null
-   gemini mcp add --transport http conjuredsp "http://localhost:$MCP_PORT/mcp"
+   ( cd "$WORKSPACE" && gemini mcp remove conjuredsp 2>/dev/null )
+   ( cd "$WORKSPACE" && gemini mcp add --scope project --transport http conjuredsp "http://localhost:$MCP_PORT/mcp" )
+   WORKSPACE="$WORKSPACE" MCP_PORT="$MCP_PORT" python3 -c 'import json,os; d=json.load(open(os.environ["WORKSPACE"]+"/.gemini/settings.json")); url=d.get("mcpServers",{}).get("conjuredsp",{}).get("url",""); assert ":"+os.environ["MCP_PORT"]+"/" in url, f"settings.json url={url!r} does not contain port {os.environ[\"MCP_PORT\"]}"' \
+     || { echo "[try-it] $WORKSPACE/.gemini/settings.json missing conjuredsp:$MCP_PORT — gemini config refresh wrote the wrong file." >&2; exit 1; }
    ```
+
+   `--scope project` is the default but stating it documents intent. The python3 parse is robust to multi-server settings.json (won't false-match if another server uses the same port) and to prettifier reformatting.
 
 2. **`gemini-2.5-pro` daily quota is tight** — ~2–3 multi-iteration preset-authoring runs and you hit `code: 429, "exhausted your capacity on this model"` with a 12+ hour reset. Detect this in the `result` event (`status:"error"` and `error.message` contains `exhausted`) and **automatically retry the same prompt with `-m gemini-2.5-flash`**. Flash's quota is much more generous and it's still capable enough for most preset tasks.
 
    Pseudocode for the gemini branch:
 
    ```bash
-   gemini mcp remove conjuredsp 2>/dev/null
-   gemini mcp add --transport http conjuredsp "http://localhost:$MCP_PORT/mcp"
+   ( cd "$WORKSPACE" && gemini mcp remove conjuredsp 2>/dev/null )
+   ( cd "$WORKSPACE" && gemini mcp add --scope project --transport http conjuredsp "http://localhost:$MCP_PORT/mcp" )
+   WORKSPACE="$WORKSPACE" MCP_PORT="$MCP_PORT" python3 -c 'import json,os; d=json.load(open(os.environ["WORKSPACE"]+"/.gemini/settings.json")); url=d.get("mcpServers",{}).get("conjuredsp",{}).get("url",""); assert ":"+os.environ["MCP_PORT"]+"/" in url, f"settings.json url={url!r} does not contain port {os.environ[\"MCP_PORT\"]}"' \
+     || { echo "[try-it] $WORKSPACE/.gemini/settings.json missing conjuredsp:$MCP_PORT — gemini config refresh wrote the wrong file." >&2; exit 1; }
    MODEL_USED="gemini-2.5-pro"
    ( cd "$WORKSPACE" && gemini --yolo -m "$MODEL_USED" \
        --output-format stream-json -p "$SUBAGENT_PROMPT" < /dev/null ) > "$LOG" 2>&1
@@ -208,6 +214,10 @@ Codex emits `{"type":"turn.completed", "usage":{...}}` and `{"type":"item.comple
    In the per-run summary frontmatter, set `agent_model: <MODEL_USED>` so cross-run aggregation knows the fallback fired. When a fallback happened, also add a `[skill]` line in `## Friction findings`: `gemini-2.5-pro quota exhausted; auto-fell back to gemini-2.5-flash.`
 
    **Don't** set `--allowed-mcp-server-names conjuredsp` — that flag has inverted semantics in some gemini-cli builds and silently hides the configured server from the model. Leave the global allowlist alone.
+
+   **Exit behavior of the python3 verify.** If the verification fails, the script calls `exit 1`. Because the `gemini mcp` commands and the verification run at the OUTER script level (NOT inside the `( cd "$WORKSPACE" && gemini ... )` dispatch subshell), `exit 1` terminates the entire `/try-it` invocation — not just the gemini step. `/try-it` is single-harness-per-invocation today (one prompt, one harness, one preset). If multi-harness sweeps are ever added inside the skill, this needs to become a `return` from a harness-scoped function. For now, whole-skill exit is the desired behavior — fail loudly and cheaply instead of burning a 600+ s gemini dispatch on a misconfigured settings.json.
+
+   **Alternative (sidestep `gemini mcp` entirely).** Write `$WORKSPACE/.gemini/settings.json` directly with a heredoc, mirroring the claude `--mcp-config $MCP_CONFIG` pattern. **Caution:** write only `$WORKSPACE/.gemini/settings.json`, NEVER `~/.gemini/settings.json` — the user-scope file holds `security.auth.selectedType` and `ui.errorVerbosity`, and a heredoc would clobber auth config. If you ever need to touch user scope, use `jq` or `python3 -c '...'` for in-place key updates.
 
 ## Step 6: Surface the report
 
