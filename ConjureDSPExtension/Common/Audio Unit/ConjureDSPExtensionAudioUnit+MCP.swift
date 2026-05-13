@@ -474,8 +474,14 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         // factory presets — keep their existing behavior.
         let uiOverrides: PresetManifest.UI? = {
             guard scaffoldUI else { return nil }
-            let width = Self.coerceInt(input["ui_width"])
-            let height = Self.coerceInt(input["ui_height"])
+            // Range bounds mirror the schema declarations in
+            // `MCPProtocol.tools` — keep them in sync. Out-of-range
+            // inputs drop to nil → manifest falls back to the scaffold
+            // default (520/260), rather than writing a degenerate
+            // width to disk that would break the CustomUIWebView's
+            // frame sizing downstream.
+            let width = Self.coerceInt(input["ui_width"], in: 120...1600)
+            let height = Self.coerceInt(input["ui_height"], in: 120...1600)
             let audioFrames = Self.coerceBool(input["ui_audio_frames"])
             if width == nil, height == nil, audioFrames == nil {
                 return nil
@@ -1695,5 +1701,17 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         default:
             return nil
         }
+    }
+
+    /// Range-checked variant of `coerceInt`. The MCP tool schemas declare
+    /// `minimum`/`maximum` on integer args (e.g. `ui_width` is 120-1600)
+    /// but those bounds are advisory to the agent — nothing on the
+    /// server enforces them. This variant rejects out-of-range values
+    /// the same way `coerceInt` rejects garbage strings: returns nil so
+    /// the caller falls back to its documented default rather than
+    /// silently writing a degenerate value to disk.
+    static func coerceInt(_ value: Any?, in range: ClosedRange<Int>) -> Int? {
+        guard let v = coerceInt(value) else { return nil }
+        return range.contains(v) ? v : nil
     }
 }

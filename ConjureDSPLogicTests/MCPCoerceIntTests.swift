@@ -24,6 +24,11 @@ private func coerceInt(_ value: Any?) -> Int? {
     }
 }
 
+private func coerceInt(_ value: Any?, in range: ClosedRange<Int>) -> Int? {
+    guard let v = coerceInt(value) else { return nil }
+    return range.contains(v) ? v : nil
+}
+
 /// Pins the lenient integer-coercion contract for MCP tool inputs.
 /// `save_preset` introduced the first integer args on the MCP surface
 /// (`ui_width`, `ui_height`); the same coercion rules apply going
@@ -147,5 +152,45 @@ struct MCPCoerceIntTests {
         let dict = try #require(JSONSerialization.jsonObject(with: json) as? [String: Any])
         let x = dict["x"]
         #expect(coerceInt(x) == 360)
+    }
+
+    // MARK: - Range-checked variant (coerceInt(_:in:))
+
+    /// In-range integers pass through unchanged.
+    @Test("In-range value returns itself")
+    func rangeInRange() {
+        #expect(coerceInt(360, in: 120...1600) == 360)
+        #expect(coerceInt(120, in: 120...1600) == 120, "lower bound inclusive")
+        #expect(coerceInt(1600, in: 120...1600) == 1600, "upper bound inclusive")
+    }
+
+    /// Out-of-range integers return nil so the caller falls back to its
+    /// documented default — same shape as `coerceInt` returning nil for
+    /// garbage strings. This is the fix for the schema-declared
+    /// `minimum`/`maximum` not being enforced server-side (Seer
+    /// Reference ID: 14059401).
+    @Test("Out-of-range value returns nil")
+    func rangeOutOfRange() {
+        #expect(coerceInt(50, in: 120...1600) == nil,
+                "below minimum → nil so caller drops to default rather than writing a degenerate width to disk")
+        #expect(coerceInt(2000, in: 120...1600) == nil, "above maximum → nil")
+        #expect(coerceInt(-50, in: 120...1600) == nil, "negative → nil")
+        #expect(coerceInt(0, in: 120...1600) == nil)
+    }
+
+    /// String inputs go through the base coerceInt first, then the
+    /// range check, so "360" → 360 → in range.
+    @Test("String inputs honor the range check")
+    func rangeStringInputs() {
+        #expect(coerceInt("360", in: 120...1600) == 360)
+        #expect(coerceInt("50", in: 120...1600) == nil, "string below minimum → nil")
+        #expect(coerceInt("not-a-number", in: 120...1600) == nil, "non-numeric short-circuits before range check")
+    }
+
+    /// Boolean rejection in the base function carries through.
+    @Test("Bool rejected by range variant just like base variant")
+    func rangeRejectsBool() {
+        #expect(coerceInt(true, in: 0...10) == nil,
+                "true would have to land as 1, but the Bool guard in base coerceInt fires first → nil")
     }
 }
