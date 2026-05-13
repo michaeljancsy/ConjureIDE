@@ -129,20 +129,20 @@ Rust API overview:
 - Parameter builders: `freq()`, `db()`, `time_ms()`, `mix()`, `pct()`, `toggle()`, `ratio()`, `param(min, max)` — all support `.min()`, `.max()`, `.default()`, `.unit()`, `.curve()` modifiers
 - `persist!(NAME: T = init)` / `persist_buf!(NAME: T = init)` — persistent state across render blocks. Scalar / Copy values use `persist!` with `.get()` / `.set(v)` / `.replace(v)`; large arrays / non-Copy use `persist_buf!` with `.with_mut(|buf| …)` in-place mutation. Both replace the deprecated raw `static mut` + `unsafe` idiom.
 - `telemetry!`, `state!`, `nam!`, `nams!`, `latency!` — optional feature macros, all compose with `process!`
-- `Context` accessors (built by `process!`): `ctx.input(ch, frame)`, `ctx.set_output(ch, frame, val)`, `ctx.param(INDEX)`, `ctx.channels()`, `ctx.frames()`, `ctx.sample_rate()`, `ctx.sidechain(c, i)`, `ctx.sidechain_connected()`, `ctx.set_telemetry_scalar(slot, value)`. `setup!()` is invoked internally and not user-facing.
-- DSP utils: `db_to_gain`, `gain_to_db`, `smooth_coeff`, `ms_to_samples`, `soft_clip`, `lerp`, `crossfade`
-- `BiquadCoeffs` (8 filter types) + `Biquad` (stateful DF2T), `DelayLine<SIZE>`, `Lfo` + `Waveform`
-- `accel` module — hardware-accelerated vectorized math (Rust: `use conjuredsp::accel;`, Python: `from conjuredsp.accel import ...`). Functions: `matmul`, `vec_add`, `vec_mul`, `vec_tanh`, `vec_sigmoid`, `vec_add_scalar`. In WASM, these call Accelerate framework (vDSP/vecLib) via host imports for near-native performance. In Python, they wrap numpy. Used internally by NAM inference but available to any preset.
+- `Context` accessors (built by `process!`): `ctx.input(ch, frame)`, `ctx.set_output(ch, frame, val)`, `ctx.param(INDEX)`, `ctx.channels()`, `ctx.frames()`, `ctx.sample_rate()`, `ctx.sidechain(c, i)`, `ctx.sidechain_channels()`, `ctx.sidechain_connected()`, `ctx.set_telemetry_scalar(slot, value)`. `setup!()` is invoked internally and not user-facing.
+- DSP utils: `db_to_gain`, `gain_to_db`, `smooth_coeff`, `ms_to_samples`, `samples_to_ms`, `freq_to_period`, `soft_clip`, `lerp`, `crossfade`, `dbfs_to_vu` (+ `VU_REF_DBFS` constant, -18 dBFS)
+- `BiquadCoeffs` (8 filter types, with `::identity()` constructor + `Default` impl for zero-value array init) + `Biquad` (stateful DF2T), `DelayLine<SIZE>`, `Lfo` + `Waveform`
+- `accel` module — hardware-accelerated vectorized math (Rust: `use conjuredsp::accel;`, Python: `from conjuredsp.accel import ...`). Functions: `matmul`, `matmul_acc` (Rust only — accumulating `c += a*b`), `vec_add`, `vec_mul`, `vec_tanh`, `vec_sigmoid`, `vec_add_scalar`. In WASM, these call Accelerate framework (vDSP/vecLib) via host imports for near-native performance. In Python, they wrap numpy. Used internally by NAM inference but available to any preset.
 
 ### Monaco Editor
 The code editor uses Monaco Editor (VS Code's editor) loaded in a WKWebView. It auto-detects Python vs Rust, applies light/dark themes, and communicates with Swift via `WKUserContentController` message handlers. Downloaded by `scripts/setup-monaco.sh` to `Resources/monaco/vs/` (gitignored).
 
 ### Claude Code Terminal
-An in-plugin terminal running Claude Code CLI via a companion app architecture. The AU extension runs an MCP server (HTTP, direct AU access) exposing 17 tools:
+An in-plugin terminal running Claude Code CLI via a companion app architecture. The AU extension runs an MCP server (HTTP, direct AU access) exposing 19 tools:
 
-- **DSP scripting:** `compile_and_run`, `get_script`, `get_error`, `get_docs` (topics: `params`, `filters`, `delays`, `oscillators`, `utilities`, `accel`, `nam`, `ui`, `all` — see `ConjureDSPExtension/Common/DSPDocumentation.swift`), `list_packages`
+- **DSP scripting:** `compile_and_run`, `get_script`, `get_error`, `get_docs` (topics: `params`, `filters`, `delays`, `oscillators`, `utilities`, `accel`, `nam`, `ui`, `all` — see `ConjureDSPExtension/Common/DSPDocumentation.swift`), `list_packages`, `dsp_probe`
 - **Parameters + audio state:** `set_parameter`, `get_parameters`, `get_audio_state`, `toggle_bypass`
-- **Presets + tones:** `list_presets` (returns `is_bundle` + `has_custom_ui`), `save_preset` (accepts `scaffold_ui`), `list_tones`
+- **Presets + tones:** `list_presets` (returns `is_bundle` + `has_custom_ui`), `save_preset` (accepts `scaffold_ui`), `duplicate_bundle`, `list_tones`
 - **Custom UI authoring:** `get_bundle_info` (inspect the active bundle — files, manifest UI block, factory/editable status), `read_bundle_file`, `write_bundle_file` (for editing `ui/index.html`, `manifest.json`, `ui/assets/*.css`, etc. — responses for ui/* and manifest.json edits include an inline `validation` block from `BundleUIValidator`), `validate_bundle` (explicit re-run of the same validator — returns `{status, issues[]}` covering orphan ui files, missing manifest.ui blocks, unresolved `param=` references (including when manifest.params is absent), CSP-blocked external assets, Canvas 2D system-color literals, UIs with no interactive surface, low text contrast (including cross-rule body-bg + descendant-color cases), and theme-breaking hard-coded body colors), `smoke_test_ui` (runtime check — loads the UI in an offscreen WKWebView via `BundleUISmokeTester`, waits for bridge `ready`, reports JS errors / callback exceptions / per-component binding state / per-parameter coverage)
 
 The terminal UI uses xterm.js in a WKWebView with a contentEditable input proxy for keyboard input through the AU ViewBridge.
@@ -173,7 +173,7 @@ MyPreset.cdp/
 
 **Custom UI render path:** when a bundle ships `ui/index.html` AND its manifest declares a `ui` block, `CustomUIWebView` renders the HTML in place of `ParameterSlidersView`. `BundleAssetSchemeHandler` (`WKURLSchemeHandler`) serves bundle files into the WebContent process via `conjuredsp-preset://preset/<path>` to avoid `kTCCServiceSystemPolicyAppData` prompts — WebContent doesn't inherit the appex's App Group entitlement, but the scheme handler runs in the appex process. Path standardization + `hasPrefix(rootURL.path)` enforce sandboxing. The scheme handler also sets `Content-Security-Policy: default-src 'self' 'unsafe-inline' data:; connect-src 'none';` on every response, blocking fetch/XHR/WebSocket egress from author JS. (An earlier `WKContentRuleList` layer was removed — `ignore-previous-rules` for custom schemes was unreliable and blanked exported webviews.)
 
-**Component library (`cdp-ui.js`):** injected into the webview alongside `customui-bridge.js` at document-start. Provides `<cdp-slider>`, `<cdp-toggle>`, `<cdp-choice>`, `<cdp-xy>`, `<cdp-knob>`, `<cdp-panel>` web components plus helper functions under `window.ConjureDSP.ui` (`control(i)`, `formatValue`, `normalize`, `denormalize`). Themed via CSS custom properties + `::part()` hooks; for fully custom geometry (knob, XY pad), authors can slot in their own SVG and react to the `--cdp-knob-norm` CSS variable. Loose param-name resolution (case / underscore / space insensitive) lets the same `ui/index.html` serve both the Python and Rust variant of a preset. Full reference: `docs/custom-ui-component-library.md` and `get_docs("ui")`.
+**Component library (`cdp-ui.js`):** injected into the webview alongside `customui-bridge.js` at document-start. Provides `<cdp-slider>`, `<cdp-toggle>`, `<cdp-choice>`, `<cdp-xy>`, `<cdp-knob>`, `<cdp-meter>`, `<cdp-scope>`, `<cdp-bargraph>`, `<cdp-panel>` web components plus helper functions under `window.ConjureDSP.ui` (`version`, `requireVersion(n)`, `control(i)`, `formatValue`, `normalize`, `denormalize`, `parseUserValue(raw, meta)`). Themed via CSS custom properties + `::part()` hooks; for fully custom geometry (knob, XY pad), authors can slot in their own SVG and react to the `--cdp-knob-norm` CSS variable. Loose param-name resolution (case / underscore / space insensitive) lets the same `ui/index.html` serve both the Python and Rust variant of a preset. Full reference: `docs/custom-ui-component-library.md` and `get_docs("ui")`.
 
 **`parameters.set` self-write semantics:** the bridge fires `onChange`/`onAnyChange` synchronously inside `parameters.set(i, v)`, with a dedupe-on-equal guard. This is the single notification path for self-writes; external automation arrives via `_paramUpdate`. Swift's `ParameterState.binding` writes with our own AU originator token, so `_paramUpdate` is never invoked for self-writes — no double-fire (pinned by `ParameterStateEchoTests` and `CustomUIBridgeOnChangeTests`). Custom widgets that hand-roll against `ConjureDSP.ui.control(i)` should treat `ctrl.onChange(cb)` as the single source of truth for visual updates: the same handler that redraws on DAW automation also redraws on the user's drag.
 
@@ -184,6 +184,7 @@ MyPreset.cdp/
 **JS bridge (`window.ConjureDSP`, injected by `customui-bridge.js` at `.atDocumentStart`):**
 - `apiVersion: 1`
 - `parameters.{count, get(i), set(i, v), metadata(i), onChange(i, cb), onAnyChange(cb)}` — writes route through the existing `ParameterState.binding(for:)` path so DAW automation sees them identically to slider drags.
+- `state.{get(key), set(key, value), onChange(key, cb), onAnyChange(cb), reset(key), resetAll()}` — JSON-serializable per-bundle state (UI counterpart of Python `ctx.state`). `set` writes are size-capped (`MAX_STATE_BYTES`, 64 KB by default); reads return the script default when a key is unset. Keys not in `declaredStateKeys` log a one-shot warning.
 - `theme` getter + `'themechange'` event
 - `ready(cb)` — fires once when the initial state arrives
 - `log(…)` — forwards to `os_log`
@@ -226,13 +227,13 @@ Paddle Billing subscription model with a Cloudflare Workers backend (`server/`).
 
 ```
 ConjureDSP/                  Host app — loads and tests the AU extension
-  Model/                     AudioUnitHostModel, AudioUnitViewModel, PendingExportHandler
+  Model/                     AudioUnitHostModel, AudioUnitViewModel, PaddleCheckoutManager
   Common/Audio/              SimplePlayEngine (AVAudioEngine wrapper)
   Common/MIDI/               MIDIManager
   SentrySetup.swift          Sentry crash reporting initialization
   ValidationView.swift       Debug UI for AU validation output
 ConjureDSPExtension/         The AU plugin itself
-  Terminal/                  MCPServer (HTTP+JSON-RPC), MCPProtocol (15 tools), TerminalServer (lifecycle)
+  Terminal/                  MCPServer (HTTP+JSON-RPC), MCPProtocol (19 tools), TerminalServer (lifecycle), MCPInstanceInfo (per-instance discovery JSON), DaemonStatusChecker (App Group poll for daemon readiness)
   Analytics.swift            Mixpanel analytics wrapper
   Audio/                     AudioCaptureManager — reads ring buffers for spectrogram FFT
   Compilation/               RustCompiler (bundled rustc → WASM), ScriptCompiler, ScriptLanguage (auto-detect), WasmCache (SHA256)
@@ -249,6 +250,8 @@ ConjureDSPExtension/         The AU plugin itself
                              BundleAssetSchemeHandler (WKURLSchemeHandler + CSP), BundleFileWatcher (FSEventStream),
                              BundleFilePicker (editable files for Monaco), CustomUIPreference (custom/stock toggle)
   Resources/                 Factory preset bundles (presets/preset_*.cdp/), customui-bridge.js, monaco/ (gitignored)
+  State/                     PresetStateManager — coordinator for the bundle-private STATE channel (Swift mirror of the kernel's atomically-swapped JSON buffer, restored via the AU's `fullState` setters)
+  Tone3000/                  Tone3000AuthView, Tone3000Client, Tone3000Models (third-party tone library; backs the `list_tones` MCP tool)
   Common/Audio Unit/         ConjureDSPExtensionAudioUnit.swift — AUAudioUnit subclass + render block
   Common/UI/                 AudioUnitViewController
   Common/Utility/            CrossPlatform.swift, SentrySetup.swift, String+Utils.swift, KeychainHelper.swift
@@ -276,15 +279,15 @@ rust/                        Rust DSP crate
     params.rs                ParamMetadata, denormalize/normalize with log curve support
     ring_buffer.rs           SPSC lock-free ring buffer (audio thread → UI)
     license.rs               Ed25519 token verification + subscription status (embedded server public key)
-  test_plugin_dsp/           Test harness for standalone DSP testing
+  multi_instance_test/       Standalone Rust harness — exercises multi-instance pyo3 init/teardown outside the AU host
   include/                   Generated C header (conjure_dsp.h)
   build-rust.sh              Xcode build phase script
   setup-python.sh            Downloads free-threaded Python 3.14 + numpy + scipy
   setup-wasm-target.sh       Installs wasm32-wasip1 target for Rust compiler
   conjuredsp/                Python DSP library (installed into bundled Python site-packages)
   conjuredsp-rs/             Rust DSP library (compiled to rlib for wasm32-wasip1)
-    src/lib.rs               setup!(), params!() macros, re-exports
-    src/dsp.rs               db_to_gain, smooth_coeff, soft_clip, lerp, crossfade
+    src/lib.rs               `process!`, `params!`, `persist!`, `persist_buf!`, `telemetry!`, `state!`, `nam!`, `nams!`, `latency!` macros, re-exports
+    src/dsp.rs               db_to_gain, gain_to_db, smooth_coeff, ms_to_samples, samples_to_ms, freq_to_period, soft_clip, lerp, crossfade, dbfs_to_vu
     src/filters.rs           BiquadCoeffs (8 filter types) + Biquad (stateful DF2T)
     src/buffers.rs           DelayLine<SIZE> with linear/cubic interpolation
     src/osc.rs               Lfo + Waveform enum + waveform functions
@@ -310,7 +313,7 @@ scripts/                     Build and setup scripts
   setup-xterm.sh             Downloads xterm.js for terminal UI
 assets/                      App icons (app-icon.png, export-icon.png)
 tools/generate-license/      Rust CLI for generating license keys
-plans/                       Implementation plans (ai-assisted-coding, host-app-daw-controls, etc.)
+plans/                       Implementation plans (host-app-daw-controls, scripting-languages, visualization-diagnostics, etc.)
 rustc-dist/                  Bundled Rust compiler + wasm32-wasip1 target (gitignored)
 docs/                        Design docs (export-au-plan, python-package-management, preset-repo-format, etc.)
 ConjureDSPLogicTests/        Pure logic/FFI unit tests — no host app launch (Swift Testing)
