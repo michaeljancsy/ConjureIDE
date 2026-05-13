@@ -31,21 +31,62 @@ const VIB_MS: f64 = 5.0;
 const VIB_DEPTH_MS: f64 = 0.25;
 const LFO_CH_HZ: [f64; 4] = [0.4, 0.5, 0.6, 0.8];
 
-persist_buf!(LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(CAV: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(VIB: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(CH: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
-persist_buf!(AP: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
-persist_buf!(APS: [[f64; 4]; 2] = [[0.0; 4]; 2]);
-persist_buf!(TANK: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(TANK_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(TANK_FB: [f64; 2] = [0.0; 2]);
-persist_buf!(SLAP: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(SLAP_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(SLAP_FB: [f64; 2] = [0.0; 2]);
-persist_buf!(LFO_VIB: Lfo = Lfo::new());
-persist_buf!(LFOS_CH: [Lfo; 4] = [Lfo::new(); 4]);
-persist_buf!(LFO_TREM: Lfo = Lfo::new());
+// Input chain: underwater lowpass, water-cavity peak, vibrato pre-stage + LFO.
+struct Input {
+    lp: [Biquad; 2],
+    cav: [Biquad; 2],
+    vib: [DelayLine<MAX_DL>; 2],
+    lfo_vib: Lfo,
+}
+
+// 4-voice chorus + 4 modulation LFOs.
+struct Chorus {
+    dl: [[DelayLine<MAX_DL>; 4]; 2],
+    lfo: [Lfo; 4],
+}
+
+// Spring-reverb impression: 4 cascaded Schroeder allpasses + feedback tank
+// (LP in feedback loop). Named `Reverb` (not `Spring`) so the static
+// doesn't clash with the `SPRING` parameter index const.
+struct Reverb {
+    ap: [[DelayLine<MAX_DL>; 4]; 2],
+    aps: [[f64; 4]; 2],
+    tank: [DelayLine<MAX_DL>; 2],
+    tank_lp: [Biquad; 2],
+    tank_fb: [f64; 2],
+}
+
+// End-of-chain: Bond tape slap echo (LP in feedback) + tremolo LFO.
+struct Tail {
+    slap: [DelayLine<MAX_DL>; 2],
+    slap_lp: [Biquad; 2],
+    slap_fb: [f64; 2],
+    lfo_trem: Lfo,
+}
+
+persist_buf!(INPUT: Input = Input {
+    lp: [Biquad::new(); 2],
+    cav: [Biquad::new(); 2],
+    vib: [DelayLine::new(); 2],
+    lfo_vib: Lfo::new(),
+});
+persist_buf!(CHORUS: Chorus = Chorus {
+    dl: [[DelayLine::new(); 4]; 2],
+    lfo: [Lfo::new(); 4],
+});
+persist_buf!(REVERB: Reverb = Reverb {
+    ap: [[DelayLine::new(); 4]; 2],
+    aps: [[0.0; 4]; 2],
+    tank: [DelayLine::new(); 2],
+    tank_lp: [Biquad::new(); 2],
+    tank_fb: [0.0; 2],
+});
+persist_buf!(TAIL: Tail = Tail {
+    slap: [DelayLine::new(); 2],
+    slap_lp: [Biquad::new(); 2],
+    slap_fb: [0.0; 2],
+    lfo_trem: Lfo::new(),
+});
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
@@ -85,128 +126,106 @@ process! { ctx =>
     let tank_fb_amt = 0.85 * spring;
     let slap_fb_amt: f64 = 0.4;
 
-    LP.with_mut(|lp| {
-        CAV.with_mut(|cav| {
-            VIB.with_mut(|vib| {
-                CH.with_mut(|ch_buf| {
-                    AP.with_mut(|ap| {
-                        APS.with_mut(|aps| {
-                            TANK.with_mut(|tank| {
-                                TANK_LP.with_mut(|tank_lp| {
-                                    TANK_FB.with_mut(|tank_fb| {
-                                        SLAP.with_mut(|slap| {
-                                            SLAP_LP.with_mut(|slap_lp| {
-                                                SLAP_FB.with_mut(|slap_fb| {
-                                                    LFO_VIB.with_mut(|lfo_vib| {
-                                                        LFOS_CH.with_mut(|lfos_ch| {
-                                                            LFO_TREM.with_mut(|lfo_trem| {
-                                                                // LFO init
-                                                                lfo_vib.init(sr, 6.0);
-                                                                for l in 0..4 {
-                                                                    lfos_ch[l].init(sr, LFO_CH_HZ[l]);
-                                                                }
-                                                                lfo_trem.init(sr, 4.0);
-                                                                lfo_trem.set_waveform(Waveform::Triangle);
+    INPUT.with_mut(|input| {
+        CHORUS.with_mut(|chorus| {
+            REVERB.with_mut(|reverb| {
+                TAIL.with_mut(|tail| {
+                    // LFO init
+                    input.lfo_vib.init(sr, 6.0);
+                    for l in 0..4 {
+                        chorus.lfo[l].init(sr, LFO_CH_HZ[l]);
+                    }
+                    tail.lfo_trem.init(sr, 4.0);
+                    tail.lfo_trem.set_waveform(Waveform::Triangle);
 
-                                                                for ch in 0..nch {
-                                                                    lp[ch].set_coeffs(lpc);
-                                                                    cav[ch].set_coeffs(cavc);
-                                                                    tank_lp[ch].set_coeffs(fblpc);
-                                                                    slap_lp[ch].set_coeffs(fblpc);
-                                                                }
+                    for ch in 0..nch {
+                        input.lp[ch].set_coeffs(lpc);
+                        input.cav[ch].set_coeffs(cavc);
+                        reverb.tank_lp[ch].set_coeffs(fblpc);
+                        tail.slap_lp[ch].set_coeffs(fblpc);
+                    }
 
-                                                                let mut wet: [f64; 2] = [0.0; 2];
+                    let mut wet: [f64; 2] = [0.0; 2];
 
-                                                                for f in 0..ctx.frames() {
-                                                                    let v = lfo_vib.tick();
-                                                                    let m0 = lfos_ch[0].tick();
-                                                                    let m1 = lfos_ch[1].tick();
-                                                                    let m2 = lfos_ch[2].tick();
-                                                                    let m3 = lfos_ch[3].tick();
-                                                                    let trem = lfo_trem.tick();
-                                                                    let trem_gain = 1.0 - tide * 0.25 * (1.0 - trem);
+                    for f in 0..ctx.frames() {
+                        let v = input.lfo_vib.tick();
+                        let m0 = chorus.lfo[0].tick();
+                        let m1 = chorus.lfo[1].tick();
+                        let m2 = chorus.lfo[2].tick();
+                        let m3 = chorus.lfo[3].tick();
+                        let trem = tail.lfo_trem.tick();
+                        let trem_gain = 1.0 - tide * 0.25 * (1.0 - trem);
 
-                                                                    for ch in 0..nch {
-                                                                        let dry = ctx.input(ch, f) as f64;
+                        for ch in 0..nch {
+                            let dry = ctx.input(ch, f) as f64;
 
-                                                                        // Stage A: underwater lowpass
-                                                                        let mut x = lp[ch].process_sample(dry);
+                            // Stage A: underwater lowpass
+                            let mut x = input.lp[ch].process_sample(dry);
 
-                                                                        // Stage B: water cavity peak
-                                                                        x = cav[ch].process_sample(x);
+                            // Stage B: water cavity peak
+                            x = input.cav[ch].process_sample(x);
 
-                                                                        // Stage C: vibrato pre-stage
-                                                                        vib[ch].write(x as f32);
-                                                                        x = vib[ch].read((vib_d + v * vib_depth).max(1.0)) as f64;
+                            // Stage C: vibrato pre-stage
+                            input.vib[ch].write(x as f32);
+                            x = input.vib[ch].read((vib_d + v * vib_depth).max(1.0)) as f64;
 
-                                                                        // Stage D: 4-voice chorus
-                                                                        for c in 0..4 {
-                                                                            ch_buf[ch][c].write(x as f32);
-                                                                        }
-                                                                        let d0 = (ch_d[0] + m0 * bubble_samp).max(1.0);
-                                                                        let d1 = (ch_d[1] + m1 * bubble_samp).max(1.0);
-                                                                        let d2 = (ch_d[2] + m2 * bubble_samp).max(1.0);
-                                                                        let d3 = (ch_d[3] + m3 * bubble_samp).max(1.0);
-                                                                        let csum = (ch_buf[ch][0].read(d0) as f64
-                                                                            + ch_buf[ch][1].read(d1) as f64
-                                                                            + ch_buf[ch][2].read(d2) as f64
-                                                                            + ch_buf[ch][3].read(d3) as f64)
-                                                                            * 0.25;
+                            // Stage D: 4-voice chorus
+                            for c in 0..4 {
+                                chorus.dl[ch][c].write(x as f32);
+                            }
+                            let d0 = (ch_d[0] + m0 * bubble_samp).max(1.0);
+                            let d1 = (ch_d[1] + m1 * bubble_samp).max(1.0);
+                            let d2 = (ch_d[2] + m2 * bubble_samp).max(1.0);
+                            let d3 = (ch_d[3] + m3 * bubble_samp).max(1.0);
+                            let csum = (chorus.dl[ch][0].read(d0) as f64
+                                + chorus.dl[ch][1].read(d1) as f64
+                                + chorus.dl[ch][2].read(d2) as f64
+                                + chorus.dl[ch][3].read(d3) as f64)
+                                * 0.25;
 
-                                                                        let mut sig = csum;
+                            let mut sig = csum;
 
-                                                                        // Stage E: 4 cascaded Schroeder allpass diffusers
-                                                                        for a in 0..4 {
-                                                                            let vd = aps[ch][a];
-                                                                            let vn = sig + AP_G * vd;
-                                                                            ap[ch][a].write(vn as f32);
-                                                                            aps[ch][a] = ap[ch][a].read(ap_d[a]) as f64;
-                                                                            sig = vd - AP_G * vn;
-                                                                        }
+                            // Stage E: 4 cascaded Schroeder allpass diffusers
+                            for a in 0..4 {
+                                let vd = reverb.aps[ch][a];
+                                let vn = sig + AP_G * vd;
+                                reverb.ap[ch][a].write(vn as f32);
+                                reverb.aps[ch][a] = reverb.ap[ch][a].read(ap_d[a]) as f64;
+                                sig = vd - AP_G * vn;
+                            }
 
-                                                                        // Stage F: spring tank feedback comb (LP in feedback loop)
-                                                                        let tflt = tank_lp[ch].process_sample(tank_fb[ch]);
-                                                                        tank[ch].write((sig + tank_fb_amt * tflt) as f32);
-                                                                        tank_fb[ch] = tank[ch].read(tank_d) as f64;
-                                                                        sig = sig + 0.6 * tank_fb[ch];
+                            // Stage F: spring tank feedback comb (LP in feedback loop)
+                            let tflt = reverb.tank_lp[ch].process_sample(reverb.tank_fb[ch]);
+                            reverb.tank[ch].write((sig + tank_fb_amt * tflt) as f32);
+                            reverb.tank_fb[ch] = reverb.tank[ch].read(tank_d) as f64;
+                            sig = sig + 0.6 * reverb.tank_fb[ch];
 
-                                                                        // Stage G: Bond tape slap
-                                                                        let sflt = slap_lp[ch].process_sample(slap_fb[ch]);
-                                                                        slap[ch].write((sig + slap_fb_amt * sflt) as f32);
-                                                                        slap_fb[ch] = slap[ch].read(slap_d) as f64;
-                                                                        sig = sig + 0.3 * slap_fb[ch];
+                            // Stage G: Bond tape slap
+                            let sflt = tail.slap_lp[ch].process_sample(tail.slap_fb[ch]);
+                            tail.slap[ch].write((sig + slap_fb_amt * sflt) as f32);
+                            tail.slap_fb[ch] = tail.slap[ch].read(slap_d) as f64;
+                            sig = sig + 0.3 * tail.slap_fb[ch];
 
-                                                                        // Stage H: tremolo gain
-                                                                        sig = sig * trem_gain;
+                            // Stage H: tremolo gain
+                            sig = sig * trem_gain;
 
-                                                                        wet[ch] = sig;
-                                                                    }
+                            wet[ch] = sig;
+                        }
 
-                                                                    // Stage I: mid/side widening
-                                                                    if nch >= 2 {
-                                                                        let mid = (wet[0] + wet[1]) * 0.5;
-                                                                        let side = (wet[0] - wet[1]) * 0.5 * 1.5;
-                                                                        wet[0] = mid + side;
-                                                                        wet[1] = mid - side;
-                                                                    }
+                        // Stage I: mid/side widening
+                        if nch >= 2 {
+                            let mid = (wet[0] + wet[1]) * 0.5;
+                            let side = (wet[0] - wet[1]) * 0.5 * 1.5;
+                            wet[0] = mid + side;
+                            wet[1] = mid - side;
+                        }
 
-                                                                    // Stage J: final wet/dry mix
-                                                                    for ch in 0..nch {
-                                                                        let dry = ctx.input(ch, f) as f64;
-                                                                        ctx.set_output(ch, f, (dry * (1.0 - mx) + wet[ch] * mx) as f32);
-                                                                    }
-                                                                }
-                                                            });
-                                                        });
-                                                    });
-                                                });
-                                            });
-                                        });
-                                    });
-                                });
-                            });
-                        });
-                    });
+                        // Stage J: final wet/dry mix
+                        for ch in 0..nch {
+                            let dry = ctx.input(ch, f) as f64;
+                            ctx.set_output(ch, f, (dry * (1.0 - mx) + wet[ch] * mx) as f32);
+                        }
+                    }
                 });
             });
         });

@@ -31,18 +31,62 @@ const TREM_HZ: f64 = 11.0;
 const INTERFERE_LFO_HZ: f64 = 0.3;
 const INTERFERE_TONE_HZ: f64 = 800.0;
 
-persist_buf!(BP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(SQUEAL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(SQUEAL_FB: [f64; 2] = [0.0; 2]);
-persist_buf!(HP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(SH_HELD: [f64; 2] = [0.0; 2]);
+// Head + tail filters: per-channel bandpass at the front, final highpass
+// cleanup at the back.
+struct Filters {
+    bp: [Biquad; 2],
+    hp: [Biquad; 2],
+}
+
+// Ring-mod carriers + drift LFO that detunes them.
+struct Carriers {
+    lfo_car: [Lfo; 2],
+    lfo_drift: Lfo,
+}
+
+// Heterodyne squeal feedback comb (delay line + per-channel feedback).
+struct Squeal {
+    dl: [DelayLine<MAX_DL>; 2],
+    fb: [f64; 2],
+}
+
+// Bit-crush sample-and-hold held values. Named `Crusher` (not `Crush`) so
+// the static doesn't clash with the `CRUSH` parameter index const.
+struct Crusher {
+    sh_held: [f64; 2],
+}
+
+// Post-crush output-stage modulators: squelch tremolo + carrier-interference
+// amp & tone LFOs.
+struct Tail {
+    lfo_trem: Lfo,
+    lfo_interfere_amp: Lfo,
+    lfo_interfere_tone: Lfo,
+}
+
+persist_buf!(FILTERS: Filters = Filters {
+    bp: [Biquad::new(); 2],
+    hp: [Biquad::new(); 2],
+});
+persist_buf!(CARRIERS: Carriers = Carriers {
+    lfo_car: [Lfo::new(); 2],
+    lfo_drift: Lfo::new(),
+});
+persist_buf!(SQUEAL: Squeal = Squeal {
+    dl: [DelayLine::new(); 2],
+    fb: [0.0; 2],
+});
+persist_buf!(CRUSHER: Crusher = Crusher {
+    sh_held: [0.0; 2],
+});
+persist_buf!(TAIL: Tail = Tail {
+    lfo_trem: Lfo::new(),
+    lfo_interfere_amp: Lfo::new(),
+    lfo_interfere_tone: Lfo::new(),
+});
+
 persist!(SH_COUNT: usize = 0);
-persist_buf!(LFO_DRIFT: Lfo = Lfo::new());
-persist_buf!(LFO_CARRIERS: [Lfo; 2] = [Lfo::new(); 2]);
-persist_buf!(LFO_TREM: Lfo = Lfo::new());
 persist!(TREM_ENV: f64 = 1.0);
-persist_buf!(LFO_INTERFERE_AMP: Lfo = Lfo::new());
-persist_buf!(LFO_INTERFERE_TONE: Lfo = Lfo::new());
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
@@ -86,109 +130,99 @@ process! { ctx =>
     let mut sh_count = SH_COUNT.get();
     let mut trem_env = TREM_ENV.get();
 
-    BP.with_mut(|bp| {
-        SQUEAL.with_mut(|squeal| {
-            SQUEAL_FB.with_mut(|squeal_fb| {
-                HP.with_mut(|hp| {
-                    SH_HELD.with_mut(|sh_held| {
-                        LFO_DRIFT.with_mut(|lfo_drift| {
-                            LFO_CARRIERS.with_mut(|lfo_carriers| {
-                                LFO_TREM.with_mut(|lfo_trem| {
-                                    LFO_INTERFERE_AMP.with_mut(|lfo_interfere_amp| {
-                                        LFO_INTERFERE_TONE.with_mut(|lfo_interfere_tone| {
-                                            // LFO init
-                                            lfo_drift.init(sr, DRIFT_LFO_HZ);
-                                            lfo_carriers[0].init(sr, CARRIER_HZ[0]);
-                                            lfo_carriers[1].init(sr, CARRIER_HZ[1]);
-                                            lfo_trem.init(sr, TREM_HZ);
-                                            lfo_trem.set_waveform(Waveform::Square);
-                                            lfo_interfere_amp.init(sr, INTERFERE_LFO_HZ);
-                                            lfo_interfere_tone.init(sr, INTERFERE_TONE_HZ);
+    FILTERS.with_mut(|filters| {
+        CARRIERS.with_mut(|carriers| {
+            SQUEAL.with_mut(|squeal| {
+                CRUSHER.with_mut(|crusher| {
+                    TAIL.with_mut(|tail| {
+                        // LFO init
+                        carriers.lfo_drift.init(sr, DRIFT_LFO_HZ);
+                        carriers.lfo_car[0].init(sr, CARRIER_HZ[0]);
+                        carriers.lfo_car[1].init(sr, CARRIER_HZ[1]);
+                        tail.lfo_trem.init(sr, TREM_HZ);
+                        tail.lfo_trem.set_waveform(Waveform::Square);
+                        tail.lfo_interfere_amp.init(sr, INTERFERE_LFO_HZ);
+                        tail.lfo_interfere_tone.init(sr, INTERFERE_TONE_HZ);
 
-                                            // Per-channel bandpass coefficients
-                                            for ch in 0..nch {
-                                                let bpc = BiquadCoeffs::bandpass(BP_HZ[ch], BP_Q, sr);
-                                                bp[ch].set_coeffs(bpc);
-                                            }
+                        // Per-channel bandpass coefficients
+                        for ch in 0..nch {
+                            let bpc = BiquadCoeffs::bandpass(BP_HZ[ch], BP_Q, sr);
+                            filters.bp[ch].set_coeffs(bpc);
+                        }
 
-                                            for ch in 0..nch {
-                                                hp[ch].set_coeffs(hpc);
-                                            }
+                        for ch in 0..nch {
+                            filters.hp[ch].set_coeffs(hpc);
+                        }
 
-                                            let mut wet: [f64; 2] = [0.0; 2];
+                        let mut wet: [f64; 2] = [0.0; 2];
 
-                                            for f in 0..ctx.frames() {
-                                                let d_lfo = lfo_drift.tick();
-                                                let car0 = lfo_carriers[0].tick();
-                                                let car1 = lfo_carriers[1].tick();
-                                                let trem = (lfo_trem.tick() + 1.0) * 0.5;
-                                                let ia = lfo_interfere_amp.tick();
-                                                let it = lfo_interfere_tone.tick();
+                        for f in 0..ctx.frames() {
+                            let d_lfo = carriers.lfo_drift.tick();
+                            let car0 = carriers.lfo_car[0].tick();
+                            let car1 = carriers.lfo_car[1].tick();
+                            let trem = (tail.lfo_trem.tick() + 1.0) * 0.5;
+                            let ia = tail.lfo_interfere_amp.tick();
+                            let it = tail.lfo_interfere_tone.tick();
 
-                                                trem_env = trem_alpha * trem_env + one_minus_alpha * trem;
-                                                let trem_gain = 1.0 - trem_depth * (1.0 - trem_env);
+                            trem_env = trem_alpha * trem_env + one_minus_alpha * trem;
+                            let trem_gain = 1.0 - trem_depth * (1.0 - trem_env);
 
-                                                let update_held = (sh_count % sh_period) == 0;
-                                                sh_count += 1;
+                            let update_held = (sh_count % sh_period) == 0;
+                            sh_count += 1;
 
-                                                let interfere = it * (0.5 + 0.5 * ia) * interfere_gain;
+                            let interfere = it * (0.5 + 0.5 * ia) * interfere_gain;
 
-                                                let car_mod0 = car0 * (1.0 + drift * 0.3 * d_lfo);
-                                                let car_mod1 = car1 * (1.0 + drift * 0.3 * d_lfo);
-                                                let car = [car_mod0, car_mod1];
+                            let car_mod0 = car0 * (1.0 + drift * 0.3 * d_lfo);
+                            let car_mod1 = car1 * (1.0 + drift * 0.3 * d_lfo);
+                            let car = [car_mod0, car_mod1];
 
-                                                for ch in 0..nch {
-                                                    let dry = ctx.input(ch, f) as f64;
+                            for ch in 0..nch {
+                                let dry = ctx.input(ch, f) as f64;
 
-                                                    // Stage A: per-channel bandpass
-                                                    let mut x = bp[ch].process_sample(dry);
+                                // Stage A: per-channel bandpass
+                                let mut x = filters.bp[ch].process_sample(dry);
 
-                                                    // Stage B: per-channel ring modulation
-                                                    x = x * car[ch];
+                                // Stage B: per-channel ring modulation
+                                x = x * car[ch];
 
-                                                    // Stage C: heterodyne squeal feedback comb
-                                                    squeal[ch].write((x + squeal_fb_amt * squeal_fb[ch]) as f32);
-                                                    squeal_fb[ch] = squeal[ch].read(squeal_d[ch]) as f64;
-                                                    x = x + 0.5 * squeal_fb[ch];
+                                // Stage C: heterodyne squeal feedback comb
+                                squeal.dl[ch].write((x + squeal_fb_amt * squeal.fb[ch]) as f32);
+                                squeal.fb[ch] = squeal.dl[ch].read(squeal_d[ch]) as f64;
+                                x = x + 0.5 * squeal.fb[ch];
 
-                                                    // Stage D: sample-and-hold rate reduction
-                                                    if update_held {
-                                                        sh_held[ch] = x;
-                                                    }
-                                                    let mut sig = sh_held[ch];
+                                // Stage D: sample-and-hold rate reduction
+                                if update_held {
+                                    crusher.sh_held[ch] = x;
+                                }
+                                let mut sig = crusher.sh_held[ch];
 
-                                                    // Stage E: bit-depth reduction
-                                                    sig = (sig * levels + 0.5).floor() * inv_levels;
+                                // Stage E: bit-depth reduction
+                                sig = (sig * levels + 0.5).floor() * inv_levels;
 
-                                                    // Stage F: squelch tremolo
-                                                    sig = sig * trem_gain;
+                                // Stage F: squelch tremolo
+                                sig = sig * trem_gain;
 
-                                                    // Stage G: carrier interference bleed
-                                                    sig = sig + interfere;
+                                // Stage G: carrier interference bleed
+                                sig = sig + interfere;
 
-                                                    wet[ch] = sig;
-                                                }
+                                wet[ch] = sig;
+                            }
 
-                                                // Stage H: mid/side widening
-                                                if nch >= 2 {
-                                                    let mid = (wet[0] + wet[1]) * 0.5;
-                                                    let side = (wet[0] - wet[1]) * 0.5 * 1.7;
-                                                    wet[0] = mid + side;
-                                                    wet[1] = mid - side;
-                                                }
+                            // Stage H: mid/side widening
+                            if nch >= 2 {
+                                let mid = (wet[0] + wet[1]) * 0.5;
+                                let side = (wet[0] - wet[1]) * 0.5 * 1.7;
+                                wet[0] = mid + side;
+                                wet[1] = mid - side;
+                            }
 
-                                                // Stage I: final highpass + wet/dry mix
-                                                for ch in 0..nch {
-                                                    let dry = ctx.input(ch, f) as f64;
-                                                    let sig = hp[ch].process_sample(wet[ch]);
-                                                    ctx.set_output(ch, f, (dry * (1.0 - mx) + sig * mx) as f32);
-                                                }
-                                            }
-                                        });
-                                    });
-                                });
-                            });
-                        });
+                            // Stage I: final highpass + wet/dry mix
+                            for ch in 0..nch {
+                                let dry = ctx.input(ch, f) as f64;
+                                let sig = filters.hp[ch].process_sample(wet[ch]);
+                                ctx.set_output(ch, f, (dry * (1.0 - mx) + sig * mx) as f32);
+                            }
+                        }
                     });
                 });
             });
