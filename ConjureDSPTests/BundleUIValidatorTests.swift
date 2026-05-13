@@ -1523,4 +1523,178 @@ struct BundleUIValidatorTests {
         #expect(!report.issues.contains { $0.check == "state_key_referenced_in_ui" },
                 "Rust scripts use a dynamic byte API; UI state.* references must not be flagged; issues: \(report.issues)")
     }
+
+    // MARK: - body_smaller_than_manifest
+
+    /// Manifest 520×260 declared in `bodySizeManifest`; CSS `body { width:
+    /// 360px; height: 200px }` shrinks the rendered content into a corner
+    /// of the manifest-sized webview. This is exactly the bug class that
+    /// shipped three times on 2026-05-12 from `/try-it` runs.
+    private let bodySizeManifest = """
+    {
+      "schemaVersion": 2,
+      "entry": "process.py",
+      "language": "python",
+      "params": [
+        { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }
+      ],
+      "ui": {
+        "entryHTML": "ui/index.html",
+        "width": 520,
+        "height": 260,
+        "fps": 30,
+        "audioFrames": false
+      }
+    }
+    """
+
+    @Test func bodySmallerThanManifestWarns() throws {
+        let ui = """
+        <!doctype html><html><head><style>
+          body { width: 360px; height: 200px; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: bodySizeManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let issue = report.issues.first { $0.check == "body_smaller_than_manifest" }
+        #expect(issue != nil, "expected body_smaller_than_manifest; got \(report.issues)")
+        #expect(issue?.severity == .warn)
+        #expect(issue?.message.contains("360") == true, "message should reference the body width")
+        #expect(issue?.message.contains("200") == true, "message should reference the body height")
+        #expect(issue?.message.contains("520") == true, "message should reference the manifest width")
+        #expect(issue?.message.contains("260") == true, "message should reference the manifest height")
+    }
+
+    @Test func bodyMatchingManifestPasses() throws {
+        // Body explicitly sized to match manifest — the static check
+        // should not fire (the runtime will confirm rendered fit).
+        let ui = """
+        <!doctype html><html><head><style>
+          body { width: 520px; height: 260px; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: bodySizeManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "body_smaller_than_manifest" })
+    }
+
+    @Test func bodyWithinToleranceDoesNotWarn() throws {
+        // 5px under on each axis — within the 8px tolerance. Mirrors the
+        // runtime overflow tolerance so the two layers agree on "matches".
+        let ui = """
+        <!doctype html><html><head><style>
+          body { width: 515px; height: 255px; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: bodySizeManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "body_smaller_than_manifest" })
+    }
+
+    @Test func bodyPercentWidthIgnored() throws {
+        // `width: 100%` is the *correct* fill state — body inherits the
+        // manifest-sized viewport. We have no viewport context at static
+        // time and shouldn't warn on relative units; the runtime smoke
+        // test catches a genuine `width: 50%` if it produces underflow.
+        let ui = """
+        <!doctype html><html><head><style>
+          html, body { width: 100%; height: 100%; margin: 0; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: bodySizeManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "body_smaller_than_manifest" })
+    }
+
+    @Test func bodySizeSkippedWhenManifestDimsMissing() throws {
+        // Manifest has a ui block but no width/height (legacy / hand-
+        // edited). No oracle to compare against — skip without complaint.
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [{ "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }],
+          "ui": {"entryHTML": "ui/index.html", "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><head><style>
+          body { width: 200px; height: 80px; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "body_smaller_than_manifest" })
+    }
+
+    @Test func bodyLargerThanManifestNotFlaggedByUnderflow() throws {
+        // Oversized body is the overflow case — caught at runtime, not
+        // this rule's job. Confirms the rule is one-sided.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { width: 800px; height: 500px; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: bodySizeManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "body_smaller_than_manifest" })
+    }
+
+    @Test func htmlBodyComboSelectorCovered() throws {
+        // `html, body { width: ... }` is a common idiom. `isPageLevelSelector`
+        // already treats it as page-level for the contrast cascade; the
+        // size check should too.
+        let ui = """
+        <!doctype html><html><head><style>
+          html, body { width: 360px; height: 200px; margin: 0; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: bodySizeManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "body_smaller_than_manifest" },
+                "html, body combo selector should be recognized; issues: \(report.issues)")
+    }
+
+    @Test func inlineBodyStyleCovered() throws {
+        // `<body style="width: 360px">` bypasses <style>-block parsing.
+        // The check pulls the body's inline `style` attr and applies the
+        // same px comparison.
+        let ui = """
+        <!doctype html><html><body style="width: 360px; height: 200px;">
+        <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: bodySizeManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "body_smaller_than_manifest" },
+                "inline body style should be covered; issues: \(report.issues)")
+    }
+
+    @Test func bodyOneAxisShortOnlyMentionsThatAxis() throws {
+        // Width matches manifest, height is short. Message should only
+        // call out height — calling out width too is misleading.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { width: 520px; height: 180px; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: bodySizeManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let issue = report.issues.first { $0.check == "body_smaller_than_manifest" }
+        #expect(issue != nil)
+        #expect(issue?.message.contains("height") == true)
+        #expect(issue?.message.contains("width") == false,
+                "width matches manifest; message should not mention width. got: \(issue?.message ?? "")")
+    }
+
+    @Test func bodyNoSizeDeclaredPasses() throws {
+        // Default state — body fills viewport (correct). No warning.
+        let ui = """
+        <!doctype html><html><head><style>
+          body { margin: 0; padding: 0; }
+        </style></head><body><cdp-slider param="cutoff"></cdp-slider></body></html>
+        """
+        let bundle = try makeBundle(manifest: bodySizeManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "body_smaller_than_manifest" })
+    }
 }

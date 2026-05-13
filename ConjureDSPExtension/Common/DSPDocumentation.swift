@@ -1053,6 +1053,15 @@ enum DSPDocumentation {
     - `entryHTML` — path relative to the bundle root.
     - `width` / `height` — pt; the webview is pinned to this height, so
       authors control vertical space. Window is user-resizable horizontally.
+      **The manifest is the single source of truth for size.** Do NOT also
+      set `body { width: ... }` or `body { height: ... }` in CSS — the
+      webview is already sized by `manifest.ui`, and a shrunken body just
+      leaves whitespace around the rendered content while the webview
+      stays at manifest dimensions. To change the plugin's size, edit
+      `manifest.ui.width` / `height`; leave `body` to fill the viewport
+      (default behavior, or `html, body { width: 100%; height: 100% }`).
+      Both `validate_bundle` (static) and `smoke_test_ui` (runtime) flag
+      body-vs-manifest size disagreement.
     - `fps` — tick rate hint for `window.ConjureDSP.audio.onFrame`.
     - `audioFrames` — **REQUIRED `true` if your UI calls
       `ConjureDSP.audio.onFrame(...)` or reads telemetry slots.** When
