@@ -566,7 +566,8 @@ class PresetManager: ObservableObject {
             if scaffoldUI, !fileManager.fileExists(atPath: uiIndexURL.path) {
                 let uiDir = bundleURL.appendingPathComponent("ui", isDirectory: true)
                 try fileManager.createDirectory(at: uiDir, withIntermediateDirectories: true)
-                try PresetBundle.starterIndexHTML().write(
+                let audioFrames = scaffoldUIOverrides?.audioFrames ?? false
+                try PresetBundle.starterIndexHTML(audioFrames: audioFrames).write(
                     to: uiIndexURL,
                     atomically: true,
                     encoding: .utf8
@@ -622,7 +623,8 @@ class PresetManager: ObservableObject {
             if scaffoldUI {
                 let uiDir = bundleURL.appendingPathComponent("ui", isDirectory: true)
                 try fileManager.createDirectory(at: uiDir, withIntermediateDirectories: true)
-                try PresetBundle.starterIndexHTML().write(
+                let audioFrames = scaffoldUIOverrides?.audioFrames ?? false
+                try PresetBundle.starterIndexHTML(audioFrames: audioFrames).write(
                     to: uiDir.appendingPathComponent("index.html"),
                     atomically: true,
                     encoding: .utf8

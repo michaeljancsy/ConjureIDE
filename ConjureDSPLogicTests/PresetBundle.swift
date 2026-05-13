@@ -258,15 +258,110 @@ extension PresetBundle {
     }
 
     /// Starter `ui/index.html` content used when scaffolding a new
-    /// bundle with custom UI enabled. Leans on the injected `cdp-ui`
-    /// component library — `<cdp-panel auto>` renders one appropriate
-    /// control per parameter (slider / toggle / choice / etc.), matching
-    /// the Swift stock panel's behavior. Authors can replace as little
-    /// or as much as they want: drop in `<cdp-slider param="0">` or
-    /// `<cdp-xy param-x="0" param-y="1">` alongside, or strip the
-    /// panel entirely and hand-build a layout.
-    static func starterIndexHTML() -> String {
-        """
+    /// bundle with custom UI enabled. When `audioFrames` is true, also
+    /// emits a `<canvas id="spec">` plus the rAF-coalesced FFT
+    /// smoothing scaffold (peak-hold + decay-toward-floor) so authors
+    /// who opted into ui_audio_frames get a working spectrum surface
+    /// out of the box instead of having to hand-write the boilerplate.
+    static func starterIndexHTML(audioFrames: Bool = false) -> String {
+        let canvasCSS = audioFrames ? """
+            /* Spectrum canvas — width/height attributes set the backing
+               buffer; this rule makes it visible at the panel width. */
+            #spec { display: block; width: 100%; height: 120px; }
+
+        """ : ""
+
+        let canvasElement = audioFrames ? """
+            <!-- Spectrum analyzer surface. Remove this <canvas> and the
+                 <script> block below if you don't need a live FFT
+                 display. -->
+            <canvas id="spec" width="480" height="120"></canvas>
+
+        """ : ""
+
+        let spectrumScript = audioFrames ? """
+
+          <script>
+            // FFT smoothing scaffold.
+            //
+            // audio.onFrame fires at display rate (60–120 Hz), but
+            // frame.fftOut only arrives when a new FFT column is produced
+            // (~23 Hz at 48 kHz / 2048 fftSize / 50% hop). Drawing raw bin
+            // updates looks visibly stepped. The peak-hold-then-decay
+            // pattern below produces smooth display-rate motion.
+            //
+            // Tune to taste — eq3 chose SPEC_DECAY = 0.85.
+            //
+            // Remove the <canvas id="spec"> above and this entire <script>
+            // block if you don't need a spectrum display.
+            const CDP = window.ConjureDSP;
+
+            let specIn = null;   // Float32Array, halfN bins of dB (-120..0)
+            let specOut = null;
+            let specBins = 0;
+            let specSampleRate = 48000;  // refreshed each frame from frame.sampleRate
+            const SPEC_FLOOR = -90;
+            const SPEC_CEIL  = 0;
+            const SPEC_DECAY = 0.85;
+
+            function ingestSpectrum(prev, fresh) {
+              const n = fresh.length;
+              // Pre-fill with SPEC_FLOOR so the first decay step doesn't
+              // pull from a 0 dB seed (which would briefly render ~-13.5 dB
+              // for one frame — a visible pop on UI mount).
+              if (!prev || prev.length !== n) prev = new Float32Array(n).fill(SPEC_FLOOR);
+              for (let i = 0; i < n; i++) {
+                const decayed = prev[i] * SPEC_DECAY + SPEC_FLOOR * (1 - SPEC_DECAY);
+                prev[i] = fresh[i] > decayed ? fresh[i] : decayed;
+              }
+              return prev;
+            }
+
+            let raf = 0;
+            function scheduleRedraw() {
+              if (raf) return;
+              raf = requestAnimationFrame(() => { raf = 0; draw(); });
+            }
+
+            function draw() {
+              if (!specIn || !specOut) return;
+              const canvas = document.getElementById('spec');
+              if (!canvas) return;
+              const ctx = canvas.getContext('2d');
+              const w = canvas.width, h = canvas.height;
+              ctx.clearRect(0, 0, w, h);
+              ctx.fillStyle = (CDP && CDP.theme === 'dark')
+                ? 'rgba(232,232,232,0.7)'
+                : 'rgba(24,24,24,0.7)';
+              function paint(spec, yOffset) {
+                let sum = 0;
+                for (let i = 1; i < specBins; i++) sum += spec[i];
+                const mean = sum / Math.max(1, specBins - 1);
+                const clamped = Math.max(SPEC_FLOOR, Math.min(SPEC_CEIL, mean));
+                const t = (clamped - SPEC_FLOOR) / (SPEC_CEIL - SPEC_FLOOR);
+                ctx.fillRect(0, yOffset, w * t, h * 0.45);
+              }
+              paint(specIn,  0);
+              paint(specOut, h * 0.5);
+            }
+
+            if (CDP && CDP.audio && CDP.audio.onFrame) {
+              CDP.audio.onFrame((frame) => {
+                if (!frame.fftIn || !frame.fftOut) return;
+                specBins = frame.fftIn.length;
+                if (typeof frame.sampleRate === 'number' && frame.sampleRate > 0) {
+                  specSampleRate = frame.sampleRate;
+                }
+                specIn  = ingestSpectrum(specIn,  frame.fftIn);
+                specOut = ingestSpectrum(specOut, frame.fftOut);
+                scheduleRedraw();
+              }, { fft: true });
+            }
+            window.addEventListener('themechange', scheduleRedraw);
+          </script>
+        """ : ""
+
+        return """
         <!DOCTYPE html>
         <html>
         <head>
@@ -284,7 +379,7 @@ extension PresetBundle {
               gap: 12px;
               padding: 12px;
             }
-            cdp-slider { min-height: 24px; min-width: 100px; }
+        \(canvasCSS)    cdp-slider { min-height: 24px; min-width: 100px; }
             cdp-knob   { min-width: 40px; min-height: 40px; }
             cdp-xy     { min-width: 80px; min-height: 80px; }
             cdp-toggle { min-height: 24px; min-width: 32px; }
@@ -296,7 +391,7 @@ extension PresetBundle {
         </head>
         <body>
           <main class="conjure-ui">
-            <cdp-panel auto></cdp-panel>
+        \(canvasElement)    <cdp-panel auto></cdp-panel>
             <!--
               Swap the line above for anything you want. Examples:
                 <cdp-slider param="0"></cdp-slider>
@@ -308,7 +403,7 @@ extension PresetBundle {
               primitives (ConjureDSP.ui.control(i), formatValue, ...) are
               available when you want to render your own widgets.
             -->
-          </main>
+          </main>\(spectrumScript)
         </body>
         </html>
         """
