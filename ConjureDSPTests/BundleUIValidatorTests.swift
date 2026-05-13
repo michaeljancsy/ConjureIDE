@@ -672,6 +672,426 @@ struct BundleUIValidatorTests {
                 "audio.onFrame in an inline handler is real code — must fire even though there's a `//` URL nearby")
     }
 
+    // MARK: - fft_redraw_gated_on_hop
+
+    /// Baseline manifest with `audioFrames: true` — every fft test below
+    /// needs the frame stream open, so the audio_frames_not_enabled check
+    /// stays silent.
+    private let fftManifest = """
+    {
+      "schemaVersion": 2, "entry": "process.py", "language": "python",
+      "params": [
+        { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+      ],
+      "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": true}
+    }
+    """
+
+    /// The Spectrum Analyzer shape that prompted the rule: early-return
+    /// on missing fftOut, then draw directly from fftOut. Screen ticks at
+    /// the hop rate (~23 Hz) instead of display rate.
+    @Test func earlyReturnOnFftOutFlagged() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            ConjureDSP.audio.onFrame((frame) => {
+              if (!frame.fftOut) return;
+              const ctx = document.getElementById('c').getContext('2d');
+              ctx.clearRect(0, 0, 400, 240);
+              for (let bin = 1; bin < frame.fftOut.length; bin++) {
+                ctx.fillRect(bin, 240 + frame.fftOut[bin] * 2, 1, -frame.fftOut[bin] * 2);
+              }
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "fft_redraw_gated_on_hop" })
+        if let issue = report.issues.first(where: { $0.check == "fft_redraw_gated_on_hop" }) {
+            #expect(issue.severity == .warn, "stepped redraw is visible but not silent — warn, not fail")
+        }
+    }
+
+    /// Smoothed-array pattern is the recommended fix and must not fire
+    /// the warning: indexed assignment with frame.fftOut on the RHS is
+    /// the suppression signal.
+    @Test func smoothedFftDoesNotFlag() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            const smoothed = new Float32Array(1024);
+            const attack = 0.6;
+            ConjureDSP.audio.onFrame((frame) => {
+              if (frame.fftOut) {
+                for (let bin = 0; bin < frame.fftOut.length; bin++) {
+                  smoothed[bin] = attack * smoothed[bin] + (1 - attack) * frame.fftOut[bin];
+                }
+              }
+              const ctx = document.getElementById('c').getContext('2d');
+              ctx.clearRect(0, 0, 400, 240);
+              for (let bin = 1; bin < smoothed.length; bin++) {
+                ctx.fillRect(bin, 240 + smoothed[bin] * 2, 1, -smoothed[bin] * 2);
+              }
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "smoothing array assignment must suppress; issues: \(report.issues)")
+    }
+
+    /// The docs canonical example splits the smoothing assignment
+    /// across two lines:
+    ///     smoothed[bin] = attack * smoothed[bin]
+    ///                   + (1 - attack) * frame.fftOut[bin];
+    /// The suppression regex must allow newlines between `=` and the
+    /// `frame.fftOut` reference, or copy-pasting the docs idiom would
+    /// trip the very warning the docs recommend (regression flagged by
+    /// Sentry Seer on PR #328).
+    @Test func multiLineSmoothedFftDoesNotFlag() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            const smoothed = new Float32Array(1024);
+            const attack = 0.6;
+            ConjureDSP.audio.onFrame((frame) => {
+              if (!frame.fftOut) return;
+              for (let bin = 0; bin < frame.fftOut.length; bin++) {
+                smoothed[bin] = attack * smoothed[bin]
+                              + (1 - attack) * frame.fftOut[bin];
+              }
+              drawSpectrum(smoothed);
+            }, { fft: true });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "multi-line smoothing assignment must suppress; issues: \(report.issues)")
+    }
+
+    /// Helper-function smoothing pattern (peak-hold + decay inside an
+    /// `ingestSpectrum` helper) — main's canonical example shape. The
+    /// per-bin loop lives in the helper, not at the call site, so the
+    /// suppression rule must recognize `frame.fftOut` passed as a bare
+    /// function argument.
+    @Test func helperFunctionSmoothingDoesNotFlag() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            let spec = null;
+            function ingestSpectrum(prev, fresh) {
+              if (!prev || prev.length !== fresh.length) prev = new Float32Array(fresh.length).fill(-90);
+              for (let i = 0; i < fresh.length; i++) {
+                const decayed = prev[i] * 0.85 + -90 * 0.15;
+                prev[i] = fresh[i] > decayed ? fresh[i] : decayed;
+              }
+              return prev;
+            }
+            ConjureDSP.audio.onFrame((frame) => {
+              if (!frame.fftOut) return;
+              spec = ingestSpectrum(spec, frame.fftOut);
+              requestAnimationFrame(() => drawSpectrum(spec));
+            }, { fft: true });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "frame.fftOut passed to a helper smoother must suppress; issues: \(report.issues)")
+    }
+
+    /// Single-arg helpers like `smooth(frame.fftOut)` are deliberately
+    /// NOT recognized by the helper-arg suppression rule — the regex
+    /// requires a comma to distinguish from `if (frame.fftOut)`. This
+    /// fixture locks in that boundary: if a future regex widening also
+    /// swallowed the early-return signal, this test would go silent.
+    @Test func singleArgHelperStillFlags() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            function smooth(arr) { /* pretend per-bin work */ return arr; }
+            ConjureDSP.audio.onFrame((frame) => {
+              if (!frame.fftOut) return;
+              smooth(frame.fftOut);  // single-arg, no comma — does NOT suppress
+              const ctx = document.getElementById('c').getContext('2d');
+              ctx.clearRect(0, 0, 400, 240);
+              for (let bin = 1; bin < frame.fftOut.length; bin++) {
+                ctx.fillRect(bin, 240 + frame.fftOut[bin] * 2, 1, -frame.fftOut[bin] * 2);
+              }
+            }, { fft: true });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "single-arg `smooth(frame.fftOut)` must not suppress; issues: \(report.issues)")
+    }
+
+    /// The suppression marker is matched as a word-bounded slug, not a
+    /// substring — `// validator:ignore fft_redraw_gated_on_hop_v2`
+    /// must NOT silence the v1 check. Without this guard, a future
+    /// related rule could accidentally turn off this one.
+    @Test func suppressionMarkerOnlyMatchesExactSlug() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            // validator:ignore fft_redraw_gated_on_hop_v2 — unrelated, hypothetical future rule
+            ConjureDSP.audio.onFrame((frame) => {
+              if (!frame.fftOut) return;
+              const ctx = document.getElementById('c').getContext('2d');
+              ctx.clearRect(0, 0, 400, 240);
+              for (let bin = 1; bin < frame.fftOut.length; bin++) {
+                ctx.fillRect(bin, 240 + frame.fftOut[bin] * 2, 1, -frame.fftOut[bin] * 2);
+              }
+            }, { fft: true });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "substring-only marker match must not suppress the v1 check; issues: \(report.issues)")
+    }
+
+    /// Explicit author opt-out via `// validator:ignore fft_redraw_gated_on_hop`.
+    @Test func explicitSuppressionCommentSilencesCheck() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            // validator:ignore fft_redraw_gated_on_hop — sample-and-hold by design
+            ConjureDSP.audio.onFrame((frame) => {
+              if (!frame.fftOut) return;
+              const ctx = document.getElementById('c').getContext('2d');
+              ctx.clearRect(0, 0, 400, 240);
+              for (let bin = 1; bin < frame.fftOut.length; bin++) {
+                ctx.fillRect(bin, 240 + frame.fftOut[bin] * 2, 1, -frame.fftOut[bin] * 2);
+              }
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" })
+    }
+
+    /// A commented-out `if (!frame.fftOut) return;` is illustrative, not
+    /// real code, and must not fire — same convention used by the
+    /// audio_frames_not_enabled check.
+    @Test func commentedOutEarlyReturnDoesNotFlag() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>
+            ConjureDSP.audio.onFrame((frame) => {
+              // if (!frame.fftOut) return;
+              // TODO bring back FFT path once smoothing lands
+              console.log(frame.rms);
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "JS-comment broken shape isn't running code; issues: \(report.issues)")
+    }
+
+    /// Inverted `if (frame.fftOut) { ... }` whose body is a per-hop
+    /// column-buffer fill (no canvas draw call inside) is a legitimate
+    /// sample-and-hold visualizer pattern, not the bug we're flagging.
+    @Test func invertedFftBlockWithoutDrawCallDoesNotFlag() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>
+            const column = new Float32Array(1024);
+            ConjureDSP.audio.onFrame((frame) => {
+              if (frame.fftOut) {
+                column.set(frame.fftOut);
+              }
+              // draw happens elsewhere on a different timer
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "no draw call inside the guarded block + no early-return → don't flag; issues: \(report.issues)")
+    }
+
+    /// Inverted form WITH a draw call inside and no else branch IS the
+    /// jerky-redraw bug — flag it.
+    @Test func invertedFftBlockWithDrawCallFlagged() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            ConjureDSP.audio.onFrame((frame) => {
+              if (frame.fftOut) {
+                const ctx = document.getElementById('c').getContext('2d');
+                ctx.clearRect(0, 0, 400, 240);
+                ctx.beginPath();
+                ctx.stroke();
+              }
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "fft_redraw_gated_on_hop" })
+    }
+
+    /// Inverted form with a sibling `else` branch — author handled the
+    /// no-fft case explicitly. The walker must still see `else` even
+    /// when the closing `}` is deeply indented (the previous 20-char
+    /// tail window broke at ~5 levels of nesting).
+    @Test func invertedFftBlockWithDeeplyIndentedElseDoesNotFlag() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            ConjureDSP.audio.onFrame((frame) => {
+              if (true) {
+                if (true) {
+                  if (true) {
+                    if (true) {
+                      if (frame.fftOut) {
+                        const ctx = document.getElementById('c').getContext('2d');
+                        ctx.fillRect(0, 0, 10, 10);
+                      } else {
+                        const ctx = document.getElementById('c').getContext('2d');
+                        ctx.clearRect(0, 0, 400, 240);
+                      }
+                    }
+                  }
+                }
+              }
+            }, { fft: true });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "deeply-indented sibling `else` must suppress; issues: \(report.issues)")
+    }
+
+    /// A `}` inside a string literal inside the inverted-form body must
+    /// not desync the brace walker. Without quote-state tracking the
+    /// walker exits one statement early and may either miss the real
+    /// draw call (false negative) or accidentally find one outside the
+    /// block (false positive).
+    @Test func invertedFftBlockWithBraceInStringLiteralStillFlags() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            ConjureDSP.audio.onFrame((frame) => {
+              if (frame.fftOut) {
+                const label = "{closing brace inside string: }";
+                const ctx = document.getElementById('c').getContext('2d');
+                ctx.fillRect(0, 0, 10, 10);
+              }
+            }, { fft: true });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "brace inside string literal must not desync the walker; issues: \(report.issues)")
+    }
+
+    /// Template literals with `${…}` interpolation must not desync the
+    /// brace walker. A naive walker that toggles state on backtick
+    /// (without tracking `${…}` as a sub-expression) would treat the
+    /// `}` of `${expr}` as the outer block's close and exit early.
+    @Test func invertedFftBlockWithTemplateInterpolationStillFlags() throws {
+        let ui = #"""
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            ConjureDSP.audio.onFrame((frame) => {
+              if (frame.fftOut) {
+                const label = `bin0=${frame.fftOut[0].toFixed(1)} dB`;
+                const wrapped = `nested ${ `inner ${1+1} done` } outer`;
+                const ctx = document.getElementById('c').getContext('2d');
+                ctx.fillText(label, 10, 20);
+              }
+            }, { fft: true });
+          </script>
+        </body></html>
+        """#
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "template literal with ${…} must not desync the walker; issues: \(report.issues)")
+    }
+
+    /// Sibling `else` after a template-literal-heavy body still
+    /// suppresses — verifies the walker reaches the real `}` despite
+    /// embedded `${…}` braces.
+    @Test func invertedFftBlockWithTemplateAndElseDoesNotFlag() throws {
+        let ui = #"""
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            ConjureDSP.audio.onFrame((frame) => {
+              if (frame.fftOut) {
+                const label = `bin0=${frame.fftOut[0]}`;
+                const ctx = document.getElementById('c').getContext('2d');
+                ctx.fillText(label, 10, 20);
+              } else {
+                console.log('no fft this tick');
+              }
+            }, { fft: true });
+          </script>
+        </body></html>
+        """#
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "sibling `else` after template-literal body must still suppress; issues: \(report.issues)")
+    }
+
+    /// A UI with no `audio.onFrame` at all has nothing for this check to
+    /// say. Don't fire — and don't accidentally match on `// if (!frame.fftOut) return;`
+    /// floating around in unrelated code.
+    @Test func uiWithoutOnFrameDoesNotFlag() throws {
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: baselineUI)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" })
+    }
+
     // MARK: - external_asset_ref / network_egress_in_ui
 
     @Test func externalScriptFlagged() throws {

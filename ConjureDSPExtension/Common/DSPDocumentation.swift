@@ -1389,12 +1389,25 @@ enum DSPDocumentation {
     48000 — the host can run at 44.1k / 96k / etc.):
 
     ```js
+    // FFT data arrives at the hop rate (~23 Hz at 48k/2048), but
+    // `audio.onFrame` fires at display rate. Smooth per bin so the UI
+    // redraws every tick from `smoothed[]`, not just on FFT ticks —
+    // otherwise the visualization steps visibly at the hop rate.
+    const smoothed = new Float32Array(1024);   // matches default fftSize / 2
+    const attack = 0.6;                         // 0 = none, 1 = frozen
     ConjureDSP.audio.onFrame(frame => {
-        if (!frame.fftOut) return;             // FFT only present when opts.fft = true
-        const N = frame.fftOut.length * 2;     // FFT size (halfN bins published)
-        for (let bin = 1; bin < frame.fftOut.length; bin++) {
-            const hz  = bin * frame.sampleRate / N;
-            const dB  = frame.fftOut[bin];     // already in dB, range [-120, 0]
+        if (frame.fftOut) {                     // FFT only present when opts.fft = true
+            for (let bin = 0; bin < frame.fftOut.length; bin++) {
+                smoothed[bin] = attack * smoothed[bin]
+                              + (1 - attack) * frame.fftOut[bin];
+            }
+        }
+        // Redraw every tick from `smoothed`, regardless of whether
+        // fftOut arrived this tick.
+        const N = smoothed.length * 2;
+        for (let bin = 1; bin < smoothed.length; bin++) {
+            const hz = bin * frame.sampleRate / N;
+            const dB = smoothed[bin];           // already in dB, range [-120, 0]
             // …plot or aggregate…
         }
     }, { fft: true });
@@ -1414,7 +1427,9 @@ enum DSPDocumentation {
     - **Hop:** 50% (`fftSize / 2` samples). FFT bins only ride along on
       ticks that produced a new column, so `frame.fftIn` / `frame.fftOut`
       are `undefined` on most ticks (CADisplayLink fires faster than
-      hops complete) — gate on `if (!frame.fftOut) return;`.
+      hops complete). Guard reads with `if (frame.fftOut) { … }` and
+      update a smoothed per-bin array inside — then redraw every tick
+      from `smoothed[]`. See **FFT smoothing** below.
     - **Bin → Hz:** `freq_hz = bin * frame.sampleRate / N` for bins
       `1..N/2 - 1`. Bin spacing is `sampleRate / N` (≈ 23.4 Hz at 48 kHz,
       `N = 2048`).
@@ -1432,32 +1447,43 @@ enum DSPDocumentation {
 
     ### Smoothing FFT bins to display rate
 
-    The gating idiom above (`if (!frame.fftOut) return;`) is necessary
-    but not sufficient on its own: it draws *only* on FFT-column ticks,
-    so bars step at ~23 Hz instead of flowing at display rate. Hold the
+    The gating idiom (`if (!frame.fftOut) return;`) is necessary but
+    not sufficient on its own: it draws *only* on FFT-column ticks, so
+    bars step at ~23 Hz instead of flowing at display rate. Hold the
     last column in a per-bin buffer, decay it toward a visible floor,
     and coalesce paints through `requestAnimationFrame`:
 
     ```js
     const SPEC_FLOOR = -90;   // dB shown at the bottom of the canvas
-    const SPEC_DECAY = 0.85;  // per-FFT-column decay coefficient
+    const SPEC_DECAY = 0.85;  // per-display-tick decay coefficient
 
     let spec = null;          // Float32Array, smoothed per-bin dB
 
-    function ingestSpectrum(prev, fresh) {
-        const n = fresh.length;
-        // Pre-fill with SPEC_FLOOR so the first decay step doesn't pull
-        // from a 0 dB seed (which would otherwise flash near the canvas
-        // top for one frame on UI mount).
-        if (!prev || prev.length !== n) prev = new Float32Array(n).fill(SPEC_FLOOR);
-        // Peak-hold, then decay toward the floor:
-        //   decayed = prev * SPEC_DECAY + SPEC_FLOOR * (1 - SPEC_DECAY)
-        //   held    = max(decayed, fresh)
-        for (let i = 0; i < n; i++) {
-            const decayed = prev[i] * SPEC_DECAY + SPEC_FLOOR * (1 - SPEC_DECAY);
-            prev[i] = fresh[i] > decayed ? fresh[i] : decayed;
+    function ensureBuffer(prev, n) {
+        if (!prev || prev.length !== n) {
+            // Pre-fill with SPEC_FLOOR so the first decay step doesn't
+            // pull from a 0 dB seed (which would otherwise flash near
+            // the canvas top for one frame on UI mount).
+            return new Float32Array(n).fill(SPEC_FLOOR);
         }
         return prev;
+    }
+
+    function decayOneStep(buf) {
+        // Decay toward the floor (NOT toward the fresh value):
+        //   buf = buf * SPEC_DECAY + SPEC_FLOOR * (1 - SPEC_DECAY)
+        // Runs every display tick so bars slide smoothly down between
+        // FFT columns instead of stepping at the hop rate.
+        for (let i = 0; i < buf.length; i++) {
+            buf[i] = buf[i] * SPEC_DECAY + SPEC_FLOOR * (1 - SPEC_DECAY);
+        }
+    }
+
+    function peakHold(buf, fresh) {
+        // Snap up to fresh bins — runs only on FFT-column ticks.
+        for (let i = 0; i < fresh.length; i++) {
+            if (fresh[i] > buf[i]) buf[i] = fresh[i];
+        }
     }
 
     let raf = 0;
@@ -1467,27 +1493,35 @@ enum DSPDocumentation {
     }
 
     ConjureDSP.audio.onFrame(frame => {
-        if (!frame.fftOut) return;          // gate: only update on FFT columns
-        spec = ingestSpectrum(spec, frame.fftOut);
-        scheduleRedraw();                   // one paint per display tick
+        // Decay every display tick — bars slide smoothly toward the floor.
+        if (spec) decayOneStep(spec);
+        // Peak-hold against fresh FFT only on ticks that carried a new column.
+        if (frame.fftOut) {
+            spec = ensureBuffer(spec, frame.fftOut.length);
+            peakHold(spec, frame.fftOut);
+        }
+        // Paint every tick — the picture changes every tick because
+        // decay ran above, even when no fresh FFT arrived.
+        scheduleRedraw();
     }, { fft: true });
     ```
 
     Why each piece matters:
 
-    - **Peak-hold-then-decay-toward-floor**, not raw bin updates: a loud
-      transient snaps to the new value immediately and then drifts down
-      toward `SPEC_FLOOR` over many display ticks — easier to read than
-      ~23 Hz steps. The recurrence decays toward the floor, not toward
-      the fresh value; the difference matters if you adapt it.
+    - **Decay runs every display tick, peak-hold runs every FFT tick.**
+      A loud transient snaps to the new value immediately and then
+      drifts down toward `SPEC_FLOOR` over many display ticks — easier
+      to read than ~23 Hz steps. If decay also ran only on FFT ticks
+      (the older shape), the bars would visibly step at the hop rate
+      even with rAF coalescing the paint.
     - **`SPEC_FLOOR` pre-fill** of the buffer: without it the buffer
       starts at 0 dB (`new Float32Array(n)`), and the first decay step
       lands at `SPEC_FLOOR * (1 - 0.85) ≈ -13.5 dB` — visible as a brief
       flash near the canvas top on UI mount.
-    - **`requestAnimationFrame` coalescer**: the buffer is updated every
-      FFT-column tick (~23 Hz at 48 kHz / N=2048, see the Hop bullet
-      above and the cadence comment at AudioCaptureManager.swift:554),
-      but the *paint* runs at display rate so motion stays smooth.
+    - **`scheduleRedraw()` is unconditional**: paint follows display
+      rate, not FFT rate. rAF coalesces multiple updates within one
+      frame but only fires when called — gating it on `frame.fftOut`
+      would drop the paint cadence to ~23 Hz.
     - **No throttle in the canonical shape**: call `scheduleRedraw()`
       directly. Presets that overlay an FFT on a draggable curve (where
       parameter-drag triggers its own redraws) may add a `performance.now()`
@@ -1496,6 +1530,14 @@ enum DSPDocumentation {
       analyzers should leave it unthrottled.
     - **Use `frame.sampleRate`** for any bin → Hz mapping (already shown
       in the bin-conversion example above): never hardcode 48000.
+
+    The `fft_redraw_gated_on_hop` static validator flags the early-return
+    shape when it's *not* paired with a smoothing buffer (the gemini
+    Spectrum Analyzer bug — gated redraw, no peak-hold). Passing
+    `frame.fftOut` as a non-first arg to a per-bin smoother like
+    `peakHold(spec, frame.fftOut)` above suppresses the warning. Add
+    `// validator:ignore fft_redraw_gated_on_hop` if the gating is
+    intentional (e.g. true sample-and-hold).
 
     ## DSP→UI telemetry channel
 
