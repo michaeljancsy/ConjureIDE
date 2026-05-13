@@ -51,7 +51,7 @@ process! { ctx =>
 
     FILTERS.with_mut(|filters| {
         for i in 0..ctx.frames() {
-            // Peak detect across channel_count with sensitivity scaling
+            // Peak detect across channels with sensitivity scaling
             let mut peak_val: f64 = 0.0;
             for c in 0..ctx.channels() {
                 let abs_val = (ctx.input(c, i) as f64).abs() * sensitivity_gain;

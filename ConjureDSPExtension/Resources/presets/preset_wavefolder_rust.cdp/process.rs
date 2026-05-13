@@ -15,17 +15,15 @@ params! {
 }
 
 process! { ctx =>
-    unsafe {
-        let drive = ctx.param(DRIVE);
+    let drive = ctx.param(DRIVE);
 
-        for c in 0..ctx.channels() {
-            for i in 0..ctx.frames() {
-                let x = ctx.input(c, i) * drive;
-                // Triangle-wave fold: maps any value into [-1, 1]
-                let t = (x + 1.0) * 0.25;
-                let t = t - t.floor();
-                ctx.set_output(c, i, 1.0 - (t * 4.0 - 2.0).abs());
-            }
+    for c in 0..ctx.channels() {
+        for i in 0..ctx.frames() {
+            let x = ctx.input(c, i) * drive;
+            // Triangle-wave fold: maps any value into [-1, 1]
+            let t = (x + 1.0) * 0.25;
+            let t = t - t.floor();
+            ctx.set_output(c, i, 1.0 - (t * 4.0 - 2.0).abs());
         }
     }
 }

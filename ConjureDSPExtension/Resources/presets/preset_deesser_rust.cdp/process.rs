@@ -52,7 +52,7 @@ process! { ctx =>
         }
 
         for i in 0..ctx.frames() {
-            // Sidechain: bandpass filter then peak detect across channel_count
+            // Sidechain: bandpass filter then peak detect across channels
             let mut sc_peak: f64 = 0.0;
             for c in 0..ctx.channels() {
                 let x = ctx.input(c, i) as f64;

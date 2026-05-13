@@ -1,6 +1,6 @@
 // Ping-Pong Delay — stereo bouncing echo.
 //
-// Creates echoes that alternate between left and right channel_count. The
+// Creates echoes that alternate between left and right channels. The
 // input feeds into the left delay, the left delay's output feeds into
 // the right delay, and the right delay feeds back into the left. This
 // creates a bouncing stereo effect. For mono input, falls back to a

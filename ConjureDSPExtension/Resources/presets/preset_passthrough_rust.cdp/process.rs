@@ -6,8 +6,8 @@
 use conjuredsp::*;
 /// Passthrough — copies input to output unchanged.
 ///
-/// Iterates over all channel-sequential samples (channel_count x frames) and copies each
-/// input sample directly to the output buffer. No parameters are declared.
+/// Iterates over the full (channels × frames) grid and copies each input
+/// sample directly to the output buffer. No parameters are declared.
 process! { ctx =>
     for c in 0..ctx.channels() {
         for i in 0..ctx.frames() {

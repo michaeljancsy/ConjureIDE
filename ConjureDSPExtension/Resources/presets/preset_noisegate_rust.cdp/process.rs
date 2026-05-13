@@ -1,6 +1,6 @@
 // Noise Gate — silences signal below a threshold.
 //
-// Monitors the peak level across all channel_count. When the level drops
+// Monitors the peak level across all channels. When the level drops
 // below the threshold, the gate closes (attenuates to silence) after
 // a hold period. Attack and release control how quickly the gate
 // opens and closes. The hold time prevents the gate from chattering
@@ -41,7 +41,7 @@ process! { ctx =>
     let mut hold = HOLD_COUNTER.get();
 
     for i in 0..ctx.frames() {
-        // Peak detect across all channel_count
+        // Peak detect across all channels
         let mut peak: f64 = 0.0;
         for c in 0..ctx.channels() {
             let abs_val = (ctx.input(c, i) as f64).abs();

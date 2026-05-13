@@ -29,7 +29,7 @@ persist!(PHASE: f64 = 0.0);
 ///
 /// Computes a per-sample LFO gain using a sine wave, then multiplies
 /// each input sample by that gain. The phase accumulates across callbacks so the
-/// modulation is seamless between audio buffers. All channel_count share the same LFO.
+/// modulation is seamless between audio buffers. All channels share the same LFO.
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
     let two_pi = 2.0 * core::f64::consts::PI;
