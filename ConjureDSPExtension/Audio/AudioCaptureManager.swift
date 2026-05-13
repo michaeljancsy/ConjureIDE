@@ -506,7 +506,7 @@ final class AudioCaptureManager: ObservableObject {
             // smoothed values to the spectrogram column rings. The diff /
             // normDiff path below continues to consume the un-smoothed
             // `fftInputScratch` / `fftOutputScratch`, so the passthrough-
-            // zero-diff invariant is preserved. See `applySpectrogramSmoothing`
+            // zero-diff invariant is preserved. See `SpectrogramSmoothing.step`
             // for the symmetric-with-bypass rule details.
             //
             // A/B verified load-bearing: with the smoother disabled (and

@@ -58,7 +58,15 @@ enum SpectrogramSmoothing {
     static func step(scratch: [Float], state: inout [Float]) {
         let oneMinusAlpha: Float = 1.0 - alpha
         let n = scratch.count
-        guard state.count == n else { return }
+        // Size mismatch means setupFFT didn't reallocate the EMA arrays
+        // alongside the scratch buffers — a real bug if it happens.
+        // assertionFailure in debug so a future resize-race surfaces loudly;
+        // release falls back to silent no-op so the visualization doesn't
+        // crash the AU.
+        guard state.count == n else {
+            assertionFailure("SpectrogramSmoothing.step size mismatch: scratch=\(n) state=\(state.count)")
+            return
+        }
         for i in 0..<n {
             let x = scratch[i]
             let s = state[i]
