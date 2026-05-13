@@ -318,6 +318,18 @@ final class AudioCaptureManager: ObservableObject {
     private var fftInputScratch:  [Float] = []
     private var fftOutputScratch: [Float] = []
 
+    // Per-bin smoother state for the spectrogram column rings only.
+    // Damps the small phase-dependent magnitude cross-term that windowed-sine
+    // FFT produces between hops — visible in the screenshot as vertical
+    // striping in sidelobe bins even after the rendering-interpolation fix.
+    // The smoother is asymmetric (attack-snap, gentle-release on small drops,
+    // hard-step bypass on large drops) so transients still render as sharp
+    // single-column events; only quasi-stationary wobble gets averaged.
+    // `fftInputScratch` / `fftOutputScratch` stay un-smoothed so the diff and
+    // normDiff channels (and the audioFramePublisher) continue to see raw dB.
+    private var fftInputEMA:  [Float] = []
+    private var fftOutputEMA: [Float] = []
+
     // Telemetry: cached metadata + reusable read buffer.
     // The cached-JSON string lets us re-parse names only when the
     // kernel's metadata content changes (i.e. on script load), keeping
@@ -412,6 +424,12 @@ final class AudioCaptureManager: ObservableObject {
         fftInputScratch  = [Float](repeating: 0, count: halfN)
         fftOutputScratch = [Float](repeating: 0, count: halfN)
 
+        // EMA state for spectrogram smoothing — init to floorDB so the first
+        // column post-resize attack-snaps to actual signal instead of ramping
+        // up from 0 dB.
+        fftInputEMA  = [Float](repeating: Self.floorDB, count: halfN)
+        fftOutputEMA = [Float](repeating: Self.floorDB, count: halfN)
+
         // Linearization buffer for circular accumulator → contiguous FFT input
         linearizationBuffer = [Float](repeating: 0, count: n)
 
@@ -444,6 +462,13 @@ final class AudioCaptureManager: ObservableObject {
         // Reset accumulators
         inputAccumulator.reset()
         outputAccumulator.reset()
+
+        // Reset EMA state so resuming capture after a stop doesn't carry
+        // stale per-bin magnitudes from a prior session.
+        for i in 0..<fftInputEMA.count {
+            fftInputEMA[i]  = Self.floorDB
+            fftOutputEMA[i] = Self.floorDB
+        }
 
         displayLink?.invalidate()
 
@@ -536,9 +561,18 @@ final class AudioCaptureManager: ObservableObject {
             computeFFT(samples: linearizationBuffer, result: &fftOutputScratch)
             outputAccumulator.dropFirst(hopSize)
 
+            // Smooth each bin into per-channel EMA state, then append the
+            // smoothed values to the spectrogram column rings. The diff /
+            // normDiff path below continues to consume the un-smoothed
+            // `fftInputScratch` / `fftOutputScratch`, so the passthrough-
+            // zero-diff invariant is preserved. See `fftInputEMA` docstring
+            // above for the asymmetric-smoother rationale.
+            applySpectrogramSmoothing(scratch: fftInputScratch,  state: &fftInputEMA)
+            applySpectrogramSmoothing(scratch: fftOutputScratch, state: &fftOutputEMA)
+
             // Append to column ring buffers (zero heap allocation — copies into pre-allocated storage)
-            inputColumnRing.append(from: fftInputScratch)
-            outputColumnRing.append(from: fftOutputScratch)
+            inputColumnRing.append(from: fftInputEMA)
+            outputColumnRing.append(from: fftOutputEMA)
 
             computeDifference(input: fftInputScratch, output: fftOutputScratch)
             differenceColumnRing.append(from: diffScratch)
@@ -757,6 +791,54 @@ final class AudioCaptureManager: ObservableObject {
         // Copy into caller's buffer (avoids allocation since result is pre-sized by caller)
         for i in 0..<halfN {
             result[i] = fftDBValues[i]
+        }
+    }
+
+    // MARK: - Spectrogram Smoothing
+
+    /// Symmetric per-bin smoother with a hard-step bypass, applied to the
+    /// spectrogram-only columns. Two branches:
+    ///   - **Hard-step bypass** (`|s - x| > 20` dB): `s = x`. Note-ons, note-offs,
+    ///     and signal start/stop land in a single column with no tail.
+    ///   - **Symmetric one-pole** (small step): `s = α·x + (1-α)·s` with α=0.3.
+    ///     Converges toward the time-averaged magnitude, killing the
+    ///     phase-dependent cross-term wobble that a Hann-windowed stationary
+    ///     sine produces between hops in its sidelobe bins.
+    ///
+    /// Earlier asymmetric design (attack-snap + gentle-release) was insufficient:
+    /// attack-snap fires on every upward step of a stationary wobble, leaving
+    /// a ~1 dB residual oscillation that maps to ~3 magma indices in the
+    /// bright sidelobe region — still visible as vertical stripes. Symmetric
+    /// smoothing trades slightly slower fade-in onset (~3-frame time constant
+    /// ≈ 65 ms at 46 cols/sec) for actual convergence to a uniform horizontal
+    /// band on stationary tones.
+    ///
+    /// Cost: one subtract + one abs + one branch + (usually) two multiplies +
+    /// one add per bin, twice per column. ~100k ops/sec at fftSize=2048,
+    /// 46 cols/sec — negligible.
+    private func applySpectrogramSmoothing(scratch: [Float], state: inout [Float]) {
+        // α=0.15 chosen empirically: the deep-sidelobe cross-term wobble for
+        // an off-bin sine through a Hann window can hit 5–8 dB peak-to-peak
+        // in bins where the positive and negative image responses are
+        // comparable. A one-pole at Nyquist alternation attenuates by
+        // α/(2-α) — α=0.3 gives -15 dB (~1 dB residual on 8 dB input, still
+        // visible); α=0.15 gives -22 dB (~0.5 dB residual, below one magma
+        // index step under visualFloor=-90). Time constant is ~7 columns
+        // ≈ 150 ms at 46 cols/sec — noticeable lag on dynamics but the
+        // 20 dB bypass catches the loud-step cases that matter most.
+        let alpha: Float = 0.15
+        let oneMinusAlpha: Float = 1.0 - alpha
+        let bypassThreshold: Float = 20.0
+        let n = scratch.count
+        guard state.count == n else { return }
+        for i in 0..<n {
+            let x = scratch[i]
+            let s = state[i]
+            if abs(s - x) > bypassThreshold {
+                state[i] = x
+            } else {
+                state[i] = alpha * x + oneMinusAlpha * s
+            }
         }
     }
 
