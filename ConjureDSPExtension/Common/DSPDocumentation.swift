@@ -1790,7 +1790,13 @@ enum DSPDocumentation {
     - Metadata is late-binding: on preset switch the components may render
       with a placeholder before `params` arrive. Components re-bind
       automatically; any custom JS should listen to `ConjureDSP.ready(cb)`
-      before reading `parameters.get(i)` at startup.
+      before reading parameter state at startup — `parameters.get(i)` is
+      `undefined`, `ConjureDSP.ui.control(i).value` is `undefined`
+      (non-finite — crashes `CanvasRenderingContext2D` / `Path2D` calls
+      with "provided value is non-finite"), and `parameters.metadata(i)`
+      is `null` until `_init` lands. If you need a first-paint render
+      before `ready` fires, hardcode a literal placeholder — do not read
+      the bridge.
     - `onChange`/`onAnyChange` fires for ALL parameter writes — your own
       `parameters.set(...)` calls AND external automation (DAW, MIDI,
       MCP, preset load). Use it as the single source of truth for
