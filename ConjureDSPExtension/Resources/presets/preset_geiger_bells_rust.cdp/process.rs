@@ -29,8 +29,8 @@ const BELL_HZ: [f64; 4] = [440.0, 880.0, 1320.0, 1760.0];
 const BELL_PARTIAL_GAIN: [f64; 4] = [1.0, 0.7, 0.5, 0.35];
 const CLICK_MS: [f64; 8] = [77.0, 113.0, 59.0, 89.0, 137.0, 71.0, 103.0, 61.0];
 
-persist_buf!(BELL: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
-persist_buf!(SUB_LP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(BELL: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
+persist_mut!(SUB_LP: [Biquad; 2] = [Biquad::new(); 2]);
 persist!(CLICK_IX: usize = 0);
 persist!(COUNTDOWN: f64 = 0.0);
 

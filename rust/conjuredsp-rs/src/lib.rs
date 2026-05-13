@@ -13,8 +13,10 @@
 //!     RESONANCE = param(0.0, 1.0).default(0.5),
 //! }
 //!
-//! // Per-block state lives in `persist!` (scalar / Copy) or
-//! // `persist_buf!` (large arrays / non-Copy). Replaces `static mut`.
+//! // Per-block state lives in `persist!` (scalars + Copy coefficient
+//! // structs recomputed on param change) or `persist_mut!` (DSP
+//! // blocks mutated per sample — Biquad/Lfo/DelayLine — and raw
+//! // buffers written linearly). Replaces `static mut`.
 //! persist!(ENVELOPE: f64 = 0.0);
 //!
 //! process! { ctx =>
@@ -53,7 +55,7 @@ pub mod state_json;
 pub use abi::BlockInfo;
 pub use buffers::DelayLine;
 pub use context::{Context, TELEMETRY_LEN};
-pub use persist::{Persist, PersistBuf};
+pub use persist::{Persist, PersistMut};
 pub use dsp::*;
 pub use filters::{Biquad, BiquadCoeffs};
 pub use osc::{advance_phase, saw, sine, triangle, Lfo, Waveform};
@@ -1036,33 +1038,37 @@ macro_rules! persist {
     };
 }
 
-/// Declares a persistent buffer (typically a large array) with in-place
-/// mutation via [`PersistBuf::with_mut`](crate::PersistBuf::with_mut).
+/// Declares persistent state mutated in place via
+/// [`PersistMut::with_mut`](crate::PersistMut::with_mut).
 ///
-/// Reach for `persist_buf!` only when the wrapped value is large
-/// enough that `Persist`'s `get` / `set` round-trips would regress
-/// performance — the 384 KB stereo delay buffer, multi-MB reverb
-/// networks, ring buffers in chorus/flanger/slicer/pingpong.
+/// Reach for `persist_mut!` when the value is mutated during the
+/// render loop — either a DSP block whose `&mut self` methods
+/// (`Biquad::process_sample`, `Lfo::tick`, `DelayLine::write`) are the
+/// natural usage shape, or a raw buffer written linearly per block
+/// (delay-line write-through, IR convolution scratch, scope rings).
+/// The closure body gets `&mut T`, so methods run without a
+/// read-modify-write round-trip through `get`/`set`.
 ///
 /// The closure passed to `with_mut` must not call any other method on
-/// the same `PersistBuf` (debug builds panic on reentrant access; see
-/// [`PersistBuf`](crate::PersistBuf) docs).
+/// the same `PersistMut` (debug builds panic on reentrant access;
+/// see [`PersistMut`](crate::PersistMut) docs).
 ///
 /// # Example
 ///
 /// ```ignore
 /// use conjuredsp::*;
 ///
-/// persist_buf!(DELAY_BUF: [[f32; 48_000]; 2] = [[0.0; 48_000]; 2]);
+/// persist_mut!(DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2]);
 ///
 /// // Inside process():
-/// DELAY_BUF.with_mut(|buf| {
-///     buf[channel][write_pos] = sample;
+/// DELAYS.with_mut(|d| {
+///     d[channel].write(sample);
+///     let y = d[channel].read(delay_samples);
 /// });
 /// ```
 #[macro_export]
-macro_rules! persist_buf {
+macro_rules! persist_mut {
     ($(#[$attr:meta])* $name:ident : $ty:ty = $init:expr) => {
-        $(#[$attr])* static $name: $crate::PersistBuf<$ty> = $crate::PersistBuf::new($init);
+        $(#[$attr])* static $name: $crate::PersistMut<$ty> = $crate::PersistMut::new($init);
     };
 }

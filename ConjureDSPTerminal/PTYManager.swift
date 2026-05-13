@@ -690,11 +690,15 @@ final class PTYManager {
         MIX = mix(),
     }
 
-    // Persistent state across blocks. Copy / scalar values use `persist!`
-    // (`.get()` / `.set(v)`); large buffers use `persist_buf!` instead
-    // (`.with_mut(|b| …)` for in-place mutation). Read with FILTERS.get();
-    // write with FILTERS.set(updated). No `unsafe {}` at the call site.
-    persist!(FILTERS: [Biquad; 2] = [Biquad::new(); 2]);
+    // Persistent state across blocks:
+    //  - `persist!(NAME: T = v)` for scalars + Copy coefficient structs
+    //    recomputed on param change. `.get()` / `.set(v)` / `.replace(v)`.
+    //  - `persist_mut!(NAME: T = v)` for DSP blocks mutated per sample
+    //    (`Biquad`, `Lfo`, `DelayLine`) and raw buffers written linearly.
+    //    `.with_mut(|val| …)` — closure gets `&mut T` so `&mut self`
+    //    methods (`process_sample`, `tick`, `write`) run directly.
+    // No `unsafe {}` at the call site.
+    persist_mut!(FILTERS: [Biquad; 2] = [Biquad::new(); 2]);
 
     // `process! { ctx => … }` is the entry point. It emits the zero-arg
     // `extern "C" fn process()` the host calls and the I/O buffer statics
@@ -713,8 +717,10 @@ final class PTYManager {
 
     `ctx` provides: `.input(ch, frame)`, `.set_output(ch, frame, val)`, `.param(INDEX)`, \
     `.channels()`, `.frames()`, `.sample_rate()`. Persistent state across blocks uses \
-    `persist!` for Copy / scalar values (`.get()` / `.set(v)`) and `persist_buf!` for \
-    large arrays (`.with_mut(|b| …)`). No raw `static mut` and no `unsafe {}` at the call site.
+    `persist!` for scalars + Copy coefficient structs read-only in render (`.get()` / `.set(v)` / `.replace(v)`) \
+    and `persist_mut!` for DSP blocks mutated per sample (`Biquad`, `Lfo`, `DelayLine`) and raw buffers \
+    written linearly (`.with_mut(|val| …)` — closure gets `&mut T` for direct `&mut self` method calls). \
+    No raw `static mut` and no `unsafe {}` at the call site.
 
     ## Standard Library
 

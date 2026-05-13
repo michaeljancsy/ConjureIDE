@@ -26,7 +26,7 @@ params! {
 }
 
 // Biquad state per channel.
-persist_buf!(FILTERS: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH]);
+persist_mut!(FILTERS: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH]);
 
 // Envelope follower.
 persist!(ENVELOPE: f64 = 0.0);

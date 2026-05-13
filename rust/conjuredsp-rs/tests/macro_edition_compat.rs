@@ -57,7 +57,7 @@ nams! {
 }
 
 persist!(SCALAR: f64 = 0.0);
-persist_buf!(BUF: [f32; 8] = [0.0; 8]);
+persist_mut!(BUF: [f32; 8] = [0.0; 8]);
 
 // Canonical zero-arg entry point via process!. The `#[unsafe(no_mangle)]`
 // attribute the macro emits works under both editions (accepted since

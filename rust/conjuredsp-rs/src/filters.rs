@@ -157,23 +157,24 @@ impl Default for BiquadCoeffs {
 
 /// Stateful biquad filter using Direct Form II Transposed.
 ///
-/// Create one per channel and store across callbacks with `persist!`
-/// (Biquad is `Copy`, so the `.get()` / `.set(...)` shape works without
-/// the `with_mut` round-trip):
+/// `Biquad` mutates per sample via `process_sample(&mut self, …)`. Store
+/// one per channel across callbacks with `persist_mut!` so the
+/// closure body can call methods on `&mut self` without a get/set
+/// round-trip:
 ///
 /// ```ignore
-/// persist!(BIQUADS: [Biquad; 2] = [Biquad::new(); 2]);
+/// persist_mut!(BIQUADS: [Biquad; 2] = [Biquad::new(); 2]);
 ///
 /// // Inside process! { ctx => … }:
-/// let mut biquads = BIQUADS.get();
-/// for c in 0..ctx.channels() {
-///     biquads[c].set_coeffs(coeffs);
-///     for i in 0..ctx.frames() {
-///         let y = biquads[c].process_sample(ctx.input(c, i) as f64) as f32;
-///         ctx.set_output(c, i, y);
+/// BIQUADS.with_mut(|biquads| {
+///     for c in 0..ctx.channels() {
+///         biquads[c].set_coeffs(coeffs);
+///         for i in 0..ctx.frames() {
+///             let y = biquads[c].process_sample(ctx.input(c, i) as f64) as f32;
+///             ctx.set_output(c, i, y);
+///         }
 ///     }
-/// }
-/// BIQUADS.set(biquads);
+/// });
 /// ```
 #[derive(Clone, Copy)]
 pub struct Biquad {

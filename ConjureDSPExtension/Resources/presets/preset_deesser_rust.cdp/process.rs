@@ -24,7 +24,7 @@ params! {
 }
 
 // Sidechain biquad state per channel.
-persist_buf!(SC_FILTERS: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH]);
+persist_mut!(SC_FILTERS: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH]);
 
 // Envelope follower.
 persist!(ENVELOPE: f64 = 0.0);

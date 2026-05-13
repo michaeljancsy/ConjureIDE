@@ -67,29 +67,29 @@ struct Comb {
     fb: [f64; 2],
 }
 
-persist_buf!(TRANSPORT: Transport = Transport {
+persist_mut!(TRANSPORT: Transport = Transport {
     dl: [DelayLine::new(); 2],
     lfo_wow: Lfo::new(),
     lfo_flutter: Lfo::new(),
 });
-persist_buf!(EMPHASIS: Emphasis = Emphasis {
+persist_mut!(EMPHASIS: Emphasis = Emphasis {
     pre: [Biquad::new(); 2],
     de: [Biquad::new(); 2],
 });
-persist_buf!(SHELVES: Shelves = Shelves {
+persist_mut!(SHELVES: Shelves = Shelves {
     lo: [Biquad::new(); 2],
     hi: [Biquad::new(); 2],
 });
-persist_buf!(PRINT: Print = Print {
+persist_mut!(PRINT: Print = Print {
     dl: [DelayLine::new(); 2],
     lp: [Biquad::new(); 2],
 });
-persist_buf!(ECHO: Echo = Echo {
+persist_mut!(ECHO: Echo = Echo {
     dl: [DelayLine::new(); 2],
     lp: [Biquad::new(); 2],
     fb: [0.0; 2],
 });
-persist_buf!(COMB: Comb = Comb {
+persist_mut!(COMB: Comb = Comb {
     dl: [DelayLine::new(); 2],
     fb: [0.0; 2],
 });

@@ -19,9 +19,9 @@ params! {
     MIX = mix(),
 }
 
-// Persistent state — 384 KB delay buffer (the canonical persist_buf!
+// Persistent state — 384 KB delay buffer (the canonical persist_mut!
 // motivating case) plus a scalar write index.
-persist_buf!(DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH]);
+persist_mut!(DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH]);
 persist!(WRITE_POS: usize = 0);
 
 process! { ctx =>

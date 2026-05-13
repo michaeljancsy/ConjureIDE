@@ -19,8 +19,8 @@ const MODE: usize = 0; // 0=LP, 1=HP, 2=BP, 3=Notch
 
 // Persistent state per channel: [ic1eq, ic2eq]. f64 to match
 // Python's float64 precision.
-persist_buf!(IC1EQ: [f64; MAX_CH] = [0.0; MAX_CH]);
-persist_buf!(IC2EQ: [f64; MAX_CH] = [0.0; MAX_CH]);
+persist_mut!(IC1EQ: [f64; MAX_CH] = [0.0; MAX_CH]);
+persist_mut!(IC2EQ: [f64; MAX_CH] = [0.0; MAX_CH]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;

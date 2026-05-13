@@ -34,13 +34,13 @@ const CHORUS_MS: [f64; 4] = [7.0, 11.0, 13.0, 19.0];
 const CHORUS_LFO_HZ: [f64; 4] = [0.31, 0.43, 0.57, 0.71];
 const COMB_MS: [f64; 4] = [83.0, 109.0, 137.0, 167.0];
 
-persist_buf!(MODAL: [[Biquad; 8]; 2] = [[Biquad::new(); 8]; 2]);
-persist_buf!(RING_LFO: [Lfo; 2] = [Lfo::new(); 2]);
-persist_buf!(CHORUS_DL: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
-persist_buf!(CHORUS_LFO: [Lfo; 4] = [Lfo::new(); 4]);
-persist_buf!(COMBS: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
-persist_buf!(COMB_LP: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
-persist_buf!(COMB_FB_BUF: [[f64; 4]; 2] = [[0.0; 4]; 2]);
+persist_mut!(MODAL: [[Biquad; 8]; 2] = [[Biquad::new(); 8]; 2]);
+persist_mut!(RING_LFO: [Lfo; 2] = [Lfo::new(); 2]);
+persist_mut!(CHORUS_DL: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
+persist_mut!(CHORUS_LFO: [Lfo; 4] = [Lfo::new(); 4]);
+persist_mut!(COMBS: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
+persist_mut!(COMB_LP: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
+persist_mut!(COMB_FB_BUF: [[f64; 4]; 2] = [[0.0; 4]; 2]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;

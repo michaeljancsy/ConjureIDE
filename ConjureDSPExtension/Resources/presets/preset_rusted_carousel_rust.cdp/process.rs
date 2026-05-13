@@ -33,12 +33,12 @@ const CHORUS_LFO_HZ: [f64; 5] = [0.17, 0.23, 0.29, 0.37, 0.41];
 const WALTZ_HZ: f64 = 1.2;
 const PIPE_HZ: f64 = 110.0;
 
-persist_buf!(CHORUS_DL: [[DelayLine<MAX_DL>; 5]; 2] = [[DelayLine::new(); 5]; 2]);
-persist_buf!(CHORUS_LFO: [Lfo; 5] = [Lfo::new(); 5]);
-persist_buf!(WALTZ_LFO: Lfo = Lfo::new());
-persist_buf!(PIPE_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(PIPE_FB: [f64; 2] = [0.0; 2]);
-persist_buf!(PIPE_LP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(CHORUS_DL: [[DelayLine<MAX_DL>; 5]; 2] = [[DelayLine::new(); 5]; 2]);
+persist_mut!(CHORUS_LFO: [Lfo; 5] = [Lfo::new(); 5]);
+persist_mut!(WALTZ_LFO: Lfo = Lfo::new());
+persist_mut!(PIPE_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_mut!(PIPE_FB: [f64; 2] = [0.0; 2]);
+persist_mut!(PIPE_LP: [Biquad; 2] = [Biquad::new(); 2]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;

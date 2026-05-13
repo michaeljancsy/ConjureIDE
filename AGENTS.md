@@ -127,7 +127,7 @@ Rust API overview:
 - `process! { ctx => /* body */ }` — entry point. Emits the zero-arg `extern "C" fn process()` the host calls and the buffer statics in one shot. Subsumes `setup!()` (do NOT write it separately — duplicate-static error). The identifier on the left of `=>` becomes the `Context` binding (`ctx` is canonical).
 - `params! { NAME = builder() }` — generates parameter index constants + METADATA JSON at compile time
 - Parameter builders: `freq()`, `db()`, `time_ms()`, `mix()`, `pct()`, `toggle()`, `ratio()`, `param(min, max)` — all support `.min()`, `.max()`, `.default()`, `.unit()`, `.curve()` modifiers
-- `persist!(NAME: T = init)` / `persist_buf!(NAME: T = init)` — persistent state across render blocks. Scalar / Copy values use `persist!` with `.get()` / `.set(v)` / `.replace(v)`; large arrays / non-Copy use `persist_buf!` with `.with_mut(|buf| …)` in-place mutation. Both replace the deprecated raw `static mut` + `unsafe` idiom.
+- `persist!(NAME: T = init)` / `persist_mut!(NAME: T = init)` — persistent state across render blocks. Scalars + Copy coefficient structs read or recomputed wholesale (envelope levels, write counters, `BiquadCoeffs`) use `persist!` with `.get()` / `.set(v)` / `.replace(v)`. DSP blocks mutated per sample via `&mut self` methods (`Biquad::process_sample`, `Lfo::tick`, `DelayLine::write`) and raw buffers written linearly per block use `persist_mut!` with `.with_mut(|val| …)` — the closure body gets `&mut T` so methods run without a get/set round-trip. Both replace the deprecated raw `static mut` + `unsafe` idiom.
 - `telemetry!`, `state!`, `nam!`, `nams!`, `latency!` — optional feature macros, all compose with `process!`
 - `Context` accessors (built by `process!`): `ctx.input(ch, frame)`, `ctx.set_output(ch, frame, val)`, `ctx.param(INDEX)`, `ctx.channels()`, `ctx.frames()`, `ctx.sample_rate()`, `ctx.sidechain(c, i)`, `ctx.sidechain_channels()`, `ctx.sidechain_connected()`, `ctx.set_telemetry_scalar(slot, value)`. `setup!()` is invoked internally and not user-facing.
 - DSP utils: `db_to_gain`, `gain_to_db`, `smooth_coeff`, `ms_to_samples`, `samples_to_ms`, `freq_to_period`, `soft_clip`, `lerp`, `crossfade`, `dbfs_to_vu` (+ `VU_REF_DBFS` constant, -18 dBFS)
@@ -286,7 +286,7 @@ rust/                        Rust DSP crate
   setup-wasm-target.sh       Installs wasm32-wasip1 target for Rust compiler
   conjuredsp/                Python DSP library (installed into bundled Python site-packages)
   conjuredsp-rs/             Rust DSP library (compiled to rlib for wasm32-wasip1)
-    src/lib.rs               `process!`, `params!`, `persist!`, `persist_buf!`, `telemetry!`, `state!`, `nam!`, `nams!`, `latency!` macros, re-exports
+    src/lib.rs               `process!`, `params!`, `persist!`, `persist_mut!`, `telemetry!`, `state!`, `nam!`, `nams!`, `latency!` macros, re-exports
     src/dsp.rs               db_to_gain, gain_to_db, smooth_coeff, ms_to_samples, samples_to_ms, freq_to_period, soft_clip, lerp, crossfade, dbfs_to_vu
     src/filters.rs           BiquadCoeffs (8 filter types) + Biquad (stateful DF2T)
     src/buffers.rs           DelayLine<SIZE> with linear/cubic interpolation

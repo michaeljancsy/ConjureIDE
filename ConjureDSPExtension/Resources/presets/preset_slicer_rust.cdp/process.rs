@@ -17,8 +17,8 @@ params! {
 }
 
 // Double buffers for record and playback.
-persist_buf!(BUF_A: [[f32; MAX_CHUNK]; MAX_CH] = [[0.0; MAX_CHUNK]; MAX_CH]);
-persist_buf!(BUF_B: [[f32; MAX_CHUNK]; MAX_CH] = [[0.0; MAX_CHUNK]; MAX_CH]);
+persist_mut!(BUF_A: [[f32; MAX_CHUNK]; MAX_CH] = [[0.0; MAX_CHUNK]; MAX_CH]);
+persist_mut!(BUF_B: [[f32; MAX_CHUNK]; MAX_CH] = [[0.0; MAX_CHUNK]; MAX_CH]);
 persist!(RECORDING_A: bool = true); // true = recording to A, playing from B
 persist!(WRITE_POS: usize = 0);
 

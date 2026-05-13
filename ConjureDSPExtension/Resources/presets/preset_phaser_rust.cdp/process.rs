@@ -26,8 +26,8 @@ params! {
 
 // Persistent state per channel per stage: [x_prev, y_prev]
 // Use f64 to match Python's float64 precision in the allpass feedback.
-persist_buf!(AP_X_PREV: [[f64; MAX_STAGES]; MAX_CH] = [[0.0; MAX_STAGES]; MAX_CH]);
-persist_buf!(AP_Y_PREV: [[f64; MAX_STAGES]; MAX_CH] = [[0.0; MAX_STAGES]; MAX_CH]);
+persist_mut!(AP_X_PREV: [[f64; MAX_STAGES]; MAX_CH] = [[0.0; MAX_STAGES]; MAX_CH]);
+persist_mut!(AP_Y_PREV: [[f64; MAX_STAGES]; MAX_CH] = [[0.0; MAX_STAGES]; MAX_CH]);
 persist!(LFO_PHASE: f64 = 0.0);
 
 process! { ctx =>

@@ -28,9 +28,9 @@ params! {
 const BP_HZ: f64 = 1000.0;
 const DROPOUT_HZ: f64 = 0.37;
 
-persist_buf!(BP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(CROSS_FB: [f64; 2] = [0.0; 2]);
-persist_buf!(DROPOUT_LFO: Lfo = Lfo::new());
+persist_mut!(BP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(CROSS_FB: [f64; 2] = [0.0; 2]);
+persist_mut!(DROPOUT_LFO: Lfo = Lfo::new());
 
 #[inline]
 fn asym_clip(x: f64, drive: f64) -> f64 {

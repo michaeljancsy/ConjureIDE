@@ -17,8 +17,8 @@ params! {
 // Persistent state per channel: [prev_x, prev_y]. f64 to match
 // Python's float64 precision — f32 accumulation in the feedback loop
 // (R * prev_y) causes audible rounding drift.
-persist_buf!(PREV_X: [f64; MAX_CH] = [0.0; MAX_CH]);
-persist_buf!(PREV_Y: [f64; MAX_CH] = [0.0; MAX_CH]);
+persist_mut!(PREV_X: [f64; MAX_CH] = [0.0; MAX_CH]);
+persist_mut!(PREV_Y: [f64; MAX_CH] = [0.0; MAX_CH]);
 
 process! { ctx =>
     let cutoff_hz = ctx.param(CUTOFF) as f64;

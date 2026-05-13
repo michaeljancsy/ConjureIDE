@@ -7,8 +7,8 @@
 // Quick start:
 //   - process! { ctx => ... } — entry point; binds `ctx: Context` for the body
 //   - params! { ... }         — parameter metadata, generates index constants
-//   - persist!(NAME: T = v)   — scalar / Copy state across blocks (.get/.set)
-//   - persist_buf!(NAME: T)   — large-array state with in-place .with_mut(|b|)
+//   - persist!(NAME: T = v)         — scalars + Copy coefficient structs read-only in render (.get()/.set()/.replace())
+//   - persist_mut!(NAME: T = v) — DSP blocks (Biquad/Lfo/DelayLine) + raw write-through buffers (.with_mut(|b| …))
 //
 // Safety: avoid allocations, I/O, or panics in the process body.
 

@@ -15,14 +15,14 @@ const AP_MS: [f64; 2] = [12.1, 4.3];
 const AP_G: f64 = 0.6;
 const LFO_HZ: [f64; 4] = [0.11, 0.15, 0.19, 0.27];
 
-persist_buf!(PD: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(CB: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
-persist_buf!(CLP: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
-persist_buf!(CFB: [[f64; 4]; 2] = [[0.0; 4]; 2]);
-persist_buf!(AP: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2]);
-persist_buf!(APS: [[f64; 2]; 2] = [[0.0; 2]; 2]);
-persist_buf!(HP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(LFOS: [Lfo; 4] = [Lfo::new(); 4]);
+persist_mut!(PD: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_mut!(CB: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
+persist_mut!(CLP: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
+persist_mut!(CFB: [[f64; 4]; 2] = [[0.0; 4]; 2]);
+persist_mut!(AP: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2]);
+persist_mut!(APS: [[f64; 2]; 2] = [[0.0; 2]; 2]);
+persist_mut!(HP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(LFOS: [Lfo; 4] = [Lfo::new(); 4]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;

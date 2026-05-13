@@ -207,12 +207,15 @@ enum DSPDocumentation {
       //        Use: process! { ctx => /* body */ }
       //        (or any identifier in place of `ctx`).
 
-    Per-block state belongs in `persist!(NAME: T = init)` (scalar /
-    `Copy` values, accessed via `.get()` / `.set()` / `.replace()`) or
-    `persist_buf!(NAME: T = init)` (large arrays / non-Copy types,
-    accessed via `.with_mut(|buf| …)`). Both replace raw `static mut`
-    and the `unsafe { … }` boilerplate that used to surround it. See
-    the `state` topic.
+    Per-block state belongs in `persist!(NAME: T = init)` (scalars +
+    `Copy` coefficient structs read-only in the render loop, accessed
+    via `.get()` / `.set()` / `.replace()`) or
+    `persist_mut!(NAME: T = init)` (DSP blocks like `Biquad` /
+    `Lfo` / `DelayLine` mutated per sample via `&mut self` methods,
+    plus raw buffers written linearly per block, accessed via
+    `.with_mut(|val| …)`). Both replace raw `static mut` and the
+    `unsafe { … }` boilerplate that used to surround it. See the
+    `state` topic.
 
     ## Rust ctx accessors
 
@@ -347,18 +350,18 @@ enum DSPDocumentation {
                   row_out[i] = _filters[ch].process_sample(row_in[i])
 
     Rust:
-      persist!(BIQUADS: [Biquad; 2] = [Biquad::new(); 2]);
+      persist_mut!(BIQUADS: [Biquad; 2] = [Biquad::new(); 2]);
       // Inside process! { ctx => ... }:
       let coeffs = BiquadCoeffs::lowpass(ctx.param(CUTOFF) as f64, 0.707, ctx.sample_rate() as f64);
-      let mut biquads = BIQUADS.get();
-      for c in 0..ctx.channels() {
-          biquads[c].set_coeffs(coeffs);
-          for i in 0..ctx.frames() {
-              let y = biquads[c].process_sample(ctx.input(c, i) as f64) as f32;
-              ctx.set_output(c, i, y);
+      BIQUADS.with_mut(|biquads| {
+          for c in 0..ctx.channels() {
+              biquads[c].set_coeffs(coeffs);
+              for i in 0..ctx.frames() {
+                  let y = biquads[c].process_sample(ctx.input(c, i) as f64) as f32;
+                  ctx.set_output(c, i, y);
+              }
           }
-      }
-      BIQUADS.set(biquads);
+      });
     """
 
     static let delays = """
@@ -374,8 +377,8 @@ enum DSPDocumentation {
 
     Rust: DelayLine::<SIZE>::new() — const generic, compile-time size
       SIZE must be a const. Example: DelayLine::<48000>::new()
-      Stored across blocks via persist_buf! (in-place mutation, avoids the multi-KB get/set round-trip):
-        persist_buf!(DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2]);
+      Stored across blocks via persist_mut! — DelayLine mutates per sample via write(&mut self, …), so the closure body can call &mut self methods directly:
+        persist_mut!(DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2]);
         // Inside process! { ctx => ... }:
         DELAYS.with_mut(|d| { d[c].write(sample); let wet = d[c].read(delay_samples as f64); });
 
@@ -1696,7 +1699,7 @@ enum DSPDocumentation {
     telemetry! {
         SCOPE = vector_telemetry(),
     }
-    persist_buf!(SCOPE_BUF: [f32; MAX_FR] = [0.0; MAX_FR]);
+    persist_mut!(SCOPE_BUF: [f32; MAX_FR] = [0.0; MAX_FR]);
     process! { ctx =>
         SCOPE_BUF.with_mut(|scope_buf| {
             for i in 0..ctx.frames() {
@@ -2407,17 +2410,17 @@ enum DSPDocumentation {
 
     ## Typical usage pattern
 
-      persist!(BIQUADS: [Biquad; 2] = [Biquad::new(); 2]);
+      persist_mut!(BIQUADS: [Biquad; 2] = [Biquad::new(); 2]);
       // Inside process! { ctx => ... }:
       let coeffs = BiquadCoeffs::lowpass(ctx.param(CUTOFF) as f64, 0.707, ctx.sample_rate() as f64);
-      let mut biquads = BIQUADS.get();
-      for c in 0..ctx.channels() {
-          biquads[c].set_coeffs(coeffs);
-          for i in 0..ctx.frames() {
-              ctx.set_output(c, i, biquads[c].process_sample(ctx.input(c, i) as f64) as f32);
+      BIQUADS.with_mut(|biquads| {
+          for c in 0..ctx.channels() {
+              biquads[c].set_coeffs(coeffs);
+              for i in 0..ctx.frames() {
+                  ctx.set_output(c, i, biquads[c].process_sample(ctx.input(c, i) as f64) as f32);
+              }
           }
-      }
-      BIQUADS.set(biquads);
+      });
     """
 
     private static let pythonDelays = """
@@ -2461,8 +2464,8 @@ enum DSPDocumentation {
 
     DelayLine::<SIZE>::new() — const generic, compile-time size
       SIZE must be a const. Example: DelayLine::<48000>::new()
-      Stored across blocks via persist_buf! (in-place via .with_mut, avoids the multi-KB get/set round-trip):
-        persist_buf!(DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2]);
+      Stored across blocks via persist_mut! — DelayLine mutates per sample via write(&mut self, …), so the closure body can call &mut self methods directly:
+        persist_mut!(DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2]);
 
     ## Methods
 

@@ -49,12 +49,12 @@ const GRAIN_MS: f64 = 80.0;
 const AP_MS: [f64; 4] = [11.3, 17.7, 23.1, 29.9];
 const AP_G: f64 = 0.65;
 
-persist_buf!(SUB_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(SHIFT_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(AP: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
-persist_buf!(APS: [[f64; 4]; 2] = [[0.0; 4]; 2]);
-persist_buf!(CLOSE_LP: [f64; 2] = [0.0; 2]);
-persist_buf!(RING: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(SUB_LP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(SHIFT_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_mut!(AP: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
+persist_mut!(APS: [[f64; 4]; 2] = [[0.0; 4]; 2]);
+persist_mut!(CLOSE_LP: [f64; 2] = [0.0; 2]);
+persist_mut!(RING: [Biquad; 2] = [Biquad::new(); 2]);
 persist!(GRAIN_PHASE: f64 = 0.0);
 
 process! { ctx =>

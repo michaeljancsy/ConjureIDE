@@ -27,8 +27,8 @@ const REC_SIZE:   usize = 96000;                         // ≥2 s @ 48 k
 const GRAIN_SIZE: usize = 48000;                         // ≤1 s captured phrase
 const REV_SIZE:   usize = 16384;                         // ≥170 ms @ 96 k
 
-persist_buf!(RECORD: [DelayLine<REC_SIZE>; N_CHANS] = [DelayLine::new(); N_CHANS]);
-persist_buf!(GRAIN:  [f32; GRAIN_SIZE] = [0.0; GRAIN_SIZE]);
+persist_mut!(RECORD: [DelayLine<REC_SIZE>; N_CHANS] = [DelayLine::new(); N_CHANS]);
+persist_mut!(GRAIN:  [f32; GRAIN_SIZE] = [0.0; GRAIN_SIZE]);
 
 // ── State machine ───────────────────────────────────────────────────────
 #[derive(Copy, Clone, PartialEq)]
@@ -44,17 +44,17 @@ persist!(PLAY_RATE:      f64 = 1.5);                    // current pitch ratio
 persist!(BASE_RATE:      f64 = 1.5);                    // phrase-level base rate
 
 // ── Filters ─────────────────────────────────────────────────────────────
-persist_buf!(BP:       [Biquad; N_CHANS] = [Biquad::new(); N_CHANS]);
-persist_buf!(NIGHT_HP: [Biquad; N_CHANS] = [Biquad::new(); N_CHANS]);
-persist_buf!(NIGHT_LP: [Biquad; N_CHANS] = [Biquad::new(); N_CHANS]);
+persist_mut!(BP:       [Biquad; N_CHANS] = [Biquad::new(); N_CHANS]);
+persist_mut!(NIGHT_HP: [Biquad; N_CHANS] = [Biquad::new(); N_CHANS]);
+persist_mut!(NIGHT_LP: [Biquad; N_CHANS] = [Biquad::new(); N_CHANS]);
 
 // ── Reverb: 2 combs + 1 allpass per channel, different tunings for stereo ──
 const N_COMBS: usize = 2;
 const COMB_MS: [[f64; N_COMBS]; N_CHANS] = [[71.0, 113.0], [97.0, 149.0]];
 const AP_MS:   [f64; N_CHANS] = [5.3, 7.1];
-persist_buf!(COMBS: [[DelayLine<REV_SIZE>; N_COMBS]; N_CHANS] =
+persist_mut!(COMBS: [[DelayLine<REV_SIZE>; N_COMBS]; N_CHANS] =
     [[DelayLine::new(); N_COMBS]; N_CHANS]);
-persist_buf!(AP:    [DelayLine<REV_SIZE>; N_CHANS] = [DelayLine::new(); N_CHANS]);
+persist_mut!(AP:    [DelayLine<REV_SIZE>; N_CHANS] = [DelayLine::new(); N_CHANS]);
 
 persist!(RNG: u32 = 0xC0DE_F00D);
 

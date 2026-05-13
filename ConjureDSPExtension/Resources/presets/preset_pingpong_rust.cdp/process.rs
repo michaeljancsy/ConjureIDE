@@ -21,8 +21,8 @@ params! {
 }
 
 // Persistent state: separate left and right delay lines.
-persist_buf!(LEFT_BUF: [f32; MAX_DELAY] = [0.0; MAX_DELAY]);
-persist_buf!(RIGHT_BUF: [f32; MAX_DELAY] = [0.0; MAX_DELAY]);
+persist_mut!(LEFT_BUF: [f32; MAX_DELAY] = [0.0; MAX_DELAY]);
+persist_mut!(RIGHT_BUF: [f32; MAX_DELAY] = [0.0; MAX_DELAY]);
 persist!(WRITE_POS: usize = 0);
 
 process! { ctx =>

@@ -31,14 +31,14 @@ const GRAN_BASE_MS: f64 = 80.0;
 const GRAN_GRAIN_MS: f64 = 100.0;
 const COMB_MS: [f64; 4] = [200.0, 250.0, 310.0, 370.0];
 
-persist_buf!(MODAL: [[Biquad; 6]; 2] = [[Biquad::new(); 6]; 2]);
-persist_buf!(SHIMMER_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(GRAN_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(SUB_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(SHIM_HP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(COMBS: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
-persist_buf!(COMB_FB_BUF: [[f64; 4]; 2] = [[0.0; 4]; 2]);
-persist_buf!(COMB_LP: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
+persist_mut!(MODAL: [[Biquad; 6]; 2] = [[Biquad::new(); 6]; 2]);
+persist_mut!(SHIMMER_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_mut!(GRAN_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_mut!(SUB_LP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(SHIM_HP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(COMBS: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
+persist_mut!(COMB_FB_BUF: [[f64; 4]; 2] = [[0.0; 4]; 2]);
+persist_mut!(COMB_LP: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
 persist!(SHIM_PHASE: f64 = 0.0);
 persist!(GRAN_PHASE: f64 = 0.0);
 

@@ -33,11 +33,11 @@ const TAP_BASE_MS: f64 = 220.0;
 const TAP_LFO_HZ: [f64; 2] = [0.31, 0.47];
 const SWEEP_HZ: f64 = 0.07;
 
-persist_buf!(DELAY: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(SUB_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(WET_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(TAP_LFO: [Lfo; 2] = [Lfo::new(); 2]);
-persist_buf!(SWEEP_LFO: Lfo = Lfo::new());
+persist_mut!(DELAY: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_mut!(SUB_LP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(WET_LP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(TAP_LFO: [Lfo; 2] = [Lfo::new(); 2]);
+persist_mut!(SWEEP_LFO: Lfo = Lfo::new());
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;

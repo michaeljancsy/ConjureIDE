@@ -32,13 +32,13 @@ const TAP_LFO_HZ: [f64; 8] = [0.7, 1.1, 1.4, 1.9, 2.3, 3.1, 4.1, 5.3];
 const RES_HZ: [f64; 4] = [800.0, 1600.0, 2700.0, 4200.0];
 const COMB_MS: [f64; 4] = [137.0, 179.0, 223.0, 277.0];
 
-persist_buf!(GRAIN_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(TAP_LFO: [Lfo; 8] = [Lfo::new(); 8]);
-persist_buf!(RES: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
-persist_buf!(COMBS: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
-persist_buf!(COMB_LP: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
-persist_buf!(COMB_FB_BUF: [[f64; 4]; 2] = [[0.0; 4]; 2]);
-persist_buf!(HP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(GRAIN_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_mut!(TAP_LFO: [Lfo; 8] = [Lfo::new(); 8]);
+persist_mut!(RES: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
+persist_mut!(COMBS: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
+persist_mut!(COMB_LP: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
+persist_mut!(COMB_FB_BUF: [[f64; 4]; 2] = [[0.0; 4]; 2]);
+persist_mut!(HP: [Biquad; 2] = [Biquad::new(); 2]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;

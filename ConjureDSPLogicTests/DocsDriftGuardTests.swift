@@ -5,7 +5,7 @@
 //  Structural guard against the class of API-drift documentation rot that
 //  PRs #305 / #308 surfaced. After the modernization (`process! { ctx => … }`
 //  replaces the 5-arg `extern "C" fn process(input, output, ch, frames, sr)`;
-//  `persist!` / `persist_buf!` replace `static mut` + `unsafe`), every
+//  `persist!` / `persist_mut!` replace `static mut` + `unsafe`), every
 //  user-facing teaching surface must teach the new shape — not just the
 //  hand-curated docs, but autocomplete snippets, hover docs, default
 //  templates, library rustdoc (which the extractor pulls into MCP
@@ -18,7 +18,7 @@
 //  of this class fail CI the moment they land.
 //
 //  Patterns checked are user-named `static mut <IDENT>` (the deprecated
-//  state idiom — `persist!`/`persist_buf!` replace it) and the 5-arg
+//  state idiom — `persist!`/`persist_mut!` replace it) and the 5-arg
 //  `extern "C" fn process(input, …)` signature in its single-line,
 //  multi-line-Rust, and JS-snippet-concat forms. The zero-arg
 //  `extern "C" fn process()` shape that `process!` emits internally is
@@ -46,31 +46,31 @@ struct DocsDriftGuardTests {
     /// the right replacement.
     private static let forbiddenPatterns: [(pattern: String, why: String)] = [
         // User-named `static mut` state — the deprecated idiom.
-        // `persist!`/`persist_buf!` replace these. Macro-internal names
+        // `persist!`/`persist_mut!` replace these. Macro-internal names
         // (INPUT_BUF, OUTPUT_BUF, PARAMS_BUF, TELEMETRY_BUF, NAM_IN, …) are
         // not in this list — they're emitted by setup!()/nam!() etc. and
         // legitimately referenced from inside macros, and we check
         // user-facing teaching files only.
         ("static mut FILTERS",
-         "use `persist!(FILTERS: [Biquad; N] = [Biquad::new(); N]);` then `FILTERS.get()` / `FILTERS.set(...)`"),
+         "use `persist_mut!(FILTERS: [Biquad; N] = [Biquad::new(); N]);` then `FILTERS.with_mut(|f| { f[c].set_coeffs(coeffs); for i in 0..frames { f[c].process_sample(x) } })`"),
         ("static mut DELAYS",
-         "use `persist_buf!(DELAYS: [DelayLine<N>; M] = [DelayLine::new(); M]);` + `DELAYS.with_mut(|d| …)`"),
+         "use `persist_mut!(DELAYS: [DelayLine<N>; M] = [DelayLine::new(); M]);` + `DELAYS.with_mut(|d| …)`"),
         ("static mut LFO",
-         "use `persist!(LFO: Lfo = Lfo::new());` then `let mut l = LFO.get(); l.init(...); LFO.set(l);`"),
+         "use `persist_mut!(LFO: Lfo = Lfo::new());` then `LFO.with_mut(|l| { l.init(sr, rate); for i in 0..frames { let v = l.tick(); … } })`"),
         ("static mut WRITE_POS",
          "use `persist!(WRITE_POS: usize = 0);` + `.get()` / `.set(WRITE_POS.get().wrapping_add(1))`"),
         ("static mut ENVELOPE",
          "use `persist!(ENVELOPE: f64 = 0.0);` + `.get()` / `.set(v)`"),
         ("static mut PREV_OUT",
-         "use `persist!(PREV_OUT: [f64; MAX_CH] = [0.0; MAX_CH]);` or `persist_buf!` for in-place"),
+         "use `persist_mut!(PREV_OUT: [f64; MAX_CH] = [0.0; MAX_CH]);` + `.with_mut(|p| p[c] = …)` — y[n-1] is written every sample inside the feedback loop, that's the tier-3 in-place case (matches preset_lowpass_rust)"),
         ("static mut DELAY_BUF",
-         "use `persist_buf!(DELAY_BUF: [[f32; N]; MAX_CH] = …);` + `.with_mut(|b| b[c][i] = v)`"),
+         "use `persist_mut!(DELAY_BUF: [[f32; N]; MAX_CH] = …);` + `.with_mut(|b| b[c][i] = v)`"),
         // Hand-rolled biquad state (X1/X2/Y1/Y2 form). Match on the
         // type annotation so we don't flag every `X1` token.
         ("static mut X1: [f64",
-         "hand-rolled biquad state — use `persist!` with a struct or `persist_buf!` for in-place"),
+         "hand-rolled biquad state — use `persist_mut!(BIQUAD: Biquad = Biquad::new());` then `BIQUAD.with_mut(|b| { b.set_coeffs(coeffs); b.process_sample(x) })`"),
         ("static mut Y1: [f64",
-         "hand-rolled biquad state — use `persist!` with a struct or `persist_buf!` for in-place"),
+         "hand-rolled biquad state — use `persist_mut!(BIQUAD: Biquad = Biquad::new());` then `BIQUAD.with_mut(|b| { b.set_coeffs(coeffs); b.process_sample(x) })`"),
 
         // 5-arg `extern "C" fn process(input, …)` signature. Three forms
         // cover the syntactic variants in the codebase:

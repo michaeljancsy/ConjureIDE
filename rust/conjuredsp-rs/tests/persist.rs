@@ -1,6 +1,6 @@
 //! Tests for [`conjuredsp::Persist`] and the [`persist!`] macro.
 //!
-//! Companion to `tests/persist_buf.rs`; the structural guarantee of
+//! Companion to `tests/persist_mut.rs`; the structural guarantee of
 //! `Persist` is that it has no closure-based mutator (so the
 //! read-snapshot-mutate-writeback footgun is a compile error), which
 //! is documented by the trybuild-style negative test at the bottom.
