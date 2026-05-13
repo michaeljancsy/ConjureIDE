@@ -14,6 +14,13 @@ pub struct BiquadCoeffs {
 }
 
 impl BiquadCoeffs {
+    /// Passthrough coefficients (b0=1, rest=0). Useful as the zero value when
+    /// stack-allocating an array of slots to be filled at runtime, e.g.
+    /// `let mut bands: [BiquadCoeffs; 5] = [BiquadCoeffs::identity(); 5];`
+    pub const fn identity() -> Self {
+        BiquadCoeffs { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0 }
+    }
+
     /// Low-pass filter. Passes frequencies below cutoff.
     pub fn lowpass(freq: f64, q: f64, sample_rate: f64) -> Self {
         let w0 = 2.0 * PI * freq / sample_rate;
@@ -139,6 +146,12 @@ impl BiquadCoeffs {
             a1: -2.0 * cos_w0 / a0,
             a2: (1.0 - alpha) / a0,
         }
+    }
+}
+
+impl Default for BiquadCoeffs {
+    fn default() -> Self {
+        Self::identity()
     }
 }
 
@@ -293,6 +306,35 @@ mod tests {
             "highshelf +6dB DC response: {} (expected ~1.0)",
             out
         );
+    }
+
+    #[test]
+    fn test_identity_coeffs_are_passthrough() {
+        // Array init with the const fn — the motivating use case.
+        let coeffs: [BiquadCoeffs; 4] = [BiquadCoeffs::identity(); 4];
+        assert_eq!(coeffs[0].b0, 1.0);
+        assert_eq!(coeffs[0].b1, 0.0);
+        assert_eq!(coeffs[0].b2, 0.0);
+        assert_eq!(coeffs[0].a1, 0.0);
+        assert_eq!(coeffs[0].a2, 0.0);
+
+        // Default delegates to identity().
+        let d: BiquadCoeffs = Default::default();
+        assert_eq!(d.b0, 1.0);
+        assert_eq!(d.a2, 0.0);
+
+        // Applied to a Biquad, identity coeffs leave samples unchanged.
+        let mut f = Biquad::new();
+        f.set_coeffs(BiquadCoeffs::identity());
+        for i in 0..10 {
+            let input = i as f64 * 0.1;
+            let output = f.process_sample(input);
+            assert!(
+                (output - input).abs() < 1e-10,
+                "identity not passthrough at {}: got {}, expected {}",
+                i, output, input
+            );
+        }
     }
 
     #[test]

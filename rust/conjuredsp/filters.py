@@ -25,6 +25,16 @@ class BiquadCoeffs:
         self.a2 = a2
 
     @staticmethod
+    def identity() -> "BiquadCoeffs":
+        """Passthrough coefficients (b0=1, rest=0).
+
+        Useful for pre-allocating a list of slots to be filled at runtime,
+        e.g. ``bands = [BiquadCoeffs.identity() for _ in range(5)]`` for a
+        5-band parametric EQ.
+        """
+        return BiquadCoeffs(1.0, 0.0, 0.0, 0.0, 0.0)
+
+    @staticmethod
     def lowpass(freq: float, q: float, sample_rate: float) -> "BiquadCoeffs":
         """Low-pass filter. Passes frequencies below cutoff."""
         w0 = 2.0 * math.pi * freq / sample_rate
