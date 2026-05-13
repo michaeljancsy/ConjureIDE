@@ -97,8 +97,12 @@ struct BundleUISmokeTesterTests {
     // MARK: - Happy path
 
     @Test @MainActor func passesCleanBundle() async throws {
+        // Body's default 8-px UA margin would push scroll extent past
+        // the 400-pt manifest width by ~16 px (over the 8-px tolerance)
+        // and trip contentOverflow → .warn. Real preset UIs reset this
+        // (and the scaffold does too); the test UI matches.
         let ui = """
-        <!doctype html><html><body>
+        <!doctype html><html><body style="margin:0;padding:0">
           <cdp-slider param="cutoff"></cdp-slider>
           <cdp-slider param="resonance"></cdp-slider>
         </body></html>
@@ -225,8 +229,10 @@ struct BundleUISmokeTesterTests {
     // MARK: - xy pad binding
 
     @Test @MainActor func cdpXYBindsBothAxes() async throws {
+        // Reset UA margin so scroll extent fits within the 400×240
+        // manifest — otherwise contentOverflow trips status to .warn.
         let ui = """
-        <!doctype html><html><body>
+        <!doctype html><html><body style="margin:0;padding:0">
           <cdp-xy param-x="cutoff" param-y="resonance"></cdp-xy>
         </body></html>
         """
@@ -300,6 +306,11 @@ struct BundleUISmokeTesterTests {
         #expect(heightOver >= 350,
                 "expected height overflow ~400pt; got \(heightOver)")
         #expect(overflow.rendered.height >= overflow.declared.height + heightOver)
+        // contentOverflow promotes status to .warn — confirms the
+        // status mapping that was inconsistent before (block was
+        // populated but status stayed .pass).
+        #expect(report.status == .warn,
+                "non-nil contentOverflow must promote status to .warn; got \(report.status)")
     }
 
     @Test @MainActor func omitsContentOverflowWhenContentFits() async throws {
@@ -339,6 +350,8 @@ struct BundleUISmokeTesterTests {
         #expect(report.readyFired)
         #expect(report.contentOverflow == nil,
                 "content_overflow must be nil when the layout fits within the declared dimensions; got \(String(describing: report.contentOverflow))")
+        #expect(report.status == .pass,
+                "fits-within-manifest layout must stay .pass; got \(report.status)")
     }
 
     // MARK: - Text contrast pass
@@ -387,7 +400,7 @@ struct BundleUISmokeTesterTests {
         let ui = """
         <!doctype html><html>
         <head><style>:root { color-scheme: dark; }</style></head>
-        <body style="background: #111; color: #f5f5f5;">
+        <body style="background: #111; color: #f5f5f5; margin:0; padding:0">
           <p>Cutoff</p>
           <cdp-slider param="cutoff"></cdp-slider>
           <cdp-slider param="resonance"></cdp-slider>
@@ -1206,5 +1219,146 @@ struct BundleUISmokeTesterTests {
                 "expected a default_buffer_unset canvas issue; got \(report.canvasIssues)")
         #expect(report.status != .pass,
                 "non-empty canvas_issues must yield non-.pass status; got \(report.status)")
+    }
+
+    // MARK: - content_overflow underflow
+
+    /// Manifest 520×260 (mirrors the scaffold default). Body + html
+    /// shrunk to 360×200 — the rendered content fills only a corner of
+    /// the manifest-sized webview, leaving whitespace. The bug class
+    /// shipped three times on 2026-05-12 from `/try-it` agents.
+    private let roomyManifest = """
+    {
+      "schemaVersion": 2,
+      "entry": "process.py",
+      "language": "python",
+      "params": [
+        { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log" }
+      ],
+      "ui": {
+        "entryHTML": "ui/index.html",
+        "width": 520, "height": 260, "fps": 30, "audioFrames": false
+      }
+    }
+    """
+
+    @Test @MainActor func reportsContentUnderflowWhenBodySmallerThanManifest() async throws {
+        // body shrunk so body.getBoundingClientRect() reads 360 wide.
+        // Underflow uses the body bbox (not scroll extent, which is
+        // floored at the viewport size and would miss this). Width
+        // axis only at runtime — see ContentOverflow doc for why
+        // height-underflow runtime detection is too noisy; the static
+        // validator covers the explicit-CSS case.
+        let ui = """
+        <!doctype html><html><head><style>
+          html, body { width: 360px; margin: 0; padding: 0; }
+        </style></head><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: roomyManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff"],
+            hostParameterCount: 1,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired,
+                "ready must fire for underflow detection to run")
+        let overflow = try #require(report.contentOverflow,
+                "expected content_overflow block populated for underflow")
+        #expect(overflow.declared.width == 520)
+        #expect(overflow.declared.height == 260)
+        #expect(overflow.underflows.contains("width"),
+                "width axis should be underflow-flagged; got underflows=\(overflow.underflows)")
+        #expect(!overflow.underflows.contains("height"),
+                "height underflow is not surfaced at runtime (too noisy on auto-height bodies); got underflows=\(overflow.underflows)")
+        #expect(overflow.overflows.isEmpty,
+                "underflow scenario must not also flag overflow; got overflows=\(overflow.overflows)")
+        // Width: ~160 (520 − 360). Generous floor because WebKit can
+        // drift a few px on subpixel rounding.
+        let widthUnder = overflow.underByPixels.width ?? 0
+        #expect(widthUnder >= 100,
+                "expected width underflow ~160px; got \(widthUnder)")
+        #expect(overflow.underByPixels.height == nil,
+                "height underByPixels must be nil when height underflow is not flagged; got \(String(describing: overflow.underByPixels.height))")
+        #expect(report.status == .warn,
+                "underflow must promote status to .warn; got \(report.status)")
+    }
+
+    @Test @MainActor func widthUnderflowMaskedWhenWidthOverflows() async throws {
+        // Body width 360 (would underflow the 520 manifest); a wide
+        // 800×50 child forces body.scrollWidth past the manifest on
+        // the width axis. The two width-axis signals fight: bbox 360
+        // vs declared 520 (would underflow) vs scroll 800 vs declared
+        // 520 (overflows). Overflow wins — overflow is the louder
+        // symptom (clipping past the edge, not whitespace inside the
+        // body), and reporting both would be a contradiction. Net on
+        // width: OVERFLOW only.
+        //
+        // Height is not surfaced at runtime — body's bbox height is
+        // content-driven and noisy. See ContentOverflow doc.
+        let ui = """
+        <!doctype html><html><head><style>
+          html, body { width: 360px; margin: 0; padding: 0; }
+        </style></head><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <div style="width: 800px; height: 50px;"></div>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: roomyManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff"],
+            hostParameterCount: 1,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        let overflow = try #require(report.contentOverflow)
+        #expect(overflow.overflows.contains("width"),
+                "width should overflow due to the 800px child; got overflows=\(overflow.overflows)")
+        #expect(!overflow.underflows.contains("width"),
+                "width underflow must be masked when overflow fires on the same axis; got underflows=\(overflow.underflows)")
+        #expect(!overflow.underflows.contains("height"),
+                "height underflow is not surfaced at runtime; got underflows=\(overflow.underflows)")
+        #expect(report.status == .warn,
+                "any contentOverflow (over or under) promotes status to .warn; got \(report.status)")
+    }
+
+    @Test @MainActor func omitsContentOverflowWhenLayoutMatchesManifest() async throws {
+        // Confirms the existing pass case still works after the
+        // underflow additions — content fits both axes within the 8px
+        // tolerance and the block stays nil. A separate test from the
+        // earlier `omitsContentOverflowWhenContentFits` because that
+        // one uses a generously oversized manifest; here the manifest
+        // dimensions are realistic and the body fills them.
+        let ui = """
+        <!doctype html><html><head><style>
+          html, body { margin: 0; padding: 0; }
+        </style></head><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let (bundle, root) = try Self.makeBundle(manifest: roomyManifest, uiHTML: ui)
+        defer { Self.cleanup(root) }
+
+        let report = await BundleUISmokeTester.run(
+            bundle: bundle,
+            hostParameterNames: [0: "cutoff"],
+            hostParameterCount: 1,
+            resourceBundle: try Self.resourceBundle
+        )
+
+        #expect(report.readyFired)
+        #expect(report.contentOverflow == nil,
+                "content_overflow must be nil when layout fills the manifest viewport; got \(String(describing: report.contentOverflow))")
+        #expect(report.status == .pass,
+                "fitting layout must stay .pass; got \(report.status)")
     }
 }

@@ -115,14 +115,42 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         }
     }
 
-    /// Reported when the rendered HTML's scroll extent exceeds the
-    /// manifest's declared `ui.width` / `ui.height` by more than
-    /// `overflowToleranceP`. Captures both the declared and rendered
-    /// dimensions so the caller can see exactly how much to bump the
-    /// manifest by — clipping silently in the live plugin (and in
-    /// exported AUs that pin the webview to manifest dimensions) was
-    /// invisible to the static validator. Omitted from the report
-    /// entirely when the content fits.
+    /// Reported when the rendered HTML's scroll extent differs from
+    /// the manifest's declared `ui.width` / `ui.height` by more than
+    /// `overflowToleranceP` on either axis. Captures both the declared
+    /// and rendered dimensions so the caller can see exactly how much
+    /// to bump the manifest by — clipping silently in the live plugin
+    /// (and in exported AUs that pin the webview to manifest
+    /// dimensions) was invisible to the static validator; underflow is
+    /// the inverse case where the rendered content sits in a sub-region
+    /// of the manifest-sized webview, leaving whitespace around it.
+    /// Omitted from the report entirely when the content fits both axes
+    /// within tolerance.
+    ///
+    /// `overflows` and `byPixels` flag axes where the rendered content
+    /// (scroll extent) EXCEEDS declared. Both axes are checked.
+    ///
+    /// `underflows` and `underByPixels` flag axes where the body's
+    /// CSS-rendered size (bounding rect) FALLS SHORT of declared.
+    /// **Width only at runtime.** Body's default block width = the
+    /// html/viewport width, so a small body width is unambiguously a
+    /// deliberate CSS narrowing — the failure mode this check exists
+    /// for. Body's bbox height by contrast defaults to content height,
+    /// so a 24-pt cdp-slider produces a 24-pt body inside a 260-pt
+    /// manifest; flagging that as height underflow noises up every
+    /// preset that doesn't declare `html, body { height: 100% }`.
+    /// `BundleUIValidator`'s static `body_smaller_than_manifest` check
+    /// still flags explicit `body { height: Npx }` from CSS, which is
+    /// the only mode of height underflow worth surfacing.
+    ///
+    /// Overflow uses scroll extent; underflow uses body's bounding
+    /// rect because scroll extent is floored at the viewport size and
+    /// would miss a body shrunk by `body { width: Npx }`. The width
+    /// axis is mutually exclusive: if width overflows, width-underflow
+    /// is suppressed even when body's bbox is small (overflow is the
+    /// louder symptom — clipping past the manifest, not whitespace
+    /// inside it). Older consumers that only inspect `overflows` /
+    /// `by_pixels` keep working unchanged.
     struct ContentOverflow: Encodable, Equatable {
         struct Size: Encodable, Equatable {
             let width: Int
@@ -136,10 +164,14 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         let rendered: Size
         let overflows: [String]   // any subset of ["width", "height"]
         let byPixels: ByPixels
+        let underflows: [String]  // any subset of ["width", "height"]
+        let underByPixels: ByPixels
 
         enum CodingKeys: String, CodingKey {
             case declared, rendered, overflows
             case byPixels = "by_pixels"
+            case underflows
+            case underByPixels = "under_by_pixels"
         }
     }
 
@@ -491,20 +523,31 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         // of both so we report the true content size regardless. Only
         // collected when ready actually fired; before that the layout
         // hasn't settled and the numbers are misleading.
-        let renderedDims: (Int, Int)? = await withCheckedContinuation { cont in
+        // (overflow_w, overflow_h, body_rect_w, body_rect_h):
+        //   overflow_* is the scroll extent (max of body + documentElement,
+        //   captures content past the viewport); body_rect_* is body's
+        //   getBoundingClientRect (CSS-set body size — used for underflow,
+        //   which the scroll extent can't see because it's floored at the
+        //   viewport size).
+        let renderedDims: (Int, Int, Int, Int)? = await withCheckedContinuation { cont in
             guard let wv = webView, readyAtMs != nil else {
                 cont.resume(returning: nil); return
             }
             wv.evaluateJavaScript(Self.scrollExtentScript) { result, _ in
-                guard let arr = result as? [Any], arr.count >= 4,
-                      let bw = (arr[0] as? NSNumber)?.intValue,
-                      let bh = (arr[1] as? NSNumber)?.intValue,
-                      let dw = (arr[2] as? NSNumber)?.intValue,
-                      let dh = (arr[3] as? NSNumber)?.intValue
+                guard let arr = result as? [Any], arr.count >= 6,
+                      let bsw = (arr[0] as? NSNumber)?.intValue,
+                      let bsh = (arr[1] as? NSNumber)?.intValue,
+                      let dsw = (arr[2] as? NSNumber)?.intValue,
+                      let dsh = (arr[3] as? NSNumber)?.intValue,
+                      let brw = (arr[4] as? NSNumber)?.doubleValue,
+                      let brh = (arr[5] as? NSNumber)?.doubleValue
                 else {
                     cont.resume(returning: nil); return
                 }
-                cont.resume(returning: (max(bw, dw), max(bh, dh)))
+                cont.resume(returning: (
+                    max(bsw, dsw), max(bsh, dsh),
+                    Int(round(brw)), Int(round(brh))
+                ))
             }
         }
 
@@ -686,27 +729,64 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         let stateProbe: StateProbeResult? = await runStateProbeIfPossible()
 
         // Build the content_overflow block when the rendered extent
-        // exceeds declared on either axis by more than the tolerance.
-        // Skipped entirely (nil) when ready didn't fire — the rendered
-        // dims are unreliable then, and the report already flags ready
-        // failure as its own status — or when content fits.
+        // differs from declared on either axis by more than the
+        // tolerance — overflow (rendered > declared) or underflow
+        // (rendered < declared). Skipped entirely (nil) when ready
+        // didn't fire — the rendered dims are unreliable then, and the
+        // report already flags ready failure as its own status — or
+        // when the content fits both axes within tolerance.
         var contentOverflow: ContentOverflow? = nil
-        if let (rw, rh) = renderedDims {
+        if let (rw, rh, bw, bh) = renderedDims {
             let dw = declaredWidth
             let dh = declaredHeight
+            // Overflow uses scroll extent — captures content extending
+            // past the viewport even when body fits inside it.
             let widthOver = rw - dw > Self.overflowToleranceP
             let heightOver = rh - dh > Self.overflowToleranceP
-            if widthOver || heightOver {
-                var axes: [String] = []
-                if widthOver { axes.append("width") }
-                if heightOver { axes.append("height") }
+            // Underflow uses body's CSS-rendered bounding rect. Scroll
+            // extent is floored at the viewport size, so a body sized
+            // 360 inside a 520 webview reports scrollWidth=520 and
+            // misses the underflow; getBoundingClientRect returns 360.
+            //
+            // Width only. body's default `display: block` makes its
+            // bbox width = the html/viewport width, so a shrunken body
+            // width is unambiguously a deliberate CSS narrowing — the
+            // failure mode this check exists for. Body's bbox height,
+            // by contrast, defaults to the *content* height (CSS auto),
+            // so a single short cdp-slider naturally produces a 24-px-
+            // tall body inside a 260-pt-tall manifest. Treating that as
+            // underflow would noise-up every preset that doesn't
+            // declare `html, body { height: 100% }`. The static
+            // validator still catches explicit `body { height: Npx }`
+            // CSS via its own parse, which is the only mode of height-
+            // underflow worth flagging.
+            //
+            // Masked on the width axis when overflow already fires — if
+            // content extends past the manifest, the visible symptom is
+            // overflow (clipping past the edge), not whitespace inside
+            // the body. Reporting both would be a confusing
+            // contradiction; overflow wins.
+            let widthUnder = !widthOver && (dw - bw > Self.overflowToleranceP)
+            let heightUnder = false
+            if widthOver || heightOver || widthUnder || heightUnder {
+                var overAxes: [String] = []
+                if widthOver { overAxes.append("width") }
+                if heightOver { overAxes.append("height") }
+                var underAxes: [String] = []
+                if widthUnder { underAxes.append("width") }
+                if heightUnder { underAxes.append("height") }
                 contentOverflow = ContentOverflow(
                     declared: ContentOverflow.Size(width: dw, height: dh),
                     rendered: ContentOverflow.Size(width: rw, height: rh),
-                    overflows: axes,
+                    overflows: overAxes,
                     byPixels: ContentOverflow.ByPixels(
                         width: widthOver ? rw - dw : nil,
                         height: heightOver ? rh - dh : nil
+                    ),
+                    underflows: underAxes,
+                    underByPixels: ContentOverflow.ByPixels(
+                        width: widthUnder ? dw - bw : nil,
+                        height: heightUnder ? dh - bh : nil
                     )
                 )
             }
@@ -744,6 +824,15 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         // runtime misconfigurations — the viz still loads but draws
         // wrong, so they warn rather than fail. Pinning: a non-empty
         // canvas_issues array must never collapse into `.pass`.
+        //
+        // contentOverflow promotes to warn whenever it's present at
+        // all — overflow means rendered content clips past the
+        // manifest, underflow means the body leaves whitespace inside
+        // it; both are real layout-mismatch symptoms the agent should
+        // react to. A non-nil contentOverflow must never collapse to
+        // `.pass`. (Earlier the block was data-only and didn't affect
+        // status — that was inconsistent with how other layout signals
+        // like canvas_issues are surfaced.)
         let failureKinds: Set<String> = [
             "error", "unhandledrejection", "load", "harness", "callback_exception"
         ]
@@ -756,6 +845,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         } else if paramCoverage.contains(where: { !$0.hasInteractiveBinding })
                   || !lowContrastTexts.isEmpty
                   || !canvasIssues.isEmpty
+                  || contentOverflow != nil
         {
             status = .warn
         } else {
@@ -1338,17 +1428,36 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         return w < minW || h < minH
     }
 
-    /// Measures the rendered content extent on both the body and the
-    /// document element (some pages put their main content on body,
-    /// some on documentElement). The Swift side takes the max along
-    /// each axis and compares to manifest.ui.{width,height}. Returns a
-    /// 4-element number array — `evaluateJavaScript`'s portable subset
-    /// of return types.
+    /// Measures rendered dimensions for the layout-mismatch checks.
+    /// Returns a 6-element number array:
+    ///   [0] body.scrollWidth   — content extent (includes horizontal overflow)
+    ///   [1] body.scrollHeight  — content extent (includes vertical overflow)
+    ///   [2] documentElement.scrollWidth   — same, for the html root
+    ///   [3] documentElement.scrollHeight  —   "      "    "    "
+    ///   [4] body.getBoundingClientRect().width   — body's CSS-rendered width
+    ///   [5] body.getBoundingClientRect().height  — body's CSS-rendered height
+    ///
+    /// Overflow detection uses max of indices [0..3] (scroll extent reports
+    /// content past the viewport). Underflow detection uses [4..5] — the
+    /// body's bounding rect actually shrinks when body has CSS `width` /
+    /// `height` set smaller than the manifest, whereas scroll extent is
+    /// floored at clientWidth/clientHeight (the viewport) and would mask
+    /// the underflow. Falling back to 0 for missing nodes keeps the
+    /// array shape stable.
     private static let scrollExtentScript = """
-    [document.body ? document.body.scrollWidth : 0,
-     document.body ? document.body.scrollHeight : 0,
-     document.documentElement ? document.documentElement.scrollWidth : 0,
-     document.documentElement ? document.documentElement.scrollHeight : 0]
+    (function() {
+      var b = document.body;
+      var d = document.documentElement;
+      var r = b ? b.getBoundingClientRect() : { width: 0, height: 0 };
+      return [
+        b ? b.scrollWidth : 0,
+        b ? b.scrollHeight : 0,
+        d ? d.scrollWidth : 0,
+        d ? d.scrollHeight : 0,
+        r.width,
+        r.height
+      ];
+    })()
     """
 
     /// Run after ready fires (or on timeout). Enumerates cdp-* custom

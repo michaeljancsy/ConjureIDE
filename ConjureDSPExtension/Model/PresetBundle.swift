@@ -278,6 +278,11 @@ extension PresetBundle {
           <title>Custom UI</title>
           <style>
             :root { color-scheme: light dark; }
+            /* The webview is sized by manifest.ui.width/height. Leave
+               html/body to fill the viewport — do NOT set body { width:
+               Npx } or body { height: Npx }, that just leaves whitespace
+               around the rendered content. To change the plugin's size,
+               edit manifest.ui in manifest.json. */
             html, body {
               margin: 0; padding: 0; height: 100%;
               font: 13px -apple-system, system-ui, sans-serif;
