@@ -216,22 +216,29 @@ class AudioUnitHostModel {
             print("Built-in audio resource not found: \(source.resource.name).\(source.resource.ext)")
             return
         }
+        let wasPlaying = playEngine.isPlaying
         do {
             try playEngine.setAudioFile(url)
             audioSource = .builtIn(source)
             UserDefaults.standard.set(AudioSourcePersistence.encode(audioSource), forKey: Self.audioSourceKey)
         } catch {
             print("Failed to load built-in audio source \(source.rawValue): \(error)")
+            // setAudioFile stops playback before throwing; the previous file is
+            // still loaded, so resume on it rather than leave the user staring
+            // at an unchanged source name and silent output.
+            if wasPlaying { playEngine.startPlaying() }
         }
     }
 
     func selectExternalFile(_ url: URL) {
+        let wasPlaying = playEngine.isPlaying
         do {
             try playEngine.setAudioFile(url)
             audioSource = .external(url)
             UserDefaults.standard.set(AudioSourcePersistence.encode(audioSource), forKey: Self.audioSourceKey)
         } catch {
             print("Failed to load audio file: \(error)")
+            if wasPlaying { playEngine.startPlaying() }
         }
     }
 
