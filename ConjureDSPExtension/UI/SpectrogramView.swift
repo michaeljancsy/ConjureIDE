@@ -38,10 +38,21 @@ struct SpectrogramView: View {
                 guard let buffer = bitmapBuffer, let fullImage = buffer.makeImage() else { return }
                 let col = buffer.writeColumn
 
+                // Pin nearest-neighbor interpolation on the bitmap draws.
+                // The buffer is one CG pixel per FFT column; on retina the
+                // Canvas backing store scales by 2× and the dual-half cropped
+                // draw places the seam at a non-integer point coordinate
+                // (`leftColumnsCount * scaleX`). Default interpolation
+                // (.medium / .low) resamples adjacent columns into one
+                // another, producing alternating bright/dim vertical bands
+                // for what should be a uniform horizontal line. `.none`
+                // preserves per-column fidelity.
+
                 if col == 0 {
                     // Buffer is in natural order — draw as single image
                     context.draw(
-                        Image(fullImage, scale: 1, label: Text("")),
+                        Image(fullImage, scale: 1, label: Text(""))
+                            .interpolation(.none),
                         in: CGRect(origin: .zero, size: size)
                     )
                 } else {
@@ -52,7 +63,6 @@ struct SpectrogramView: View {
 
                     // Scale factors from pixel coords to view coords
                     let scaleX = size.width / CGFloat(bufW)
-                    let scaleY = size.height / CGFloat(bufH)
 
                     // Left portion (older data) — from pixel column `col` to end
                     if leftColumnsCount > 0,
@@ -60,7 +70,8 @@ struct SpectrogramView: View {
                            x: col, y: 0, width: leftColumnsCount, height: bufH
                        )) {
                         context.draw(
-                            Image(leftCrop, scale: 1, label: Text("")),
+                            Image(leftCrop, scale: 1, label: Text(""))
+                                .interpolation(.none),
                             in: CGRect(
                                 x: 0,
                                 y: 0,
@@ -76,7 +87,8 @@ struct SpectrogramView: View {
                            x: 0, y: 0, width: rightColumnsCount, height: bufH
                        )) {
                         context.draw(
-                            Image(rightCrop, scale: 1, label: Text("")),
+                            Image(rightCrop, scale: 1, label: Text(""))
+                                .interpolation(.none),
                             in: CGRect(
                                 x: CGFloat(leftColumnsCount) * scaleX,
                                 y: 0,
@@ -169,7 +181,7 @@ struct SpectrogramView: View {
             } else if isDivergingMap {
                 pixel = SpectrogramColorMap.divergingForDB(value, range: 40.0)
             } else {
-                pixel = SpectrogramColorMap.magmaForDB(value, floor: AudioCaptureManager.floorDB)
+                pixel = SpectrogramColorMap.magmaForDB(value, floor: AudioCaptureManager.visualFloorDB)
             }
 
             // Write directly to bitmap (y=0 is bottom, bitmap row 0 is top)
