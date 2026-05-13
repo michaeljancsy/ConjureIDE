@@ -29,18 +29,64 @@ const CHORUS_DEPTH_MS: f64 = 1.2;
 const COMB_MS: f64 = 9.4;
 const COMB_FB_AMT: f64 = 0.55;
 
-persist_buf!(CHORUS: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(COMB: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(COMB_FB: [f64; 2] = [0.0; 2]);
-persist_buf!(BP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(HP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(SH_HELD: [f64; 2] = [0.0; 2]);
+// Lullaby chorus pre-stage: machine-wobble delay line + modulation LFO.
+struct Chorus {
+    dl: [DelayLine<MAX_DL>; 2],
+    lfo: Lfo,
+}
+
+// 4-carrier ring modulation: carrier sines + square-wave gate envelopes.
+struct Carriers {
+    lfo_car: [Lfo; 4],
+    lfo_gates: [Lfo; 4],
+}
+
+// Telephony bandpass at the head of the post-ringmod chain + final
+// highpass cleanup. Bundled because they share the per-channel
+// `set_coeffs` loop and bookend the destructive middle.
+struct Filters {
+    bp: [Biquad; 2],
+    hp: [Biquad; 2],
+}
+
+// Destructive middle: sample-and-hold held value + mechanical comb buzz
+// (delay + feedback). Named `Crusher` (not `Crush`) so the static doesn't
+// clash with the `CRUSH` parameter index const.
+struct Crusher {
+    sh_held: [f64; 2],
+    comb_dl: [DelayLine<MAX_DL>; 2],
+    comb_fb: [f64; 2],
+}
+
+// Atmospheric noise generators: dropout-gate square LFO + 60 Hz mains hum.
+struct Atmos {
+    lfo_dropout: Lfo,
+    lfo_hum: Lfo,
+}
+
+persist_buf!(CHORUS: Chorus = Chorus {
+    dl: [DelayLine::new(); 2],
+    lfo: Lfo::new(),
+});
+persist_buf!(CARRIERS: Carriers = Carriers {
+    lfo_car: [Lfo::new(); 4],
+    lfo_gates: [Lfo::new(); 4],
+});
+persist_buf!(FILTERS: Filters = Filters {
+    bp: [Biquad::new(); 2],
+    hp: [Biquad::new(); 2],
+});
+persist_buf!(CRUSHER: Crusher = Crusher {
+    sh_held: [0.0; 2],
+    comb_dl: [DelayLine::new(); 2],
+    comb_fb: [0.0; 2],
+});
+persist_buf!(ATMOS: Atmos = Atmos {
+    lfo_dropout: Lfo::new(),
+    lfo_hum: Lfo::new(),
+});
+
 persist!(SH_COUNT: usize = 0);
-persist_buf!(LFO_CHORUS: Lfo = Lfo::new());
-persist_buf!(LFO_CARRIERS: [Lfo; 4] = [Lfo::new(); 4]);
-persist_buf!(LFO_GATES: [Lfo; 4] = [Lfo::new(); 4]);
-persist_buf!(LFO_DROPOUT: Lfo = Lfo::new());
-persist_buf!(LFO_HUM: Lfo = Lfo::new());
 persist!(GATE_ENV: f64 = 1.0);
 
 process! { ctx =>
@@ -79,101 +125,89 @@ process! { ctx =>
     let mut gate_env = GATE_ENV.get();
 
     CHORUS.with_mut(|chorus| {
-        COMB.with_mut(|comb| {
-            COMB_FB.with_mut(|comb_fb| {
-                BP.with_mut(|bp| {
-                    HP.with_mut(|hp| {
-                        SH_HELD.with_mut(|sh_held| {
-                            LFO_CHORUS.with_mut(|lfo_chorus| {
-                                LFO_CARRIERS.with_mut(|lfo_carriers| {
-                                    LFO_GATES.with_mut(|lfo_gates| {
-                                        LFO_DROPOUT.with_mut(|lfo_dropout| {
-                                            LFO_HUM.with_mut(|lfo_hum| {
-                                                // LFO init
-                                                lfo_chorus.init(sr, 1.5);
-                                                for i in 0..4 {
-                                                    lfo_carriers[i].init(sr, CARRIER_HZ[i]);
-                                                    lfo_gates[i].init(sr, GATE_HZ[i]);
-                                                    lfo_gates[i].set_waveform(Waveform::Square);
-                                                }
-                                                lfo_dropout.init(sr, gate_hz);
-                                                lfo_dropout.set_waveform(Waveform::Square);
-                                                lfo_hum.init(sr, 60.0);
+        CARRIERS.with_mut(|carriers| {
+            FILTERS.with_mut(|filters| {
+                CRUSHER.with_mut(|crusher| {
+                    ATMOS.with_mut(|atmos| {
+                        // LFO init
+                        chorus.lfo.init(sr, 1.5);
+                        for i in 0..4 {
+                            carriers.lfo_car[i].init(sr, CARRIER_HZ[i]);
+                            carriers.lfo_gates[i].init(sr, GATE_HZ[i]);
+                            carriers.lfo_gates[i].set_waveform(Waveform::Square);
+                        }
+                        atmos.lfo_dropout.init(sr, gate_hz);
+                        atmos.lfo_dropout.set_waveform(Waveform::Square);
+                        atmos.lfo_hum.init(sr, 60.0);
 
-                                                for ch in 0..nch {
-                                                    bp[ch].set_coeffs(bpc);
-                                                    hp[ch].set_coeffs(hpc);
-                                                }
+                        for ch in 0..nch {
+                            filters.bp[ch].set_coeffs(bpc);
+                            filters.hp[ch].set_coeffs(hpc);
+                        }
 
-                                                for f in 0..ctx.frames() {
-                                                    let c_lfo = lfo_chorus.tick();
-                                                    let car0 = lfo_carriers[0].tick();
-                                                    let car1 = lfo_carriers[1].tick();
-                                                    let car2 = lfo_carriers[2].tick();
-                                                    let car3 = lfo_carriers[3].tick();
-                                                    let g0 = (lfo_gates[0].tick() + 1.0) * 0.5;
-                                                    let g1 = (lfo_gates[1].tick() + 1.0) * 0.5;
-                                                    let g2 = (lfo_gates[2].tick() + 1.0) * 0.5;
-                                                    let g3 = (lfo_gates[3].tick() + 1.0) * 0.5;
-                                                    let drop = (lfo_dropout.tick() + 1.0) * 0.5;
-                                                    let hum = lfo_hum.tick();
+                        for f in 0..ctx.frames() {
+                            let c_lfo = chorus.lfo.tick();
+                            let car0 = carriers.lfo_car[0].tick();
+                            let car1 = carriers.lfo_car[1].tick();
+                            let car2 = carriers.lfo_car[2].tick();
+                            let car3 = carriers.lfo_car[3].tick();
+                            let g0 = (carriers.lfo_gates[0].tick() + 1.0) * 0.5;
+                            let g1 = (carriers.lfo_gates[1].tick() + 1.0) * 0.5;
+                            let g2 = (carriers.lfo_gates[2].tick() + 1.0) * 0.5;
+                            let g3 = (carriers.lfo_gates[3].tick() + 1.0) * 0.5;
+                            let drop = (atmos.lfo_dropout.tick() + 1.0) * 0.5;
+                            let hum = atmos.lfo_hum.tick();
 
-                                                    gate_env = gate_alpha * gate_env + one_minus_alpha * drop;
+                            gate_env = gate_alpha * gate_env + one_minus_alpha * drop;
 
-                                                    let update_held = (sh_count % sh_period) == 0;
-                                                    sh_count += 1;
+                            let update_held = (sh_count % sh_period) == 0;
+                            sh_count += 1;
 
-                                                    for ch in 0..nch {
-                                                        let dry = ctx.input(ch, f) as f64;
+                            for ch in 0..nch {
+                                let dry = ctx.input(ch, f) as f64;
 
-                                                        // Stage A: lullaby chorus pre-stage
-                                                        chorus[ch].write(dry as f32);
-                                                        let chorus_read = (chorus_d + c_lfo * chorus_depth).max(1.0);
-                                                        let chr_voice = chorus[ch].read(chorus_read) as f64;
-                                                        let x = dry + lullaby * (chr_voice - dry);
+                                // Stage A: lullaby chorus pre-stage
+                                chorus.dl[ch].write(dry as f32);
+                                let chorus_read = (chorus_d + c_lfo * chorus_depth).max(1.0);
+                                let chr_voice = chorus.dl[ch].read(chorus_read) as f64;
+                                let x = dry + lullaby * (chr_voice - dry);
 
-                                                        // Stage B: 4-carrier ring modulation, gated
-                                                        let mut ring = (x * car0 * g0
-                                                            + x * car1 * g1
-                                                            + x * car2 * g2
-                                                            + x * car3 * g3)
-                                                            * 0.25;
+                                // Stage B: 4-carrier ring modulation, gated
+                                let mut ring = (x * car0 * g0
+                                    + x * car1 * g1
+                                    + x * car2 * g2
+                                    + x * car3 * g3)
+                                    * 0.25;
 
-                                                        // Stage C: telephony bandpass
-                                                        ring = bp[ch].process_sample(ring);
+                                // Stage C: telephony bandpass
+                                ring = filters.bp[ch].process_sample(ring);
 
-                                                        // Stage D: sample-and-hold (rate reduction)
-                                                        if update_held {
-                                                            sh_held[ch] = ring;
-                                                        }
-                                                        let mut sig = sh_held[ch];
+                                // Stage D: sample-and-hold (rate reduction)
+                                if update_held {
+                                    crusher.sh_held[ch] = ring;
+                                }
+                                let mut sig = crusher.sh_held[ch];
 
-                                                        // Stage E: bit-depth reduction
-                                                        sig = (sig * levels + 0.5).floor() * inv_levels;
+                                // Stage E: bit-depth reduction
+                                sig = (sig * levels + 0.5).floor() * inv_levels;
 
-                                                        // Stage F: smoothed dropout gate
-                                                        sig = sig * gate_env;
+                                // Stage F: smoothed dropout gate
+                                sig = sig * gate_env;
 
-                                                        // Stage G: mechanical comb buzz
-                                                        comb[ch].write((sig + COMB_FB_AMT * comb_fb[ch]) as f32);
-                                                        comb_fb[ch] = comb[ch].read(comb_d) as f64;
-                                                        sig = sig + 0.4 * comb_fb[ch];
+                                // Stage G: mechanical comb buzz
+                                crusher.comb_dl[ch].write((sig + COMB_FB_AMT * crusher.comb_fb[ch]) as f32);
+                                crusher.comb_fb[ch] = crusher.comb_dl[ch].read(comb_d) as f64;
+                                sig = sig + 0.4 * crusher.comb_fb[ch];
 
-                                                        // Stage H: 60 Hz mains hum
-                                                        sig = sig + hum * hum_gain;
+                                // Stage H: 60 Hz mains hum
+                                sig = sig + hum * hum_gain;
 
-                                                        // Stage I: final highpass
-                                                        sig = hp[ch].process_sample(sig);
+                                // Stage I: final highpass
+                                sig = filters.hp[ch].process_sample(sig);
 
-                                                        ctx.set_output(ch, f, (dry * (1.0 - mx) + sig * mx) as f32);
-                                                    }
-                                                }
-                                            });
-                                        });
-                                    });
-                                });
-                            });
-                        });
+                                ctx.set_output(ch, f, (dry * (1.0 - mx) + sig * mx) as f32);
+                            }
+                        }
                     });
                 });
             });

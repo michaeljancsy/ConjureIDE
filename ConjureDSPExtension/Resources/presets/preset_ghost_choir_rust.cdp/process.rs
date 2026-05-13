@@ -38,21 +38,62 @@ const AP_MS: [f64; 2] = [18.3, 7.9];
 const AP_G: f64 = 0.6;
 const TREM_HZ: f64 = 6.0;
 
-persist_buf!(LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(FORMANTS: [[Biquad; 3]; 2] = [[Biquad::new(); 3]; 2]);
-persist_buf!(CHORUS: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(REV_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(REV_ENV: [f64; 2] = [0.0; 2]);
-persist_buf!(WHISPER_BP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(WHISPER_HS: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(COMBS: [[DelayLine<MAX_DL>; 4]; 2] = [[DelayLine::new(); 4]; 2]);
-persist_buf!(COMB_FB_BUF: [[f64; 4]; 2] = [[0.0; 4]; 2]);
-persist_buf!(COMB_LP: [[Biquad; 4]; 2] = [[Biquad::new(); 4]; 2]);
-persist_buf!(AP: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2]);
-persist_buf!(APS: [[f64; 2]; 2] = [[0.0; 2]; 2]);
-persist_buf!(LFO_CHORUS: [Lfo; 8] = [Lfo::new(); 8]);
-persist_buf!(LFO_COMBS: [Lfo; 4] = [Lfo::new(); 4]);
-persist_buf!(LFO_TREM: Lfo = Lfo::new());
+// Whisper / voice chain: lowpass formant softening, 3 vowel formants,
+// whisper-band BP + HS, breathing tremolo LFO.
+struct Voice {
+    lp: [Biquad; 2],
+    formants: [[Biquad; 3]; 2],
+    whisper_bp: [Biquad; 2],
+    whisper_hs: [Biquad; 2],
+    lfo_trem: Lfo,
+}
+
+// 8-voice prime-spaced chorus + 8 coprime modulation LFOs.
+struct Chorus {
+    dl: [DelayLine<MAX_DL>; 2],
+    lfo: [Lfo; 8],
+}
+
+// 4-comb cathedral wash (with LP-in-feedback) + 2 Schroeder allpass
+// diffusers + 4 comb-modulation LFOs.
+struct Combs {
+    dl: [[DelayLine<MAX_DL>; 4]; 2],
+    fb_buf: [[f64; 4]; 2],
+    lp: [[Biquad; 4]; 2],
+    ap: [[DelayLine<MAX_DL>; 2]; 2],
+    aps: [[f64; 2]; 2],
+    lfo: [Lfo; 4],
+}
+
+// Reversed-attack envelope shaper on delayed dry.
+struct Reverb {
+    dl: [DelayLine<MAX_DL>; 2],
+    env: [f64; 2],
+}
+
+persist_buf!(VOICE: Voice = Voice {
+    lp: [Biquad::new(); 2],
+    formants: [[Biquad::new(); 3]; 2],
+    whisper_bp: [Biquad::new(); 2],
+    whisper_hs: [Biquad::new(); 2],
+    lfo_trem: Lfo::new(),
+});
+persist_buf!(CHORUS: Chorus = Chorus {
+    dl: [DelayLine::new(); 2],
+    lfo: [Lfo::new(); 8],
+});
+persist_buf!(COMBS: Combs = Combs {
+    dl: [[DelayLine::new(); 4]; 2],
+    fb_buf: [[0.0; 4]; 2],
+    lp: [[Biquad::new(); 4]; 2],
+    ap: [[DelayLine::new(); 2]; 2],
+    aps: [[0.0; 2]; 2],
+    lfo: [Lfo::new(); 4],
+});
+persist_buf!(REVERB: Reverb = Reverb {
+    dl: [DelayLine::new(); 2],
+    env: [0.0; 2],
+});
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
@@ -107,171 +148,149 @@ process! { ctx =>
 
     let trem_depth: f64 = 0.08;
 
-    LP.with_mut(|lp| {
-        FORMANTS.with_mut(|formants| {
-            CHORUS.with_mut(|chorus| {
-                REV_DL.with_mut(|rev_dl| {
-                    REV_ENV.with_mut(|rev_env| {
-                        WHISPER_BP.with_mut(|whisper_bp| {
-                            WHISPER_HS.with_mut(|whisper_hs| {
-                                COMBS.with_mut(|combs| {
-                                    COMB_FB_BUF.with_mut(|comb_fb_buf| {
-                                        COMB_LP.with_mut(|comb_lp| {
-                                            AP.with_mut(|ap| {
-                                                APS.with_mut(|aps| {
-                                                    LFO_CHORUS.with_mut(|lfo_chorus| {
-                                                        LFO_COMBS.with_mut(|lfo_combs| {
-                                                            LFO_TREM.with_mut(|lfo_trem| {
-                                                                // LFO init
-                                                                for k in 0..8 {
-                                                                    lfo_chorus[k].init(sr, CH_LFO_HZ[k]);
-                                                                }
-                                                                for k in 0..4 {
-                                                                    lfo_combs[k].init(sr, COMB_LFO_HZ[k]);
-                                                                }
-                                                                lfo_trem.init(sr, TREM_HZ);
-                                                                lfo_trem.set_waveform(Waveform::Triangle);
+    VOICE.with_mut(|voice| {
+        CHORUS.with_mut(|chorus| {
+            COMBS.with_mut(|combs| {
+                REVERB.with_mut(|reverb| {
+                    // LFO init
+                    for k in 0..8 {
+                        chorus.lfo[k].init(sr, CH_LFO_HZ[k]);
+                    }
+                    for k in 0..4 {
+                        combs.lfo[k].init(sr, COMB_LFO_HZ[k]);
+                    }
+                    voice.lfo_trem.init(sr, TREM_HZ);
+                    voice.lfo_trem.set_waveform(Waveform::Triangle);
 
-                                                                for ch in 0..nch {
-                                                                    lp[ch].set_coeffs(lpc);
-                                                                    for k in 0..3 {
-                                                                        formants[ch][k].set_coeffs(formant_c[k]);
-                                                                    }
-                                                                    whisper_bp[ch].set_coeffs(whisper_bpc);
-                                                                    whisper_hs[ch].set_coeffs(whisper_hsc);
-                                                                    for k in 0..4 {
-                                                                        comb_lp[ch][k].set_coeffs(comb_lpc);
-                                                                    }
-                                                                }
+                    for ch in 0..nch {
+                        voice.lp[ch].set_coeffs(lpc);
+                        for k in 0..3 {
+                            voice.formants[ch][k].set_coeffs(formant_c[k]);
+                        }
+                        voice.whisper_bp[ch].set_coeffs(whisper_bpc);
+                        voice.whisper_hs[ch].set_coeffs(whisper_hsc);
+                        for k in 0..4 {
+                            combs.lp[ch][k].set_coeffs(comb_lpc);
+                        }
+                    }
 
-                                                                let mut wet: [f64; 2] = [0.0; 2];
+                    let mut wet: [f64; 2] = [0.0; 2];
 
-                                                                for f in 0..ctx.frames() {
-                                                                    let chl: [f64; 8] = [
-                                                                        lfo_chorus[0].tick(),
-                                                                        lfo_chorus[1].tick(),
-                                                                        lfo_chorus[2].tick(),
-                                                                        lfo_chorus[3].tick(),
-                                                                        lfo_chorus[4].tick(),
-                                                                        lfo_chorus[5].tick(),
-                                                                        lfo_chorus[6].tick(),
-                                                                        lfo_chorus[7].tick(),
-                                                                    ];
-                                                                    let cbl: [f64; 4] = [
-                                                                        lfo_combs[0].tick(),
-                                                                        lfo_combs[1].tick(),
-                                                                        lfo_combs[2].tick(),
-                                                                        lfo_combs[3].tick(),
-                                                                    ];
-                                                                    let trem = lfo_trem.tick();
-                                                                    let trem_gain = 1.0 - trem_depth * (1.0 - (trem + 1.0) * 0.5);
+                    for f in 0..ctx.frames() {
+                        let chl: [f64; 8] = [
+                            chorus.lfo[0].tick(),
+                            chorus.lfo[1].tick(),
+                            chorus.lfo[2].tick(),
+                            chorus.lfo[3].tick(),
+                            chorus.lfo[4].tick(),
+                            chorus.lfo[5].tick(),
+                            chorus.lfo[6].tick(),
+                            chorus.lfo[7].tick(),
+                        ];
+                        let cbl: [f64; 4] = [
+                            combs.lfo[0].tick(),
+                            combs.lfo[1].tick(),
+                            combs.lfo[2].tick(),
+                            combs.lfo[3].tick(),
+                        ];
+                        let trem = voice.lfo_trem.tick();
+                        let trem_gain = 1.0 - trem_depth * (1.0 - (trem + 1.0) * 0.5);
 
-                                                                    for ch in 0..nch {
-                                                                        let dry = ctx.input(ch, f) as f64;
+                        for ch in 0..nch {
+                            let dry = ctx.input(ch, f) as f64;
 
-                                                                        // Stage A: lowpass formant softening
-                                                                        let mut x = lp[ch].process_sample(dry);
+                            // Stage A: lowpass formant softening
+                            let mut x = voice.lp[ch].process_sample(dry);
 
-                                                                        // Stage B: vowel formant peaks
-                                                                        x = formants[ch][0].process_sample(x);
-                                                                        x = formants[ch][1].process_sample(x);
-                                                                        x = formants[ch][2].process_sample(x);
+                            // Stage B: vowel formant peaks
+                            x = voice.formants[ch][0].process_sample(x);
+                            x = voice.formants[ch][1].process_sample(x);
+                            x = voice.formants[ch][2].process_sample(x);
 
-                                                                        // Stage C: 8-voice chorus
-                                                                        chorus[ch].write(x as f32);
-                                                                        let d0 = (ch_d[0] + chl[0] * voice_depth).max(1.0);
-                                                                        let d1 = (ch_d[1] + chl[1] * voice_depth).max(1.0);
-                                                                        let d2 = (ch_d[2] + chl[2] * voice_depth).max(1.0);
-                                                                        let d3 = (ch_d[3] + chl[3] * voice_depth).max(1.0);
-                                                                        let d4 = (ch_d[4] + chl[4] * voice_depth).max(1.0);
-                                                                        let d5 = (ch_d[5] + chl[5] * voice_depth).max(1.0);
-                                                                        let d6 = (ch_d[6] + chl[6] * voice_depth).max(1.0);
-                                                                        let d7 = (ch_d[7] + chl[7] * voice_depth).max(1.0);
-                                                                        let csum = (chorus[ch].read(d0) as f64
-                                                                            + chorus[ch].read(d1) as f64
-                                                                            + chorus[ch].read(d2) as f64
-                                                                            + chorus[ch].read(d3) as f64
-                                                                            + chorus[ch].read(d4) as f64
-                                                                            + chorus[ch].read(d5) as f64
-                                                                            + chorus[ch].read(d6) as f64
-                                                                            + chorus[ch].read(d7) as f64)
-                                                                            * 0.125;
+                            // Stage C: 8-voice chorus
+                            chorus.dl[ch].write(x as f32);
+                            let d0 = (ch_d[0] + chl[0] * voice_depth).max(1.0);
+                            let d1 = (ch_d[1] + chl[1] * voice_depth).max(1.0);
+                            let d2 = (ch_d[2] + chl[2] * voice_depth).max(1.0);
+                            let d3 = (ch_d[3] + chl[3] * voice_depth).max(1.0);
+                            let d4 = (ch_d[4] + chl[4] * voice_depth).max(1.0);
+                            let d5 = (ch_d[5] + chl[5] * voice_depth).max(1.0);
+                            let d6 = (ch_d[6] + chl[6] * voice_depth).max(1.0);
+                            let d7 = (ch_d[7] + chl[7] * voice_depth).max(1.0);
+                            let csum = (chorus.dl[ch].read(d0) as f64
+                                + chorus.dl[ch].read(d1) as f64
+                                + chorus.dl[ch].read(d2) as f64
+                                + chorus.dl[ch].read(d3) as f64
+                                + chorus.dl[ch].read(d4) as f64
+                                + chorus.dl[ch].read(d5) as f64
+                                + chorus.dl[ch].read(d6) as f64
+                                + chorus.dl[ch].read(d7) as f64)
+                                * 0.125;
 
-                                                                        // Stage D: reversed-attack envelope shaper on delayed dry
-                                                                        rev_dl[ch].write(dry as f32);
-                                                                        let rev_tap = rev_dl[ch].read(rev_d) as f64;
-                                                                        let target = rev_tap.abs();
-                                                                        rev_env[ch] = rev_alpha * rev_env[ch] + one_minus_rev * target;
-                                                                        let chorus_voice = csum * (0.4 + 1.6 * rev_env[ch]);
+                            // Stage D: reversed-attack envelope shaper on delayed dry
+                            reverb.dl[ch].write(dry as f32);
+                            let rev_tap = reverb.dl[ch].read(rev_d) as f64;
+                            let target = rev_tap.abs();
+                            reverb.env[ch] = rev_alpha * reverb.env[ch] + one_minus_rev * target;
+                            let chorus_voice = csum * (0.4 + 1.6 * reverb.env[ch]);
 
-                                                                        // Stage E: whisper layer (parallel)
-                                                                        let mut wb = whisper_bp[ch].process_sample(x);
-                                                                        wb = (wb * 1.5).tanh();
-                                                                        wb = whisper_hs[ch].process_sample(wb);
-                                                                        let whisper_voice = wb * whisper;
+                            // Stage E: whisper layer (parallel)
+                            let mut wb = voice.whisper_bp[ch].process_sample(x);
+                            wb = (wb * 1.5).tanh();
+                            wb = voice.whisper_hs[ch].process_sample(wb);
+                            let whisper_voice = wb * whisper;
 
-                                                                        // Stage F: cathedral wash — 4 modulated comb filters
-                                                                        let wash_in = chorus_voice;
-                                                                        let cw0 = (comb_d[0] + cbl[0] * comb_depth).max(1.0);
-                                                                        let cw1 = (comb_d[1] + cbl[1] * comb_depth).max(1.0);
-                                                                        let cw2 = (comb_d[2] + cbl[2] * comb_depth).max(1.0);
-                                                                        let cw3 = (comb_d[3] + cbl[3] * comb_depth).max(1.0);
-                                                                        let f0 = comb_lp[ch][0].process_sample(comb_fb_buf[ch][0]);
-                                                                        let f1 = comb_lp[ch][1].process_sample(comb_fb_buf[ch][1]);
-                                                                        let f2 = comb_lp[ch][2].process_sample(comb_fb_buf[ch][2]);
-                                                                        let f3 = comb_lp[ch][3].process_sample(comb_fb_buf[ch][3]);
-                                                                        combs[ch][0].write((wash_in + COMB_FB * f0) as f32);
-                                                                        combs[ch][1].write((wash_in + COMB_FB * f1) as f32);
-                                                                        combs[ch][2].write((wash_in + COMB_FB * f2) as f32);
-                                                                        combs[ch][3].write((wash_in + COMB_FB * f3) as f32);
-                                                                        comb_fb_buf[ch][0] = combs[ch][0].read(cw0) as f64;
-                                                                        comb_fb_buf[ch][1] = combs[ch][1].read(cw1) as f64;
-                                                                        comb_fb_buf[ch][2] = combs[ch][2].read(cw2) as f64;
-                                                                        comb_fb_buf[ch][3] = combs[ch][3].read(cw3) as f64;
-                                                                        let cathedral = (comb_fb_buf[ch][0]
-                                                                            + comb_fb_buf[ch][1]
-                                                                            + comb_fb_buf[ch][2]
-                                                                            + comb_fb_buf[ch][3])
-                                                                            * 0.25;
+                            // Stage F: cathedral wash — 4 modulated comb filters
+                            let wash_in = chorus_voice;
+                            let cw0 = (comb_d[0] + cbl[0] * comb_depth).max(1.0);
+                            let cw1 = (comb_d[1] + cbl[1] * comb_depth).max(1.0);
+                            let cw2 = (comb_d[2] + cbl[2] * comb_depth).max(1.0);
+                            let cw3 = (comb_d[3] + cbl[3] * comb_depth).max(1.0);
+                            let f0 = combs.lp[ch][0].process_sample(combs.fb_buf[ch][0]);
+                            let f1 = combs.lp[ch][1].process_sample(combs.fb_buf[ch][1]);
+                            let f2 = combs.lp[ch][2].process_sample(combs.fb_buf[ch][2]);
+                            let f3 = combs.lp[ch][3].process_sample(combs.fb_buf[ch][3]);
+                            combs.dl[ch][0].write((wash_in + COMB_FB * f0) as f32);
+                            combs.dl[ch][1].write((wash_in + COMB_FB * f1) as f32);
+                            combs.dl[ch][2].write((wash_in + COMB_FB * f2) as f32);
+                            combs.dl[ch][3].write((wash_in + COMB_FB * f3) as f32);
+                            combs.fb_buf[ch][0] = combs.dl[ch][0].read(cw0) as f64;
+                            combs.fb_buf[ch][1] = combs.dl[ch][1].read(cw1) as f64;
+                            combs.fb_buf[ch][2] = combs.dl[ch][2].read(cw2) as f64;
+                            combs.fb_buf[ch][3] = combs.dl[ch][3].read(cw3) as f64;
+                            let cathedral = (combs.fb_buf[ch][0]
+                                + combs.fb_buf[ch][1]
+                                + combs.fb_buf[ch][2]
+                                + combs.fb_buf[ch][3])
+                                * 0.25;
 
-                                                                        // Stage G: 2 cascaded Schroeder allpass diffusers
-                                                                        let mut sig = chorus_voice + whisper_voice + cathedral * wash;
-                                                                        for k in 0..2 {
-                                                                            let vd = aps[ch][k];
-                                                                            let vn = sig + AP_G * vd;
-                                                                            ap[ch][k].write(vn as f32);
-                                                                            aps[ch][k] = ap[ch][k].read(ap_d[k]) as f64;
-                                                                            sig = vd - AP_G * vn;
-                                                                        }
+                            // Stage G: 2 cascaded Schroeder allpass diffusers
+                            let mut sig = chorus_voice + whisper_voice + cathedral * wash;
+                            for k in 0..2 {
+                                let vd = combs.aps[ch][k];
+                                let vn = sig + AP_G * vd;
+                                combs.ap[ch][k].write(vn as f32);
+                                combs.aps[ch][k] = combs.ap[ch][k].read(ap_d[k]) as f64;
+                                sig = vd - AP_G * vn;
+                            }
 
-                                                                        wet[ch] = sig;
-                                                                    }
+                            wet[ch] = sig;
+                        }
 
-                                                                    // Stage H: mid/side widening
-                                                                    if nch >= 2 {
-                                                                        let mid = (wet[0] + wet[1]) * 0.5;
-                                                                        let side = (wet[0] - wet[1]) * 0.5 * 1.7;
-                                                                        wet[0] = mid + side;
-                                                                        wet[1] = mid - side;
-                                                                    }
+                        // Stage H: mid/side widening
+                        if nch >= 2 {
+                            let mid = (wet[0] + wet[1]) * 0.5;
+                            let side = (wet[0] - wet[1]) * 0.5 * 1.7;
+                            wet[0] = mid + side;
+                            wet[1] = mid - side;
+                        }
 
-                                                                    // Stage I: breathing tremolo + final mix
-                                                                    for ch in 0..nch {
-                                                                        let dry = ctx.input(ch, f) as f64;
-                                                                        ctx.set_output(ch, f, (dry * (1.0 - mx) + wet[ch] * trem_gain * mx) as f32);
-                                                                    }
-                                                                }
-                                                            });
-                                                        });
-                                                    });
-                                                });
-                                            });
-                                        });
-                                    });
-                                });
-                            });
-                        });
-                    });
+                        // Stage I: breathing tremolo + final mix
+                        for ch in 0..nch {
+                            let dry = ctx.input(ch, f) as f64;
+                            ctx.set_output(ch, f, (dry * (1.0 - mx) + wet[ch] * trem_gain * mx) as f32);
+                        }
+                    }
                 });
             });
         });

@@ -26,20 +26,73 @@ const PRINT_MS: f64 = 150.0;
 const ECHO_MS: f64 = 280.0;
 const COMB_MS: f64 = 0.7;
 
-persist_buf!(WF: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(PRE_HS: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(DE_HS: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(LO_SH: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(HI_SH: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(PRINT_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(PRINT_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(ECHO_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(ECHO_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(ECHO_FB: [f64; 2] = [0.0; 2]);
-persist_buf!(COMB_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(COMB_FB: [f64; 2] = [0.0; 2]);
-persist_buf!(LFO_WOW: Lfo = Lfo::new());
-persist_buf!(LFO_FLUTTER: Lfo = Lfo::new());
+// Tape transport: wow + flutter modulated delay line and the two LFOs that
+// drive it.
+struct Transport {
+    dl: [DelayLine<MAX_DL>; 2],
+    lfo_wow: Lfo,
+    lfo_flutter: Lfo,
+}
+
+// Pre- and de-emphasis highshelves bracketing the tanh saturation.
+struct Emphasis {
+    pre: [Biquad; 2],
+    de: [Biquad; 2],
+}
+
+// Tone-shaping shelves: warmth lowshelf + HF rolloff highshelf. Named
+// `Shelves` (not `Tone`) so the static doesn't clash with the `TONE`
+// parameter index const.
+struct Shelves {
+    lo: [Biquad; 2],
+    hi: [Biquad; 2],
+}
+
+// Print-through pre-echo: lowpassed delayed dry layer.
+struct Print {
+    dl: [DelayLine<MAX_DL>; 2],
+    lp: [Biquad; 2],
+}
+
+// Tape echo with LP in the feedback loop.
+struct Echo {
+    dl: [DelayLine<MAX_DL>; 2],
+    lp: [Biquad; 2],
+    fb: [f64; 2],
+}
+
+// Head-wear feedback comb.
+struct Comb {
+    dl: [DelayLine<MAX_DL>; 2],
+    fb: [f64; 2],
+}
+
+persist_buf!(TRANSPORT: Transport = Transport {
+    dl: [DelayLine::new(); 2],
+    lfo_wow: Lfo::new(),
+    lfo_flutter: Lfo::new(),
+});
+persist_buf!(EMPHASIS: Emphasis = Emphasis {
+    pre: [Biquad::new(); 2],
+    de: [Biquad::new(); 2],
+});
+persist_buf!(SHELVES: Shelves = Shelves {
+    lo: [Biquad::new(); 2],
+    hi: [Biquad::new(); 2],
+});
+persist_buf!(PRINT: Print = Print {
+    dl: [DelayLine::new(); 2],
+    lp: [Biquad::new(); 2],
+});
+persist_buf!(ECHO: Echo = Echo {
+    dl: [DelayLine::new(); 2],
+    lp: [Biquad::new(); 2],
+    fb: [0.0; 2],
+});
+persist_buf!(COMB: Comb = Comb {
+    dl: [DelayLine::new(); 2],
+    fb: [0.0; 2],
+});
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
@@ -73,89 +126,73 @@ process! { ctx =>
     let echo_fb_amt: f64 = 0.4;
     let comb_fb_amt: f64 = 0.35;
 
-    WF.with_mut(|wf| {
-        PRE_HS.with_mut(|pre_hs| {
-            DE_HS.with_mut(|de_hs| {
-                LO_SH.with_mut(|lo_sh| {
-                    HI_SH.with_mut(|hi_sh| {
-                        PRINT_DL.with_mut(|print_dl| {
-                            PRINT_LP.with_mut(|print_lp| {
-                                ECHO_DL.with_mut(|echo_dl| {
-                                    ECHO_LP.with_mut(|echo_lp| {
-                                        ECHO_FB.with_mut(|echo_fb| {
-                                            COMB_DL.with_mut(|comb_dl| {
-                                                COMB_FB.with_mut(|comb_fb| {
-                                                    LFO_WOW.with_mut(|lfo_wow| {
-                                                        LFO_FLUTTER.with_mut(|lfo_flutter| {
-                                                            lfo_wow.init(sr, 0.5);
-                                                            lfo_flutter.init(sr, 7.0);
+    TRANSPORT.with_mut(|transport| {
+        EMPHASIS.with_mut(|emphasis| {
+            SHELVES.with_mut(|shelves| {
+                PRINT.with_mut(|print| {
+                    ECHO.with_mut(|echo| {
+                        COMB.with_mut(|comb| {
+                            transport.lfo_wow.init(sr, 0.5);
+                            transport.lfo_flutter.init(sr, 7.0);
 
-                                                            for ch in 0..nch {
-                                                                pre_hs[ch].set_coeffs(pre_hsc);
-                                                                de_hs[ch].set_coeffs(de_hsc);
-                                                                lo_sh[ch].set_coeffs(lo_shc);
-                                                                hi_sh[ch].set_coeffs(hi_shc);
-                                                                print_lp[ch].set_coeffs(print_lpc);
-                                                                echo_lp[ch].set_coeffs(echo_lpc);
-                                                            }
+                            for ch in 0..nch {
+                                emphasis.pre[ch].set_coeffs(pre_hsc);
+                                emphasis.de[ch].set_coeffs(de_hsc);
+                                shelves.lo[ch].set_coeffs(lo_shc);
+                                shelves.hi[ch].set_coeffs(hi_shc);
+                                print.lp[ch].set_coeffs(print_lpc);
+                                echo.lp[ch].set_coeffs(echo_lpc);
+                            }
 
-                                                            for f in 0..ctx.frames() {
-                                                                let wlfo = lfo_wow.tick();
-                                                                let flfo = lfo_flutter.tick();
-                                                                let d = (base_d + wlfo * wow_depth + flfo * flutter_depth).max(1.0);
+                            for f in 0..ctx.frames() {
+                                let wlfo = transport.lfo_wow.tick();
+                                let flfo = transport.lfo_flutter.tick();
+                                let d = (base_d + wlfo * wow_depth + flfo * flutter_depth).max(1.0);
 
-                                                                for ch in 0..nch {
-                                                                    let dry = ctx.input(ch, f) as f64;
+                                for ch in 0..nch {
+                                    let dry = ctx.input(ch, f) as f64;
 
-                                                                    // Stage A: wow + flutter modulated delay
-                                                                    wf[ch].write(dry as f32);
-                                                                    let mut x = wf[ch].read(d) as f64;
+                                    // Stage A: wow + flutter modulated delay
+                                    transport.dl[ch].write(dry as f32);
+                                    let mut x = transport.dl[ch].read(d) as f64;
 
-                                                                    // Stage B: pre-emphasis highshelf
-                                                                    x = pre_hs[ch].process_sample(x);
+                                    // Stage B: pre-emphasis highshelf
+                                    x = emphasis.pre[ch].process_sample(x);
 
-                                                                    // Stage C: asymmetric tanh saturation
-                                                                    if x > 0.0 {
-                                                                        x = (x * drive_pos).tanh();
-                                                                    } else {
-                                                                        x = (x * drive_neg).tanh();
-                                                                    }
+                                    // Stage C: asymmetric tanh saturation
+                                    if x > 0.0 {
+                                        x = (x * drive_pos).tanh();
+                                    } else {
+                                        x = (x * drive_neg).tanh();
+                                    }
 
-                                                                    // Stage D: de-emphasis highshelf
-                                                                    x = de_hs[ch].process_sample(x);
+                                    // Stage D: de-emphasis highshelf
+                                    x = emphasis.de[ch].process_sample(x);
 
-                                                                    // Stage E: tone shaping (warmth + HF rolloff)
-                                                                    x = lo_sh[ch].process_sample(x);
-                                                                    x = hi_sh[ch].process_sample(x);
+                                    // Stage E: tone shaping (warmth + HF rolloff)
+                                    x = shelves.lo[ch].process_sample(x);
+                                    x = shelves.hi[ch].process_sample(x);
 
-                                                                    // Stage F: print-through pre-echo (lowpassed delayed dry)
-                                                                    print_dl[ch].write(dry as f32);
-                                                                    let mut print_tap = print_dl[ch].read(print_d) as f64;
-                                                                    print_tap = print_lp[ch].process_sample(print_tap);
-                                                                    x = x + print_tap * print_gain;
+                                    // Stage F: print-through pre-echo (lowpassed delayed dry)
+                                    print.dl[ch].write(dry as f32);
+                                    let mut print_tap = print.dl[ch].read(print_d) as f64;
+                                    print_tap = print.lp[ch].process_sample(print_tap);
+                                    x = x + print_tap * print_gain;
 
-                                                                    // Stage G: tape echo (LP in feedback)
-                                                                    let eflt = echo_lp[ch].process_sample(echo_fb[ch]);
-                                                                    echo_dl[ch].write((x + echo_fb_amt * eflt) as f32);
-                                                                    echo_fb[ch] = echo_dl[ch].read(echo_d) as f64;
-                                                                    x = x + 0.5 * echo_fb[ch];
+                                    // Stage G: tape echo (LP in feedback)
+                                    let eflt = echo.lp[ch].process_sample(echo.fb[ch]);
+                                    echo.dl[ch].write((x + echo_fb_amt * eflt) as f32);
+                                    echo.fb[ch] = echo.dl[ch].read(echo_d) as f64;
+                                    x = x + 0.5 * echo.fb[ch];
 
-                                                                    // Stage H: head-wear feedback comb
-                                                                    comb_dl[ch].write((x + comb_fb_amt * comb_fb[ch]) as f32);
-                                                                    comb_fb[ch] = comb_dl[ch].read(comb_d) as f64;
-                                                                    x = x + 0.3 * comb_fb[ch];
+                                    // Stage H: head-wear feedback comb
+                                    comb.dl[ch].write((x + comb_fb_amt * comb.fb[ch]) as f32);
+                                    comb.fb[ch] = comb.dl[ch].read(comb_d) as f64;
+                                    x = x + 0.3 * comb.fb[ch];
 
-                                                                    ctx.set_output(ch, f, (dry * (1.0 - mx) + x * mx) as f32);
-                                                                }
-                                                            }
-                                                        });
-                                                    });
-                                                });
-                                            });
-                                        });
-                                    });
-                                });
-                            });
+                                    ctx.set_output(ch, f, (dry * (1.0 - mx) + x * mx) as f32);
+                                }
+                            }
                         });
                     });
                 });
