@@ -1430,6 +1430,73 @@ enum DSPDocumentation {
     scale, clamp, and dB conversion — so per-bin subtraction
     (`fftOut[i] - fftIn[i]`) yields a meaningful dB delta.
 
+    ### Smoothing FFT bins to display rate
+
+    The gating idiom above (`if (!frame.fftOut) return;`) is necessary
+    but not sufficient on its own: it draws *only* on FFT-column ticks,
+    so bars step at ~23 Hz instead of flowing at display rate. Hold the
+    last column in a per-bin buffer, decay it toward a visible floor,
+    and coalesce paints through `requestAnimationFrame`:
+
+    ```js
+    const SPEC_FLOOR = -90;   // dB shown at the bottom of the canvas
+    const SPEC_DECAY = 0.85;  // per-FFT-column decay coefficient
+
+    let spec = null;          // Float32Array, smoothed per-bin dB
+
+    function ingestSpectrum(prev, fresh) {
+        const n = fresh.length;
+        // Pre-fill with SPEC_FLOOR so the first decay step doesn't pull
+        // from a 0 dB seed (which would otherwise flash near the canvas
+        // top for one frame on UI mount).
+        if (!prev || prev.length !== n) prev = new Float32Array(n).fill(SPEC_FLOOR);
+        // Peak-hold, then decay toward the floor:
+        //   decayed = prev * SPEC_DECAY + SPEC_FLOOR * (1 - SPEC_DECAY)
+        //   held    = max(decayed, fresh)
+        for (let i = 0; i < n; i++) {
+            const decayed = prev[i] * SPEC_DECAY + SPEC_FLOOR * (1 - SPEC_DECAY);
+            prev[i] = fresh[i] > decayed ? fresh[i] : decayed;
+        }
+        return prev;
+    }
+
+    let raf = 0;
+    function scheduleRedraw() {
+        if (raf) return;
+        raf = requestAnimationFrame(() => { raf = 0; drawSpectrum(spec); });
+    }
+
+    ConjureDSP.audio.onFrame(frame => {
+        if (!frame.fftOut) return;          // gate: only update on FFT columns
+        spec = ingestSpectrum(spec, frame.fftOut);
+        scheduleRedraw();                   // one paint per display tick
+    }, { fft: true });
+    ```
+
+    Why each piece matters:
+
+    - **Peak-hold-then-decay-toward-floor**, not raw bin updates: a loud
+      transient snaps to the new value immediately and then drifts down
+      toward `SPEC_FLOOR` over many display ticks — easier to read than
+      ~23 Hz steps. The recurrence decays toward the floor, not toward
+      the fresh value; the difference matters if you adapt it.
+    - **`SPEC_FLOOR` pre-fill** of the buffer: without it the buffer
+      starts at 0 dB (`new Float32Array(n)`), and the first decay step
+      lands at `SPEC_FLOOR * (1 - 0.85) ≈ -13.5 dB` — visible as a brief
+      flash near the canvas top on UI mount.
+    - **`requestAnimationFrame` coalescer**: the buffer is updated every
+      FFT-column tick (~23 Hz at 48 kHz / N=2048, see the Hop bullet
+      above and the cadence comment at AudioCaptureManager.swift:554),
+      but the *paint* runs at display rate so motion stays smooth.
+    - **No throttle in the canonical shape**: call `scheduleRedraw()`
+      directly. Presets that overlay an FFT on a draggable curve (where
+      parameter-drag triggers its own redraws) may add a `performance.now()`
+      throttle to avoid competing — see
+      `preset_eq3.cdp/ui/index.html:139` for that variant. Pure
+      analyzers should leave it unthrottled.
+    - **Use `frame.sampleRate`** for any bin → Hz mapping (already shown
+      in the bin-conversion example above): never hardcode 48000.
+
     ## DSP→UI telemetry channel
 
     For meters / visualizers that need to show **internal DSP state**
