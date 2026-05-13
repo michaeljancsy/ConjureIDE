@@ -462,6 +462,33 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         // insensitive), and 0/1 integers; anything else falls back to
         // the documented `false` default.
         let scaffoldUI = Self.coerceBool(input["scaffold_ui"]) ?? false
+
+        // Optional ui_* overrides for the scaffold path. The agent
+        // should pass these when the prompt specifies dimensions (and
+        // it almost always does). When omitted, fall back to
+        // `defaultScaffoldUI` per-field — that's why the override
+        // struct carries Optionals, not concrete values. Only the
+        // fields the caller explicitly named are overridden; the rest
+        // come from the scaffold default. This lives in the MCP layer
+        // (not PresetManager) so non-MCP save paths — SaveAsPopover,
+        // factory presets — keep their existing behavior.
+        let uiOverrides: PresetManifest.UI? = {
+            guard scaffoldUI else { return nil }
+            let width = Self.coerceInt(input["ui_width"])
+            let height = Self.coerceInt(input["ui_height"])
+            let audioFrames = Self.coerceBool(input["ui_audio_frames"])
+            if width == nil, height == nil, audioFrames == nil {
+                return nil
+            }
+            return PresetManifest.UI(
+                entryHTML: nil,
+                width: width,
+                height: height,
+                fps: nil,
+                audioFrames: audioFrames
+            )
+        }()
+
         let pm = presetManager
 
         do {
@@ -469,6 +496,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 name: name, source: source,
                 language: language,
                 scaffoldUI: scaffoldUI,
+                scaffoldUIOverrides: uiOverrides,
                 // Agents calling save_preset don't know about prior
                 // user content — a name collision is incidental, not an
                 // intentional replace. Auto-suffix on cross-language
@@ -1634,6 +1662,29 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             if d == 0.0 { return false }
             if d == 1.0 { return true }
             return nil
+        default:
+            return nil
+        }
+    }
+
+    /// Same lenient-coercion shape as `coerceBool` but for integer args.
+    /// Agents commonly send numeric args as JSON strings ("360") or as
+    /// Double-valued JSON numbers; both should land as Int. Returns nil
+    /// if the value is missing or can't be unambiguously interpreted.
+    static func coerceInt(_ value: Any?) -> Int? {
+        switch value {
+        case let i as Int:
+            return i
+        case let d as Double:
+            // Reject obviously-fractional doubles — the schema declares
+            // integer, so 280.5 is more likely a bug than a rounding
+            // request.
+            if d.rounded() == d, d >= Double(Int.min), d <= Double(Int.max) {
+                return Int(d)
+            }
+            return nil
+        case let s as String:
+            return Int(s.trimmingCharacters(in: .whitespacesAndNewlines))
         default:
             return nil
         }

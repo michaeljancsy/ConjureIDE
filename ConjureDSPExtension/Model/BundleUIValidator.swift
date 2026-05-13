@@ -101,6 +101,7 @@ enum BundleUIValidator {
             issues.append(contentsOf: checkUnboundDeclaredParams(html: html, bundle: bundle))
             issues.append(contentsOf: checkTelemetryReferences(html: html, bundle: bundle))
             issues.append(contentsOf: checkStateReferences(html: html, bundle: bundle))
+            issues.append(contentsOf: checkAudioFramesGate(html: html, bundle: bundle))
             issues.append(contentsOf: checkNoExternalNetwork(html: html))
             issues.append(contentsOf: checkNoSystemColorInCanvas(html: html))
             issues.append(contentsOf: checkHasInteractiveSurface(html: html, bundle: bundle))
@@ -1573,6 +1574,62 @@ enum BundleUIValidator {
             )
         }
         return issues
+    }
+
+    /// `manifest.ui.audioFrames` gates the bridge from subscribing to the
+    /// audio frame stream. When false (the default), `audio.onFrame`
+    /// callbacks never fire and the `<cdp-meter>` / `<cdp-scope>` /
+    /// `<cdp-bargraph>` components silently sit at zero — no error, no
+    /// console warning, just dead visualizers. Catch the mismatch at
+    /// author time so the bug doesn't ride to a release.
+    ///
+    /// Severity is `fail`: a meter that renders forever-flat is
+    /// indistinguishable from "no signal" and is exactly the class of
+    /// bug the agent reports as "done" while the user sees broken UI.
+    private static func checkAudioFramesGate(html: String, bundle: PresetBundle) -> [Issue] {
+        let scanned = stripHTMLComments(html)
+
+        // Components that subscribe to audio frames internally via
+        // cdp-ui.js (`audio.onFrame` from inside the component
+        // implementation). Catching the element tags is sufficient
+        // because the user can't disable the subscription without
+        // re-implementing the component.
+        let componentTags = ["cdp-meter", "cdp-scope", "cdp-bargraph"]
+        let presentComponents: [String] = componentTags.filter { tag in
+            scanned.range(of: "<\(tag)\\b", options: [.regularExpression, .caseInsensitive]) != nil
+        }
+
+        // Direct subscription: user JS that calls `audio.onFrame(...)`.
+        // Match `.onFrame(` preceded by `audio` to avoid colliding with
+        // unrelated identifiers (e.g. a custom `onFrame` method on the
+        // user's own object). `ConjureDSP.audio.onFrame` and
+        // `bridge.audio.onFrame` both end in `.audio.onFrame(`.
+        let directSubscription = scanned.range(
+            of: #"\baudio\s*\.\s*onFrame\s*\("#,
+            options: [.regularExpression]
+        ) != nil
+
+        let needsAudioFrames = !presentComponents.isEmpty || directSubscription
+        guard needsAudioFrames else { return [] }
+
+        // Already opted in — nothing to flag.
+        if bundle.manifest.audioFramesEnabled { return [] }
+
+        let consumerList: String = {
+            var items = presentComponents.map { "<\($0)>" }
+            if directSubscription { items.append("audio.onFrame(...)") }
+            return items.joined(separator: ", ")
+        }()
+
+        return [
+            Issue(
+                severity: .fail,
+                check: "audio_frames_not_enabled",
+                file: "ui/index.html",
+                message: "UI uses audio-frame consumer(s) (\(consumerList)) but manifest.ui.audioFrames is not true — the bridge won't subscribe and meters/scopes will silently render flat.",
+                suggestion: "Set \"audioFrames\": true in manifest.json's ui block."
+            )
+        ]
     }
 
     private static func nearestDeclaredTelemetry(
