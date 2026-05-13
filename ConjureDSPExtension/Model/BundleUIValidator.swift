@@ -1944,11 +1944,12 @@ enum BundleUIValidator {
     /// contains a canvas draw call AND whose closing `}` is not followed
     /// by an `else` clause.
     ///
-    /// The brace walker tracks single- and double-quoted string state
-    /// (and the matching escape sequences) so a `"{}"` literal inside
-    /// the body doesn't desync the depth counter. The sibling-`else`
-    /// check scans the entire post-`}` tail for the next non-whitespace
-    /// token — survives any indentation depth.
+    /// The brace walker tracks JS string and template-literal state so
+    /// braces inside `"{}"`, `'{}'`, and `` `${ … }` `` don't desync the
+    /// depth counter. Escape sequences (`\"`, `\\`, `` \` ``) skip the
+    /// next character. The sibling-`else` check scans the entire
+    /// post-`}` tail for the next non-whitespace token — survives any
+    /// indentation depth.
     private static func invertedFftDrawBlockExists(in source: String) -> Bool {
         guard let ifRegex = try? NSRegularExpression(
             pattern: #"\bif\s*\(\s*frame\s*\.\s*fftOut\s*\)\s*\{"#,
@@ -1963,34 +1964,85 @@ enum BundleUIValidator {
         let length = ns.length
         let matches = ifRegex.matches(in: source, range: NSRange(location: 0, length: length))
 
+        // Scope stack entries the walker can be inside. Top-level code
+        // (no entry) is where the outer `depth` counter ticks. Inside
+        // any scope, `depth` is frozen — only outer block braces count.
+        //
+        //   .string(q)        — a flat 'single' or "double" quoted string
+        //   .template         — a `template literal` outside any ${…}
+        //   .templateExpr(n)  — inside ${…}; `n` is the balanced-brace
+        //                        count *within this expression*. The `}`
+        //                        that drops `n` below 0 closes the
+        //                        expression and pops back to .template.
+        enum Scope {
+            case string(unichar)
+            case template
+            case templateExpr(Int)
+        }
+
         for m in matches {
             let bodyStart = m.range.location + m.range.length
-            // Brace-walk to the matching close. We entered just past the
-            // `{`. Track quote state so braces inside string literals
-            // don't desync the depth counter, and skip a character after
-            // a backslash inside a string so `"\""` and `"\\"` parse
-            // correctly.
             var depth = 1
             var i = bodyStart
-            var quote: unichar = 0       // 0 = outside, else 0x27 / 0x22
+            var scopes: [Scope] = []
+
             while i < length && depth > 0 {
                 let c = ns.character(at: i)
-                if quote != 0 {
-                    if c == 0x5C /* \ */ {
-                        i += 2
-                        continue
+                if let scope = scopes.last {
+                    switch scope {
+                    case .string(let q):
+                        if c == 0x5C /* \ */ {
+                            i += 2
+                            continue
+                        }
+                        if c == q { scopes.removeLast() }
+                        i += 1
+                    case .template:
+                        if c == 0x5C { i += 2; continue }
+                        if c == 0x60 /* ` */ {
+                            scopes.removeLast()
+                            i += 1
+                        } else if c == 0x24 /* $ */, i + 1 < length, ns.character(at: i + 1) == 0x7B {
+                            scopes[scopes.count - 1] = .templateExpr(0)
+                            i += 2
+                        } else {
+                            i += 1
+                        }
+                    case .templateExpr(let exprDepth):
+                        if c == 0x27 /* ' */ || c == 0x22 /* " */ {
+                            scopes.append(.string(c))
+                            i += 1
+                        } else if c == 0x60 {
+                            scopes.append(.template)
+                            i += 1
+                        } else if c == 0x7B {
+                            scopes[scopes.count - 1] = .templateExpr(exprDepth + 1)
+                            i += 1
+                        } else if c == 0x7D {
+                            if exprDepth == 0 {
+                                // Closing `}` of `${…}` — back to template content.
+                                scopes[scopes.count - 1] = .template
+                            } else {
+                                scopes[scopes.count - 1] = .templateExpr(exprDepth - 1)
+                            }
+                            i += 1
+                        } else {
+                            i += 1
+                        }
                     }
-                    if c == quote { quote = 0 }
                 } else {
+                    // Top-level code.
                     if c == 0x27 /* ' */ || c == 0x22 /* " */ {
-                        quote = c
+                        scopes.append(.string(c))
+                    } else if c == 0x60 /* ` */ {
+                        scopes.append(.template)
                     } else if c == 0x7B {
                         depth += 1
                     } else if c == 0x7D {
                         depth -= 1
                     }
+                    i += 1
                 }
-                i += 1
             }
             guard depth == 0 else { continue }
             let bodyLen = (i - 1) - bodyStart

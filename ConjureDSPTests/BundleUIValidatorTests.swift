@@ -1029,6 +1029,60 @@ struct BundleUIValidatorTests {
                 "brace inside string literal must not desync the walker; issues: \(report.issues)")
     }
 
+    /// Template literals with `${…}` interpolation must not desync the
+    /// brace walker. A naive walker that toggles state on backtick
+    /// (without tracking `${…}` as a sub-expression) would treat the
+    /// `}` of `${expr}` as the outer block's close and exit early.
+    @Test func invertedFftBlockWithTemplateInterpolationStillFlags() throws {
+        let ui = #"""
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            ConjureDSP.audio.onFrame((frame) => {
+              if (frame.fftOut) {
+                const label = `bin0=${frame.fftOut[0].toFixed(1)} dB`;
+                const wrapped = `nested ${ `inner ${1+1} done` } outer`;
+                const ctx = document.getElementById('c').getContext('2d');
+                ctx.fillText(label, 10, 20);
+              }
+            }, { fft: true });
+          </script>
+        </body></html>
+        """#
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "template literal with ${…} must not desync the walker; issues: \(report.issues)")
+    }
+
+    /// Sibling `else` after a template-literal-heavy body still
+    /// suppresses — verifies the walker reaches the real `}` despite
+    /// embedded `${…}` braces.
+    @Test func invertedFftBlockWithTemplateAndElseDoesNotFlag() throws {
+        let ui = #"""
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            ConjureDSP.audio.onFrame((frame) => {
+              if (frame.fftOut) {
+                const label = `bin0=${frame.fftOut[0]}`;
+                const ctx = document.getElementById('c').getContext('2d');
+                ctx.fillText(label, 10, 20);
+              } else {
+                console.log('no fft this tick');
+              }
+            }, { fft: true });
+          </script>
+        </body></html>
+        """#
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "sibling `else` after template-literal body must still suppress; issues: \(report.issues)")
+    }
+
     /// A UI with no `audio.onFrame` at all has nothing for this check to
     /// say. Don't fire — and don't accidentally match on `// if (!frame.fftOut) return;`
     /// floating around in unrelated code.
