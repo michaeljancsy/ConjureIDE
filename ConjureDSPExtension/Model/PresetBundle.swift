@@ -246,13 +246,17 @@ extension PresetBundle {
     /// re-save path in `PresetManager.savePreset` and this fresh-bundle
     /// path emit the same dimensions; drift between them was a thing
     /// before — see Failures #1 / #4 in the 2026-05-08 /try-it sweep.
-    static func defaultManifest(language: ScriptLanguage, includeUI: Bool) -> PresetManifest {
+    static func defaultManifest(
+        language: ScriptLanguage,
+        includeUI: Bool,
+        scaffoldUIOverrides: PresetManifest.UI? = nil
+    ) -> PresetManifest {
         let entry = language == .rust ? "process.rs" : "process.py"
         return PresetManifest(
             schemaVersion: PresetManifest.currentSchemaVersion,
             entry: entry,
             language: language.rawValue,
-            ui: includeUI ? PresetManifest.defaultScaffoldUI : nil,
+            ui: includeUI ? PresetManifest.scaffoldUI(withOverrides: scaffoldUIOverrides) : nil,
             meta: nil
         )
     }

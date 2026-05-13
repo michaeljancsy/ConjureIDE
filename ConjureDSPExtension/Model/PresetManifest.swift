@@ -196,13 +196,40 @@ extension PresetManifest {
     /// so the two sites stay in sync — drift between them is what
     /// produced the "ui block missing on re-save" failure mode in the
     /// 2026-05-08 /try-it sweep.
+    ///
+    /// `audioFrames` defaults to false to match the documented opt-in
+    /// semantics (see `get_docs("ui")`): pure-control UIs are the
+    /// common case and shouldn't pay for the audio capture pipeline.
+    /// Authors who add a `<cdp-meter>` / `<cdp-scope>` / `<cdp-bargraph>`
+    /// or call `audio.onFrame` get a `BundleUIValidator` failure
+    /// (`audio_frames_not_enabled`) pointing at the manifest fix —
+    /// no more silent flat-meter footgun.
     static let defaultScaffoldUI = UI(
         entryHTML: "ui/index.html",
         width: 520,
         height: 260,
         fps: 30,
-        audioFrames: true
+        audioFrames: false
     )
+
+    /// Apply optional per-field overrides on top of `defaultScaffoldUI`.
+    /// Used by the MCP `save_preset` scaffold path so the agent can ship
+    /// the user-requested dimensions (`ui_width` / `ui_height`) and
+    /// frame-capture intent (`ui_audio_frames`) in the same call instead
+    /// of save → write_bundle_file → save again. Per-field optionality
+    /// means a caller passing just width keeps the default height/fps/
+    /// audioFrames — no concrete value sneaks in from a half-specified
+    /// override struct.
+    static func scaffoldUI(withOverrides overrides: UI?) -> UI {
+        var ui = defaultScaffoldUI
+        guard let overrides else { return ui }
+        if let v = overrides.entryHTML { ui.entryHTML = v }
+        if let v = overrides.width { ui.width = v }
+        if let v = overrides.height { ui.height = v }
+        if let v = overrides.fps { ui.fps = v }
+        if let v = overrides.audioFrames { ui.audioFrames = v }
+        return ui
+    }
 
     /// Pure rewrite applied to an existing manifest before re-saving a
     /// user bundle's entry script. Owns three invariants the
@@ -240,13 +267,16 @@ extension PresetManifest {
     ///
     /// Returns a copy. Caller decides whether the rewrite materially
     /// differs from the input and skips the disk write when not.
-    func applyingSaveRewrites(scaffoldUI: Bool) -> PresetManifest {
+    func applyingSaveRewrites(
+        scaffoldUI: Bool,
+        scaffoldUIOverrides: UI? = nil
+    ) -> PresetManifest {
         var copy = self
         copy.params = nil
         copy.paramsNote = nil
         copy.telemetry = nil
         if scaffoldUI, copy.ui == nil {
-            copy.ui = Self.defaultScaffoldUI
+            copy.ui = Self.scaffoldUI(withOverrides: scaffoldUIOverrides)
         }
         return copy
     }

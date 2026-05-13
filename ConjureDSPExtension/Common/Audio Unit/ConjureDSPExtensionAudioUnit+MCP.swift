@@ -462,6 +462,39 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         // insensitive), and 0/1 integers; anything else falls back to
         // the documented `false` default.
         let scaffoldUI = Self.coerceBool(input["scaffold_ui"]) ?? false
+
+        // Optional ui_* overrides for the scaffold path. The agent
+        // should pass these when the prompt specifies dimensions (and
+        // it almost always does). When omitted, fall back to
+        // `defaultScaffoldUI` per-field — that's why the override
+        // struct carries Optionals, not concrete values. Only the
+        // fields the caller explicitly named are overridden; the rest
+        // come from the scaffold default. This lives in the MCP layer
+        // (not PresetManager) so non-MCP save paths — SaveAsPopover,
+        // factory presets — keep their existing behavior.
+        let uiOverrides: PresetManifest.UI? = {
+            guard scaffoldUI else { return nil }
+            // Range bounds mirror the schema declarations in
+            // `MCPProtocol.tools` — keep them in sync. Out-of-range
+            // inputs drop to nil → manifest falls back to the scaffold
+            // default (520/260), rather than writing a degenerate
+            // width to disk that would break the CustomUIWebView's
+            // frame sizing downstream.
+            let width = Self.coerceInt(input["ui_width"], in: 120...1600)
+            let height = Self.coerceInt(input["ui_height"], in: 120...1600)
+            let audioFrames = Self.coerceBool(input["ui_audio_frames"])
+            if width == nil, height == nil, audioFrames == nil {
+                return nil
+            }
+            return PresetManifest.UI(
+                entryHTML: nil,
+                width: width,
+                height: height,
+                fps: nil,
+                audioFrames: audioFrames
+            )
+        }()
+
         let pm = presetManager
 
         do {
@@ -469,6 +502,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 name: name, source: source,
                 language: language,
                 scaffoldUI: scaffoldUI,
+                scaffoldUIOverrides: uiOverrides,
                 // Agents calling save_preset don't know about prior
                 // user content — a name collision is incidental, not an
                 // intentional replace. Auto-suffix on cross-language
@@ -1637,5 +1671,47 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         default:
             return nil
         }
+    }
+
+    /// Same lenient-coercion shape as `coerceBool` but for integer args.
+    /// Agents commonly send numeric args as JSON strings ("360") or as
+    /// Double-valued JSON numbers; both should land as Int. Returns nil
+    /// if the value is missing or can't be unambiguously interpreted.
+    static func coerceInt(_ value: Any?) -> Int? {
+        // Reject Bool explicitly BEFORE matching Int. Foundation bridges
+        // `NSNumber(value: true)` to both `as? Bool` (true) and
+        // `as? Int` (1), so without this guard `coerceInt(true)` would
+        // silently land as 1 — surprising for a caller expecting the
+        // schema-declared integer type to reject a boolean.
+        if value is Bool { return nil }
+
+        switch value {
+        case let i as Int:
+            return i
+        case let d as Double:
+            // Reject obviously-fractional doubles — the schema declares
+            // integer, so 280.5 is more likely a bug than a rounding
+            // request.
+            if d.rounded() == d, d >= Double(Int.min), d <= Double(Int.max) {
+                return Int(d)
+            }
+            return nil
+        case let s as String:
+            return Int(s.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            return nil
+        }
+    }
+
+    /// Range-checked variant of `coerceInt`. The MCP tool schemas declare
+    /// `minimum`/`maximum` on integer args (e.g. `ui_width` is 120-1600)
+    /// but those bounds are advisory to the agent — nothing on the
+    /// server enforces them. This variant rejects out-of-range values
+    /// the same way `coerceInt` rejects garbage strings: returns nil so
+    /// the caller falls back to its documented default rather than
+    /// silently writing a degenerate value to disk.
+    static func coerceInt(_ value: Any?, in range: ClosedRange<Int>) -> Int? {
+        guard let v = coerceInt(value) else { return nil }
+        return range.contains(v) ? v : nil
     }
 }

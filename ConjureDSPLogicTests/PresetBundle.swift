@@ -242,13 +242,17 @@ struct PresetBundle: Equatable {
 
 extension PresetBundle {
     /// Suggested default manifest for a new bundle with the given language.
-    static func defaultManifest(language: ScriptLanguage, includeUI: Bool) -> PresetManifest {
+    static func defaultManifest(
+        language: ScriptLanguage,
+        includeUI: Bool,
+        scaffoldUIOverrides: PresetManifest.UI? = nil
+    ) -> PresetManifest {
         let entry = language == .rust ? "process.rs" : "process.py"
         return PresetManifest(
             schemaVersion: PresetManifest.currentSchemaVersion,
             entry: entry,
             language: language.rawValue,
-            ui: includeUI ? PresetManifest.defaultScaffoldUI : nil,
+            ui: includeUI ? PresetManifest.scaffoldUI(withOverrides: scaffoldUIOverrides) : nil,
             meta: nil
         )
     }

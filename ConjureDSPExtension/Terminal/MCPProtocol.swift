@@ -172,6 +172,9 @@ enum MCPProtocol {
                     "source": PropertySchema(type: "string", description: "The DSP script text for the preset. Required when starting from scratchpad (no current preset) or when you're authoring new content. Optional — if omitted, save_preset uses whatever script the kernel currently has loaded."),
                     "language": PropertySchema(type: "string", description: "\"python\" or \"rust\". Optional — when omitted, auto-detected from the `source` text (def process = python, fn process / use conjuredsp = rust), or falls back to the kernel's current language."),
                     "scaffold_ui": PropertySchema(type: "boolean", description: "When true, creates a starter ui/index.html + declares the ui block in manifest.json so the preset renders with the custom-UI WebView from the start. Default: false (stock slider panel)."),
+                    "ui_width": PropertySchema(type: "integer", description: "Width in points for the scaffolded ui block. Only honored when `scaffold_ui` is true and no manifest.ui block exists yet. Defaults to 520 when omitted. Pick a size that matches the UI you intend to author — DAWs let plugins set their own size and the user resizes the host window to match.", minimum: 120, maximum: 1600),
+                    "ui_height": PropertySchema(type: "integer", description: "Height in points for the scaffolded ui block. Same semantics as `ui_width`. Defaults to 260 when omitted.", minimum: 120, maximum: 1600),
+                    "ui_audio_frames": PropertySchema(type: "boolean", description: "When true, the scaffolded ui block opts into the audio frame stream — required if the UI will use `<cdp-meter>`, `<cdp-scope>`, `<cdp-bargraph>`, or call `audio.onFrame(...)` directly. Defaults to false (pure-control UIs are the common case). Only honored when `scaffold_ui` is true and no manifest.ui block exists yet."),
                 ],
                 required: ["name"]
             )

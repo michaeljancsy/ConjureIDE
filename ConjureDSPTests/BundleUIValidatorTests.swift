@@ -388,6 +388,290 @@ struct BundleUIValidatorTests {
                 "missing manifest.telemetry → defer to runtime resolution, no static fail")
     }
 
+    // MARK: - audio_frames_not_enabled
+
+    /// A `<cdp-meter>` in the HTML implicitly subscribes to the audio
+    /// frame stream from inside cdp-ui.js. Without `audioFrames: true`
+    /// the bridge never opens that stream and the meter renders flat
+    /// forever. Catch the mismatch at author time so it doesn't ride
+    /// to release.
+    @Test func cdpMeterWithoutAudioFramesFlagged() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <cdp-meter></cdp-meter>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "audio_frames_not_enabled" })
+        #expect(report.status == .fail)
+    }
+
+    /// Same gate applies when `audioFrames` is omitted entirely — the
+    /// default is false. The validator must treat nil the same as false.
+    @Test func cdpScopeWithoutAudioFramesKeyFlagged() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <cdp-scope></cdp-scope>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "audio_frames_not_enabled" },
+                "audioFrames key omitted should be treated as false")
+    }
+
+    /// `<cdp-bargraph>` is the third audio-frame consumer component.
+    @Test func cdpBargraphWithoutAudioFramesFlagged() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <cdp-bargraph count="32"></cdp-bargraph>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "audio_frames_not_enabled" })
+    }
+
+    /// User JS calling `audio.onFrame(...)` directly is the other path
+    /// to needing the frame stream open. Same fail when audioFrames is
+    /// off.
+    @Test func directOnFrameCallWithoutAudioFramesFlagged() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>
+            ConjureDSP.ready(() => {
+              ConjureDSP.audio.onFrame((frame) => {
+                console.log(frame.rms);
+              });
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "audio_frames_not_enabled" })
+        if let issue = report.issues.first(where: { $0.check == "audio_frames_not_enabled" }) {
+            #expect(issue.message.contains("audio.onFrame"),
+                    "message should call out the direct subscription site: \(issue.message)")
+        }
+    }
+
+    /// Happy path — audioFrames is true and there's a consumer.
+    @Test func cdpMeterWithAudioFramesTruePasses() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": true}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <cdp-meter></cdp-meter>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "audio_frames_not_enabled" })
+    }
+
+    /// Pure-control UI (no meters, no onFrame) is the documented default
+    /// case for `audioFrames: false`. The check must stay silent.
+    @Test func pureControlUIWithoutAudioFramesPasses() throws {
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: baselineUI)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "audio_frames_not_enabled" },
+                "baseline (no audio consumers, audioFrames: false) must not fire the gate check")
+    }
+
+    /// Consumer-tag occurrences inside HTML comments are illustrative
+    /// (the starter scaffold lists examples for authors to copy). The
+    /// validator should ignore them, mirroring how `checkParamReferences`
+    /// strips comments before scanning.
+    @Test func commentedOutMeterDoesNotTriggerGateCheck() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <!-- to add a level meter: <cdp-meter></cdp-meter> -->
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "audio_frames_not_enabled" },
+                "commented-out example shouldn't be treated as a real consumer")
+    }
+
+    /// JS `//` line comments inside a `<script>` block don't count as
+    /// real subscriptions. A `// audio.onFrame(...) — TODO` is a note
+    /// to the author, not running code, so the gate must stay silent.
+    @Test func jsLineCommentedOnFrameDoesNotTriggerGateCheck() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>
+            ConjureDSP.ready(() => {
+              // audio.onFrame((frame) => console.log(frame.rms));
+              // TODO wire this back up after the redesign
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "audio_frames_not_enabled" },
+                "JS-comment audio.onFrame shouldn't fire the gate — it's a note, not running code")
+    }
+
+    /// JS `/* ... */` block comments inside `<script>` are stripped too.
+    @Test func jsBlockCommentedOnFrameDoesNotTriggerGateCheck() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>
+            /*
+             * Future work:
+             *   audio.onFrame((frame) => { ... });
+             */
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "audio_frames_not_enabled" },
+                "JS block-comment audio.onFrame shouldn't fire the gate")
+    }
+
+    /// The strip must not give cover to a real subscription that lives
+    /// alongside a commented-out one — at least one live `audio.onFrame(`
+    /// in real code still triggers the gate.
+    @Test func realOnFrameAlongsideCommentedOneStillFires() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>
+            // audio.onFrame((frame) => { /* old impl */ });
+            ConjureDSP.audio.onFrame((frame) => {
+              document.querySelector('#rms').textContent = frame.rms.toFixed(3);
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "audio_frames_not_enabled" },
+                "live audio.onFrame next to a commented one must still fire — strip is for FPs only, not coverage")
+    }
+
+    /// `//` outside a `<script>` block (e.g. protocol-relative URL in
+    /// an attribute) must NOT be treated as a JS comment — the
+    /// strip is scoped to script content.
+    @Test func protocolRelativeURLInAttributeIsNotStrippedAsComment() throws {
+        // No <script> block, just an inline event handler that calls
+        // audio.onFrame. The strip must leave the inline handler alone
+        // (since it isn't inside <script>...</script>) and the gate
+        // must still fire.
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <a href="//example.com/docs">docs</a>
+          <button onclick="audio.onFrame((f) => console.log(f))">subscribe</button>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "audio_frames_not_enabled" },
+                "audio.onFrame in an inline handler is real code — must fire even though there's a `//` URL nearby")
+    }
+
     // MARK: - external_asset_ref / network_egress_in_ui
 
     @Test func externalScriptFlagged() throws {

@@ -177,8 +177,22 @@ extension PresetManifest {
         width: 520,
         height: 260,
         fps: 30,
-        audioFrames: true
+        audioFrames: false
     )
+
+    /// Test-target mirror of `scaffoldUI(withOverrides:)`. Keep in sync
+    /// with the extension definition — `SavePresetScaffoldRewriteTests`
+    /// pins the override merge behavior.
+    static func scaffoldUI(withOverrides overrides: UI?) -> UI {
+        var ui = defaultScaffoldUI
+        guard let overrides else { return ui }
+        if let v = overrides.entryHTML { ui.entryHTML = v }
+        if let v = overrides.width { ui.width = v }
+        if let v = overrides.height { ui.height = v }
+        if let v = overrides.fps { ui.fps = v }
+        if let v = overrides.audioFrames { ui.audioFrames = v }
+        return ui
+    }
 
     /// Test-target mirror of `applyingSaveRewrites(scaffoldUI:)` on the
     /// extension's `PresetManifest`. See the extension's docstring for
@@ -186,13 +200,16 @@ extension PresetManifest {
     /// 2026-05-08 /try-it sweep, plus the telemetry follow-on). Both
     /// copies must stay in sync — the `SavePresetScaffoldRewriteTests`
     /// + `SavePresetTelemetryRewriteTests` suites pin the contract.
-    func applyingSaveRewrites(scaffoldUI: Bool) -> PresetManifest {
+    func applyingSaveRewrites(
+        scaffoldUI: Bool,
+        scaffoldUIOverrides: UI? = nil
+    ) -> PresetManifest {
         var copy = self
         copy.params = nil
         copy.paramsNote = nil
         copy.telemetry = nil
         if scaffoldUI, copy.ui == nil {
-            copy.ui = Self.defaultScaffoldUI
+            copy.ui = Self.scaffoldUI(withOverrides: scaffoldUIOverrides)
         }
         return copy
     }

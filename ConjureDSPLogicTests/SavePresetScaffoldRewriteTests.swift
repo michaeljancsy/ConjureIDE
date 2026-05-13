@@ -109,7 +109,13 @@ struct SavePresetScaffoldRewriteTests {
         #expect(rewritten.ui != nil,
                 "scaffold_ui=true must populate manifest.ui — the orphan starter HTML failure (#1, #4) was this branch silently leaving the manifest unchanged.")
         #expect(rewritten.ui?.entryHTML == "ui/index.html")
-        #expect(rewritten.ui?.audioFrames == true)
+        // Default opt-in semantics — pure-control UIs are the common
+        // case; consumers (cdp-meter / cdp-scope / cdp-bargraph / direct
+        // audio.onFrame) must request `audioFrames: true` explicitly.
+        // `audio_frames_not_enabled` BundleUIValidator rule catches the
+        // mismatch when an author adds a consumer but forgets to flip
+        // this flag.
+        #expect(rewritten.ui?.audioFrames == false)
     }
 
     @Test("scaffoldUI=true preserves an existing ui block verbatim")
@@ -138,6 +144,101 @@ struct SavePresetScaffoldRewriteTests {
         let rewritten = bareManifest.applyingSaveRewrites(scaffoldUI: false)
         #expect(rewritten.ui == nil,
                 "scaffoldUI=false re-saves must not silently opt the bundle into a custom UI.")
+    }
+
+    // MARK: - scaffoldUIOverrides: per-field merge against defaultScaffoldUI
+
+    /// MCP save_preset's `ui_width`/`ui_height`/`ui_audio_frames` args
+    /// route through `scaffoldUIOverrides`. A partial override (just
+    /// dimensions) must replace those fields and inherit everything
+    /// else from `defaultScaffoldUI` — including `audioFrames: false`,
+    /// which is the documented opt-in default.
+    @Test("scaffoldUIOverrides replaces named fields and inherits the rest")
+    func overridesReplaceNamedFieldsOnly() {
+        let bare = PresetBundle.defaultManifest(language: .python, includeUI: false)
+        let overrides = PresetManifest.UI(
+            entryHTML: nil,
+            width: 360, height: 280,
+            fps: nil, audioFrames: nil
+        )
+        let rewritten = bare.applyingSaveRewrites(
+            scaffoldUI: true,
+            scaffoldUIOverrides: overrides
+        )
+        #expect(rewritten.ui?.width == 360)
+        #expect(rewritten.ui?.height == 280)
+        #expect(rewritten.ui?.entryHTML == "ui/index.html",
+                "entryHTML not overridden → inherited from defaultScaffoldUI")
+        #expect(rewritten.ui?.fps == 30, "fps not overridden → inherited")
+        #expect(rewritten.ui?.audioFrames == false,
+                "audioFrames not overridden → inherited (documented opt-in default)")
+    }
+
+    /// `audioFrames: true` opt-in must roundtrip through the override.
+    @Test("scaffoldUIOverrides honors audioFrames=true")
+    func overridesHonorAudioFramesTrue() {
+        let bare = PresetBundle.defaultManifest(language: .python, includeUI: false)
+        let overrides = PresetManifest.UI(
+            entryHTML: nil,
+            width: 320, height: 360,
+            fps: nil, audioFrames: true
+        )
+        let rewritten = bare.applyingSaveRewrites(
+            scaffoldUI: true,
+            scaffoldUIOverrides: overrides
+        )
+        #expect(rewritten.ui?.audioFrames == true)
+        #expect(rewritten.ui?.width == 320)
+        #expect(rewritten.ui?.height == 360)
+    }
+
+    /// `scaffoldUIOverrides` must NOT clobber an existing ui block —
+    /// the existing-bundle re-save preserves whatever the author has
+    /// already authored. Overrides only apply to the "fresh scaffold
+    /// site" case (`copy.ui == nil`).
+    @Test("scaffoldUIOverrides ignored when manifest already has a ui block")
+    func overridesIgnoredWhenUIBlockExists() {
+        var manifest = PresetBundle.defaultManifest(language: .python, includeUI: true)
+        manifest.ui = PresetManifest.UI(
+            entryHTML: "ui/custom.html",
+            width: 800, height: 600,
+            fps: 60, audioFrames: true
+        )
+        let overrides = PresetManifest.UI(
+            entryHTML: nil,
+            width: 100, height: 100,
+            fps: nil, audioFrames: false
+        )
+        let rewritten = manifest.applyingSaveRewrites(
+            scaffoldUI: true,
+            scaffoldUIOverrides: overrides
+        )
+        #expect(rewritten.ui?.width == 800)
+        #expect(rewritten.ui?.height == 600)
+        #expect(rewritten.ui?.fps == 60)
+        #expect(rewritten.ui?.audioFrames == true)
+        #expect(rewritten.ui?.entryHTML == "ui/custom.html")
+    }
+
+    /// Fresh-bundle path (no existing manifest) also threads overrides
+    /// through `defaultManifest(_:includeUI:scaffoldUIOverrides:)`.
+    @Test("PresetBundle.defaultManifest applies scaffoldUIOverrides")
+    func defaultManifestAppliesOverrides() {
+        let overrides = PresetManifest.UI(
+            entryHTML: nil,
+            width: 480, height: 320,
+            fps: nil, audioFrames: true
+        )
+        let manifest = PresetBundle.defaultManifest(
+            language: .rust,
+            includeUI: true,
+            scaffoldUIOverrides: overrides
+        )
+        #expect(manifest.ui?.width == 480)
+        #expect(manifest.ui?.height == 320)
+        #expect(manifest.ui?.audioFrames == true)
+        #expect(manifest.ui?.entryHTML == "ui/index.html", "inherited")
+        #expect(manifest.ui?.fps == 30, "inherited")
     }
 
     // MARK: - End-to-end: encode + decode round-trip stays clean

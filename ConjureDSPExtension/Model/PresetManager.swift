@@ -441,6 +441,7 @@ class PresetManager: ObservableObject {
         source: String,
         language: ScriptLanguage = .python,
         scaffoldUI: Bool = false,
+        scaffoldUIOverrides: PresetManifest.UI? = nil,
         duplicateFrom: PresetBundle? = nil,
         crossLanguageCollision: CrossLanguageCollisionBehavior = .overwrite
     ) throws -> Preset {
@@ -508,7 +509,11 @@ class PresetManager: ObservableObject {
             // If we can't parse the existing manifest, fall back to the
             // defaults — a broken manifest is worse than losing user edits.
             var manifest = existingManifest
-                ?? PresetBundle.defaultManifest(language: language, includeUI: scaffoldUI)
+                ?? PresetBundle.defaultManifest(
+                    language: language,
+                    includeUI: scaffoldUI,
+                    scaffoldUIOverrides: scaffoldUIOverrides
+                )
 
             // If the caller's language disagrees with the existing
             // manifest, patch entry/language and delete the now-orphan
@@ -533,7 +538,10 @@ class PresetManager: ObservableObject {
             // disk write when the manifest is already in shape — the
             // rewrite is idempotent, so this is just an
             // optimization for the common no-op re-save.
-            let rewritten = manifest.applyingSaveRewrites(scaffoldUI: scaffoldUI)
+            let rewritten = manifest.applyingSaveRewrites(
+                scaffoldUI: scaffoldUI,
+                scaffoldUIOverrides: scaffoldUIOverrides
+            )
             if rewritten != manifest {
                 manifest = rewritten
                 manifestNeedsRewrite = true
@@ -601,7 +609,11 @@ class PresetManager: ObservableObject {
             try fileManager.createDirectory(at: bundleURL, withIntermediateDirectories: true)
             AppGroupContainer.stripQuarantine(at: bundleURL)
 
-            let manifest = PresetBundle.defaultManifest(language: language, includeUI: scaffoldUI)
+            let manifest = PresetBundle.defaultManifest(
+                language: language,
+                includeUI: scaffoldUI,
+                scaffoldUIOverrides: scaffoldUIOverrides
+            )
             try manifest.jsonData().write(to: bundleURL.appendingPathComponent(PresetManifest.filename))
 
             let scriptURL = bundleURL.appendingPathComponent(manifest.entry)
