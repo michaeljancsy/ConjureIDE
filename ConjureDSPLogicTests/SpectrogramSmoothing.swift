@@ -9,7 +9,7 @@
 //
 
 enum SpectrogramSmoothing {
-    /// Symmetric per-bin smoother with a hard-step bypass: α=0.3 one-pole
+    /// Symmetric per-bin smoother with a hard-step bypass: α=0.15 one-pole
     /// for small steps, snap on |Δ| > 20 dB.
     static func step(scratch: [Float], state: inout [Float]) {
         let alpha: Float = 0.15

@@ -800,7 +800,7 @@ final class AudioCaptureManager: ObservableObject {
     /// spectrogram-only columns. Two branches:
     ///   - **Hard-step bypass** (`|s - x| > 20` dB): `s = x`. Note-ons, note-offs,
     ///     and signal start/stop land in a single column with no tail.
-    ///   - **Symmetric one-pole** (small step): `s = α·x + (1-α)·s` with α=0.3.
+    ///   - **Symmetric one-pole** (small step): `s = α·x + (1-α)·s` with α=0.15.
     ///     Converges toward the time-averaged magnitude, killing the
     ///     phase-dependent cross-term wobble that a Hann-windowed stationary
     ///     sine produces between hops in its sidelobe bins.
