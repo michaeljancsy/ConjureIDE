@@ -563,6 +563,16 @@ final class AudioCaptureManager: ObservableObject {
             // `fftInputScratch` / `fftOutputScratch`, so the passthrough-
             // zero-diff invariant is preserved. See `applySpectrogramSmoothing`
             // for the symmetric-with-bypass rule details.
+            //
+            // A/B verified load-bearing: with the smoother disabled (and
+            // CGContext interpolation correctly pinned via withCGContext),
+            // vertical striping returns across the full spectrum — not just
+            // sidelobe bins but every low-amplitude bin including those
+            // above the fundamental. The cross-term wobble in `|X[k]|` for
+            // a real Hann-windowed off-bin sine is genuinely 5–8 dB peak-
+            // to-peak in low-magnitude bins regardless of bin distance from
+            // the peak, and it's large enough to render as visible stripes
+            // through the magma palette.
             applySpectrogramSmoothing(scratch: fftInputScratch,  state: &fftInputEMA)
             applySpectrogramSmoothing(scratch: fftOutputScratch, state: &fftOutputEMA)
 
