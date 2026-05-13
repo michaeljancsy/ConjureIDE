@@ -55,7 +55,7 @@ process! { ctx =>
     let mx = ctx.param(MIX) as f64;
 
     let pipe_q = 12.0 + 28.0 * pipes;
-    let mut pipe_c: [BiquadCoeffs; 8] = [BiquadCoeffs::lowpass(1000.0, 0.707, sr); 8];
+    let mut pipe_c: [BiquadCoeffs; 8] = [BiquadCoeffs::identity(); 8];
     for k in 0..8 {
         pipe_c[k] = BiquadCoeffs::bandpass(PIPE_HZ[k], pipe_q, sr);
     }

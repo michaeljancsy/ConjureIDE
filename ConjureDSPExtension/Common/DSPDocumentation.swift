@@ -307,6 +307,18 @@ enum DSPDocumentation {
       IMPORTANT (Rust): all three arguments must be f64. Cast with `as f64`:
         BiquadCoeffs::lowpass(cutoff as f64, q as f64, sample_rate as f64)
 
+    Zero-value / passthrough:
+      .identity() — passthrough coeffs (b0=1, rest=0). Use for stack-allocating
+                    a fixed-size array of slots that will be filled at runtime
+                    (e.g. a parametric EQ where each band picks a filter type):
+                      Rust:   let mut bands: [BiquadCoeffs; 5] = [BiquadCoeffs::identity(); 5];
+                      Python: bands = [BiquadCoeffs.identity() for _ in range(5)]
+                    Rust also implements Default for runtime use
+                    (`BiquadCoeffs::default()`, `#[derive(Default)]` on containing
+                    structs). Array initializers must use `::identity()` —
+                    trait methods aren't `const` on stable Rust, so
+                    `[BiquadCoeffs::default(); N]` won't compile.
+
     ## Biquad — stateful filter (Direct Form II Transposed)
 
     Python: Biquad(coeffs=None) — passthrough if no coeffs
@@ -2179,6 +2191,12 @@ enum DSPDocumentation {
 
     BiquadCoeffs.lowpass(freq, q, sr) — returns BiquadCoeffs instance
 
+    Zero-value / passthrough:
+      .identity() — passthrough coeffs (b0=1, rest=0). Use for pre-allocating
+                    a list of slots that will be filled at runtime, e.g. a
+                    parametric EQ where each band picks a filter type:
+                      bands = [BiquadCoeffs.identity() for _ in range(5)]
+
     ## Biquad — stateful filter (Direct Form II Transposed)
 
     Biquad(coeffs=None) — passthrough if no coeffs
@@ -2234,6 +2252,18 @@ enum DSPDocumentation {
     BiquadCoeffs::lowpass(freq, q, sr) — returns BiquadCoeffs (Copy type)
     IMPORTANT: all three arguments must be f64. Cast with `as f64`:
       BiquadCoeffs::lowpass(cutoff as f64, q as f64, sample_rate as f64)
+
+    Zero-value / passthrough:
+      ::identity() — const fn, passthrough coeffs (b0=1, rest=0). Use for
+                     stack-allocating a fixed-size array of slots that will be
+                     filled at runtime (e.g. a parametric EQ where each band
+                     picks a filter type):
+                       let mut bands: [BiquadCoeffs; 5] = [BiquadCoeffs::identity(); 5];
+                     Also implements Default for runtime use
+                     (`BiquadCoeffs::default()`, `#[derive(Default)]` on
+                     containing structs). Array initializers must use
+                     `::identity()` — trait methods aren't `const` on stable
+                     Rust, so `[BiquadCoeffs::default(); N]` won't compile.
 
     ## Biquad — stateful filter (Direct Form II Transposed)
 
