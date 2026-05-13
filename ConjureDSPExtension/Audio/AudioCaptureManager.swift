@@ -211,19 +211,14 @@ final class AudioCaptureManager: ObservableObject {
     /// Numerical guard only; not the value used for color mapping.
     static let floorDB: Float = -120.0
 
-    /// Visual floor for the magma spectrogram colormap. Values below this dB
-    /// threshold paint as silence (deep navy / near-black) regardless of how
-    /// far below they sit in the FFT output.
-    ///
-    /// Tuned so that Hann sidelobe content past the third–fourth octave from a
-    /// strong peak reads as silence rather than as a wide purple haze. A pure
-    /// 440 Hz sine through a 2048-point Hann has first sidelobe at ~−32 dB
-    /// and rolls off ~18 dB/octave, so −90 dB lands just past the audible
-    /// sidelobe region.
-    ///
-    /// Presentation-only: the column rings still store dB values clamped at
-    /// `floorDB`, so changing this constant is a pure re-render — no audio
-    /// reprocessing required.
+    /// Visual floor for the magma spectrogram colormap. Content below this
+    /// dB threshold paints as deep navy / silence regardless of how far
+    /// below it sits in the FFT output. Combined with the re-anchored
+    /// magma palette (dark plum at t=0.5), this keeps the off-fundamental
+    /// sidelobe region in the lower-frequency log scale from rendering as
+    /// a wide visible purple haze — the math content is preserved in the
+    /// column rings (still clamped at `floorDB`), but the visualization
+    /// treats sub-audibility energy as silence.
     static let visualFloorDB: Float = -90.0
 
     /// Hop size as a fraction of fftSize (0.5 = 50% overlap).

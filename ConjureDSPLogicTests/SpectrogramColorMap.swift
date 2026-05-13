@@ -31,20 +31,26 @@ enum SpectrogramColorMap {
 
     private static func magmaColor(_ t: Float) -> (Float, Float, Float) {
         // Anchors must match ConjureDSPExtension/UI/SpectrogramColorMap.swift:
-        //  0.0 #0D0F1A deep navy     (0.051, 0.059, 0.102)
-        //  0.5 #B06EFF soft purple   (0.690, 0.431, 1.000)
-        //  1.0 #FFD166 warm gold     (1.000, 0.820, 0.400)
+        //  0.00 #0D0F1A deep navy     (0.051, 0.059, 0.102)
+        //  0.50 #4A1F70 dark plum     (0.290, 0.122, 0.439)
+        //  0.75 #B06EFF soft purple   (0.690, 0.431, 1.000)
+        //  1.00 #FFD166 warm gold     (1.000, 0.820, 0.400)
         let r: Float
         let g: Float
         let b: Float
 
         if t < 0.5 {
             let s = t / 0.5
-            r = 0.051 + s * (0.690 - 0.051)
-            g = 0.059 + s * (0.431 - 0.059)
-            b = 0.102 + s * (1.000 - 0.102)
+            r = 0.051 + s * (0.290 - 0.051)
+            g = 0.059 + s * (0.122 - 0.059)
+            b = 0.102 + s * (0.439 - 0.102)
+        } else if t < 0.75 {
+            let s = (t - 0.5) / 0.25
+            r = 0.290 + s * (0.690 - 0.290)
+            g = 0.122 + s * (0.431 - 0.122)
+            b = 0.439 + s * (1.000 - 0.439)
         } else {
-            let s = (t - 0.5) / 0.5
+            let s = (t - 0.75) / 0.25
             r = 0.690 + s * (1.000 - 0.690)
             g = 0.431 + s * (0.820 - 0.431)
             b = 1.000 + s * (0.400 - 1.000)
