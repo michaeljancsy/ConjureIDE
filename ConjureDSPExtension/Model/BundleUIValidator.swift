@@ -1868,7 +1868,12 @@ enum BundleUIValidator {
         //   smoothed[bin] = a * smoothed[bin] + (1 - a) * frame.fftOut[bin]
         //   buf[i] = frame.fftOut[i]
         //   col[x] = Math.max(col[x], frame.fftOut[x])
-        let smoothingAssignment = #"\w+\s*\[[^\]]+\]\s*=\s*[^;\n]*\bframe\s*\.\s*fftOut\b"#
+        // RHS may span multiple lines (the docs idiom splits the
+        // attack/release coefficients across two lines), so the negated
+        // class blocks only `;` — the JS statement terminator — not
+        // newlines. `[^;]*` won't bleed into a later assignment because
+        // the terminator is still required to fall outside the class.
+        let smoothingAssignment = #"\w+\s*\[[^\]]+\]\s*=\s*[^;]*\bframe\s*\.\s*fftOut\b"#
         if stripped.range(of: smoothingAssignment, options: [.regularExpression]) != nil {
             return []
         }

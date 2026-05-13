@@ -747,6 +747,39 @@ struct BundleUIValidatorTests {
                 "smoothing array assignment must suppress; issues: \(report.issues)")
     }
 
+    /// The docs canonical example splits the smoothing assignment
+    /// across two lines:
+    ///     smoothed[bin] = attack * smoothed[bin]
+    ///                   + (1 - attack) * frame.fftOut[bin];
+    /// The suppression regex must allow newlines between `=` and the
+    /// `frame.fftOut` reference, or copy-pasting the docs idiom would
+    /// trip the very warning the docs recommend (regression flagged by
+    /// Sentry Seer on PR #328).
+    @Test func multiLineSmoothedFftDoesNotFlag() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            const smoothed = new Float32Array(1024);
+            const attack = 0.6;
+            ConjureDSP.audio.onFrame((frame) => {
+              if (!frame.fftOut) return;
+              for (let bin = 0; bin < frame.fftOut.length; bin++) {
+                smoothed[bin] = attack * smoothed[bin]
+                              + (1 - attack) * frame.fftOut[bin];
+              }
+              drawSpectrum(smoothed);
+            }, { fft: true });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "multi-line smoothing assignment must suppress; issues: \(report.issues)")
+    }
+
     /// Helper-function smoothing pattern (peak-hold + decay inside an
     /// `ingestSpectrum` helper) — main's canonical example shape. The
     /// per-bin loop lives in the helper, not at the call site, so the
