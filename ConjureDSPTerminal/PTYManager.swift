@@ -683,7 +683,6 @@ final class PTYManager {
 
     ```rust
     use conjuredsp::*;
-    setup!();  // declares buffers, WASM exports, and ctx() helper
 
     params! {
         CUTOFF = freq(),                                     // index constant + metadata
@@ -691,33 +690,31 @@ final class PTYManager {
         MIX = mix(),
     }
 
-    // Persistent state via static mut
-    static mut FILTERS: [Biquad; 2] = [Biquad::new(); 2];
+    // Persistent state across blocks. Copy / scalar values use `persist!`
+    // (`.get()` / `.set(v)`); large buffers use `persist_buf!` instead
+    // (`.with_mut(|b| …)` for in-place mutation). Read with FILTERS.get();
+    // write with FILTERS.set(updated). No `unsafe {}` at the call site.
+    persist!(FILTERS: [Biquad; 2] = [Biquad::new(); 2]);
 
-    #[no_mangle]
-    pub extern "C" fn process(
-        input: *const f32, output: *mut f32,
-        channel_count: i32, frame_count: i32, sample_rate: f32,
-    ) {
-        // Copy your process() args into ctx() in the same order. Don't rename
-        // the third arg to anything that suggests "frames" — Context indexes
-        // via channel * frames + frame; mixing the two compiles fine but
-        // walks the buffer with the wrong stride and produces silently-wrong
-        // output.
-        let ctx = ctx(input, output, channel_count, frame_count, sample_rate);
-        unsafe {
-            let cutoff = ctx.param(CUTOFF);  // actual value (1000.0 Hz), not 0-1
-            for c in 0..ctx.channels() {
-                for i in 0..ctx.frames() {
-                    ctx.set_output(c, i, ctx.input(c, i));  // passthrough
-                }
+    // `process! { ctx => … }` is the entry point. It emits the zero-arg
+    // `extern "C" fn process()` the host calls and the I/O buffer statics
+    // in one shot — do NOT hand-roll the 5-arg signature and do NOT write
+    // a standalone `setup!();` alongside it (duplicate-static error).
+    process! { ctx =>
+        // ctx.param(INDEX) returns the actual value (e.g. 1000.0 Hz),
+        // not the normalized 0-1 form.
+        for c in 0..ctx.channels() {
+            for i in 0..ctx.frames() {
+                ctx.set_output(c, i, ctx.input(c, i));  // passthrough
             }
         }
     }
     ```
 
     `ctx` provides: `.input(ch, frame)`, `.set_output(ch, frame, val)`, `.param(INDEX)`, \
-    `.channels()`, `.frames()`, `.sample_rate()`. All `static mut` access requires `unsafe {}`.
+    `.channels()`, `.frames()`, `.sample_rate()`. Persistent state across blocks uses \
+    `persist!` for Copy / scalar values (`.get()` / `.set(v)`) and `persist_buf!` for \
+    large arrays (`.with_mut(|b| …)`). No raw `static mut` and no `unsafe {}` at the call site.
 
     ## Standard Library
 

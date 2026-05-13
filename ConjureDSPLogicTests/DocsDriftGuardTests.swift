@@ -179,7 +179,18 @@ struct DocsDriftGuardTests {
         Self.expectClean(content, in: "AIPromptHelperView.swift")
     }
 
-    /// (g) Bundled-resource gate for Step B (Bundle-load de-dup of
+    /// (g) PTYManager.contextContent — written verbatim to
+    /// ~/Library/Application Support/ConjureDSP/agent-workspace/{CLAUDE,GEMINI,AGENTS}.md
+    /// on every ConjureDSPTerminal launch. The in-plugin Claude / Gemini /
+    /// Codex agents read this as project memory before their first
+    /// `compile_and_run`. Stale bullets here actively mistrain INSIDE
+    /// agents on the deprecated shape (sibling to (f) for outside agents).
+    @Test func agentWorkspaceTeachingContextIsClean() throws {
+        let content = try Self.read("ConjureDSPTerminal/PTYManager.swift")
+        Self.expectClean(content, in: "ConjureDSPTerminal/PTYManager.swift")
+    }
+
+    /// (h) Bundled-resource gate for Step B (Bundle-load de-dup of
     /// `newRustTemplate`). After Step B, `AudioUnitViewController`
     /// reads `process.rs` out of the extension's Resources at runtime
     /// instead of inlining the bytes. If the build phase silently
