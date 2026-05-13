@@ -48,13 +48,14 @@ enum DSPDocumentation {
           "drive": pct(default=70),
           "mix": mix(default=0.35),
           "bypass": toggle(),
-          "mode": choice("Low", "Mid", "High", default="Mid"),  # Python-only dropdown
+          "mode": choice("Low", "Mid", "High", default="Mid"),  # dropdown
       }
 
     param() accepts: param(min, max, unit="", default=None, curve="linear")
 
-    choice(*labels, default=None) — Python-only. Dropdown menu, receives selected index as float \
-    (0.0, 1.0, ...). Requires at least 2 labels.
+    choice(*labels, default=None) (Python) / choice(&[labels]) (Rust) — Dropdown menu, \
+    receives selected index as float (0.0, 1.0, ...). Requires at least 2 labels. Rust \
+    spelling: `MODE = choice(&["Low", "Mid", "High"]).default(1.0),`.
 
     ## Rust syntax
 
@@ -2104,6 +2105,7 @@ enum DSPDocumentation {
     mix — 0.0-1.0, linear, default 0.5
     pct — 0-100%, linear, default 50
     toggle — 0/1, rendered as switch in UI, default 0
+    choice — dropdown menu (style:"choice"), receives selected index as f64 (0.0, 1.0, …)
     ratio — 1-20 :1, linear, default 4
     param — generic with explicit min/max, default=min, linear, no unit
 
@@ -2118,13 +2120,16 @@ enum DSPDocumentation {
           DRIVE = pct().default(70.0),
           MIX = mix().default(0.35),
           BYPASS = toggle(),
+          DIVISION = choice(&["1/1", "1/2", "1/4", "1/8"]).default(2.0),  // dropdown
           ROTATE = param(0.0, 360.0).unit("°").default(0.0),  // generic builder
       }
 
     Chaining methods: .min(val), .max(val), .default(val), .unit("str"), .curve("log" or "linear")
     All are const fn and can be used in static/const contexts. The typed
-    builders (freq, db, time_ms, …) are presets over the same modifier
-    surface; use param(min, max) when none of them fit.
+    builders (freq, db, time_ms, toggle, choice, …) are presets over the same
+    modifier surface; use param(min, max) when none of them fit. `choice` takes
+    a static slice of labels and renders as a dropdown — the script reads the
+    selected index via `ctx.param(INDEX)` (0.0, 1.0, …).
 
     ## How parameters are delivered
 
