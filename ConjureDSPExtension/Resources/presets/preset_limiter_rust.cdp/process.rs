@@ -37,7 +37,7 @@ process! { ctx =>
     let mut env = ENVELOPE.get();
 
     for i in 0..ctx.frames() {
-        // Peak detect across all channel_count
+        // Peak detect across all channels
         let mut peak: f64 = 0.0;
         for c in 0..ctx.channels() {
             let abs_val = (ctx.input(c, i) as f64).abs();

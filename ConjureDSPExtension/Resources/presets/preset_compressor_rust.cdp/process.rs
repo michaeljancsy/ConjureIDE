@@ -6,7 +6,7 @@
 // quickly the compressor responds to level changes. Makeup gain compensates
 // for the overall volume reduction caused by compression.
 //
-// The envelope follower operates per-sample across all channel_count (peak detection),
+// The envelope follower operates per-sample across all channels (peak detection),
 // so stereo signals are compressed with linked gain to preserve the stereo image.
 //
 // Params:
@@ -43,7 +43,7 @@ telemetry! {
 persist!(ENVELOPE: f64 = 0.0);
 
 // Per-block GR scratch for vector telemetry. One f32 per audio frame in
-// the current block (length = frame_count, capped at MAX_FR by the
+// the current block (length = ctx.frames(), hard-capped at MAX_FR by the
 // macro). Persistent so we don't heap-alloc per render callback.
 persist_buf!(GR_SCRATCH: [f32; MAX_FR] = [0.0; MAX_FR]);
 
@@ -70,7 +70,7 @@ process! { ctx =>
 
     GR_SCRATCH.with_mut(|gr_scratch| {
         for i in 0..ctx.frames() {
-            // Peak detect across all channel_count
+            // Peak detect across all channels
             let mut peak: f64 = 0.0;
             for c in 0..ctx.channels() {
                 let abs_val = (ctx.input(c, i) as f64).abs();
