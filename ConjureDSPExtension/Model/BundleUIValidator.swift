@@ -1992,13 +1992,18 @@ enum BundleUIValidator {
                     switch scope {
                     case .string(let q):
                         if c == 0x5C /* \ */ {
-                            i += 2
+                            // Skip the escaped character, but don't step
+                            // past the end of input on a trailing `\`.
+                            i += (i + 1 < length) ? 2 : 1
                             continue
                         }
                         if c == q { scopes.removeLast() }
                         i += 1
                     case .template:
-                        if c == 0x5C { i += 2; continue }
+                        if c == 0x5C {
+                            i += (i + 1 < length) ? 2 : 1
+                            continue
+                        }
                         if c == 0x60 /* ` */ {
                             scopes.removeLast()
                             i += 1
