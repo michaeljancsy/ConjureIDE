@@ -1389,12 +1389,25 @@ enum DSPDocumentation {
     48000 — the host can run at 44.1k / 96k / etc.):
 
     ```js
+    // FFT data arrives at the hop rate (~23 Hz at 48k/2048), but
+    // `audio.onFrame` fires at display rate. Smooth per bin so the UI
+    // redraws every tick from `smoothed[]`, not just on FFT ticks —
+    // otherwise the visualization steps visibly at the hop rate.
+    const smoothed = new Float32Array(1024);   // matches default fftSize / 2
+    const attack = 0.6;                         // 0 = none, 1 = frozen
     ConjureDSP.audio.onFrame(frame => {
-        if (!frame.fftOut) return;             // FFT only present when opts.fft = true
-        const N = frame.fftOut.length * 2;     // FFT size (halfN bins published)
-        for (let bin = 1; bin < frame.fftOut.length; bin++) {
-            const hz  = bin * frame.sampleRate / N;
-            const dB  = frame.fftOut[bin];     // already in dB, range [-120, 0]
+        if (frame.fftOut) {                     // FFT only present when opts.fft = true
+            for (let bin = 0; bin < frame.fftOut.length; bin++) {
+                smoothed[bin] = attack * smoothed[bin]
+                              + (1 - attack) * frame.fftOut[bin];
+            }
+        }
+        // Redraw every tick from `smoothed`, regardless of whether
+        // fftOut arrived this tick.
+        const N = smoothed.length * 2;
+        for (let bin = 1; bin < smoothed.length; bin++) {
+            const hz = bin * frame.sampleRate / N;
+            const dB = smoothed[bin];           // already in dB, range [-120, 0]
             // …plot or aggregate…
         }
     }, { fft: true });
@@ -1414,7 +1427,9 @@ enum DSPDocumentation {
     - **Hop:** 50% (`fftSize / 2` samples). FFT bins only ride along on
       ticks that produced a new column, so `frame.fftIn` / `frame.fftOut`
       are `undefined` on most ticks (CADisplayLink fires faster than
-      hops complete) — gate on `if (!frame.fftOut) return;`.
+      hops complete). Guard reads with `if (frame.fftOut) { … }` and
+      update a smoothed per-bin array inside — then redraw every tick
+      from `smoothed[]`. See **FFT smoothing** below.
     - **Bin → Hz:** `freq_hz = bin * frame.sampleRate / N` for bins
       `1..N/2 - 1`. Bin spacing is `sampleRate / N` (≈ 23.4 Hz at 48 kHz,
       `N = 2048`).
@@ -1432,9 +1447,9 @@ enum DSPDocumentation {
 
     ### Smoothing FFT bins to display rate
 
-    The gating idiom above (`if (!frame.fftOut) return;`) is necessary
-    but not sufficient on its own: it draws *only* on FFT-column ticks,
-    so bars step at ~23 Hz instead of flowing at display rate. Hold the
+    The gating idiom (`if (!frame.fftOut) return;`) is necessary but
+    not sufficient on its own: it draws *only* on FFT-column ticks, so
+    bars step at ~23 Hz instead of flowing at display rate. Hold the
     last column in a per-bin buffer, decay it toward a visible floor,
     and coalesce paints through `requestAnimationFrame`:
 
@@ -1496,6 +1511,13 @@ enum DSPDocumentation {
       analyzers should leave it unthrottled.
     - **Use `frame.sampleRate`** for any bin → Hz mapping (already shown
       in the bin-conversion example above): never hardcode 48000.
+
+    The `fft_redraw_gated_on_hop` static validator flags the early-return
+    shape when it's *not* paired with a smoothing buffer (the gemini
+    Spectrum Analyzer bug — gated redraw, no peak-hold). Passing
+    `frame.fftOut` to a per-bin smoother like `ingestSpectrum` above
+    suppresses the warning. Add `// validator:ignore fft_redraw_gated_on_hop`
+    if the gating is intentional (e.g. true sample-and-hold).
 
     ## DSP→UI telemetry channel
 

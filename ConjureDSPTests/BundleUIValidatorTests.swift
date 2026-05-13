@@ -672,6 +672,218 @@ struct BundleUIValidatorTests {
                 "audio.onFrame in an inline handler is real code — must fire even though there's a `//` URL nearby")
     }
 
+    // MARK: - fft_redraw_gated_on_hop
+
+    /// Baseline manifest with `audioFrames: true` — every fft test below
+    /// needs the frame stream open, so the audio_frames_not_enabled check
+    /// stays silent.
+    private let fftManifest = """
+    {
+      "schemaVersion": 2, "entry": "process.py", "language": "python",
+      "params": [
+        { "name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz" }
+      ],
+      "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": true}
+    }
+    """
+
+    /// The Spectrum Analyzer shape that prompted the rule: early-return
+    /// on missing fftOut, then draw directly from fftOut. Screen ticks at
+    /// the hop rate (~23 Hz) instead of display rate.
+    @Test func earlyReturnOnFftOutFlagged() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            ConjureDSP.audio.onFrame((frame) => {
+              if (!frame.fftOut) return;
+              const ctx = document.getElementById('c').getContext('2d');
+              ctx.clearRect(0, 0, 400, 240);
+              for (let bin = 1; bin < frame.fftOut.length; bin++) {
+                ctx.fillRect(bin, 240 + frame.fftOut[bin] * 2, 1, -frame.fftOut[bin] * 2);
+              }
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "fft_redraw_gated_on_hop" })
+        if let issue = report.issues.first(where: { $0.check == "fft_redraw_gated_on_hop" }) {
+            #expect(issue.severity == .warn, "stepped redraw is visible but not silent — warn, not fail")
+        }
+    }
+
+    /// Smoothed-array pattern is the recommended fix and must not fire
+    /// the warning: indexed assignment with frame.fftOut on the RHS is
+    /// the suppression signal.
+    @Test func smoothedFftDoesNotFlag() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            const smoothed = new Float32Array(1024);
+            const attack = 0.6;
+            ConjureDSP.audio.onFrame((frame) => {
+              if (frame.fftOut) {
+                for (let bin = 0; bin < frame.fftOut.length; bin++) {
+                  smoothed[bin] = attack * smoothed[bin] + (1 - attack) * frame.fftOut[bin];
+                }
+              }
+              const ctx = document.getElementById('c').getContext('2d');
+              ctx.clearRect(0, 0, 400, 240);
+              for (let bin = 1; bin < smoothed.length; bin++) {
+                ctx.fillRect(bin, 240 + smoothed[bin] * 2, 1, -smoothed[bin] * 2);
+              }
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "smoothing array assignment must suppress; issues: \(report.issues)")
+    }
+
+    /// Helper-function smoothing pattern (peak-hold + decay inside an
+    /// `ingestSpectrum` helper) — main's canonical example shape. The
+    /// per-bin loop lives in the helper, not at the call site, so the
+    /// suppression rule must recognize `frame.fftOut` passed as a bare
+    /// function argument.
+    @Test func helperFunctionSmoothingDoesNotFlag() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            let spec = null;
+            function ingestSpectrum(prev, fresh) {
+              if (!prev || prev.length !== fresh.length) prev = new Float32Array(fresh.length).fill(-90);
+              for (let i = 0; i < fresh.length; i++) {
+                const decayed = prev[i] * 0.85 + -90 * 0.15;
+                prev[i] = fresh[i] > decayed ? fresh[i] : decayed;
+              }
+              return prev;
+            }
+            ConjureDSP.audio.onFrame((frame) => {
+              if (!frame.fftOut) return;
+              spec = ingestSpectrum(spec, frame.fftOut);
+              requestAnimationFrame(() => drawSpectrum(spec));
+            }, { fft: true });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "frame.fftOut passed to a helper smoother must suppress; issues: \(report.issues)")
+    }
+
+    /// Explicit author opt-out via `// validator:ignore fft_redraw_gated_on_hop`.
+    @Test func explicitSuppressionCommentSilencesCheck() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            // validator:ignore fft_redraw_gated_on_hop — sample-and-hold by design
+            ConjureDSP.audio.onFrame((frame) => {
+              if (!frame.fftOut) return;
+              const ctx = document.getElementById('c').getContext('2d');
+              ctx.clearRect(0, 0, 400, 240);
+              for (let bin = 1; bin < frame.fftOut.length; bin++) {
+                ctx.fillRect(bin, 240 + frame.fftOut[bin] * 2, 1, -frame.fftOut[bin] * 2);
+              }
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" })
+    }
+
+    /// A commented-out `if (!frame.fftOut) return;` is illustrative, not
+    /// real code, and must not fire — same convention used by the
+    /// audio_frames_not_enabled check.
+    @Test func commentedOutEarlyReturnDoesNotFlag() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>
+            ConjureDSP.audio.onFrame((frame) => {
+              // if (!frame.fftOut) return;
+              // TODO bring back FFT path once smoothing lands
+              console.log(frame.rms);
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "JS-comment broken shape isn't running code; issues: \(report.issues)")
+    }
+
+    /// Inverted `if (frame.fftOut) { ... }` whose body is a per-hop
+    /// column-buffer fill (no canvas draw call inside) is a legitimate
+    /// sample-and-hold visualizer pattern, not the bug we're flagging.
+    @Test func invertedFftBlockWithoutDrawCallDoesNotFlag() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <script>
+            const column = new Float32Array(1024);
+            ConjureDSP.audio.onFrame((frame) => {
+              if (frame.fftOut) {
+                column.set(frame.fftOut);
+              }
+              // draw happens elsewhere on a different timer
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" },
+                "no draw call inside the guarded block + no early-return → don't flag; issues: \(report.issues)")
+    }
+
+    /// Inverted form WITH a draw call inside and no else branch IS the
+    /// jerky-redraw bug — flag it.
+    @Test func invertedFftBlockWithDrawCallFlagged() throws {
+        let ui = """
+        <!doctype html><html><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+          <canvas id="c" width="400" height="240"></canvas>
+          <script>
+            ConjureDSP.audio.onFrame((frame) => {
+              if (frame.fftOut) {
+                const ctx = document.getElementById('c').getContext('2d');
+                ctx.clearRect(0, 0, 400, 240);
+                ctx.beginPath();
+                ctx.stroke();
+              }
+            });
+          </script>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: fftManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "fft_redraw_gated_on_hop" })
+    }
+
+    /// A UI with no `audio.onFrame` at all has nothing for this check to
+    /// say. Don't fire — and don't accidentally match on `// if (!frame.fftOut) return;`
+    /// floating around in unrelated code.
+    @Test func uiWithoutOnFrameDoesNotFlag() throws {
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: baselineUI)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "fft_redraw_gated_on_hop" })
+    }
+
     // MARK: - external_asset_ref / network_egress_in_ui
 
     @Test func externalScriptFlagged() throws {

@@ -102,6 +102,7 @@ enum BundleUIValidator {
             issues.append(contentsOf: checkTelemetryReferences(html: html, bundle: bundle))
             issues.append(contentsOf: checkStateReferences(html: html, bundle: bundle))
             issues.append(contentsOf: checkAudioFramesGate(html: html, bundle: bundle))
+            issues.append(contentsOf: checkFftRedrawGatedOnHop(html: html))
             issues.append(contentsOf: checkNoExternalNetwork(html: html))
             issues.append(contentsOf: checkNoSystemColorInCanvas(html: html))
             issues.append(contentsOf: checkHasInteractiveSurface(html: html, bundle: bundle))
@@ -1818,6 +1819,155 @@ enum BundleUIValidator {
                 suggestion: "Set \"audioFrames\": true in manifest.json's ui block."
             )
         ]
+    }
+
+    /// Custom-UI spectrum analyzers commonly tie redraw to the presence
+    /// of `frame.fftOut`, which only arrives on FFT-hop ticks (~23 Hz at
+    /// 48k/2048) — much slower than the display-rate `audio.onFrame`
+    /// callback. The screen then visibly steps at the hop rate instead
+    /// of running smooth. The fix is to redraw every tick and update a
+    /// smoothed per-bin array only when fftOut is present.
+    ///
+    /// The pattern is deterministic enough to lint statically:
+    ///
+    ///   (1) The script body contains either an early-return guard on
+    ///       missing fftOut (`if (!frame.fftOut) return;` and ~5 spelling
+    ///       variants) OR an inverted form `if (frame.fftOut) { ... }`
+    ///       whose body contains a canvas draw call and no sibling
+    ///       `else` branch.
+    ///   (2) There is no per-bin state-array assignment whose RHS reads
+    ///       `frame.fftOut[...]` anywhere in the script. The presence of
+    ///       such an assignment is the smoothing-pattern signal and
+    ///       unconditionally suppresses the warning.
+    ///
+    /// Severity is `warn`, not `fail`: unlike `audio_frames_not_enabled`
+    /// (forever-flat meter, indistinguishable from "no signal"), the
+    /// stepped redraw is visible to whoever runs the bundle once, and
+    /// false positives are plausible (legitimate sample-and-hold
+    /// visualizers).
+    private static func checkFftRedrawGatedOnHop(html: String) -> [Issue] {
+        let withoutHTMLComments = stripHTMLComments(html)
+
+        // Explicit author opt-out. Must scan before JS comment stripping,
+        // since the suppression marker is conventionally a `// …` line
+        // comment that `stripJSCommentsInScripts` would remove.
+        if withoutHTMLComments.contains("validator:ignore fft_redraw_gated_on_hop") {
+            return []
+        }
+
+        let stripped = stripJSCommentsInScripts(withoutHTMLComments)
+
+        // No `audio.onFrame(...)` anywhere → nothing to flag.
+        guard stripped.range(
+            of: #"\baudio\s*\.\s*onFrame\s*\("#,
+            options: [.regularExpression]
+        ) != nil else { return [] }
+
+        // Smoothing signal #1: indexed assignment whose RHS references
+        // `frame.fftOut`. Examples that all suppress:
+        //   smoothed[bin] = a * smoothed[bin] + (1 - a) * frame.fftOut[bin]
+        //   buf[i] = frame.fftOut[i]
+        //   col[x] = Math.max(col[x], frame.fftOut[x])
+        let smoothingAssignment = #"\w+\s*\[[^\]]+\]\s*=\s*[^;\n]*\bframe\s*\.\s*fftOut\b"#
+        if stripped.range(of: smoothingAssignment, options: [.regularExpression]) != nil {
+            return []
+        }
+
+        // Smoothing signal #2: `frame.fftOut` passed as a non-first
+        // argument to a function call — the helper-function idiom where
+        // a per-bin loop lives inside a smoother that also takes the
+        // accumulator buffer:
+        //   spec = ingestSpectrum(spec, frame.fftOut);
+        //   peakHold(buf, frame.fftOut);
+        // Comma on the left distinguishes this from `if (frame.fftOut)`
+        // (where `(` sits directly before `frame`, no comma). Single-arg
+        // helpers like `smooth(frame.fftOut)` are not caught, but those
+        // are rare in practice — real smoothers thread an accumulator.
+        let fftOutAsCallArg = #",\s*\bframe\s*\.\s*fftOut\s*[,)]"#
+        if stripped.range(of: fftOutAsCallArg, options: [.regularExpression]) != nil {
+            return []
+        }
+
+        // Early-return guard forms.
+        let earlyReturnPatterns = [
+            #"\bif\s*\(\s*!\s*frame\s*\.\s*fftOut\s*\)\s*(?:\{\s*)?return\b"#,
+            #"\bif\s*\(\s*!\s*frame\s*\?\.\s*fftOut\s*\)\s*(?:\{\s*)?return\b"#,
+            #"\bif\s*\(\s*!\s*frame\s*\.\s*fftOut\s*\?\.\s*length\s*\)\s*(?:\{\s*)?return\b"#,
+            #"\bif\s*\(\s*frame\s*\.\s*fftOut\s*==\s*null\s*\)\s*(?:\{\s*)?return\b"#,
+            #"\bif\s*\(\s*typeof\s+frame\s*\.\s*fftOut\s*===?\s*['"]undefined['"]\s*\)\s*(?:\{\s*)?return\b"#,
+        ]
+        let hasEarlyReturn = earlyReturnPatterns.contains { p in
+            stripped.range(of: p, options: [.regularExpression]) != nil
+        }
+
+        // Inverted form: `if (frame.fftOut) { ...draw... }` with no else
+        // and a canvas draw call inside. We brace-walk to the matching
+        // `}` and look for a draw call in the body — sibling `else`
+        // means the author handled the no-fft branch and this isn't the
+        // bug we're flagging.
+        let hasInvertedDraw = invertedFftDrawBlockExists(in: stripped)
+
+        guard hasEarlyReturn || hasInvertedDraw else { return [] }
+
+        return [
+            Issue(
+                severity: .warn,
+                check: "fft_redraw_gated_on_hop",
+                file: "ui/index.html",
+                message: "frame.fftOut arrives at the FFT hop rate (~23 Hz at 48k/2048), not the display rate. Gating redraw on its presence will look stepped. Keep redraw on every onFrame tick and update a smoothed per-bin array only when fftOut is present.",
+                suggestion: "Update a smoothing array (e.g. `smoothed[bin] = a*smoothed[bin] + (1-a)*frame.fftOut[bin]`) inside the guard and draw from `smoothed` every tick. See get_docs(\"ui\") §\"FFT smoothing\". Suppress with `// validator:ignore fft_redraw_gated_on_hop` if intentional."
+            )
+        ]
+    }
+
+    /// True when there is an `if (frame.fftOut) { … }` block whose body
+    /// contains a canvas draw call AND whose closing `}` is not followed
+    /// by an `else` clause.
+    private static func invertedFftDrawBlockExists(in source: String) -> Bool {
+        guard let ifRegex = try? NSRegularExpression(
+            pattern: #"\bif\s*\(\s*frame\s*\.\s*fftOut\s*\)\s*\{"#,
+            options: []
+        ) else { return false }
+        guard let drawRegex = try? NSRegularExpression(
+            pattern: #"\.(?:fillRect|strokeRect|fillText|drawImage|putImageData|clearRect)\s*\(|\bbeginPath\s*\(|\.(?:fill|stroke)\s*\(\s*\)"#,
+            options: []
+        ) else { return false }
+
+        let ns = source as NSString
+        let length = ns.length
+        let matches = ifRegex.matches(in: source, range: NSRange(location: 0, length: length))
+
+        for m in matches {
+            let bodyStart = m.range.location + m.range.length
+            // Brace-walk to the matching close. We entered just past the `{`.
+            var depth = 1
+            var i = bodyStart
+            while i < length && depth > 0 {
+                let c = ns.character(at: i)
+                if c == 0x7B { depth += 1 }
+                else if c == 0x7D { depth -= 1 }
+                i += 1
+            }
+            guard depth == 0 else { continue }
+            let bodyLen = (i - 1) - bodyStart
+            guard bodyLen > 0 else { continue }
+            let body = ns.substring(with: NSRange(location: bodyStart, length: bodyLen))
+            let bodyNS = body as NSString
+            guard drawRegex.firstMatch(in: body, range: NSRange(location: 0, length: bodyNS.length)) != nil else {
+                continue
+            }
+            // Check for a sibling `else` clause after the matching `}`.
+            let tailStart = i
+            let tailLen = min(20, length - tailStart)
+            if tailLen > 0 {
+                let tail = ns.substring(with: NSRange(location: tailStart, length: tailLen))
+                if tail.range(of: #"^\s*else\b"#, options: [.regularExpression]) != nil {
+                    continue
+                }
+            }
+            return true
+        }
+        return false
     }
 
     private static func nearestDeclaredTelemetry(
