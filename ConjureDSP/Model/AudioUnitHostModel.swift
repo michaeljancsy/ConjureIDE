@@ -20,7 +20,7 @@ class AudioUnitHostModel {
     var viewModel = AudioUnitViewModel()
 
     var isPlaying: Bool { playEngine.isPlaying }
-    var currentAudioFileName: String = "a440_60s_-1dbfs.wav"
+    var audioSource: AudioSource = .builtIn(.a440Sine)
 
     var audioUnitCrashed = false
 
@@ -102,7 +102,7 @@ class AudioUnitHostModel {
         #endif
 
         setupNotifications()
-        restorePersistedAudioFile()
+        restorePersistedAudioSource()
 
         if subType == "????" {
             self.viewModel = AudioUnitViewModel(showAudioControls: false,
@@ -207,32 +207,72 @@ class AudioUnitHostModel {
         playEngine.stopPlaying()
     }
 
-    // MARK: - Audio File Selection
+    // MARK: - Audio Source Selection
 
-    private static let audioFilePathKey = "selectedAudioFilePath"
+    private static let audioSourceKey = "selectedAudioSource"
 
-    func selectAudioFile(_ url: URL) {
+    func selectBuiltIn(_ source: BuiltInAudioSource) {
+        guard let url = Self.bundleURL(for: source) else {
+            print("Built-in audio resource not found: \(source.resource.name).\(source.resource.ext)")
+            return
+        }
         do {
             try playEngine.setAudioFile(url)
-            currentAudioFileName = url.lastPathComponent
-            UserDefaults.standard.set(url.path, forKey: Self.audioFilePathKey)
+            audioSource = .builtIn(source)
+            UserDefaults.standard.set(AudioSourcePersistence.encode(audioSource), forKey: Self.audioSourceKey)
+        } catch {
+            print("Failed to load built-in audio source \(source.rawValue): \(error)")
+        }
+    }
+
+    func selectExternalFile(_ url: URL) {
+        do {
+            try playEngine.setAudioFile(url)
+            audioSource = .external(url)
+            UserDefaults.standard.set(AudioSourcePersistence.encode(audioSource), forKey: Self.audioSourceKey)
         } catch {
             print("Failed to load audio file: \(error)")
         }
     }
 
-    private func restorePersistedAudioFile() {
-        guard let path = UserDefaults.standard.string(forKey: Self.audioFilePathKey),
-              FileManager.default.fileExists(atPath: path) else {
-            UserDefaults.standard.removeObject(forKey: Self.audioFilePathKey)
+    private static func bundleURL(for source: BuiltInAudioSource) -> URL? {
+        Bundle.main.url(forResource: source.resource.name, withExtension: source.resource.ext)
+    }
+
+    private func restorePersistedAudioSource() {
+        guard let raw = UserDefaults.standard.string(forKey: Self.audioSourceKey),
+              let decoded = AudioSourcePersistence.decode(raw) else {
             return
         }
-        do {
-            try playEngine.setAudioFile(URL(fileURLWithPath: path))
-            currentAudioFileName = URL(fileURLWithPath: path).lastPathComponent
-        } catch {
-            print("Failed to restore persisted audio file: \(error)")
-            UserDefaults.standard.removeObject(forKey: Self.audioFilePathKey)
+        switch decoded {
+        case .builtIn(let source):
+            // Don't FileManager.fileExists on built-ins — they're bundle
+            // resources, not user files. If the lookup fails (stale rawValue
+            // from an older schema, renamed resource), fall back to the
+            // default and clear the key.
+            guard let url = Self.bundleURL(for: source) else {
+                UserDefaults.standard.removeObject(forKey: Self.audioSourceKey)
+                return
+            }
+            do {
+                try playEngine.setAudioFile(url)
+                audioSource = .builtIn(source)
+            } catch {
+                print("Failed to restore built-in audio source: \(error)")
+                UserDefaults.standard.removeObject(forKey: Self.audioSourceKey)
+            }
+        case .external(let url):
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                UserDefaults.standard.removeObject(forKey: Self.audioSourceKey)
+                return
+            }
+            do {
+                try playEngine.setAudioFile(url)
+                audioSource = .external(url)
+            } catch {
+                print("Failed to restore persisted audio file: \(error)")
+                UserDefaults.standard.removeObject(forKey: Self.audioSourceKey)
+            }
         }
     }
 }
