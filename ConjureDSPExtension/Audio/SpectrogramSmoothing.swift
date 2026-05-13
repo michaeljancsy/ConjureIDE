@@ -38,6 +38,16 @@ enum SpectrogramSmoothing {
     ///   - `|s − x| > bypassThresholdDB`: `s = x` (snap)
     ///   - otherwise:                     `s = α·x + (1-α)·s` (one-pole)
     ///
+    /// Operates in the dB domain. Since dB = 10·log10(power), running
+    /// a one-pole on dB values converges to the arithmetic mean of
+    /// dB inputs over the smoother's time window — equivalently, the
+    /// **geometric** mean of the linear magnitude. For visualization
+    /// of a stationary spectrum that's the right answer (perceptually,
+    /// equal dB deltas look equal); for energy-correct PSD estimation
+    /// of a stationary signal you'd want arithmetic mean in linear
+    /// power instead. This smoother is for display, not measurement,
+    /// so the dB-domain convergence is the desired behavior.
+    ///
     /// A/B verified load-bearing: with this disabled (and CGContext
     /// interpolation correctly pinned via withCGContext), vertical
     /// striping returns across the full spectrum, not just sidelobe
