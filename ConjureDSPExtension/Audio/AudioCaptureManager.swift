@@ -109,64 +109,9 @@ struct ColumnRingBuffer {
     }
 }
 
-// MARK: - CircularFloatBuffer
-
-/// Fixed-capacity circular buffer for audio sample accumulation.
-/// Replaces `[Float]` + `append`/`removeFirst` to avoid O(n) copies
-/// and capacity ratcheting.
-struct CircularFloatBuffer {
-    private var storage: [Float]
-    private var head: Int = 0     // read position
-    private var tail: Int = 0     // write position
-    private(set) var count: Int = 0
-    let capacity: Int
-
-    init(capacity: Int) {
-        self.capacity = capacity
-        self.storage = [Float](repeating: 0, count: capacity)
-    }
-
-    /// Append samples. Drops oldest if buffer would overflow.
-    mutating func append(contentsOf source: ArraySlice<Float>) {
-        for sample in source {
-            storage[tail] = sample
-            tail = (tail + 1) % capacity
-            if count < capacity {
-                count += 1
-            } else {
-                head = (head + 1) % capacity  // overwrite oldest
-            }
-        }
-    }
-
-    /// Copy the first `n` elements into `dest` (must have at least `n` elements).
-    /// Handles wrap-around transparently.
-    func copyPrefix(_ n: Int, into dest: inout [Float]) {
-        let n = min(n, count)
-        let firstChunk = min(n, capacity - head)
-        for i in 0..<firstChunk {
-            dest[i] = storage[head + i]
-        }
-        let secondChunk = n - firstChunk
-        for i in 0..<secondChunk {
-            dest[firstChunk + i] = storage[i]
-        }
-    }
-
-    /// Advance the read position by `n`, discarding the oldest samples. O(1).
-    mutating func dropFirst(_ n: Int) {
-        let n = min(n, count)
-        head = (head + n) % capacity
-        count -= n
-    }
-
-    /// Reset to empty state without releasing memory.
-    mutating func reset() {
-        head = 0
-        tail = 0
-        count = 0
-    }
-}
+// Note: `CircularFloatBuffer` and `SpectrogramSmoothing` live in their
+// own files in this directory so ConjureDSPLogicTests can share the
+// same source without hand-copying.
 
 /// Reads audio samples from the Rust kernel's lock-free ring buffers,
 /// computes FFT magnitudes via Accelerate/vDSP, and publishes results
@@ -573,8 +518,8 @@ final class AudioCaptureManager: ObservableObject {
             // to-peak in low-magnitude bins regardless of bin distance from
             // the peak, and it's large enough to render as visible stripes
             // through the magma palette.
-            applySpectrogramSmoothing(scratch: fftInputScratch,  state: &fftInputEMA)
-            applySpectrogramSmoothing(scratch: fftOutputScratch, state: &fftOutputEMA)
+            SpectrogramSmoothing.step(scratch: fftInputScratch,  state: &fftInputEMA)
+            SpectrogramSmoothing.step(scratch: fftOutputScratch, state: &fftOutputEMA)
 
             // Append to column ring buffers (zero heap allocation — copies into pre-allocated storage)
             inputColumnRing.append(from: fftInputEMA)
@@ -800,53 +745,13 @@ final class AudioCaptureManager: ObservableObject {
         }
     }
 
-    // MARK: - Spectrogram Smoothing
-
-    /// Symmetric per-bin smoother with a hard-step bypass, applied to the
-    /// spectrogram-only columns. Two branches:
-    ///   - **Hard-step bypass** (`|s - x| > 20` dB): `s = x`. Note-ons, note-offs,
-    ///     and signal start/stop land in a single column with no tail.
-    ///   - **Symmetric one-pole** (small step): `s = α·x + (1-α)·s` with α=0.15.
-    ///     Converges toward the time-averaged magnitude, killing the
-    ///     phase-dependent cross-term wobble that a Hann-windowed stationary
-    ///     sine produces between hops in its sidelobe bins.
-    ///
-    /// Earlier asymmetric design (attack-snap + gentle-release) was insufficient:
-    /// attack-snap fires on every upward step of a stationary wobble, leaving
-    /// a ~1 dB residual oscillation that maps to ~3 magma indices in the
-    /// bright sidelobe region — still visible as vertical stripes. Symmetric
-    /// smoothing trades slightly slower fade-in onset (~3-frame time constant
-    /// ≈ 65 ms at 46 cols/sec) for actual convergence to a uniform horizontal
-    /// band on stationary tones.
-    ///
-    /// Cost: one subtract + one abs + one branch + (usually) two multiplies +
-    /// one add per bin, twice per column. ~100k ops/sec at fftSize=2048,
-    /// 46 cols/sec — negligible.
-    private func applySpectrogramSmoothing(scratch: [Float], state: inout [Float]) {
-        // α=0.15 chosen empirically: the deep-sidelobe cross-term wobble for
-        // an off-bin sine through a Hann window can hit 5–8 dB peak-to-peak
-        // in bins where the positive and negative image responses are
-        // comparable. A one-pole at Nyquist alternation attenuates by
-        // α/(2-α) — α=0.3 gives -15 dB (~1 dB residual on 8 dB input, still
-        // visible); α=0.15 gives -22 dB (~0.5 dB residual, below one magma
-        // index step under visualFloor=-90). Time constant is ~7 columns
-        // ≈ 150 ms at 46 cols/sec — noticeable lag on dynamics but the
-        // 20 dB bypass catches the loud-step cases that matter most.
-        let alpha: Float = 0.15
-        let oneMinusAlpha: Float = 1.0 - alpha
-        let bypassThreshold: Float = 20.0
-        let n = scratch.count
-        guard state.count == n else { return }
-        for i in 0..<n {
-            let x = scratch[i]
-            let s = state[i]
-            if abs(s - x) > bypassThreshold {
-                state[i] = x
-            } else {
-                state[i] = alpha * x + oneMinusAlpha * s
-            }
-        }
-    }
+    // The per-bin smoother lives in SpectrogramSmoothing.swift so the
+    // logic-test target can compile against the same source. The earlier
+    // asymmetric (attack-snap + gentle-release) design left a ~1 dB
+    // residual oscillation on stationary wobble that mapped to ~3 magma
+    // indices in the bright sidelobe region — still visible as stripes —
+    // so we switched to the symmetric-with-bypass form documented in
+    // `SpectrogramSmoothing.step(...)`.
 
     // MARK: - Column Draining
 
