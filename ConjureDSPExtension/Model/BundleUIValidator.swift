@@ -1851,7 +1851,15 @@ enum BundleUIValidator {
         // Explicit author opt-out. Must scan before JS comment stripping,
         // since the suppression marker is conventionally a `// …` line
         // comment that `stripJSCommentsInScripts` would remove.
-        if withoutHTMLComments.contains("validator:ignore fft_redraw_gated_on_hop") {
+        //
+        // `\b` on both sides of the slug rejects substring collisions
+        // like `fft_redraw_gated_on_hop_v2` (would otherwise silence v1
+        // by accident). The leading `\b` is defensive — `\s+` already
+        // forces a whitespace boundary, but a future maintainer who
+        // relaxes `\s+` to `\s*` shouldn't open a
+        // `prefixfft_redraw_gated_on_hop` hole.
+        let marker = #"validator:ignore\s+\bfft_redraw_gated_on_hop\b"#
+        if withoutHTMLComments.range(of: marker, options: [.regularExpression]) != nil {
             return []
         }
 
@@ -1888,6 +1896,13 @@ enum BundleUIValidator {
         // (where `(` sits directly before `frame`, no comma). Single-arg
         // helpers like `smooth(frame.fftOut)` are not caught, but those
         // are rare in practice — real smoothers thread an accumulator.
+        //
+        // Known over-suppression: any non-first-arg call shape silences,
+        // including incidental debug logging like
+        // `console.log("fft", frame.fftOut)` or
+        // `assert(ok, frame.fftOut)`. A UI that has both the bug and a
+        // debug log line will go silent. Acceptable given the `warn`
+        // severity — intentional, not an oversight.
         let fftOutAsCallArg = #",\s*\bframe\s*\.\s*fftOut\s*[,)]"#
         if stripped.range(of: fftOutAsCallArg, options: [.regularExpression]) != nil {
             return []
@@ -1928,6 +1943,12 @@ enum BundleUIValidator {
     /// True when there is an `if (frame.fftOut) { … }` block whose body
     /// contains a canvas draw call AND whose closing `}` is not followed
     /// by an `else` clause.
+    ///
+    /// The brace walker tracks single- and double-quoted string state
+    /// (and the matching escape sequences) so a `"{}"` literal inside
+    /// the body doesn't desync the depth counter. The sibling-`else`
+    /// check scans the entire post-`}` tail for the next non-whitespace
+    /// token — survives any indentation depth.
     private static func invertedFftDrawBlockExists(in source: String) -> Bool {
         guard let ifRegex = try? NSRegularExpression(
             pattern: #"\bif\s*\(\s*frame\s*\.\s*fftOut\s*\)\s*\{"#,
@@ -1944,13 +1965,31 @@ enum BundleUIValidator {
 
         for m in matches {
             let bodyStart = m.range.location + m.range.length
-            // Brace-walk to the matching close. We entered just past the `{`.
+            // Brace-walk to the matching close. We entered just past the
+            // `{`. Track quote state so braces inside string literals
+            // don't desync the depth counter, and skip a character after
+            // a backslash inside a string so `"\""` and `"\\"` parse
+            // correctly.
             var depth = 1
             var i = bodyStart
+            var quote: unichar = 0       // 0 = outside, else 0x27 / 0x22
             while i < length && depth > 0 {
                 let c = ns.character(at: i)
-                if c == 0x7B { depth += 1 }
-                else if c == 0x7D { depth -= 1 }
+                if quote != 0 {
+                    if c == 0x5C /* \ */ {
+                        i += 2
+                        continue
+                    }
+                    if c == quote { quote = 0 }
+                } else {
+                    if c == 0x27 /* ' */ || c == 0x22 /* " */ {
+                        quote = c
+                    } else if c == 0x7B {
+                        depth += 1
+                    } else if c == 0x7D {
+                        depth -= 1
+                    }
+                }
                 i += 1
             }
             guard depth == 0 else { continue }
@@ -1961,9 +2000,12 @@ enum BundleUIValidator {
             guard drawRegex.firstMatch(in: body, range: NSRange(location: 0, length: bodyNS.length)) != nil else {
                 continue
             }
-            // Check for a sibling `else` clause after the matching `}`.
+            // Sibling `else` check: scan the entire post-`}` tail for
+            // the next non-whitespace character. Survives deep
+            // indentation and any whitespace shape (the previous 20-char
+            // window broke on ~5-level-deep nesting).
             let tailStart = i
-            let tailLen = min(20, length - tailStart)
+            let tailLen = length - tailStart
             if tailLen > 0 {
                 let tail = ns.substring(with: NSRange(location: tailStart, length: tailLen))
                 if tail.range(of: #"^\s*else\b"#, options: [.regularExpression]) != nil {
