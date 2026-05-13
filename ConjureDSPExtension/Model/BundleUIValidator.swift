@@ -1339,6 +1339,75 @@ enum BundleUIValidator {
         )
     }
 
+    /// Strip `// line comments` and `/* block comments */` from inside
+    /// `<script>...</script>` blocks. Used before scanning for JS code
+    /// patterns like `audio.onFrame(` so a commented-out subscription
+    /// (`// audio.onFrame(...) — TODO`) doesn't trigger false-positive
+    /// failures in `checkAudioFramesGate`.
+    ///
+    /// Limited to script-tag content — stripping `//` globally would
+    /// mangle HTML attributes that contain it (e.g. protocol-relative
+    /// URLs like `<a href="//cdn.example.com/...">`).
+    private static func stripJSCommentsInScripts(_ html: String) -> String {
+        guard let scriptRegex = try? NSRegularExpression(
+            pattern: #"<script\b[^>]*>([\s\S]*?)</script\s*>"#,
+            options: [.caseInsensitive]
+        ) else { return html }
+
+        let ns = html as NSString
+        let matches = scriptRegex.matches(in: html, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return html }
+
+        let blockComment = try? NSRegularExpression(pattern: #"/\*[\s\S]*?\*/"#, options: [])
+        let lineComment = try? NSRegularExpression(pattern: #"//[^\n\r]*"#, options: [])
+
+        var result = ""
+        var cursor = 0
+        for match in matches where match.numberOfRanges >= 2 {
+            let outerRange = match.range(at: 0)
+            let innerRange = match.range(at: 1)
+
+            // Prefix: everything between the previous script and this one.
+            result += ns.substring(with: NSRange(location: cursor, length: outerRange.location - cursor))
+
+            // Open tag, then stripped inner, then close tag — derived
+            // from the match ranges so we never touch the tag bytes
+            // themselves.
+            let openTagLen = innerRange.location - outerRange.location
+            let openTag = ns.substring(with: NSRange(location: outerRange.location, length: openTagLen))
+            let closeTagStart = innerRange.location + innerRange.length
+            let closeTagLen = (outerRange.location + outerRange.length) - closeTagStart
+            let closeTag = ns.substring(with: NSRange(location: closeTagStart, length: closeTagLen))
+
+            // Block comments first so a `*/` inside a stripped `//` line
+            // doesn't accidentally close an outer block.
+            var inner = ns.substring(with: innerRange)
+            let innerNS = inner as NSString
+            if let r = blockComment {
+                inner = r.stringByReplacingMatches(
+                    in: inner,
+                    range: NSRange(location: 0, length: innerNS.length),
+                    withTemplate: ""
+                )
+            }
+            if let r = lineComment {
+                let curNS = inner as NSString
+                inner = r.stringByReplacingMatches(
+                    in: inner,
+                    range: NSRange(location: 0, length: curNS.length),
+                    withTemplate: ""
+                )
+            }
+
+            result += openTag + inner + closeTag
+            cursor = outerRange.location + outerRange.length
+        }
+        if cursor < ns.length {
+            result += ns.substring(with: NSRange(location: cursor, length: ns.length - cursor))
+        }
+        return result
+    }
+
     /// Every `ConjureDSP.state.{get,set,onChange,onAnyChange}('K', ...)`
     /// reference in the UI must resolve to a key declared in the script's
     /// `STATE` block (Python) / `state_struct!` block (Rust). The bundle
@@ -1604,7 +1673,13 @@ enum BundleUIValidator {
         // unrelated identifiers (e.g. a custom `onFrame` method on the
         // user's own object). `ConjureDSP.audio.onFrame` and
         // `bridge.audio.onFrame` both end in `.audio.onFrame(`.
-        let directSubscription = scanned.range(
+        //
+        // Strip JS comments inside <script> blocks first so a commented-out
+        // `// audio.onFrame(...) — TODO` doesn't fire the gate. The strip
+        // is scoped to script content to avoid mangling HTML attributes
+        // that legitimately contain `//` (e.g. protocol-relative URLs).
+        let scriptStripped = stripJSCommentsInScripts(scanned)
+        let directSubscription = scriptStripped.range(
             of: #"\baudio\s*\.\s*onFrame\s*\("#,
             options: [.regularExpression]
         ) != nil

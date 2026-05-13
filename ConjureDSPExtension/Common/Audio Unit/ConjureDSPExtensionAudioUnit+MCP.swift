@@ -1672,6 +1672,13 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     /// Double-valued JSON numbers; both should land as Int. Returns nil
     /// if the value is missing or can't be unambiguously interpreted.
     static func coerceInt(_ value: Any?) -> Int? {
+        // Reject Bool explicitly BEFORE matching Int. Foundation bridges
+        // `NSNumber(value: true)` to both `as? Bool` (true) and
+        // `as? Int` (1), so without this guard `coerceInt(true)` would
+        // silently land as 1 — surprising for a caller expecting the
+        // schema-declared integer type to reject a boolean.
+        if value is Bool { return nil }
+
         switch value {
         case let i as Int:
             return i
