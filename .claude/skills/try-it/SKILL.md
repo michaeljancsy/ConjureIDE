@@ -255,13 +255,9 @@ Write the file with the Write tool. Tell the user where it landed using a markdo
 
 Ask: "File any findings as Asana tickets in the ConjureDSP Backlog?"
 
-For each finding the user wants filed, create an Asana task in project gid `1214126484601018`:
+For each finding the user wants filed, create an Asana task in project gid `1214126484601018`, **section `try-it motivated tasks` (gid `1214784911414048`)**. All `/try-it`-spawned tickets land in this one section so the user can see in one place what came out of this experimental flow vs other backlog work — don't fan them out across `Bugs` / `UX` / `Other` by topic.
 
-- Default section: `Other` (gid `1214134192758345`)
-- Use `Bugs` (gid `1214126485669453`) if it's a clear bug
-- Use `UX` (gid `1214126485654834`) if it's a UX/copy issue
-
-Title in imperative form, body summarizing the friction. Include a pointer to the log file path so future sessions can reference what the subagent saw.
+Title in imperative form, body summarizing the friction. Include a pointer to the log file path so future sessions can reference what the subagent saw. If the body description suggests a topical home (the finding is really a bug vs a docs change vs a UX tweak), record that in the body or title prefix (`Bug:` / `Docs:` / `UX:` / `API:`) rather than via section placement.
 
 After each ticket lands, **edit the summary file's `## Filed?` section** to add a line: `- [tag] one-liner → [Asana task title](url)`. This keeps the persistent record in sync with what's in flight.
 
