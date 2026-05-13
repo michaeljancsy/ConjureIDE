@@ -312,8 +312,11 @@ enum DSPDocumentation {
                     (e.g. a parametric EQ where each band picks a filter type):
                       Rust:   let mut bands: [BiquadCoeffs; 5] = [BiquadCoeffs::identity(); 5];
                       Python: bands = [BiquadCoeffs.identity() for _ in range(5)]
-                    Rust also implements Default, so `BiquadCoeffs::default()`
-                    and `#[derive(Default)]` on containing structs both work.
+                    Rust also implements Default for runtime use
+                    (`BiquadCoeffs::default()`, `#[derive(Default)]` on containing
+                    structs). Array initializers must use `::identity()` —
+                    trait methods aren't `const` on stable Rust, so
+                    `[BiquadCoeffs::default(); N]` won't compile.
 
     ## Biquad — stateful filter (Direct Form II Transposed)
 
@@ -2251,8 +2254,11 @@ enum DSPDocumentation {
                      filled at runtime (e.g. a parametric EQ where each band
                      picks a filter type):
                        let mut bands: [BiquadCoeffs; 5] = [BiquadCoeffs::identity(); 5];
-                     Also implements Default, so `BiquadCoeffs::default()` and
-                     `#[derive(Default)]` on containing structs both work.
+                     Also implements Default for runtime use
+                     (`BiquadCoeffs::default()`, `#[derive(Default)]` on
+                     containing structs). Array initializers must use
+                     `::identity()` — trait methods aren't `const` on stable
+                     Rust, so `[BiquadCoeffs::default(); N]` won't compile.
 
     ## Biquad — stateful filter (Direct Form II Transposed)
 
