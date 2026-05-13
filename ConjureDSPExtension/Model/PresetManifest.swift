@@ -207,7 +207,7 @@ extension PresetManifest {
     static let defaultScaffoldUI = UI(
         entryHTML: "ui/index.html",
         width: 520,
-        height: 260,
+        height: 380,
         fps: 30,
         audioFrames: false
     )
@@ -228,6 +228,15 @@ extension PresetManifest {
         if let v = overrides.height { ui.height = v }
         if let v = overrides.fps { ui.fps = v }
         if let v = overrides.audioFrames { ui.audioFrames = v }
+        // Bump fps default to 60 when the scaffold opts into audio frames
+        // and the caller didn't pin fps explicitly. Pure-control UIs keep
+        // fps 30 (no global render-budget regression); audio-frame UIs
+        // (scope / spectrum / meter) get the smoother default they
+        // typically end up requesting by hand anyway. Caught by
+        // 2026-05-13 /try-it sweep, Asana 1214786384716214.
+        if overrides.audioFrames == true && overrides.fps == nil {
+            ui.fps = 60
+        }
         return ui
     }
 

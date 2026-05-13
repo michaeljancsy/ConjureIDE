@@ -906,13 +906,7 @@ class PresetManager: ObservableObject {
             // through here silently drops it on every "+ Add Custom UI"
             // — exactly what bit `paramsNote` when it landed.
             var updated = bundle.manifest
-            updated.ui = PresetManifest.UI(
-                entryHTML: "ui/index.html",
-                width: 520,
-                height: 260,
-                fps: 30,
-                audioFrames: false
-            )
+            updated.ui = PresetManifest.defaultScaffoldUI
             return updated
         }()
         try updatedManifest.jsonData().write(to: manifestURL)

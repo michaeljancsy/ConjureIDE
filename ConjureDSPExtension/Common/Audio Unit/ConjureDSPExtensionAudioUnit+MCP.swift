@@ -482,15 +482,16 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             // frame sizing downstream.
             let width = Self.coerceInt(input["ui_width"], in: 120...1600)
             let height = Self.coerceInt(input["ui_height"], in: 120...1600)
+            let fps = Self.coerceInt(input["ui_fps"], in: 1...120)
             let audioFrames = Self.coerceBool(input["ui_audio_frames"])
-            if width == nil, height == nil, audioFrames == nil {
+            if width == nil, height == nil, fps == nil, audioFrames == nil {
                 return nil
             }
             return PresetManifest.UI(
                 entryHTML: nil,
                 width: width,
                 height: height,
-                fps: nil,
+                fps: fps,
                 audioFrames: audioFrames
             )
         }()

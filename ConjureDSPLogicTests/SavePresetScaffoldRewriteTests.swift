@@ -175,7 +175,10 @@ struct SavePresetScaffoldRewriteTests {
     }
 
     /// `audioFrames: true` opt-in must roundtrip through the override.
-    @Test("scaffoldUIOverrides honors audioFrames=true")
+    /// Also pins the gated fps default: when audio frames are on and the
+    /// caller didn't pin fps, the scaffold bumps fps to 60 so canvas-
+    /// driven UIs (scope/spectrum/meter) don't ship at 30Hz by default.
+    @Test("scaffoldUIOverrides honors audioFrames=true and bumps fps to 60 by default")
     func overridesHonorAudioFramesTrue() {
         let bare = PresetBundle.defaultManifest(language: .python, includeUI: false)
         let overrides = PresetManifest.UI(
@@ -190,6 +193,66 @@ struct SavePresetScaffoldRewriteTests {
         #expect(rewritten.ui?.audioFrames == true)
         #expect(rewritten.ui?.width == 320)
         #expect(rewritten.ui?.height == 360)
+        #expect(rewritten.ui?.fps == 60,
+                "audioFrames=true with no explicit fps must bump to 60 — canvas UIs are why we ship the override at all.")
+    }
+
+    /// Counterpart: audioFrames=false (or unset) leaves fps at the
+    /// 30Hz default. Pure-control UIs are the common case and shouldn't
+    /// pay double UI render budget.
+    @Test("scaffoldUIOverrides keeps fps at 30 when audioFrames is false")
+    func overridesKeepFpsAtThirtyWhenAudioFramesFalse() {
+        let bare = PresetBundle.defaultManifest(language: .python, includeUI: false)
+        let overrides = PresetManifest.UI(
+            entryHTML: nil,
+            width: nil, height: nil,
+            fps: nil, audioFrames: false
+        )
+        let rewritten = bare.applyingSaveRewrites(
+            scaffoldUI: true,
+            scaffoldUIOverrides: overrides
+        )
+        #expect(rewritten.ui?.audioFrames == false)
+        #expect(rewritten.ui?.fps == 30)
+    }
+
+    /// Explicit `ui_fps` wins over the gated default in both branches.
+    @Test("scaffoldUIOverrides honors explicit fps over the audioFrames-gated default")
+    func explicitFpsOverridesGatedDefault() {
+        let bare = PresetBundle.defaultManifest(language: .python, includeUI: false)
+
+        // audioFrames=true would normally gate fps to 60; explicit 45 wins.
+        let withFrames = PresetManifest.UI(
+            entryHTML: nil, width: nil, height: nil,
+            fps: 45, audioFrames: true
+        )
+        let r1 = bare.applyingSaveRewrites(
+            scaffoldUI: true, scaffoldUIOverrides: withFrames
+        )
+        #expect(r1.ui?.fps == 45)
+
+        // audioFrames=false branch: explicit 90 wins over the 30 default.
+        let withoutFrames = PresetManifest.UI(
+            entryHTML: nil, width: nil, height: nil,
+            fps: 90, audioFrames: false
+        )
+        let r2 = bare.applyingSaveRewrites(
+            scaffoldUI: true, scaffoldUIOverrides: withoutFrames
+        )
+        #expect(r2.ui?.fps == 90)
+    }
+
+    /// The defaultScaffoldUI itself: 520×380, fps 30, audioFrames false.
+    /// Pinned so an accidental edit can't silently shrink the box or
+    /// flip the documented opt-in semantics.
+    @Test("defaultScaffoldUI ships 520x380 / fps 30 / audioFrames false")
+    func defaultScaffoldUIShape() {
+        let ui = PresetManifest.defaultScaffoldUI
+        #expect(ui.width == 520)
+        #expect(ui.height == 380)
+        #expect(ui.fps == 30)
+        #expect(ui.audioFrames == false)
+        #expect(ui.entryHTML == "ui/index.html")
     }
 
     /// `scaffoldUIOverrides` must NOT clobber an existing ui block —
@@ -238,7 +301,8 @@ struct SavePresetScaffoldRewriteTests {
         #expect(manifest.ui?.height == 320)
         #expect(manifest.ui?.audioFrames == true)
         #expect(manifest.ui?.entryHTML == "ui/index.html", "inherited")
-        #expect(manifest.ui?.fps == 30, "inherited")
+        #expect(manifest.ui?.fps == 60,
+                "audioFrames=true gates fps default to 60 — canvas UIs need the headroom.")
     }
 
     // MARK: - End-to-end: encode + decode round-trip stays clean
