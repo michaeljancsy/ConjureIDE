@@ -38,64 +38,78 @@ struct SpectrogramView: View {
                 guard let buffer = bitmapBuffer, let fullImage = buffer.makeImage() else { return }
                 let col = buffer.writeColumn
 
-                // Pin nearest-neighbor interpolation on the bitmap draws.
-                // The buffer is one CG pixel per FFT column; on retina the
-                // Canvas backing store scales by 2× and the dual-half cropped
-                // draw places the seam at a non-integer point coordinate
-                // (`leftColumnsCount * scaleX`). Default interpolation
-                // (.medium / .low) resamples adjacent columns into one
-                // another, producing alternating bright/dim vertical bands
-                // for what should be a uniform horizontal line. `.none`
-                // preserves per-column fidelity.
+                // Pin nearest-neighbor interpolation directly on the CGContext.
+                //
+                // We can't rely on SwiftUI's `Image(...).interpolation(.none)`
+                // modifier when drawing into `GraphicsContext`: the modifier
+                // is not propagated through Canvas's resolved-image pipeline
+                // (`ResolvedImage` has no interpolation field), so the setting
+                // is silently ignored and CG falls back to its default
+                // interpolation. `withCGContext` exposes the underlying
+                // CGContext directly, where `interpolationQuality = .none`
+                // is documented to take effect.
+                //
+                // The CGContext provided by `withCGContext` already matches
+                // SwiftUI's y-down point coordinate space, but
+                // `CGContext.draw(_ image:, in:)` always paints the image
+                // y-up within the rect, so we flip the CTM around the rect's
+                // mid-height before drawing to keep bitmap row 0 (the top of
+                // the spectrogram, highest frequency) at the top of the view.
+                context.withCGContext { cg in
+                    cg.interpolationQuality = .none
 
-                if col == 0 {
-                    // Buffer is in natural order — draw as single image
-                    context.draw(
-                        Image(fullImage, scale: 1, label: Text(""))
-                            .interpolation(.none),
-                        in: CGRect(origin: .zero, size: size)
-                    )
-                } else {
                     let bufW = buffer.width
                     let bufH = buffer.height
-                    let leftColumnsCount = bufW - col  // older data: [col ..< bufW]
-                    let rightColumnsCount = col         // newer data: [0 ..< col]
 
-                    // Scale factors from pixel coords to view coords
-                    let scaleX = size.width / CGFloat(bufW)
-
-                    // Left portion (older data) — from pixel column `col` to end
-                    if leftColumnsCount > 0,
-                       let leftCrop = fullImage.cropping(to: CGRect(
-                           x: col, y: 0, width: leftColumnsCount, height: bufH
-                       )) {
-                        context.draw(
-                            Image(leftCrop, scale: 1, label: Text(""))
-                                .interpolation(.none),
-                            in: CGRect(
-                                x: 0,
-                                y: 0,
-                                width: CGFloat(leftColumnsCount) * scaleX,
-                                height: size.height
-                            )
-                        )
+                    func drawCGImage(_ image: CGImage, in rect: CGRect) {
+                        cg.saveGState()
+                        cg.translateBy(x: rect.minX, y: rect.maxY)
+                        cg.scaleBy(x: 1, y: -1)
+                        cg.draw(image, in: CGRect(x: 0, y: 0, width: rect.width, height: rect.height))
+                        cg.restoreGState()
                     }
 
-                    // Right portion (newer data) — from pixel column 0 to `col`
-                    if rightColumnsCount > 0,
-                       let rightCrop = fullImage.cropping(to: CGRect(
-                           x: 0, y: 0, width: rightColumnsCount, height: bufH
-                       )) {
-                        context.draw(
-                            Image(rightCrop, scale: 1, label: Text(""))
-                                .interpolation(.none),
-                            in: CGRect(
-                                x: CGFloat(leftColumnsCount) * scaleX,
-                                y: 0,
-                                width: CGFloat(rightColumnsCount) * scaleX,
-                                height: size.height
+                    if col == 0 {
+                        // Buffer is in natural order — draw as single image
+                        drawCGImage(fullImage, in: CGRect(origin: .zero, size: size))
+                    } else {
+                        let leftColumnsCount = bufW - col  // older data: [col ..< bufW]
+                        let rightColumnsCount = col         // newer data: [0 ..< col]
+
+                        // Scale factor from pixel coords to view coords
+                        let scaleX = size.width / CGFloat(bufW)
+
+                        // Left portion (older data) — from pixel column `col` to end
+                        if leftColumnsCount > 0,
+                           let leftCrop = fullImage.cropping(to: CGRect(
+                               x: col, y: 0, width: leftColumnsCount, height: bufH
+                           )) {
+                            drawCGImage(
+                                leftCrop,
+                                in: CGRect(
+                                    x: 0,
+                                    y: 0,
+                                    width: CGFloat(leftColumnsCount) * scaleX,
+                                    height: size.height
+                                )
                             )
-                        )
+                        }
+
+                        // Right portion (newer data) — from pixel column 0 to `col`
+                        if rightColumnsCount > 0,
+                           let rightCrop = fullImage.cropping(to: CGRect(
+                               x: 0, y: 0, width: rightColumnsCount, height: bufH
+                           )) {
+                            drawCGImage(
+                                rightCrop,
+                                in: CGRect(
+                                    x: CGFloat(leftColumnsCount) * scaleX,
+                                    y: 0,
+                                    width: CGFloat(rightColumnsCount) * scaleX,
+                                    height: size.height
+                                )
+                            )
+                        }
                     }
                 }
             }
