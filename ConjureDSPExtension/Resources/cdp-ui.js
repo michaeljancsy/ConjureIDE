@@ -32,7 +32,18 @@
  *   <cdp-slider param="0">                // maps any slider/integer-style param
  *   <cdp-toggle param="1">                // boolean switch for style:"toggle"
  *   <cdp-choice param="2">                // segmented (<=2 opts) or dropdown
- *   <cdp-xy param-x="0" param-y="1">      // 2D pad mapping two parameters
+ *   <cdp-xy param-x="0" param-y="1">      // 2D pad mapping two parameters.
+ *                                         // Auto-renders an axis-name +
+ *                                         // current-value row for each
+ *                                         // parameter below the pad. Add
+ *                                         // `no-labels` to suppress the
+ *                                         // built-in readout when you
+ *                                         // want to roll your own gutter
+ *                                         // (see preset_svf.cdp). There
+ *                                         // is no `label-x=` / `label-y=`
+ *                                         // override — if you need custom
+ *                                         // strings, use `no-labels` and
+ *                                         // place your own labels around it.
  *   <cdp-bargraph telemetry="x" count="N"> // N adjacent bars from a vector
  *                                         // telemetry slot (read-only)
  *
@@ -40,7 +51,8 @@
  *   1. CSS custom properties on the host — see THEME_VARS below for the
  *      full list. Cheap and composable.
  *   2. `::part(...)` selectors — `label`, `value`, `track`, `thumb`, `pad`,
- *      `puck`, `option`.
+ *      `puck`, `option`, `readout`, `axis-x-name`, `axis-x-value`,
+ *      `axis-y-name`, `axis-y-value`.
  *   3. Named slots — `label`, `value`.
  *
  * Theme auto-adoption:
@@ -890,11 +902,25 @@
         '  pointer-events: none;',
         '}',
         '.pad:focus { outline: 3px solid color-mix(in srgb, var(--cdp-accent) 30%, transparent); }',
-        '.xy-label { display: flex; gap: 8px; font-size: 0.9em; color: var(--cdp-muted); margin-top: 4px; }',
+        '.readout {',
+        '  display: grid;',
+        '  grid-template-columns: auto 1fr;',
+        '  gap: 2px 8px;',
+        '  width: 100%;',
+        '  max-width: var(--cdp-xy-size);',
+        '  font-size: 0.9em;',
+        '  color: var(--cdp-muted);',
+        '  margin-top: 6px;',
+        '}',
+        '.axis-value {',
+        '  text-align: right;',
+        '  font-variant-numeric: tabular-nums;',
+        '}',
+        ':host([no-labels]) .readout { display: none; }',
     ].join('\n');
 
     class CdpXY extends HTMLElement {
-        static get observedAttributes() { return ['param-x', 'param-y', 'invert-y']; }
+        static get observedAttributes() { return ['param-x', 'param-y', 'invert-y', 'no-labels']; }
         constructor() {
             super();
             var root = this.attachShadow({ mode: 'open' });
@@ -903,12 +929,19 @@
                 '<div class="pad" part="pad" tabindex="0">',
                 '  <div class="puck" part="puck"></div>',
                 '</div>',
-                '<div class="xy-label"><span class="vx"></span><span class="vy"></span></div>',
+                '<div class="readout" part="readout">',
+                '  <span class="axis-name x" part="axis-x-name"></span>',
+                '  <span class="axis-value x" part="axis-x-value"></span>',
+                '  <span class="axis-name y" part="axis-y-name"></span>',
+                '  <span class="axis-value y" part="axis-y-value"></span>',
+                '</div>',
             ].join('\n');
             this._pad = root.querySelector('.pad');
             this._puck = root.querySelector('.puck');
-            this._vx = root.querySelector('.vx');
-            this._vy = root.querySelector('.vy');
+            this._axisXName = root.querySelector('.axis-name.x');
+            this._axisXValue = root.querySelector('.axis-value.x');
+            this._axisYName = root.querySelector('.axis-name.y');
+            this._axisYValue = root.querySelector('.axis-value.y');
         }
 
         connectedCallback() {
@@ -935,6 +968,10 @@
             this._cx = control(ix);
             this._cy = control(iy);
             this._invertY = this.hasAttribute('invert-y');
+            // Always overwrite — _bind runs on every attributeChangedCallback,
+            // so a runtime `param-x` swap must update the axis name too.
+            this._axisXName.textContent = (this._cx.metadata && this._cx.metadata.name) || ('Param ' + ix);
+            this._axisYName.textContent = (this._cy.metadata && this._cy.metadata.name) || ('Param ' + iy);
             this._render();
             this._offX = this._cx.onChange(() => this._render());
             this._offY = this._cy.onChange(() => this._render());
@@ -947,8 +984,8 @@
             if (this._invertY) ty = 1 - ty;
             this._puck.style.left = (tx * 100) + '%';
             this._puck.style.top = (ty * 100) + '%';
-            this._vx.textContent = this._cx.format();
-            this._vy.textContent = this._cy.format();
+            this._axisXValue.textContent = this._cx.format();
+            this._axisYValue.textContent = this._cy.format();
         }
 
         _startDrag(e) {

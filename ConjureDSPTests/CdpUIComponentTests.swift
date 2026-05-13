@@ -594,6 +594,78 @@ struct CdpUIComponentTests {
         #expect(top == "75%")
     }
 
+    /// The built-in axis readout pulls names from `metadata.name` so
+    /// authors don't have to scatter their own labels around the pad
+    /// (which is what produces the floating "X → Cutoff / Y → Resonance"
+    /// layout that motivated this component change).
+    @Test func xyPadRendersAxisNamesFromMetadata() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [
+            ["name": "Cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log"],
+            ["name": "Resonance", "min": 0.5, "max": 10.0, "default": 0.707],
+        ])
+        try await createElement(h, tag: "cdp-xy", id: "xy", attrs: ["param-x": "0", "param-y": "1"])
+        let xName = try await h.eval("document.getElementById('xy').shadowRoot.querySelector('.axis-name.x').textContent") as? String
+        let yName = try await h.eval("document.getElementById('xy').shadowRoot.querySelector('.axis-name.y').textContent") as? String
+        #expect(xName == "Cutoff")
+        #expect(yName == "Resonance")
+    }
+
+    /// Value text in the axis readout must follow the puck during a
+    /// drag. Mirrors `xyPadPuckMovesOnInternalDrag` — same pointerdown,
+    /// same expected normalized positions (30% / 40%) — but checks the
+    /// formatted-value strings instead of puck position.
+    @Test func xyPadAxisValuesUpdateOnDrag() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [
+            ["name": "X", "min": 0.0, "max": 1.0, "default": 0.0],
+            ["name": "Y", "min": 0.0, "max": 1.0, "default": 0.0],
+        ])
+        try await createElement(h, tag: "cdp-xy", id: "xy", attrs: ["param-x": "0", "param-y": "1"])
+        try await h.eval("""
+            var xy = document.getElementById('xy');
+            var pad = xy.shadowRoot.querySelector('.pad');
+            var rect = pad.getBoundingClientRect();
+            var e = new PointerEvent('pointerdown', {
+                pointerId: 1,
+                clientX: rect.left + rect.width * 0.3,
+                clientY: rect.top + rect.height * 0.4,
+                bubbles: true
+            });
+            pad.dispatchEvent(e);
+        """)
+        // `format()` for a min:0/max:1 param with no unit routes through
+        // `String(+v.toFixed(3))` — 0.3 / 0.4 round-trip cleanly to
+        // "0.3" / "0.4" (trailing zeros stripped by the unary plus).
+        let xVal = try await h.eval("document.getElementById('xy').shadowRoot.querySelector('.axis-value.x').textContent") as? String
+        let yVal = try await h.eval("document.getElementById('xy').shadowRoot.querySelector('.axis-value.y').textContent") as? String
+        #expect(xVal == "0.3")
+        #expect(yVal == "0.4")
+    }
+
+    /// `no-labels` is the documented opt-out for layouts that roll their
+    /// own gutter (preset_svf, etc.). Hides the readout entirely so the
+    /// author's labels aren't duplicated by the built-in row.
+    @Test func xyPadNoLabelsAttributeHidesReadout() async throws {
+        let h = try Harness(html: "")
+        try await h.waitForNavigationAndSetup()
+        try await initWithMetadata(h, [
+            ["name": "X", "min": 0.0, "max": 1.0, "default": 0.5],
+            ["name": "Y", "min": 0.0, "max": 1.0, "default": 0.5],
+        ])
+        try await createElement(h, tag: "cdp-xy", id: "xy", attrs: ["param-x": "0", "param-y": "1", "no-labels": ""])
+        let display = try await h.eval("""
+            (function() {
+                var xy = document.getElementById('xy');
+                var readout = xy.shadowRoot.querySelector('.readout');
+                return getComputedStyle(readout).display;
+            })()
+        """) as? String
+        #expect(display == "none")
+    }
+
     // MARK: - <cdp-knob>
 
     /// Initial render: indicator rotation, label, value, and the

@@ -1100,6 +1100,10 @@ enum DSPDocumentation {
       (≤2 options) or dropdown (3+), driven by manifest `options`.
     - `<cdp-xy>` — 2D pad. `invert-y` flips so low Y = bottom (standard
       graph orientation — omit for "screen" orientation where top = 0).
+      Auto-renders one `name + value` row per axis (X first, Y second)
+      below the pad, sourced from each control's `metadata.name`. Add
+      `no-labels` to suppress the readout when you're managing your own
+      gutter or legend (see `preset_svf.cdp` for the pattern).
     - `<cdp-knob>` — circular knob. Vertical drag changes the value
       (200px = 0..1; Shift = fine control); also supports mouse-wheel,
       arrow keys (Shift = fine, Page = ±0.20), Home/End for min/max,
@@ -1246,7 +1250,9 @@ enum DSPDocumentation {
 
     The components expose `::part(label)`, `::part(value)`, `::part(track)`,
     `::part(face)`, `::part(rim)`, `::part(indicator)`, `::part(puck)`,
-    `::part(option)`, `::part(thumb)` for restyling without re-rendering.
+    `::part(option)`, `::part(thumb)`, `::part(readout)`,
+    `::part(axis-x-name)`, `::part(axis-x-value)`, `::part(axis-y-name)`,
+    `::part(axis-y-value)` for restyling without re-rendering.
 
     ### Hand-rolled bindings need a declarative twin
 
@@ -1336,7 +1342,8 @@ enum DSPDocumentation {
     ```
 
     Exposed `::part()` names: `label`, `value`, `track`, `thumb`, `pad`,
-    `puck`, `option`.
+    `puck`, `option`, `readout`, `axis-x-name`, `axis-x-value`,
+    `axis-y-name`, `axis-y-value`.
 
     ## Audio frames (opt-in, for visualizers)
 
