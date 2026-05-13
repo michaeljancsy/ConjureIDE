@@ -55,13 +55,26 @@ struct ContentView: View {
 
             if hostModel.viewModel.showAudioControls {
                 HStack(spacing: 8) {
-                    Button("Choose File\u{2026}") {
-                        showFilePicker = true
+                    Menu {
+                        ForEach(BuiltInAudioSource.allCases) { source in
+                            Button(source.displayName) {
+                                hostModel.selectBuiltIn(source)
+                            }
+                        }
+                        if case .external(let url) = hostModel.audioSource {
+                            Divider()
+                            Button(url.lastPathComponent) {}
+                                .disabled(true)
+                        }
+                        Divider()
+                        Button("Other\u{2026}") {
+                            showFilePicker = true
+                        }
+                    } label: {
+                        Text(hostModel.audioSource.displayName)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
-                    Text(hostModel.currentAudioFileName)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
                     Spacer()
                     Button {
                         hostModel.isPlaying ? hostModel.stopPlaying() : hostModel.startPlaying()
@@ -77,7 +90,7 @@ struct ContentView: View {
                     allowsMultipleSelection: false
                 ) { result in
                     if case .success(let urls) = result, let url = urls.first {
-                        hostModel.selectAudioFile(url)
+                        hostModel.selectExternalFile(url)
                     }
                 }
             }
