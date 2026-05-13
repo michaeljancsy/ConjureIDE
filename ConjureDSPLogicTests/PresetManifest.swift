@@ -175,7 +175,7 @@ extension PresetManifest {
     static let defaultScaffoldUI = UI(
         entryHTML: "ui/index.html",
         width: 520,
-        height: 260,
+        height: 380,
         fps: 30,
         audioFrames: false
     )
@@ -191,6 +191,9 @@ extension PresetManifest {
         if let v = overrides.height { ui.height = v }
         if let v = overrides.fps { ui.fps = v }
         if let v = overrides.audioFrames { ui.audioFrames = v }
+        if overrides.audioFrames == true && overrides.fps == nil {
+            ui.fps = 60
+        }
         return ui
     }
 
