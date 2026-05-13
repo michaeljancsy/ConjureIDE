@@ -97,8 +97,12 @@ struct BundleUISmokeTesterTests {
     // MARK: - Happy path
 
     @Test @MainActor func passesCleanBundle() async throws {
+        // Body's default 8-px UA margin would push scroll extent past
+        // the 400-pt manifest width by ~16 px (over the 8-px tolerance)
+        // and trip contentOverflow → .warn. Real preset UIs reset this
+        // (and the scaffold does too); the test UI matches.
         let ui = """
-        <!doctype html><html><body>
+        <!doctype html><html><body style="margin:0;padding:0">
           <cdp-slider param="cutoff"></cdp-slider>
           <cdp-slider param="resonance"></cdp-slider>
         </body></html>
@@ -225,8 +229,10 @@ struct BundleUISmokeTesterTests {
     // MARK: - xy pad binding
 
     @Test @MainActor func cdpXYBindsBothAxes() async throws {
+        // Reset UA margin so scroll extent fits within the 400×240
+        // manifest — otherwise contentOverflow trips status to .warn.
         let ui = """
-        <!doctype html><html><body>
+        <!doctype html><html><body style="margin:0;padding:0">
           <cdp-xy param-x="cutoff" param-y="resonance"></cdp-xy>
         </body></html>
         """
@@ -300,6 +306,11 @@ struct BundleUISmokeTesterTests {
         #expect(heightOver >= 350,
                 "expected height overflow ~400pt; got \(heightOver)")
         #expect(overflow.rendered.height >= overflow.declared.height + heightOver)
+        // contentOverflow promotes status to .warn — confirms the
+        // status mapping that was inconsistent before (block was
+        // populated but status stayed .pass).
+        #expect(report.status == .warn,
+                "non-nil contentOverflow must promote status to .warn; got \(report.status)")
     }
 
     @Test @MainActor func omitsContentOverflowWhenContentFits() async throws {
@@ -339,6 +350,8 @@ struct BundleUISmokeTesterTests {
         #expect(report.readyFired)
         #expect(report.contentOverflow == nil,
                 "content_overflow must be nil when the layout fits within the declared dimensions; got \(String(describing: report.contentOverflow))")
+        #expect(report.status == .pass,
+                "fits-within-manifest layout must stay .pass; got \(report.status)")
     }
 
     // MARK: - Text contrast pass
@@ -387,7 +400,7 @@ struct BundleUISmokeTesterTests {
         let ui = """
         <!doctype html><html>
         <head><style>:root { color-scheme: dark; }</style></head>
-        <body style="background: #111; color: #f5f5f5;">
+        <body style="background: #111; color: #f5f5f5; margin:0; padding:0">
           <p>Cutoff</p>
           <cdp-slider param="cutoff"></cdp-slider>
           <cdp-slider param="resonance"></cdp-slider>
@@ -1272,6 +1285,8 @@ struct BundleUISmokeTesterTests {
                 "expected width underflow ~160px; got \(widthUnder)")
         #expect(overflow.underByPixels.height == nil,
                 "height underByPixels must be nil when height underflow is not flagged; got \(String(describing: overflow.underByPixels.height))")
+        #expect(report.status == .warn,
+                "underflow must promote status to .warn; got \(report.status)")
     }
 
     @Test @MainActor func widthUnderflowMaskedWhenWidthOverflows() async throws {
@@ -1312,6 +1327,8 @@ struct BundleUISmokeTesterTests {
                 "width underflow must be masked when overflow fires on the same axis; got underflows=\(overflow.underflows)")
         #expect(!overflow.underflows.contains("height"),
                 "height underflow is not surfaced at runtime; got underflows=\(overflow.underflows)")
+        #expect(report.status == .warn,
+                "any contentOverflow (over or under) promotes status to .warn; got \(report.status)")
     }
 
     @Test @MainActor func omitsContentOverflowWhenLayoutMatchesManifest() async throws {
@@ -1341,5 +1358,7 @@ struct BundleUISmokeTesterTests {
         #expect(report.readyFired)
         #expect(report.contentOverflow == nil,
                 "content_overflow must be nil when layout fills the manifest viewport; got \(String(describing: report.contentOverflow))")
+        #expect(report.status == .pass,
+                "fitting layout must stay .pass; got \(report.status)")
     }
 }

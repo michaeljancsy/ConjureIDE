@@ -824,6 +824,15 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         // runtime misconfigurations — the viz still loads but draws
         // wrong, so they warn rather than fail. Pinning: a non-empty
         // canvas_issues array must never collapse into `.pass`.
+        //
+        // contentOverflow promotes to warn whenever it's present at
+        // all — overflow means rendered content clips past the
+        // manifest, underflow means the body leaves whitespace inside
+        // it; both are real layout-mismatch symptoms the agent should
+        // react to. A non-nil contentOverflow must never collapse to
+        // `.pass`. (Earlier the block was data-only and didn't affect
+        // status — that was inconsistent with how other layout signals
+        // like canvas_issues are surfaced.)
         let failureKinds: Set<String> = [
             "error", "unhandledrejection", "load", "harness", "callback_exception"
         ]
@@ -836,6 +845,7 @@ final class BundleUISmokeTester: NSObject, WKNavigationDelegate, WKScriptMessage
         } else if paramCoverage.contains(where: { !$0.hasInteractiveBinding })
                   || !lowContrastTexts.isEmpty
                   || !canvasIssues.isEmpty
+                  || contentOverflow != nil
         {
             status = .warn
         } else {
