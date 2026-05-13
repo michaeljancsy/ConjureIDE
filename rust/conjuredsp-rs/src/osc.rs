@@ -27,7 +27,22 @@ pub enum Waveform {
 ///     }
 /// });
 /// ```
-#[derive(Clone, Copy)]
+///
+/// # `Copy` deliberately not derived
+///
+/// `Lfo` carries per-sample state (`phase`, `value`). If it were `Copy`,
+/// `persist!(LFO: Lfo = Lfo::new())` would compile — the wrong macro —
+/// and the author would lose phase every render block. Dropping `Copy`
+/// makes that line an `E0277: Lfo: Copy is not satisfied` error.
+/// Use `[const { Lfo::new() }; N]` (inline-const array-repeat) wherever
+/// the literal would otherwise require `Copy`.
+///
+/// ```compile_fail
+/// use conjuredsp::*;
+/// // persist! requires T: Copy. Lfo isn't — that's deliberate.
+/// persist!(WRONG: Lfo = Lfo::new());
+/// ```
+#[derive(Clone)]
 pub struct Lfo {
     phase: f64,
     freq: f64,

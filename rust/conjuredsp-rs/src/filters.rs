@@ -163,7 +163,7 @@ impl Default for BiquadCoeffs {
 /// round-trip:
 ///
 /// ```ignore
-/// persist_mut!(BIQUADS: [Biquad; 2] = [Biquad::new(); 2]);
+/// persist_mut!(BIQUADS: [Biquad; 2] = [const { Biquad::new() }; 2]);
 ///
 /// // Inside process! { ctx => … }:
 /// BIQUADS.with_mut(|biquads| {
@@ -176,7 +176,25 @@ impl Default for BiquadCoeffs {
 ///     }
 /// });
 /// ```
-#[derive(Clone, Copy)]
+///
+/// # `Copy` deliberately not derived
+///
+/// `Biquad` carries per-sample filter state (`z1`, `z2`). If it were
+/// `Copy`, `persist!(BAD_BIQUAD: Biquad = Biquad::new())` would
+/// compile — the wrong macro for a per-sample `&mut self` block —
+/// and the author would lose state every render block. Dropping `Copy`
+/// makes that line an `E0277: Biquad: Copy is not satisfied` error,
+/// turning the convention from `PersistMutDriftGuardTests` into a
+/// compile-time guarantee. Use `[const { Biquad::new() }; N]`
+/// (inline-const array-repeat) wherever the literal would otherwise
+/// require `Copy`.
+///
+/// ```compile_fail
+/// use conjuredsp::*;
+/// // persist! requires T: Copy. Biquad isn't — that's deliberate.
+/// persist!(WRONG: Biquad = Biquad::new());
+/// ```
+#[derive(Clone)]
 pub struct Biquad {
     b0: f64,
     b1: f64,

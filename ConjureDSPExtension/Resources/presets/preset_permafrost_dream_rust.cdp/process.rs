@@ -34,11 +34,11 @@ const GRAIN_MS: f64 = 80.0;
 const BP_HZ: [f64; 3] = [2500.0, 3700.0, 5100.0];
 const BREATH_HZ: f64 = 0.09;
 
-persist_mut!(TAIL_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_mut!(TAIL_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_mut!(SHIFT_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_mut!(GLASS_BP: [[Biquad; 3]; 2] = [[Biquad::new(); 3]; 2]);
-persist_mut!(HP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(TAIL_DL: [DelayLine<MAX_DL>; 2] = [const { DelayLine::new() }; 2]);
+persist_mut!(TAIL_LP: [Biquad; 2] = [const { Biquad::new() }; 2]);
+persist_mut!(SHIFT_DL: [DelayLine<MAX_DL>; 2] = [const { DelayLine::new() }; 2]);
+persist_mut!(GLASS_BP: [[Biquad; 3]; 2] = [const { [const { Biquad::new() }; 3] }; 2]);
+persist_mut!(HP: [Biquad; 2] = [const { Biquad::new() }; 2]);
 persist!(GRAIN_PHASE: f64 = 0.0);
 persist_mut!(BREATH_LFO: Lfo = Lfo::new());
 

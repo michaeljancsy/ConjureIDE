@@ -68,29 +68,29 @@ struct Comb {
 }
 
 persist_mut!(TRANSPORT: Transport = Transport {
-    dl: [DelayLine::new(); 2],
+    dl: [const { DelayLine::new() }; 2],
     lfo_wow: Lfo::new(),
     lfo_flutter: Lfo::new(),
 });
 persist_mut!(EMPHASIS: Emphasis = Emphasis {
-    pre: [Biquad::new(); 2],
-    de: [Biquad::new(); 2],
+    pre: [const { Biquad::new() }; 2],
+    de: [const { Biquad::new() }; 2],
 });
 persist_mut!(SHELVES: Shelves = Shelves {
-    lo: [Biquad::new(); 2],
-    hi: [Biquad::new(); 2],
+    lo: [const { Biquad::new() }; 2],
+    hi: [const { Biquad::new() }; 2],
 });
 persist_mut!(PRINT: Print = Print {
-    dl: [DelayLine::new(); 2],
-    lp: [Biquad::new(); 2],
+    dl: [const { DelayLine::new() }; 2],
+    lp: [const { Biquad::new() }; 2],
 });
 persist_mut!(ECHO: Echo = Echo {
-    dl: [DelayLine::new(); 2],
-    lp: [Biquad::new(); 2],
+    dl: [const { DelayLine::new() }; 2],
+    lp: [const { Biquad::new() }; 2],
     fb: [0.0; 2],
 });
 persist_mut!(COMB: Comb = Comb {
-    dl: [DelayLine::new(); 2],
+    dl: [const { DelayLine::new() }; 2],
     fb: [0.0; 2],
 });
 

@@ -34,11 +34,11 @@ const JITTER_BASE_MS: f64 = 4.0;
 const SHIFT_BASE_MS: f64 = 40.0;
 const GRAIN_MS: f64 = 50.0;
 
-persist_mut!(TREM_LFO: [Lfo; 3] = [Lfo::new(); 3]);
-persist_mut!(BP: [[Biquad; 3]; 2] = [[Biquad::new(); 3]; 2]);
-persist_mut!(JITTER_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_mut!(TREM_LFO: [Lfo; 3] = [const { Lfo::new() }; 3]);
+persist_mut!(BP: [[Biquad; 3]; 2] = [const { [const { Biquad::new() }; 3] }; 2]);
+persist_mut!(JITTER_DL: [DelayLine<MAX_DL>; 2] = [const { DelayLine::new() }; 2]);
 persist_mut!(JITTER_LFO: Lfo = Lfo::new());
-persist_mut!(SHIFT_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_mut!(SHIFT_DL: [DelayLine<MAX_DL>; 2] = [const { DelayLine::new() }; 2]);
 persist!(GRAIN_PHASE: f64 = 0.0);
 
 process! { ctx =>

@@ -1058,7 +1058,7 @@ macro_rules! persist {
 /// ```ignore
 /// use conjuredsp::*;
 ///
-/// persist_mut!(DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2]);
+/// persist_mut!(DELAYS: [DelayLine<48000>; 2] = [const { DelayLine::new() }; 2]);
 ///
 /// // Inside process():
 /// DELAYS.with_mut(|d| {

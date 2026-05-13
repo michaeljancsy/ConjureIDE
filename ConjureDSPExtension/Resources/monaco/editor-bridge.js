@@ -908,7 +908,7 @@ const bridge = {
 
                     sug('Biquad', Kind.Snippet,
                         [
-                            'persist_mut!(${1:BIQUADS}: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH]);',
+                            'persist_mut!(${1:BIQUADS}: [Biquad; MAX_CH] = [const { Biquad::new() }; MAX_CH]);',
                             '',
                             '// Inside process! { ctx => ... }:',
                             'let coeffs = BiquadCoeffs::lowpass(${2:cutoff_hz} as f64, ${3:0.707}, ctx.sample_rate() as f64);',
@@ -929,7 +929,7 @@ const bridge = {
 
                     sug('DelayLine', Kind.Snippet,
                         [
-                            'persist_mut!(${1:DELAYS}: [DelayLine<${2:48000}>; MAX_CH] = [DelayLine::new(); MAX_CH]);',
+                            'persist_mut!(${1:DELAYS}: [DelayLine<${2:48000}>; MAX_CH] = [const { DelayLine::new() }; MAX_CH]);',
                             '',
                             '// Inside process! { ctx => ... }:',
                             '${1:DELAYS}.with_mut(|d| {',

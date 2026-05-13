@@ -28,7 +28,7 @@ params! {
 const BP_HZ: f64 = 1000.0;
 const DROPOUT_HZ: f64 = 0.37;
 
-persist_mut!(BP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(BP: [Biquad; 2] = [const { Biquad::new() }; 2]);
 persist_mut!(CROSS_FB: [f64; 2] = [0.0; 2]);
 persist_mut!(DROPOUT_LFO: Lfo = Lfo::new());
 

@@ -20,7 +20,7 @@ params! {
 }
 
 // Persistent state. +1 to match Python's DelayLine(LATENCY + 1) sizing.
-persist_mut!(DELAYS: [DelayLine<257>; 2] = [DelayLine::new(); 2]);
+persist_mut!(DELAYS: [DelayLine<257>; 2] = [const { DelayLine::new() }; 2]);
 persist!(GAIN: f64 = 1.0);
 
 process! { ctx =>

@@ -6,7 +6,7 @@
 /// methods on `&mut self` directly:
 ///
 /// ```ignore
-/// persist_mut!(DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2]);
+/// persist_mut!(DELAYS: [DelayLine<48000>; 2] = [const { DelayLine::new() }; 2]);
 ///
 /// // Inside process! { ctx => … }:
 /// DELAYS.with_mut(|d| {
@@ -18,7 +18,23 @@
 ///     }
 /// });
 /// ```
-#[derive(Clone, Copy)]
+///
+/// # `Copy` deliberately not derived
+///
+/// `DelayLine` carries the per-sample buffer + write head. If it were
+/// `Copy`, `persist!(DL: DelayLine<N> = DelayLine::new())` would compile
+/// — the wrong macro — and the author would lose the delay tail every
+/// render block. Dropping `Copy` makes that line an
+/// `E0277: DelayLine: Copy is not satisfied` error. Use
+/// `[const { DelayLine::new() }; N]` (inline-const array-repeat)
+/// wherever the literal would otherwise require `Copy`.
+///
+/// ```compile_fail
+/// use conjuredsp::*;
+/// // persist! requires T: Copy. DelayLine isn't — that's deliberate.
+/// persist!(WRONG: DelayLine<48000> = DelayLine::new());
+/// ```
+#[derive(Clone)]
 pub struct DelayLine<const SIZE: usize> {
     buf: [f32; SIZE],
     write_pos: usize,

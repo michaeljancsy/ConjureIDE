@@ -32,12 +32,12 @@ const GRAIN_MS: f64 = 100.0;
 const BELL_HZ: f64 = 880.0;
 const TAIL_MS: f64 = 420.0;
 
-persist_mut!(SHIFT_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
+persist_mut!(SHIFT_DL: [DelayLine<MAX_DL>; 2] = [const { DelayLine::new() }; 2]);
 persist_mut!(CLOSE_LP: [f64; 2] = [0.0; 2]);
-persist_mut!(BELL_F: [Biquad; 2] = [Biquad::new(); 2]);
-persist_mut!(SUB_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_mut!(TAIL_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_mut!(TAIL_LP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(BELL_F: [Biquad; 2] = [const { Biquad::new() }; 2]);
+persist_mut!(SUB_LP: [Biquad; 2] = [const { Biquad::new() }; 2]);
+persist_mut!(TAIL_DL: [DelayLine<MAX_DL>; 2] = [const { DelayLine::new() }; 2]);
+persist_mut!(TAIL_LP: [Biquad; 2] = [const { Biquad::new() }; 2]);
 persist_mut!(TAIL_FB: [f64; 2] = [0.0; 2]);
 persist!(GRAIN_PHASE: f64 = 0.0);
 

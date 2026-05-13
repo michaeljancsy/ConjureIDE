@@ -29,9 +29,9 @@ const HIGH_FREQ: f64 = 5000.0;
 const Q: f64 = 0.707;
 
 // Biquad state per channel.
-persist_mut!(LOW: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH]);
-persist_mut!(MID: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH]);
-persist_mut!(HIGH: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH]);
+persist_mut!(LOW: [Biquad; MAX_CH] = [const { Biquad::new() }; MAX_CH]);
+persist_mut!(MID: [Biquad; MAX_CH] = [const { Biquad::new() }; MAX_CH]);
+persist_mut!(HIGH: [Biquad; MAX_CH] = [const { Biquad::new() }; MAX_CH]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;

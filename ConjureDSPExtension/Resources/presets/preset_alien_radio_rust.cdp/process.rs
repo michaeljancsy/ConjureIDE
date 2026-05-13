@@ -65,15 +65,15 @@ struct Tail {
 }
 
 persist_mut!(FILTERS: Filters = Filters {
-    bp: [Biquad::new(); 2],
-    hp: [Biquad::new(); 2],
+    bp: [const { Biquad::new() }; 2],
+    hp: [const { Biquad::new() }; 2],
 });
 persist_mut!(CARRIERS: Carriers = Carriers {
-    lfo_car: [Lfo::new(); 2],
+    lfo_car: [const { Lfo::new() }; 2],
     lfo_drift: Lfo::new(),
 });
 persist_mut!(SQUEAL: Squeal = Squeal {
-    dl: [DelayLine::new(); 2],
+    dl: [const { DelayLine::new() }; 2],
     fb: [0.0; 2],
 });
 persist_mut!(CRUSHER: Crusher = Crusher {

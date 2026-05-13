@@ -32,11 +32,11 @@ const AP_G: f64 = 0.55;
 const COMB_MS: [f64; 2] = [113.0, 167.0];
 
 persist_mut!(ENV: [f64; 2] = [0.0; 2]);
-persist_mut!(SUB_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_mut!(AP: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2]);
+persist_mut!(SUB_LP: [Biquad; 2] = [const { Biquad::new() }; 2]);
+persist_mut!(AP: [[DelayLine<MAX_DL>; 2]; 2] = [const { [const { DelayLine::new() }; 2] }; 2]);
 persist_mut!(APS: [[f64; 2]; 2] = [[0.0; 2]; 2]);
-persist_mut!(COMBS: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2]);
-persist_mut!(COMB_LP: [[Biquad; 2]; 2] = [[Biquad::new(); 2]; 2]);
+persist_mut!(COMBS: [[DelayLine<MAX_DL>; 2]; 2] = [const { [const { DelayLine::new() }; 2] }; 2]);
+persist_mut!(COMB_LP: [[Biquad; 2]; 2] = [const { [const { Biquad::new() }; 2] }; 2]);
 persist_mut!(COMB_FB_BUF: [[f64; 2]; 2] = [[0.0; 2]; 2]);
 persist!(LCG_STATE: u64 = 0x13579BDF);
 

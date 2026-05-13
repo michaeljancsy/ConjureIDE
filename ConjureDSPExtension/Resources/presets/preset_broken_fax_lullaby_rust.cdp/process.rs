@@ -65,20 +65,20 @@ struct Atmos {
 }
 
 persist_mut!(CHORUS: Chorus = Chorus {
-    dl: [DelayLine::new(); 2],
+    dl: [const { DelayLine::new() }; 2],
     lfo: Lfo::new(),
 });
 persist_mut!(CARRIERS: Carriers = Carriers {
-    lfo_car: [Lfo::new(); 4],
-    lfo_gates: [Lfo::new(); 4],
+    lfo_car: [const { Lfo::new() }; 4],
+    lfo_gates: [const { Lfo::new() }; 4],
 });
 persist_mut!(FILTERS: Filters = Filters {
-    bp: [Biquad::new(); 2],
-    hp: [Biquad::new(); 2],
+    bp: [const { Biquad::new() }; 2],
+    hp: [const { Biquad::new() }; 2],
 });
 persist_mut!(CRUSHER: Crusher = Crusher {
     sh_held: [0.0; 2],
-    comb_dl: [DelayLine::new(); 2],
+    comb_dl: [const { DelayLine::new() }; 2],
     comb_fb: [0.0; 2],
 });
 persist_mut!(ATMOS: Atmos = Atmos {
