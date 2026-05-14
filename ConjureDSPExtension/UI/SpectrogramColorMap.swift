@@ -31,32 +31,45 @@ enum SpectrogramColorMap {
     }()
 
     /// Branded colormap using the ConjureDSP palette (`assets/palette.md`).
-    /// Ramp: deep navy → soft purple → warm gold.
+    /// Ramp: deep navy → dark plum → soft purple → warm gold.
     ///
-    /// Three anchors chosen so that perceived luminance (0.299R + 0.587G + 0.114B)
-    /// ramps roughly linearly across the range:
-    ///   navy ≈ 0.06, purple ≈ 0.57, gold ≈ 0.83.
-    /// Brushed metal and hot pink anchors were dropped — metal was too close to
-    /// navy to earn its own segment, and hot pink had the same luminance as purple,
-    /// flattening the mid-loud portion of the spectrogram.
+    /// Four anchors tuned to approximate matplotlib magma's perceptually-
+    /// linear luminance curve while preserving brand colors at the loud end:
+    ///   navy ≈ 0.06, dark plum ≈ 0.16, soft purple ≈ 0.57, gold ≈ 0.83.
+    ///
+    /// Earlier two-segment design (navy → soft purple → gold at t=0.5)
+    /// placed the brand `#B06EFF` at the midpoint — luminance 0.57. Under a
+    /// dB→t linear normalization this painted off-fundamental sidelobes
+    /// (e.g. −60 dB at t=0.5 with floor=−120) as fully saturated bright
+    /// purple even though they're below typical listening thresholds. The
+    /// dark-plum anchor at t=0.5 keeps the low-dB range dark while the
+    /// shifted-up brand purple at t=0.75 reserves the bright purple for
+    /// loud signal content.
     private static func magmaColor(_ t: Float) -> (Float, Float, Float) {
         // Anchor colors (sRGB, 0–1):
-        //  0.0 #0D0F1A deep navy     (0.051, 0.059, 0.102)
-        //  0.5 #B06EFF soft purple   (0.690, 0.431, 1.000)
-        //  1.0 #FFD166 warm gold     (1.000, 0.820, 0.400)
+        //  0.00 #0D0F1A deep navy     (0.051, 0.059, 0.102)  L ≈ 0.06
+        //  0.50 #4A1F70 dark plum     (0.290, 0.122, 0.439)  L ≈ 0.16
+        //  0.75 #B06EFF soft purple   (0.690, 0.431, 1.000)  L ≈ 0.57
+        //  1.00 #FFD166 warm gold     (1.000, 0.820, 0.400)  L ≈ 0.83
         let r: Float
         let g: Float
         let b: Float
 
         if t < 0.5 {
-            // Deep navy → soft purple
+            // Deep navy → dark plum
             let s = t / 0.5
-            r = 0.051 + s * (0.690 - 0.051)
-            g = 0.059 + s * (0.431 - 0.059)
-            b = 0.102 + s * (1.000 - 0.102)
+            r = 0.051 + s * (0.290 - 0.051)
+            g = 0.059 + s * (0.122 - 0.059)
+            b = 0.102 + s * (0.439 - 0.102)
+        } else if t < 0.75 {
+            // Dark plum → soft purple (brand)
+            let s = (t - 0.5) / 0.25
+            r = 0.290 + s * (0.690 - 0.290)
+            g = 0.122 + s * (0.431 - 0.122)
+            b = 0.439 + s * (1.000 - 0.439)
         } else {
             // Soft purple → warm gold
-            let s = (t - 0.5) / 0.5
+            let s = (t - 0.75) / 0.25
             r = 0.690 + s * (1.000 - 0.690)
             g = 0.431 + s * (0.820 - 0.431)
             b = 1.000 + s * (0.400 - 1.000)

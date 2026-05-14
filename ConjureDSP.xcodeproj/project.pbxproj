@@ -26,6 +26,9 @@
 		AA33000300000001DAEMON /* DaemonStatusChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA33000100000001DAEMON /* DaemonStatusChecker.swift */; };
 		AA44000200000001MCPINF /* MCPInstanceInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA44000100000001MCPINF /* MCPInstanceInfo.swift */; };
 		AA44000300000001MCPINF /* MCPInstanceInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA44000100000001MCPINF /* MCPInstanceInfo.swift */; };
+		AA55000300000001COLORMAP /* SpectrogramColorMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA55000100000001COLORMAP /* SpectrogramColorMap.swift */; };
+		AA66000300000001SMOOTH /* SpectrogramSmoothing.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA66000100000001SMOOTH /* SpectrogramSmoothing.swift */; };
+		AA77000300000001CIRCBUF /* CircularFloatBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA77000100000001CIRCBUF /* CircularFloatBuffer.swift */; };
 		AA5E00012F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00022F5013850036AAB6 /* Sentry */; };
 		AA5E00032F5013850036AAB6 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = AA5E00042F5013850036AAB6 /* Sentry */; };
 /* End PBXBuildFile section */
@@ -132,6 +135,9 @@
 		AA22000100000001SHARED /* MCPToolProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPToolProvider.swift; sourceTree = "<group>"; };
 		AA33000100000001DAEMON /* DaemonStatusChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DaemonStatusChecker.swift; path = ConjureDSPExtension/Terminal/DaemonStatusChecker.swift; sourceTree = "<group>"; };
 		AA44000100000001MCPINF /* MCPInstanceInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MCPInstanceInfo.swift; path = ConjureDSPExtension/Terminal/MCPInstanceInfo.swift; sourceTree = "<group>"; };
+		AA55000100000001COLORMAP /* SpectrogramColorMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SpectrogramColorMap.swift; path = ConjureDSPExtension/UI/SpectrogramColorMap.swift; sourceTree = "<group>"; };
+		AA66000100000001SMOOTH /* SpectrogramSmoothing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SpectrogramSmoothing.swift; path = ConjureDSPExtension/Audio/SpectrogramSmoothing.swift; sourceTree = "<group>"; };
+		AA77000100000001CIRCBUF /* CircularFloatBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CircularFloatBuffer.swift; path = ConjureDSPExtension/Audio/CircularFloatBuffer.swift; sourceTree = "<group>"; };
 		AABB000100LOGICPRODREF1 /* ConjureDSPLogicTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConjureDSPLogicTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AABB00022F5013850036AAB6 /* rust */ = {isa = PBXFileReference; lastKnownFileType = folder; path = rust; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -329,6 +335,9 @@
 				AA11000700000001MIXPANEL /* Analytics.swift */,
 				AA33000100000001DAEMON /* DaemonStatusChecker.swift */,
 				AA44000100000001MCPINF /* MCPInstanceInfo.swift */,
+				AA55000100000001COLORMAP /* SpectrogramColorMap.swift */,
+				AA66000100000001SMOOTH /* SpectrogramSmoothing.swift */,
+				AA77000100000001CIRCBUF /* CircularFloatBuffer.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -1091,6 +1100,9 @@
 			files = (
 				AA33000300000001DAEMON /* DaemonStatusChecker.swift in Sources */,
 				AA44000300000001MCPINF /* MCPInstanceInfo.swift in Sources */,
+				AA55000300000001COLORMAP /* SpectrogramColorMap.swift in Sources */,
+				AA66000300000001SMOOTH /* SpectrogramSmoothing.swift in Sources */,
+				AA77000300000001CIRCBUF /* CircularFloatBuffer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

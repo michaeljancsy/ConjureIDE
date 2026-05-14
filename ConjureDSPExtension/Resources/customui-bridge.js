@@ -25,6 +25,18 @@
  *                                       // includes fftIn/fftOut (arrays of dB
  *                                       // bins, ~8 KB/tick; opt-in so basic VU
  *                                       // meters don't pay the encode cost).
+ *                                       // Note: fftIn/fftOut are the RAW per-
+ *                                       // tick FFT magnitudes in dB. The host
+ *                                       // app's built-in spectrogram smooths
+ *                                       // its column display to damp the
+ *                                       // hop-to-hop cross-term wobble of
+ *                                       // windowed-sine FFTs; custom UIs
+ *                                       // building their own spectrum view
+ *                                       // get raw bins here so they can
+ *                                       // apply their own smoothing if they
+ *                                       // want. Don't expect a custom <cdp-scope>
+ *                                       // to look identical to the built-in
+ *                                       // spectrogram on a stationary tone.
  *                                       // Subscribing the first callback
  *                                       // activates audio capture; the last
  *                                       // offFrame() deactivates it.

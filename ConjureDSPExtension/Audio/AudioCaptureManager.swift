@@ -109,64 +109,9 @@ struct ColumnRingBuffer {
     }
 }
 
-// MARK: - CircularFloatBuffer
-
-/// Fixed-capacity circular buffer for audio sample accumulation.
-/// Replaces `[Float]` + `append`/`removeFirst` to avoid O(n) copies
-/// and capacity ratcheting.
-struct CircularFloatBuffer {
-    private var storage: [Float]
-    private var head: Int = 0     // read position
-    private var tail: Int = 0     // write position
-    private(set) var count: Int = 0
-    let capacity: Int
-
-    init(capacity: Int) {
-        self.capacity = capacity
-        self.storage = [Float](repeating: 0, count: capacity)
-    }
-
-    /// Append samples. Drops oldest if buffer would overflow.
-    mutating func append(contentsOf source: ArraySlice<Float>) {
-        for sample in source {
-            storage[tail] = sample
-            tail = (tail + 1) % capacity
-            if count < capacity {
-                count += 1
-            } else {
-                head = (head + 1) % capacity  // overwrite oldest
-            }
-        }
-    }
-
-    /// Copy the first `n` elements into `dest` (must have at least `n` elements).
-    /// Handles wrap-around transparently.
-    func copyPrefix(_ n: Int, into dest: inout [Float]) {
-        let n = min(n, count)
-        let firstChunk = min(n, capacity - head)
-        for i in 0..<firstChunk {
-            dest[i] = storage[head + i]
-        }
-        let secondChunk = n - firstChunk
-        for i in 0..<secondChunk {
-            dest[firstChunk + i] = storage[i]
-        }
-    }
-
-    /// Advance the read position by `n`, discarding the oldest samples. O(1).
-    mutating func dropFirst(_ n: Int) {
-        let n = min(n, count)
-        head = (head + n) % capacity
-        count -= n
-    }
-
-    /// Reset to empty state without releasing memory.
-    mutating func reset() {
-        head = 0
-        tail = 0
-        count = 0
-    }
-}
+// Note: `CircularFloatBuffer` and `SpectrogramSmoothing` live in their
+// own files in this directory so ConjureDSPLogicTests can share the
+// same source without hand-copying.
 
 /// Reads audio samples from the Rust kernel's lock-free ring buffers,
 /// computes FFT magnitudes via Accelerate/vDSP, and publishes results
@@ -207,8 +152,19 @@ final class AudioCaptureManager: ObservableObject {
         }
     }
 
-    /// Floor dB value — magnitudes below this are clamped.
+    /// Floor dB value — magnitudes below this are clamped by the FFT path.
+    /// Numerical guard only; not the value used for color mapping.
     static let floorDB: Float = -120.0
+
+    /// Visual floor for the magma spectrogram colormap. Content below this
+    /// dB threshold paints as deep navy / silence regardless of how far
+    /// below it sits in the FFT output. Combined with the re-anchored
+    /// magma palette (dark plum at t=0.5), this keeps the off-fundamental
+    /// sidelobe region in the lower-frequency log scale from rendering as
+    /// a wide visible purple haze — the math content is preserved in the
+    /// column rings (still clamped at `floorDB`), but the visualization
+    /// treats sub-audibility energy as silence.
+    static let visualFloorDB: Float = -90.0
 
     /// Hop size as a fraction of fftSize (0.5 = 50% overlap).
     private let hopFraction: Float = 0.5
@@ -301,6 +257,19 @@ final class AudioCaptureManager: ObservableObject {
     // Pre-allocated scratch buffers for FFT results (reused across tick calls)
     private var fftInputScratch:  [Float] = []
     private var fftOutputScratch: [Float] = []
+
+    // Per-bin smoother state for the spectrogram column rings only.
+    // Damps the small phase-dependent magnitude cross-term that windowed-sine
+    // FFT produces between hops — visible in the screenshot as vertical
+    // striping in sidelobe bins even after the rendering-interpolation fix.
+    // The smoother is symmetric (α=0.15 one-pole on small dB steps) with a
+    // 20 dB hard-step bypass so note-ons / note-offs / signal start-stop
+    // render as sharp single-column events; only quasi-stationary wobble
+    // gets averaged. `fftInputScratch` / `fftOutputScratch` stay un-smoothed
+    // so the diff and normDiff channels (and the audioFramePublisher)
+    // continue to see raw dB.
+    private var fftInputEMA:  [Float] = []
+    private var fftOutputEMA: [Float] = []
 
     // Telemetry: cached metadata + reusable read buffer.
     // The cached-JSON string lets us re-parse names only when the
@@ -396,6 +365,12 @@ final class AudioCaptureManager: ObservableObject {
         fftInputScratch  = [Float](repeating: 0, count: halfN)
         fftOutputScratch = [Float](repeating: 0, count: halfN)
 
+        // EMA state for spectrogram smoothing — init to floorDB so the first
+        // column post-resize bypass-snaps to actual signal (state→signal step
+        // exceeds the 20 dB bypass threshold) instead of ramping up from 0 dB.
+        fftInputEMA  = [Float](repeating: Self.floorDB, count: halfN)
+        fftOutputEMA = [Float](repeating: Self.floorDB, count: halfN)
+
         // Linearization buffer for circular accumulator → contiguous FFT input
         linearizationBuffer = [Float](repeating: 0, count: n)
 
@@ -428,6 +403,13 @@ final class AudioCaptureManager: ObservableObject {
         // Reset accumulators
         inputAccumulator.reset()
         outputAccumulator.reset()
+
+        // Reset EMA state so resuming capture after a stop doesn't carry
+        // stale per-bin magnitudes from a prior session.
+        for i in 0..<fftInputEMA.count {
+            fftInputEMA[i]  = Self.floorDB
+            fftOutputEMA[i] = Self.floorDB
+        }
 
         displayLink?.invalidate()
 
@@ -520,9 +502,28 @@ final class AudioCaptureManager: ObservableObject {
             computeFFT(samples: linearizationBuffer, result: &fftOutputScratch)
             outputAccumulator.dropFirst(hopSize)
 
+            // Smooth each bin into per-channel EMA state, then append the
+            // smoothed values to the spectrogram column rings. The diff /
+            // normDiff path below continues to consume the un-smoothed
+            // `fftInputScratch` / `fftOutputScratch`, so the passthrough-
+            // zero-diff invariant is preserved. See `SpectrogramSmoothing.step`
+            // for the symmetric-with-bypass rule details.
+            //
+            // A/B verified load-bearing: with the smoother disabled (and
+            // CGContext interpolation correctly pinned via withCGContext),
+            // vertical striping returns across the full spectrum — not just
+            // sidelobe bins but every low-amplitude bin including those
+            // above the fundamental. The cross-term wobble in `|X[k]|` for
+            // a real Hann-windowed off-bin sine is genuinely 5–8 dB peak-
+            // to-peak in low-magnitude bins regardless of bin distance from
+            // the peak, and it's large enough to render as visible stripes
+            // through the magma palette.
+            SpectrogramSmoothing.step(scratch: fftInputScratch,  state: &fftInputEMA)
+            SpectrogramSmoothing.step(scratch: fftOutputScratch, state: &fftOutputEMA)
+
             // Append to column ring buffers (zero heap allocation — copies into pre-allocated storage)
-            inputColumnRing.append(from: fftInputScratch)
-            outputColumnRing.append(from: fftOutputScratch)
+            inputColumnRing.append(from: fftInputEMA)
+            outputColumnRing.append(from: fftOutputEMA)
 
             computeDifference(input: fftInputScratch, output: fftOutputScratch)
             differenceColumnRing.append(from: diffScratch)
@@ -743,6 +744,14 @@ final class AudioCaptureManager: ObservableObject {
             result[i] = fftDBValues[i]
         }
     }
+
+    // The per-bin smoother lives in SpectrogramSmoothing.swift so the
+    // logic-test target can compile against the same source. The earlier
+    // asymmetric (attack-snap + gentle-release) design left a ~1 dB
+    // residual oscillation on stationary wobble that mapped to ~3 magma
+    // indices in the bright sidelobe region — still visible as stripes —
+    // so we switched to the symmetric-with-bypass form documented in
+    // `SpectrogramSmoothing.step(...)`.
 
     // MARK: - Column Draining
 
