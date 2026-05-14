@@ -25,6 +25,11 @@ use std::sync::OnceLock;
 /// setenv() thread-safety issue when multiple AU instances init concurrently.
 static TONES_DIR_INIT: OnceLock<()> = OnceLock::new();
 
+/// Guards `install_panic_logger` so the hook installs exactly once even if
+/// multiple AU instances each call `dsp_kernel_create`.
+#[cfg(debug_assertions)]
+static PANIC_HOOK_INSTALLED: OnceLock<()> = OnceLock::new();
+
 /// Debug-only panic hook that writes the panic message + location +
 /// backtrace to the App Group container before the default hook runs.
 /// Behavior-neutral — does NOT catch the panic, so `extern "C"` boundaries
@@ -38,9 +43,6 @@ static TONES_DIR_INIT: OnceLock<()> = OnceLock::new();
 /// to via its `com.apple.security.application-groups` entitlement.
 ///
 /// `cfg(debug_assertions)`-gated so it never ships in Release.
-#[cfg(debug_assertions)]
-static PANIC_HOOK_INSTALLED: OnceLock<()> = OnceLock::new();
-
 #[cfg(debug_assertions)]
 fn install_panic_logger() {
     PANIC_HOOK_INSTALLED.get_or_init(|| {
