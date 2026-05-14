@@ -1363,6 +1363,138 @@ struct BundleUIValidatorTests {
                 "vertical 16x140 slider must not trigger; issues: \(report.issues)")
     }
 
+    /// Manifest that binds cdp-xy via param-x / param-y. Shared by the
+    /// pseudo-element regression tests so they don't trip param_no_ui_binding.
+    private let xyManifest = """
+    {
+      "schemaVersion": 2, "entry": "process.py", "language": "python",
+      "params": [
+        {"name": "x", "min": 0.0, "max": 1.0, "default": 0.0, "unit": ""},
+        {"name": "y", "min": 0.0, "max": 1.0, "default": 0.0, "unit": ""}
+      ],
+      "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+    }
+    """
+
+    /// The docs example from DSPDocumentation.swift used to trigger
+    /// control_explicit_size_too_small on cdp-xy::part(puck) — the puck is
+    /// a visual marker (pointer-events: none) so its size has no bearing
+    /// on the XY pad's grab target. The validator should now skip
+    /// pseudo-element sub-selectors entirely.
+    @Test func docsExampleVerbatimPasses() throws {
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-xy::part(puck) { width: 18px; height: 18px; }
+          cdp-xy::part(pad)  { border-radius: 10px; height: 220px; }
+        </style></head><body>
+          <cdp-xy param-x="x" param-y="y"></cdp-xy>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: xyManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "control_explicit_size_too_small" },
+                "docs cdp-xy::part(puck/pad) example must not warn; issues: \(report.issues)")
+    }
+
+    @Test func puckPseudoElementNotFlagged() throws {
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-xy::part(puck) { width: 18px; height: 18px; }
+        </style></head><body>
+          <cdp-xy param-x="x" param-y="y"></cdp-xy>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: xyManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "control_explicit_size_too_small" },
+                "cdp-xy::part(puck) is a visual marker — must not warn; issues: \(report.issues)")
+    }
+
+    @Test func knobFacePseudoElementNotFlagged() throws {
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-knob::part(face) { width: 10px; height: 10px; }
+        </style></head><body>
+          <cdp-knob param="cutoff"></cdp-knob>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "control_explicit_size_too_small" },
+                "cdp-knob::part(face) is a shadow part — must not warn; issues: \(report.issues)")
+    }
+
+    /// Guard against over-exempting: a host-level rule that undersizes the
+    /// host (no pseudo-element) should still produce a warning.
+    @Test func hostStyleStillFlagged() throws {
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-xy { width: 30px; height: 30px; }
+        </style></head><body>
+          <cdp-xy param-x="x" param-y="y"></cdp-xy>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: xyManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let xyIssues = report.issues.filter {
+            $0.check == "control_explicit_size_too_small" && $0.message.contains("cdp-xy")
+        }
+        #expect(!xyIssues.isEmpty,
+                "host-level cdp-xy at 30×30 (< 60×60) must still warn; issues: \(report.issues)")
+    }
+
+    /// Comma-list selector mixing a part and a host: the part half must be
+    /// exempt while the host half is still evaluated. cdp-toggle minimum is
+    /// 28×16 (controlSizeMinimums in BundleUIValidator.swift:542), so
+    /// width:30 passes (>28) and height:8 fails (<16) — exactly one
+    /// control_explicit_size_too_small issue should fire, on the height
+    /// axis. The validator embeds the original selector text in the message
+    /// (sourceLabel at BundleUIValidator.swift:568), so the message
+    /// literally contains "cdp-knob::part(face), cdp-toggle" — assert via
+    /// the dimension string ("height:8px"), not via host-name absence.
+    @Test func compoundSelectorMixedHostAndPart() throws {
+        // Manifest binds both cutoff + an on toggle so the UI passes
+        // param_no_ui_binding.
+        let manifest = """
+        {
+          "schemaVersion": 2, "entry": "process.py", "language": "python",
+          "params": [
+            {"name": "cutoff", "min": 20.0, "max": 20000.0, "default": 1000.0, "unit": "Hz", "curve": "log"},
+            {"name": "on", "min": 0.0, "max": 1.0, "default": 0.0, "unit": "", "style": "toggle"}
+          ],
+          "ui": {"entryHTML": "ui/index.html", "width": 400, "height": 240, "fps": 30, "audioFrames": false}
+        }
+        """
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-knob::part(face), cdp-toggle { width: 30px; height: 8px; }
+        </style></head><body>
+          <cdp-knob param="cutoff"></cdp-knob>
+          <cdp-toggle param="on"></cdp-toggle>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: manifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        let sizeIssues = report.issues.filter { $0.check == "control_explicit_size_too_small" }
+        #expect(sizeIssues.count == 1,
+                "expected exactly one size issue (cdp-toggle height); got \(sizeIssues.count): \(sizeIssues)")
+        if let only = sizeIssues.first {
+            #expect(only.message.contains("height:8px"),
+                    "single issue should be the cdp-toggle height warning; message: \(only.message)")
+            #expect(!only.message.contains("width:30px"),
+                    "width:30 > cdp-toggle min 28 — must not fire a width warning; message: \(only.message)")
+        }
+    }
+
     // MARK: - param_no_ui_binding (inverse coverage check)
 
     /// Two manifest params; UI binds only one. The unbound one should fail.

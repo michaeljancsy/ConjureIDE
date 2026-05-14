@@ -623,6 +623,19 @@ enum BundleUIValidator {
         ) else { return [] }
         for sub in parts {
             let s = String(sub)
+            // Skip pseudo-element sub-selectors (::part/::before/::after/::slotted)
+            // — they target shadow sub-elements, not the host's hit target, so the
+            // host-minimum heuristic does not apply. Trade-off: blanket ::part skip
+            // means undersized cdp-xy::part(pad) and cdp-slider::part(track) — which
+            // ARE hit targets — stop being statically caught. BundleUISmokeTester
+            // covers the xy case via host bounding-rect measurement; the slider
+            // track gap is accepted (rare in practice, visually obvious during
+            // preview).
+            let lower = s.lowercased()
+            if lower.contains("::part(") || lower.contains("::before") ||
+               lower.contains("::after") || lower.contains("::slotted(") {
+                continue
+            }
             let ns = s as NSString
             for m in regex.matches(in: s, range: NSRange(location: 0, length: ns.length)) where m.numberOfRanges >= 2 {
                 tags.insert("cdp-" + ns.substring(with: m.range(at: 1)).lowercased())
