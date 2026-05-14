@@ -1396,6 +1396,43 @@ struct BundleUIValidatorTests {
                 "docs cdp-xy::part(puck/pad) example must not warn; issues: \(report.issues)")
     }
 
+    /// `cdp-xy::part(pad)` IS the hit target for the XY pad (unlike puck,
+    /// face, etc.), but the static skip exempts it anyway — we accept that
+    /// coverage gap because the runtime smoke tester catches an undersized
+    /// pad via host bounding-rect measurement when the host rect tracks the
+    /// pad. Pinning this in a test documents the intentional trade-off.
+    @Test func padPseudoElementNotFlagged_acceptedCoverageGap() throws {
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-xy::part(pad) { width: 40px; height: 40px; }
+        </style></head><body>
+          <cdp-xy param-x="x" param-y="y"></cdp-xy>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: xyManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "control_explicit_size_too_small" },
+                "cdp-xy::part(pad) undersize is an accepted static gap (runtime tier covers it); issues: \(report.issues)")
+    }
+
+    /// CSS2 single-colon pseudo-element syntax (`cdp-xy:before`) is still
+    /// honored by browsers. The skip must match both the CSS2 and CSS3
+    /// forms; today this is implemented by checking the substring `:before`
+    /// (which `::before` also contains).
+    @Test func css2SingleColonPseudoElementNotFlagged() throws {
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-xy:before { width: 18px; height: 18px; content: ""; display: block; }
+        </style></head><body>
+          <cdp-xy param-x="x" param-y="y"></cdp-xy>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: xyManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(!report.issues.contains { $0.check == "control_explicit_size_too_small" },
+                "CSS2 single-colon :before is a pseudo-element — must not warn; issues: \(report.issues)")
+    }
+
     @Test func puckPseudoElementNotFlagged() throws {
         let ui = """
         <!doctype html><html><head><style>

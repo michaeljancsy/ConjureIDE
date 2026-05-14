@@ -632,8 +632,12 @@ enum BundleUIValidator {
             // track gap is accepted (rare in practice, visually obvious during
             // preview).
             let lower = s.lowercased()
-            if lower.contains("::part(") || lower.contains("::before") ||
-               lower.contains("::after") || lower.contains("::slotted(") {
+            // Use the single-colon prefix on :before/:after so we cover both
+            // the CSS2 form (`cdp-xy:before`) and the CSS3 form
+            // (`cdp-xy::before`) — `::before` itself contains the substring
+            // `:before`. ::part(/::slotted( only exist in the CSS3 form.
+            if lower.contains("::part(") || lower.contains(":before") ||
+               lower.contains(":after") || lower.contains("::slotted(") {
                 continue
             }
             let ns = s as NSString
