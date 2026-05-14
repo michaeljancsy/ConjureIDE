@@ -52,9 +52,9 @@ struct DocsDriftGuardTests {
         // legitimately referenced from inside macros, and we check
         // user-facing teaching files only.
         ("static mut FILTERS",
-         "use `persist_mut!(FILTERS: [Biquad; N] = [Biquad::new(); N]);` then `FILTERS.with_mut(|f| { f[c].set_coeffs(coeffs); for i in 0..frames { f[c].process_sample(x) } })`"),
+         "use `persist_mut!(FILTERS: [Biquad; N] = [const { Biquad::new() }; N]);` then `FILTERS.with_mut(|f| { f[c].set_coeffs(coeffs); for i in 0..frames { f[c].process_sample(x) } })`"),
         ("static mut DELAYS",
-         "use `persist_mut!(DELAYS: [DelayLine<N>; M] = [DelayLine::new(); M]);` + `DELAYS.with_mut(|d| …)`"),
+         "use `persist_mut!(DELAYS: [DelayLine<N>; M] = [const { DelayLine::new() }; M]);` + `DELAYS.with_mut(|d| …)`"),
         ("static mut LFO",
          "use `persist_mut!(LFO: Lfo = Lfo::new());` then `LFO.with_mut(|l| { l.init(sr, rate); for i in 0..frames { let v = l.tick(); … } })`"),
         ("static mut WRITE_POS",

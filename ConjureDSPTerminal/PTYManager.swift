@@ -698,7 +698,7 @@ final class PTYManager {
     //    `.with_mut(|val| …)` — closure gets `&mut T` so `&mut self`
     //    methods (`process_sample`, `tick`, `write`) run directly.
     // No `unsafe {}` at the call site.
-    persist_mut!(FILTERS: [Biquad; 2] = [Biquad::new(); 2]);
+    persist_mut!(FILTERS: [Biquad; 2] = [const { Biquad::new() }; 2]);
 
     // `process! { ctx => … }` is the entry point. It emits the zero-arg
     // `extern "C" fn process()` the host calls and the I/O buffer statics

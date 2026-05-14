@@ -28,20 +28,20 @@ import Testing
 @Suite("FactoryRustPresetsCompileTests")
 struct FactoryRustPresetsCompileTests {
 
-    @Test
+    /// Gated on the `RUN_FACTORY_COMPILE_TESTS` env var: ~54 rustc
+    /// compiles ≈ 9 s on a populated build cache (libconjuredsp.rlib is
+    /// pre-built), too slow for the standard logic-test run. Set the
+    /// var when landing a cross-cutting library or macro change.
+    ///
+    /// At the shell, invoke with
+    /// `TEST_RUNNER_RUN_FACTORY_COMPILE_TESTS=1 xcodebuild …` —
+    /// xcodebuild strips the `TEST_RUNNER_` prefix before the test
+    /// process sees the var. Using `.enabled(if:)` means the test is
+    /// reported as **skipped** when the var isn't set, not silently
+    /// passed; a reader sees "skipped" in test output and can tell
+    /// the sweep didn't run.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["RUN_FACTORY_COMPILE_TESTS"] == "1"))
     func everyFactoryPresetCompiles() throws {
-        guard ProcessInfo.processInfo.environment["RUN_FACTORY_COMPILE_TESTS"] == "1" else {
-            // Default-off: ~54 rustc compiles ≈ 9 s on a populated build
-            // cache (libconjuredsp.rlib is pre-built), too slow for the
-            // standard logic-test run. Opt in via env var when landing a
-            // cross-cutting library or macro change. Reads
-            // `RUN_FACTORY_COMPILE_TESTS` — at the shell, invoke with
-            // `TEST_RUNNER_RUN_FACTORY_COMPILE_TESTS=1 xcodebuild …`
-            // (xcodebuild strips the `TEST_RUNNER_` prefix before the
-            // test process sees the var).
-            return
-        }
-
         let presets = try PresetWasmCompiler.discoverFactoryRustPresets()
         #expect(presets.count >= 50, "expected ≥50 factory Rust presets, found \(presets.count)")
 

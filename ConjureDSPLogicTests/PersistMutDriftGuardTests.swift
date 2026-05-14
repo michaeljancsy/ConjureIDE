@@ -2,8 +2,8 @@
 //  PersistMutDriftGuardTests.swift
 //  ConjureDSPLogicTests
 //
-//  Drift guard for the four user-facing teaching surfaces that the
-//  persist_buf! → persist_mut! rename touched. Asserts two patterns
+//  Drift guard for the user-facing teaching surfaces that the
+//  persist_buf! → persist_mut! rename touched. Asserts three patterns
 //  are absent from each:
 //
 //  (a) Literal `persist_buf` / `PersistBuf` — catches a missed rename.
@@ -15,6 +15,15 @@
 //      persist_mut!, not persist!. A passing rename grep could still
 //      leave `persist!(BIQUADS: [Biquad; 2] = …)` in place — that's the
 //      failure mode this regex catches.
+//
+//  (c) `[Lfo|Biquad|DelayLine::new(); N]` array-repeat literal — the
+//      Copy-removal class. `Biquad` / `Lfo` / `DelayLine` no longer
+//      derive `Copy`, so the bare array-repeat literal fails with
+//      `E0277: T: Copy is not satisfied`. Authors must wrap in an
+//      inline-const block: `[const { Biquad::new() }; N]`. A reviewer
+//      caught four occurrences of the broken form in DSPDocumentation
+//      and PTYManager teaching surfaces that the original rewrite
+//      missed — this regex prevents that regression.
 //
 //  Pattern terminator `[\s;,<=)]` anchors on the close of the type name
 //  (`Biquad;`, `DelayLine<`, `Lfo =`, `Biquad `, `Lfo)`) so it excludes
@@ -74,6 +83,22 @@ struct PersistMutDriftGuardTests {
 
     private static let tier2Pattern =
         #"persist!\(\s*[^)]*?:\s*\[?\s*(Lfo|Biquad|DelayLine)\s*[\s;,<=)]"#
+
+    /// Matches the start of a bare array-repeat literal
+    /// `[Biquad::new(); N]` (and `Lfo` / `DelayLine` variants).
+    ///
+    /// Since `Biquad` / `Lfo` / `DelayLine` lost their `Copy` derive in
+    /// the same commit that landed this regex, the bare form fails with
+    /// `error[E0277]: T: Copy is not satisfied`. Authors must use
+    /// `[const { Biquad::new() }; N]` (inline-const block, exempt from
+    /// the Copy bound) — the correct form starts with `const`, not the
+    /// type name, so this regex doesn't match it.
+    ///
+    /// `[Biquad::new()]` (no semicolon — a single-element array) is also
+    /// excluded; the regex requires `\(\)\s*;` to anchor specifically on
+    /// the array-repeat case.
+    private static let copyArrayRepeatPattern =
+        #"\[\s*(Lfo|Biquad|DelayLine)(<[^>]+>)?::new\(\)\s*;"#
 
     private static func read(_ relativePath: String) throws -> String {
         let url = Self.repoRoot.appendingPathComponent(relativePath)
@@ -152,6 +177,70 @@ struct PersistMutDriftGuardTests {
             let range = NSRange(line.startIndex..., in: line)
             let match = regex.firstMatch(in: line, range: range)
             #expect(match != nil, "tier-2 positive `\(line)` failed to match — terminator class too narrow")
+        }
+    }
+
+    /// Scan every teaching surface for bare `[Biquad::new(); N]`
+    /// array-repeat literals. This is the third pattern class — after
+    /// dropping `Copy` from `Biquad` / `Lfo` / `DelayLine`, the bare form
+    /// no longer compiles; teaching surfaces must use the inline-const
+    /// shape `[const { Biquad::new() }; N]`.
+    ///
+    /// A reviewer caught 4 occurrences of the broken form in
+    /// `DSPDocumentation.swift` and `PTYManager.swift` that the original
+    /// rewrite script missed (it only scoped to `.rs`/`.js` paths under
+    /// specific directories, missing Swift heredoc strings). This test
+    /// prevents that regression.
+    @Test func noCopyArrayRepeats() throws {
+        let regex = try NSRegularExpression(pattern: Self.copyArrayRepeatPattern)
+        for surface in Self.surfaces {
+            let content = try Self.read(surface)
+            let range = NSRange(content.startIndex..., in: content)
+            let matches = regex.matches(in: content, range: range)
+            for match in matches {
+                let r = Range(match.range, in: content)!
+                let hit = String(content[r])
+                Issue.record("""
+                    \(surface) teaches a bare Copy-array-repeat: `\(hit)…N]`.
+                    `Biquad` / `Lfo` / `DelayLine` no longer derive `Copy`, so this
+                    fails with `error[E0277]: T: Copy is not satisfied`. Wrap in an
+                    inline-const block instead: `[const { TYPE::new() }; N]`.
+                    """)
+            }
+        }
+    }
+
+    /// Fixture sweep for the Copy-array-repeat regex. Positive cases
+    /// match the broken form across each type. Negative cases exercise
+    /// the legitimate alternatives — inline-const blocks, single-element
+    /// arrays, and the BiquadCoeffs Copy-value-type form that should
+    /// keep working.
+    @Test func copyArrayRepeatPatternFixtures() throws {
+        let regex = try NSRegularExpression(pattern: Self.copyArrayRepeatPattern)
+
+        let positives = [
+            "[Biquad::new(); 2]",
+            "[Lfo::new(); MAX_CH]",
+            "[DelayLine::new(); 4]",
+            "[DelayLine<48000>::new(); 2]",
+            "[ Biquad::new() ; 2]",         // tolerates whitespace
+        ]
+        for line in positives {
+            let range = NSRange(line.startIndex..., in: line)
+            let match = regex.firstMatch(in: line, range: range)
+            #expect(match != nil, "Copy-array-repeat positive `\(line)` failed to match")
+        }
+
+        let negatives = [
+            "[const { Biquad::new() }; 2]",                  // correct inline-const form
+            "[const { [const { Biquad::new() }; 3] }; 2]",   // nested 2D form
+            "[BiquadCoeffs::identity(); 4]",                 // Copy value type, still legal
+            "[Biquad::new()]",                               // single-element, not array-repeat
+        ]
+        for line in negatives {
+            let range = NSRange(line.startIndex..., in: line)
+            let match = regex.firstMatch(in: line, range: range)
+            #expect(match == nil, "Copy-array-repeat negative `\(line)` matched (false positive)")
         }
     }
 }

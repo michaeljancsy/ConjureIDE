@@ -350,7 +350,7 @@ enum DSPDocumentation {
                   row_out[i] = _filters[ch].process_sample(row_in[i])
 
     Rust:
-      persist_mut!(BIQUADS: [Biquad; 2] = [Biquad::new(); 2]);
+      persist_mut!(BIQUADS: [Biquad; 2] = [const { Biquad::new() }; 2]);
       // Inside process! { ctx => ... }:
       let coeffs = BiquadCoeffs::lowpass(ctx.param(CUTOFF) as f64, 0.707, ctx.sample_rate() as f64);
       BIQUADS.with_mut(|biquads| {
@@ -378,7 +378,7 @@ enum DSPDocumentation {
     Rust: DelayLine::<SIZE>::new() — const generic, compile-time size
       SIZE must be a const. Example: DelayLine::<48000>::new()
       Stored across blocks via persist_mut! — DelayLine mutates per sample via write(&mut self, …), so the closure body can call &mut self methods directly:
-        persist_mut!(DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2]);
+        persist_mut!(DELAYS: [DelayLine<48000>; 2] = [const { DelayLine::new() }; 2]);
         // Inside process! { ctx => ... }:
         DELAYS.with_mut(|d| { d[c].write(sample); let wet = d[c].read(delay_samples as f64); });
 
@@ -2410,7 +2410,7 @@ enum DSPDocumentation {
 
     ## Typical usage pattern
 
-      persist_mut!(BIQUADS: [Biquad; 2] = [Biquad::new(); 2]);
+      persist_mut!(BIQUADS: [Biquad; 2] = [const { Biquad::new() }; 2]);
       // Inside process! { ctx => ... }:
       let coeffs = BiquadCoeffs::lowpass(ctx.param(CUTOFF) as f64, 0.707, ctx.sample_rate() as f64);
       BIQUADS.with_mut(|biquads| {
@@ -2465,7 +2465,7 @@ enum DSPDocumentation {
     DelayLine::<SIZE>::new() — const generic, compile-time size
       SIZE must be a const. Example: DelayLine::<48000>::new()
       Stored across blocks via persist_mut! — DelayLine mutates per sample via write(&mut self, …), so the closure body can call &mut self methods directly:
-        persist_mut!(DELAYS: [DelayLine<48000>; 2] = [DelayLine::new(); 2]);
+        persist_mut!(DELAYS: [DelayLine<48000>; 2] = [const { DelayLine::new() }; 2]);
 
     ## Methods
 
