@@ -34,13 +34,13 @@ const AP_MS: [f64; 2] = [5.3, 7.9];
 const AP_G: f64 = 0.5;
 const COMB_MS: f64 = 67.0;
 
-persist_buf!(BP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(DROPOUT_LFO: [Lfo; 3] = [Lfo::new(); 3]);
-persist_buf!(AP: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2]);
-persist_buf!(APS: [[f64; 2]; 2] = [[0.0; 2]; 2]);
-persist_buf!(COMB: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(COMB_FB: [f64; 2] = [0.0; 2]);
-persist_buf!(COMB_LP: [Biquad; 2] = [Biquad::new(); 2]);
+persist_mut!(BP: [Biquad; 2] = [const { Biquad::new() }; 2]);
+persist_mut!(DROPOUT_LFO: [Lfo; 3] = [const { Lfo::new() }; 3]);
+persist_mut!(AP: [[DelayLine<MAX_DL>; 2]; 2] = [const { [const { DelayLine::new() }; 2] }; 2]);
+persist_mut!(APS: [[f64; 2]; 2] = [[0.0; 2]; 2]);
+persist_mut!(COMB: [DelayLine<MAX_DL>; 2] = [const { DelayLine::new() }; 2]);
+persist_mut!(COMB_FB: [f64; 2] = [0.0; 2]);
+persist_mut!(COMB_LP: [Biquad; 2] = [const { Biquad::new() }; 2]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;

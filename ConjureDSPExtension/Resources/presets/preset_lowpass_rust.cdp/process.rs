@@ -13,7 +13,7 @@ params! {
 
 // Persistent state: previous output per channel. f64 to match
 // Python's float64 precision in the feedback loop.
-persist_buf!(PREV_OUT: [f64; MAX_CH] = [0.0; MAX_CH]);
+persist_mut!(PREV_OUT: [f64; MAX_CH] = [0.0; MAX_CH]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;

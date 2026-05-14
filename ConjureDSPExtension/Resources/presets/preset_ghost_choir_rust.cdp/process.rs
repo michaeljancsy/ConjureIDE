@@ -71,27 +71,27 @@ struct Reverb {
     env: [f64; 2],
 }
 
-persist_buf!(VOICE: Voice = Voice {
-    lp: [Biquad::new(); 2],
-    formants: [[Biquad::new(); 3]; 2],
-    whisper_bp: [Biquad::new(); 2],
-    whisper_hs: [Biquad::new(); 2],
+persist_mut!(VOICE: Voice = Voice {
+    lp: [const { Biquad::new() }; 2],
+    formants: [const { [const { Biquad::new() }; 3] }; 2],
+    whisper_bp: [const { Biquad::new() }; 2],
+    whisper_hs: [const { Biquad::new() }; 2],
     lfo_trem: Lfo::new(),
 });
-persist_buf!(CHORUS: Chorus = Chorus {
-    dl: [DelayLine::new(); 2],
-    lfo: [Lfo::new(); 8],
+persist_mut!(CHORUS: Chorus = Chorus {
+    dl: [const { DelayLine::new() }; 2],
+    lfo: [const { Lfo::new() }; 8],
 });
-persist_buf!(COMBS: Combs = Combs {
-    dl: [[DelayLine::new(); 4]; 2],
+persist_mut!(COMBS: Combs = Combs {
+    dl: [const { [const { DelayLine::new() }; 4] }; 2],
     fb_buf: [[0.0; 4]; 2],
-    lp: [[Biquad::new(); 4]; 2],
-    ap: [[DelayLine::new(); 2]; 2],
+    lp: [const { [const { Biquad::new() }; 4] }; 2],
+    ap: [const { [const { DelayLine::new() }; 2] }; 2],
     aps: [[0.0; 2]; 2],
-    lfo: [Lfo::new(); 4],
+    lfo: [const { Lfo::new() }; 4],
 });
-persist_buf!(REVERB: Reverb = Reverb {
-    dl: [DelayLine::new(); 2],
+persist_mut!(REVERB: Reverb = Reverb {
+    dl: [const { DelayLine::new() }; 2],
     env: [0.0; 2],
 });
 

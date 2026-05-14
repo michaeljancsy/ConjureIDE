@@ -353,8 +353,8 @@ const bridge = {
 
         rustHoverDocs['setup'] = '```rust\nsetup!()  // INTERNAL\n```\nInvoked automatically by `process! { ctx => … }`. Do not call directly — writing `setup!();` next to `process!` causes a duplicate-static error because both emit the same `INPUT_BUF`/`OUTPUT_BUF`/etc.';
         rustHoverDocs['process'] = '```rust\nprocess! { ctx => /* body */ }\n```\nEntry point for every Rust preset. Emits the zero-arg `extern "C" fn process()` the host calls, plus the buffer statics (subsumes `setup!()`). Bind any identifier on the left of `=>` (`ctx` is canonical).';
-        rustHoverDocs['persist'] = '```rust\npersist!(NAME: T = init);\n```\nDeclare scalar / Copy state that survives across render blocks. Access via `NAME.get()` / `NAME.set(v)` / `NAME.replace(v)` — no `unsafe` needed. For large arrays use `persist_buf!` instead.';
-        rustHoverDocs['persist_buf'] = '```rust\npersist_buf!(NAME: T = init);\n```\nDeclare large-array / non-Copy state with in-place mutation via `NAME.with_mut(|buf| buf[c][i] = …)`. Use for delay buffers, reverb networks, ring buffers — anywhere `.get()`/`.set()` would round-trip multi-KB on every sample.';
+        rustHoverDocs['persist'] = '```rust\npersist!(NAME: T = init);\n```\nDeclare scalar or Copy coefficient-struct state that\'s read or recomputed wholesale per block (envelope levels, write counters, `BiquadCoeffs` recomputed on param change). Access via `NAME.get()` / `NAME.set(v)` / `NAME.replace(v)` — no `unsafe` needed. For DSP blocks mutated per sample (`Biquad`, `Lfo`, `DelayLine`) use `persist_mut!` instead.';
+        rustHoverDocs['persist_mut'] = '```rust\npersist_mut!(NAME: T = init);\n```\nDeclare state mutated in place during the render loop — DSP blocks like `Biquad` / `Lfo` / `DelayLine` whose `&mut self` methods (`process_sample`, `tick`, `write`) are the natural usage shape, plus raw buffers written linearly per block. Access via `NAME.with_mut(|val| …)` — the closure body gets `&mut T` so methods run without a read-modify-write round-trip.';
         rustHoverDocs['params'] = '```rust\nparams! { NAME = builder(), ... }\n```\nDeclares parameter index constants, METADATA JSON, and get_param_metadata_ptr/len exports.';
         rustHoverDocs['latency'] = '```rust\nlatency!(samples)\n```\nDeclares algorithmic latency for DAW delay compensation. Generates `get_latency_samples()` export.';
 
@@ -880,15 +880,15 @@ const bridge = {
 
                     sug('persist', Kind.Snippet,
                         'persist!(${1:NAME}: ${2:f64} = ${3:0.0});',
-                        'Declare scalar / Copy state that survives across render blocks.\n' +
+                        'Declare scalar or Copy coefficient-struct state read or recomputed wholesale per block (envelope levels, write counters, BiquadCoeffs).\n' +
                         'Access via `${1:NAME}.get()` / `${1:NAME}.set(v)` / `${1:NAME}.replace(v)` — no `unsafe` needed.\n' +
-                        'For large arrays (delay buffers, reverb networks) use `persist_buf!` instead.',
+                        'For DSP blocks mutated per sample (Biquad/Lfo/DelayLine) use `persist_mut!` instead.',
                         true),
 
-                    sug('persist_buf', Kind.Snippet,
-                        'persist_buf!(${1:NAME}: ${2:[[f32; MAX_FR]; MAX_CH]} = ${3:[[0.0; MAX_FR]; MAX_CH]});',
-                        'Declare large-array / non-Copy state with in-place mutation.\n' +
-                        'Access via `${1:NAME}.with_mut(|buf| buf[c][i] = v)` — closure body must not call any method on the same `persist_buf!` (debug builds panic on reentrance).',
+                    sug('persist_mut', Kind.Snippet,
+                        'persist_mut!(${1:NAME}: ${2:[[f32; MAX_FR]; MAX_CH]} = ${3:[[0.0; MAX_FR]; MAX_CH]});',
+                        'Declare state mutated in place during the render loop — DSP blocks (Biquad/Lfo/DelayLine) whose `&mut self` methods are the natural usage shape, plus raw buffers written linearly.\n' +
+                        'Access via `${1:NAME}.with_mut(|val| …)` — closure body must not call any method on the same `persist_mut!` (debug builds panic on reentrance).',
                         true),
 
                     sug('freq', Kind.Function, 'freq()', 'Frequency param: 20–20000 Hz, log curve. Customize with .min()/.max()/.default()', true),
@@ -908,28 +908,28 @@ const bridge = {
 
                     sug('Biquad', Kind.Snippet,
                         [
-                            'persist!(${1:BIQUADS}: [Biquad; MAX_CH] = [Biquad::new(); MAX_CH]);',
+                            'persist_mut!(${1:BIQUADS}: [Biquad; MAX_CH] = [const { Biquad::new() }; MAX_CH]);',
                             '',
                             '// Inside process! { ctx => ... }:',
                             'let coeffs = BiquadCoeffs::lowpass(${2:cutoff_hz} as f64, ${3:0.707}, ctx.sample_rate() as f64);',
-                            'let mut biquads = ${1:BIQUADS}.get();',
-                            'for c in 0..ctx.channels() {',
-                            '\tbiquads[c].set_coeffs(coeffs);',
-                            '\tfor i in 0..ctx.frames() {',
-                            '\t\tlet x = ctx.input(c, i) as f64;',
-                            '\t\tlet y = biquads[c].process_sample(x);',
-                            '\t\tctx.set_output(c, i, y as f32);',
+                            '${1:BIQUADS}.with_mut(|biquads| {',
+                            '\tfor c in 0..ctx.channels() {',
+                            '\t\tbiquads[c].set_coeffs(coeffs);',
+                            '\t\tfor i in 0..ctx.frames() {',
+                            '\t\t\tlet x = ctx.input(c, i) as f64;',
+                            '\t\t\tlet y = biquads[c].process_sample(x);',
+                            '\t\t\tctx.set_output(c, i, y as f32);',
+                            '\t\t}',
                             '\t}',
-                            '}',
-                            '${1:BIQUADS}.set(biquads);',
+                            '});',
                         ].join('\n'),
-                        'Biquad filter with per-channel state via `persist!` (Biquad is Copy).\n' +
+                        'Biquad filter with per-channel state via `persist_mut!` — `process_sample` takes `&mut self`, so the closure body calls it directly without a get/set round-trip.\n' +
                         'Types: lowpass, highpass, bandpass, notch, peak, lowshelf, highshelf, allpass.',
                         true),
 
                     sug('DelayLine', Kind.Snippet,
                         [
-                            'persist_buf!(${1:DELAYS}: [DelayLine<${2:48000}>; MAX_CH] = [DelayLine::new(); MAX_CH]);',
+                            'persist_mut!(${1:DELAYS}: [DelayLine<${2:48000}>; MAX_CH] = [const { DelayLine::new() }; MAX_CH]);',
                             '',
                             '// Inside process! { ctx => ... }:',
                             '${1:DELAYS}.with_mut(|d| {',
@@ -942,24 +942,24 @@ const bridge = {
                             '\t}',
                             '});',
                         ].join('\n'),
-                        'Circular delay buffer with in-place mutation via `persist_buf!`.\n' +
+                        'Circular delay buffer with in-place mutation via `persist_mut!`.\n' +
                         'Methods: write(sample), read(delay), read_cubic(delay), tap(n), clear().',
                         true),
 
                     sug('Lfo', Kind.Snippet,
                         [
-                            'persist!(${1:LFO_STATE}: Lfo = Lfo::new());',
+                            'persist_mut!(${1:LFO_STATE}: Lfo = Lfo::new());',
                             '',
                             '// Inside process! { ctx => ... }:',
-                            'let mut lfo = ${1:LFO_STATE}.get();',
-                            'lfo.init(ctx.sample_rate() as f64, ${2:rate_hz} as f64);',
-                            'for i in 0..ctx.frames() {',
-                            '\tlet mod_val = lfo.tick();',
-                            '\t${0:// use mod_val}',
-                            '}',
-                            '${1:LFO_STATE}.set(lfo);',
+                            '${1:LFO_STATE}.with_mut(|lfo| {',
+                            '\tlfo.init(ctx.sample_rate() as f64, ${2:rate_hz} as f64);',
+                            '\tfor i in 0..ctx.frames() {',
+                            '\t\tlet mod_val = lfo.tick();',
+                            '\t\t${0:// use mod_val}',
+                            '\t}',
+                            '});',
                         ].join('\n'),
-                        'Low-frequency oscillator with `persist!` state (Lfo is Copy).\n' +
+                        'Low-frequency oscillator with `persist_mut!` state — `tick` takes `&mut self`, so the closure body calls it directly without a get/set round-trip.\n' +
                         'Waveforms: Sine, Triangle, Saw, Square. `lfo.set_waveform(Waveform::Triangle)` to change.',
                         true),
 
@@ -967,12 +967,12 @@ const bridge = {
                     sug('state (per-channel)', Kind.Snippet,
                         [
                             '// Persistent state across blocks (one value per channel)',
-                            'persist_buf!(${1:PREV_OUT}: [f64; MAX_CH] = [0.0; MAX_CH]);',
+                            'persist_mut!(${1:PREV_OUT}: [f64; MAX_CH] = [0.0; MAX_CH]);',
                             '',
                             '// Read/write in-place:',
                             '${1:PREV_OUT}.with_mut(|s| { s[c] = ${2:value}; });',
                         ].join('\n'),
-                        'Per-channel state array via `persist_buf!`. Use f64 for precision in feedback loops.',
+                        'Per-channel state array via `persist_mut!`. Use f64 for precision in feedback loops.',
                         true),
 
                     sug('state (scalar)', Kind.Snippet,
@@ -990,7 +990,7 @@ const bridge = {
                     sug('delay line', Kind.Snippet,
                         [
                             'const MAX_DELAY: usize = 48000; // supports 500 ms at 96 kHz',
-                            'persist_buf!(DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH]);',
+                            'persist_mut!(DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH]);',
                             'persist!(WRITE_POS: usize = 0);',
                             '',
                             '// Inside process! { ctx => ... }:',
@@ -1016,13 +1016,13 @@ const bridge = {
                             'WRITE_POS.set(wp);',
                         ].join('\n'),
                         'Delay line with feedback. Common pattern for echo, chorus, flanger.\n' +
-                        'Uses `persist_buf!` for the buffer (in-place mutation) + `persist!` for the write position.',
+                        'Uses `persist_mut!` for the buffer (in-place mutation) + `persist!` for the write position.',
                         true),
 
                     sug('biquad', Kind.Snippet,
                         [
                             '// Hand-rolled biquad state (2 samples of history per channel)',
-                            'persist_buf!(BIQ_STATE: [[f64; 4]; MAX_CH] = [[0.0; 4]; MAX_CH]); // [x1, x2, y1, y2]',
+                            'persist_mut!(BIQ_STATE: [[f64; 4]; MAX_CH] = [[0.0; 4]; MAX_CH]); // [x1, x2, y1, y2]',
                             '',
                             '// Inside process! { ctx => ... }:',
                             'let sr = ctx.sample_rate() as f64;',
@@ -1056,7 +1056,7 @@ const bridge = {
                             '\t}',
                             '});',
                         ].join('\n'),
-                        'Biquad filter (2nd-order IIR), hand-rolled with `persist_buf!`. Low-pass shown; change coefficients for HP/BP/notch.\n' +
+                        'Biquad filter (2nd-order IIR), hand-rolled with `persist_mut!`. Low-pass shown; change coefficients for HP/BP/notch.\n' +
                         'For the prebuilt `Biquad` type from `conjuredsp`, see the `Biquad` snippet instead.',
                         true),
 
@@ -1094,7 +1094,7 @@ const bridge = {
                     sug('one-pole lowpass', Kind.Snippet,
                         [
                             '// Simple 1-pole IIR low-pass: y[n] = b*x[n] + a*y[n-1]',
-                            'persist_buf!(LP_STATE: [f64; MAX_CH] = [0.0; MAX_CH]);',
+                            'persist_mut!(LP_STATE: [f64; MAX_CH] = [0.0; MAX_CH]);',
                             '',
                             '// Inside process! { ctx => ... }:',
                             'let sr = ctx.sample_rate() as f64;',
@@ -1114,7 +1114,7 @@ const bridge = {
                             '\t}',
                             '});',
                         ].join('\n'),
-                        'Simple 1-pole low-pass filter (6 dB/octave rolloff) using `persist_buf!`.\n' +
+                        'Simple 1-pole low-pass filter (6 dB/octave rolloff) using `persist_mut!`.\n' +
                         'Good for parameter smoothing or gentle filtering.',
                         true),
 

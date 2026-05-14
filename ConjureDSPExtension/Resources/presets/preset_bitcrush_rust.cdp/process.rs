@@ -17,7 +17,7 @@ params! {
 }
 
 // Persistent held sample per channel for sample-rate reduction.
-persist_buf!(HELD: [f32; MAX_CH] = [0.0; MAX_CH]);
+persist_mut!(HELD: [f32; MAX_CH] = [0.0; MAX_CH]);
 
 /// Bitcrush — bit depth reduction and sample rate reduction.
 process! { ctx =>

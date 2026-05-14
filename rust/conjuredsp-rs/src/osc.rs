@@ -11,22 +11,38 @@ pub enum Waveform {
 
 /// Low-frequency oscillator with multiple waveforms.
 ///
-/// Maintains phase across callbacks via `persist!` (Lfo is `Copy`, so the
-/// `.get()` / `.set()` round-trip is cheap):
+/// `Lfo` mutates per sample via `tick()` which takes `&mut self`. Store
+/// it across callbacks with `persist_mut!` so the closure body can
+/// call `&mut self` methods directly — no read-modify-write round-trip:
 ///
 /// ```ignore
-/// persist!(LFO_STATE: Lfo = Lfo::new());
+/// persist_mut!(LFO_STATE: Lfo = Lfo::new());
 ///
 /// // Inside process! { ctx => … }:
-/// let mut lfo = LFO_STATE.get();
-/// lfo.init(ctx.sample_rate() as f64, rate_hz);
-/// for i in 0..ctx.frames() {
-///     let mod_val = lfo.tick();
-///     // use mod_val
-/// }
-/// LFO_STATE.set(lfo);
+/// LFO_STATE.with_mut(|lfo| {
+///     lfo.init(ctx.sample_rate() as f64, rate_hz);
+///     for i in 0..ctx.frames() {
+///         let mod_val = lfo.tick();
+///         // use mod_val
+///     }
+/// });
 /// ```
-#[derive(Clone, Copy)]
+///
+/// # `Copy` deliberately not derived
+///
+/// `Lfo` carries per-sample state (`phase`, `value`). If it were `Copy`,
+/// `persist!(LFO: Lfo = Lfo::new())` would compile — the wrong macro —
+/// and the author would lose phase every render block. Dropping `Copy`
+/// makes that line an `E0277: Lfo: Copy is not satisfied` error.
+/// Use `[const { Lfo::new() }; N]` (inline-const array-repeat) wherever
+/// the literal would otherwise require `Copy`.
+///
+/// ```compile_fail
+/// use conjuredsp::*;
+/// // persist! requires T: Copy. Lfo isn't — that's deliberate.
+/// persist!(WRONG: Lfo = Lfo::new());
+/// ```
+#[derive(Clone)]
 pub struct Lfo {
     phase: f64,
     freq: f64,

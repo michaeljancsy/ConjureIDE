@@ -9,22 +9,25 @@
 //! gives presets two replacements split along whether mutation needs
 //! in-place access:
 //!
-//! - [`Persist<T>`] for scalar / `Copy` state — read/write through
-//!   `get` / `set` / `replace`. **Has no closure API**, so the
-//!   read-snapshot-mutate-writeback pitfall is a compile error rather
-//!   than a silent miscompile.
-//! - [`PersistBuf<T>`] for in-place mutation of large arrays (delay
-//!   buffers, ring buffers in reverbs/chorus/flanger). Mutates via
-//!   `with_mut(|buf| …)` with a documented reentrancy contract; debug
-//!   builds enforce that contract with a RAII guard, release builds
-//!   trust the author.
+//! - [`Persist<T>`] for scalar / `Copy` state that's read or recomputed
+//!   wholesale — read/write through `get` / `set` / `replace`. **Has no
+//!   closure API**, so the read-snapshot-mutate-writeback pitfall is a
+//!   compile error rather than a silent miscompile.
+//! - [`PersistMut<T>`] for state mutated in place during the render
+//!   loop — DSP blocks like `Biquad` / `Lfo` / `DelayLine` whose
+//!   `&mut self` methods (`process_sample`, `tick`, `write`) are the
+//!   natural usage shape, plus raw buffers written linearly per block
+//!   (delay write-through, IR convolution scratch, scope rings).
+//!   Mutates via `with_mut(|val| …)` with a documented reentrancy
+//!   contract; debug builds enforce that contract with a RAII guard,
+//!   release builds trust the author.
 //!
 //! Storage shape is cfg-gated by target:
 //!
 //! - **wasm32** (the only target that ships to users): a bare
-//!   [`UnsafeCell`] with an `unsafe impl Sync` that's sound because the
+//!   `UnsafeCell` with an `unsafe impl Sync` that's sound because the
 //!   AU host never calls `process()` reentrantly on the same instance.
-//! - **host** (cargo test on aarch64/x86_64): a [`std::sync::Mutex`]
+//! - **host** (cargo test on aarch64/x86_64): a `std::sync::Mutex`
 //!   so the integration tests under `tests/persist*.rs` stay sound when
 //!   `cargo test` runs test functions in parallel. The lock is held for
 //!   exactly the duration of the closure / scalar access; no
@@ -32,7 +35,7 @@
 //!
 //! `static mut` remains a viable fallback under edition 2024 if either
 //! primitive ever hits a limitation, via `&raw mut X` / `&raw const X`.
-//! Prefer the macros (`persist!` / `persist_buf!`) over the fallback —
+//! Prefer the macros (`persist!` / `persist_mut!`) over the fallback —
 //! they're 2024-clean by construction and read more cleanly at the call
 //! site.
 
@@ -66,12 +69,12 @@ use std::sync::Mutex;
 ///
 /// # Why no `with_mut`?
 ///
-/// A single `with_mut`-style API for both scalars and buffers invites
-/// `X.with_mut(|x| { *x = X.get() + 1 })` — the read-snapshot-mutate-
-/// writeback shape that silently miscompiles in release. By keeping
-/// scalars on `get`/`set` and buffers on a separate [`PersistBuf`] type,
-/// calling `with_mut` on a `Persist` becomes a "method not found"
-/// compile error, not a runtime hazard:
+/// A single `with_mut`-style API for both scalars and in-place state
+/// invites `X.with_mut(|x| { *x = X.get() + 1 })` — the read-snapshot-
+/// mutate-writeback shape that silently miscompiles in release. By
+/// keeping scalars on `get`/`set` and in-place state on a separate
+/// [`PersistMut`] type, calling `with_mut` on a `Persist` becomes a
+/// "method not found" compile error, not a runtime hazard:
 ///
 /// ```compile_fail
 /// use conjuredsp::Persist;
@@ -152,19 +155,22 @@ impl<T: Copy + Send> Persist<T> {
     }
 }
 
-/// Persistent buffer (typically a large array or struct) with in-place
-/// mutation via [`with_mut`](PersistBuf::with_mut).
+/// Persistent state mutated in place via
+/// [`with_mut`](PersistMut::with_mut).
 ///
-/// Choose this over [`Persist<T>`] when the value is large enough that
-/// `get`/`set` round-trips would materially regress performance — the
-/// 384 KB stereo delay buffer, multi-MB reverb networks, ring-buffer
-/// scratch.
+/// Choose this over [`Persist<T>`] when the value is mutated during the
+/// render loop — either a DSP block whose `&mut self` methods
+/// (`Biquad::process_sample`, `Lfo::tick`, `DelayLine::write`) are the
+/// natural usage shape, or a raw buffer written linearly per block
+/// (delay-line write-through, IR convolution scratch, scope/oscilloscope
+/// ring). The closure body gets `&mut T`, so methods can run without a
+/// read-modify-write round-trip through `get`/`set`.
 ///
 /// # Reentrancy contract
 ///
 /// `with_mut` borrows the wrapped value mutably for the closure's
 /// lifetime. The closure must not call any other method on the same
-/// `PersistBuf` — aliased `&mut T` is undefined behaviour even on a
+/// `PersistMut` — aliased `&mut T` is undefined behaviour even on a
 /// single thread. Debug builds enforce the contract with a panic-safe
 /// RAII guard; release builds trust the author. The release failure
 /// mode is **silent miscompilation**, not panic, so the debug check is
@@ -175,32 +181,33 @@ impl<T: Copy + Send> Persist<T> {
 /// ```ignore
 /// use conjuredsp::*;
 ///
-/// persist_buf!(DELAY_BUF: [[f32; 48_000]; 2] = [[0.0; 48_000]; 2]);
+/// persist_mut!(DELAYS: [DelayLine<48000>; 2] = [const { DelayLine::new() }; 2]);
 ///
 /// // Inside process():
-/// DELAY_BUF.with_mut(|buf| {
-///     buf[channel][write_pos] = sample;
+/// DELAYS.with_mut(|d| {
+///     d[channel].write(sample);
+///     let y = d[channel].read(delay_samples);
 /// });
 /// ```
 #[cfg(target_arch = "wasm32")]
-pub struct PersistBuf<T> {
+pub struct PersistMut<T> {
     inner: UnsafeCell<T>,
     #[cfg(debug_assertions)]
     in_use: core::cell::Cell<bool>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub struct PersistBuf<T: Send>(Mutex<T>);
+pub struct PersistMut<T: Send>(Mutex<T>);
 
 // SAFETY: WASM modules are single-threaded; the host never calls
 // `process()` reentrantly on the same instance. On non-wasm targets
 // Mutex<T> already provides `Sync` (for `T: Send`), so no manual impl
 // is needed.
 #[cfg(target_arch = "wasm32")]
-unsafe impl<T> Sync for PersistBuf<T> {}
+unsafe impl<T> Sync for PersistMut<T> {}
 
 #[cfg(target_arch = "wasm32")]
-impl<T> PersistBuf<T> {
+impl<T> PersistMut<T> {
     /// Wrap an initial value. `const` so it can sit in a `static`.
     pub const fn new(v: T) -> Self {
         Self {
@@ -214,7 +221,7 @@ impl<T> PersistBuf<T> {
     ///
     /// # Reentrancy
     ///
-    /// `f` MUST NOT call any other method on the same `PersistBuf`.
+    /// `f` MUST NOT call any other method on the same `PersistMut`.
     /// Aliased `&mut T` is undefined behaviour even single-threaded.
     /// Debug builds enforce this contract with a RAII guard that
     /// panics on reentry (and resets cleanly on panic via `Drop`).
@@ -225,7 +232,7 @@ impl<T> PersistBuf<T> {
         let _guard = {
             assert!(
                 !self.in_use.replace(true),
-                "reentrant PersistBuf::with_mut"
+                "reentrant PersistMut::with_mut"
             );
             struct Reset<'a>(&'a core::cell::Cell<bool>);
             impl Drop for Reset<'_> {
@@ -242,7 +249,7 @@ impl<T> PersistBuf<T> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<T: Send> PersistBuf<T> {
+impl<T: Send> PersistMut<T> {
     /// Wrap an initial value. `const` so it can sit in a `static`.
     pub const fn new(v: T) -> Self {
         Self(Mutex::new(v))
@@ -256,7 +263,7 @@ impl<T: Send> PersistBuf<T> {
     /// instead since `std::sync::Mutex` isn't appropriate there.
     #[inline]
     pub fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-        let mut guard = self.0.lock().expect("PersistBuf Mutex poisoned");
+        let mut guard = self.0.lock().expect("PersistMut Mutex poisoned");
         f(&mut *guard)
     }
 }

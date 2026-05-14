@@ -36,14 +36,14 @@ const AP_MS: [f64; 2] = [9.7, 13.1];
 const AP_G: f64 = 0.55;
 const COMB_MS: [f64; 2] = [97.0, 131.0];
 
-persist_buf!(SUB_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(PIPES_F: [[Biquad; 8]; 2] = [[Biquad::new(); 8]; 2]);
-persist_buf!(BREATH_LFO: [Lfo; 8] = [Lfo::new(); 8]);
-persist_buf!(AP: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2]);
-persist_buf!(APS: [[f64; 2]; 2] = [[0.0; 2]; 2]);
-persist_buf!(COMBS: [[DelayLine<MAX_DL>; 2]; 2] = [[DelayLine::new(); 2]; 2]);
-persist_buf!(COMB_LP: [[Biquad; 2]; 2] = [[Biquad::new(); 2]; 2]);
-persist_buf!(COMB_FB_BUF: [[f64; 2]; 2] = [[0.0; 2]; 2]);
+persist_mut!(SUB_LP: [Biquad; 2] = [const { Biquad::new() }; 2]);
+persist_mut!(PIPES_F: [[Biquad; 8]; 2] = [const { [const { Biquad::new() }; 8] }; 2]);
+persist_mut!(BREATH_LFO: [Lfo; 8] = [const { Lfo::new() }; 8]);
+persist_mut!(AP: [[DelayLine<MAX_DL>; 2]; 2] = [const { [const { DelayLine::new() }; 2] }; 2]);
+persist_mut!(APS: [[f64; 2]; 2] = [[0.0; 2]; 2]);
+persist_mut!(COMBS: [[DelayLine<MAX_DL>; 2]; 2] = [const { [const { DelayLine::new() }; 2] }; 2]);
+persist_mut!(COMB_LP: [[Biquad; 2]; 2] = [const { [const { Biquad::new() }; 2] }; 2]);
+persist_mut!(COMB_FB_BUF: [[f64; 2]; 2] = [[0.0; 2]; 2]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;

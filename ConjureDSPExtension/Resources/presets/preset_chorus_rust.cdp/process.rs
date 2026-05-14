@@ -22,7 +22,7 @@ params! {
 }
 
 // Persistent state
-persist_buf!(DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH]);
+persist_mut!(DELAY_BUF: [[f32; MAX_DELAY]; MAX_CH] = [[0.0; MAX_DELAY]; MAX_CH]);
 persist!(WRITE_POS: usize = 0);
 // Use f64 to match Python's float64 precision in the phase accumulator.
 persist!(LFO_PHASE: f64 = 0.0);

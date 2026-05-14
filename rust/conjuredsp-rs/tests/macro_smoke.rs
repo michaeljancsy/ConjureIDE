@@ -7,7 +7,7 @@
 //! That's how the drift accumulated.
 //!
 //! This test exercises the macros that DON'T pull in host imports
-//! (`process!`, `params!`, `persist!`, `persist_buf!`, `telemetry!`,
+//! (`process!`, `params!`, `persist!`, `persist_mut!`, `telemetry!`,
 //! `state!`, `latency!`) paired together exactly as the rustdoc
 //! examples teach. If the macros change shape in a way that breaks
 //! composition, this file fails to compile.
@@ -43,7 +43,7 @@ latency!(0);
 
 persist!(ENVELOPE: f64 = 0.0);
 persist!(WRITE_POS: usize = 0);
-persist_buf!(SCRATCH: [[f32; MAX_FR]; MAX_CH] = [[0.0; MAX_FR]; MAX_CH]);
+persist_mut!(SCRATCH: [[f32; MAX_FR]; MAX_CH] = [[0.0; MAX_FR]; MAX_CH]);
 
 // Exercises the canonical post-#308 entry-point shape end-to-end:
 //
@@ -65,7 +65,7 @@ process! { ctx =>
     // Scalar persist! state — counter (read-snapshot-mutate-writeback)
     WRITE_POS.set(WRITE_POS.get().wrapping_add(1));
 
-    // Buffer-shaped persist_buf! state — in-place mutation
+    // Buffer-shaped persist_mut! state — in-place mutation
     SCRATCH.with_mut(|s| {
         for c in 0..ctx.channels() {
             for i in 0..ctx.frames() {

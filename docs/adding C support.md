@@ -30,7 +30,7 @@ enum ScriptLanguage: String, CaseIterable {
 
     static func detect(from source: String) -> ScriptLanguage {
         // Rust: unambiguous markers (modern process! + persist! / legacy markers)
-        if source.contains("process!") || source.contains("persist!") || source.contains("persist_buf!")
+        if source.contains("process!") || source.contains("persist!") || source.contains("persist_mut!")
             || source.contains("fn process(") || source.contains("#[no_mangle]")
         {
             return .rust
@@ -735,7 +735,7 @@ Alternative: use `-Wl,--export=process,--export=get_input_ptr,...` linker flags.
 
 ### Persistent state
 
-C uses `static` variables for persistent state (delay lines, filter memory, etc.). Rust presets use `persist!` / `persist_buf!` macros which wrap the same underlying storage with safer access (no `unsafe` for callers, optional reentrance guard for buffer mutation). In WASM, these live in linear memory and persist across `process()` calls. They're reset when the module is reloaded (same behavior as Rust).
+C uses `static` variables for persistent state (delay lines, filter memory, etc.). Rust presets use `persist!` / `persist_mut!` macros which wrap the same underlying storage with safer access (no `unsafe` for callers, optional reentrance guard for buffer mutation). In WASM, these live in linear memory and persist across `process()` calls. They're reset when the module is reloaded (same behavior as Rust).
 
 ---
 

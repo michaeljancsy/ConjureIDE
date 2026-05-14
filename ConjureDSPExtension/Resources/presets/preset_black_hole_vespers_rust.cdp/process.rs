@@ -34,14 +34,14 @@ const AP_G: f64 = 0.62;
 const FORMANT_HZ: [f64; 3] = [500.0, 1100.0, 2200.0];
 const TAIL_MS: f64 = 530.0;
 
-persist_buf!(DRONE_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(SHIFT_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(AP: [[DelayLine<MAX_DL>; 6]; 2] = [[DelayLine::new(); 6]; 2]);
-persist_buf!(APS: [[f64; 6]; 2] = [[0.0; 6]; 2]);
-persist_buf!(FORMANT: [[Biquad; 3]; 2] = [[Biquad::new(); 3]; 2]);
-persist_buf!(TAIL_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(TAIL_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(TAIL_FB: [f64; 2] = [0.0; 2]);
+persist_mut!(DRONE_LP: [Biquad; 2] = [const { Biquad::new() }; 2]);
+persist_mut!(SHIFT_DL: [DelayLine<MAX_DL>; 2] = [const { DelayLine::new() }; 2]);
+persist_mut!(AP: [[DelayLine<MAX_DL>; 6]; 2] = [const { [const { DelayLine::new() }; 6] }; 2]);
+persist_mut!(APS: [[f64; 6]; 2] = [[0.0; 6]; 2]);
+persist_mut!(FORMANT: [[Biquad; 3]; 2] = [const { [const { Biquad::new() }; 3] }; 2]);
+persist_mut!(TAIL_DL: [DelayLine<MAX_DL>; 2] = [const { DelayLine::new() }; 2]);
+persist_mut!(TAIL_LP: [Biquad; 2] = [const { Biquad::new() }; 2]);
+persist_mut!(TAIL_FB: [f64; 2] = [0.0; 2]);
 persist!(GRAIN_PHASE: f64 = 0.0);
 
 process! { ctx =>

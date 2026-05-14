@@ -64,24 +64,24 @@ struct Atmos {
     lfo_hum: Lfo,
 }
 
-persist_buf!(CHORUS: Chorus = Chorus {
-    dl: [DelayLine::new(); 2],
+persist_mut!(CHORUS: Chorus = Chorus {
+    dl: [const { DelayLine::new() }; 2],
     lfo: Lfo::new(),
 });
-persist_buf!(CARRIERS: Carriers = Carriers {
-    lfo_car: [Lfo::new(); 4],
-    lfo_gates: [Lfo::new(); 4],
+persist_mut!(CARRIERS: Carriers = Carriers {
+    lfo_car: [const { Lfo::new() }; 4],
+    lfo_gates: [const { Lfo::new() }; 4],
 });
-persist_buf!(FILTERS: Filters = Filters {
-    bp: [Biquad::new(); 2],
-    hp: [Biquad::new(); 2],
+persist_mut!(FILTERS: Filters = Filters {
+    bp: [const { Biquad::new() }; 2],
+    hp: [const { Biquad::new() }; 2],
 });
-persist_buf!(CRUSHER: Crusher = Crusher {
+persist_mut!(CRUSHER: Crusher = Crusher {
     sh_held: [0.0; 2],
-    comb_dl: [DelayLine::new(); 2],
+    comb_dl: [const { DelayLine::new() }; 2],
     comb_fb: [0.0; 2],
 });
-persist_buf!(ATMOS: Atmos = Atmos {
+persist_mut!(ATMOS: Atmos = Atmos {
     lfo_dropout: Lfo::new(),
     lfo_hum: Lfo::new(),
 });

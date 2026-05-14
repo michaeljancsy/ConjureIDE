@@ -45,7 +45,7 @@ persist!(ENVELOPE: f64 = 0.0);
 // Per-block GR scratch for vector telemetry. One f32 per audio frame in
 // the current block (length = ctx.frames(), hard-capped at MAX_FR by the
 // macro). Persistent so we don't heap-alloc per render callback.
-persist_buf!(GR_SCRATCH: [f32; MAX_FR] = [0.0; MAX_FR]);
+persist_mut!(GR_SCRATCH: [f32; MAX_FR] = [0.0; MAX_FR]);
 
 /// Compressor — dynamic range compression with envelope follower.
 process! { ctx =>

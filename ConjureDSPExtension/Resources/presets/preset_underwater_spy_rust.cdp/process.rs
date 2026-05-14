@@ -64,26 +64,26 @@ struct Tail {
     lfo_trem: Lfo,
 }
 
-persist_buf!(INPUT: Input = Input {
-    lp: [Biquad::new(); 2],
-    cav: [Biquad::new(); 2],
-    vib: [DelayLine::new(); 2],
+persist_mut!(INPUT: Input = Input {
+    lp: [const { Biquad::new() }; 2],
+    cav: [const { Biquad::new() }; 2],
+    vib: [const { DelayLine::new() }; 2],
     lfo_vib: Lfo::new(),
 });
-persist_buf!(CHORUS: Chorus = Chorus {
-    dl: [[DelayLine::new(); 4]; 2],
-    lfo: [Lfo::new(); 4],
+persist_mut!(CHORUS: Chorus = Chorus {
+    dl: [const { [const { DelayLine::new() }; 4] }; 2],
+    lfo: [const { Lfo::new() }; 4],
 });
-persist_buf!(REVERB: Reverb = Reverb {
-    ap: [[DelayLine::new(); 4]; 2],
+persist_mut!(REVERB: Reverb = Reverb {
+    ap: [const { [const { DelayLine::new() }; 4] }; 2],
     aps: [[0.0; 4]; 2],
-    tank: [DelayLine::new(); 2],
-    tank_lp: [Biquad::new(); 2],
+    tank: [const { DelayLine::new() }; 2],
+    tank_lp: [const { Biquad::new() }; 2],
     tank_fb: [0.0; 2],
 });
-persist_buf!(TAIL: Tail = Tail {
-    slap: [DelayLine::new(); 2],
-    slap_lp: [Biquad::new(); 2],
+persist_mut!(TAIL: Tail = Tail {
+    slap: [const { DelayLine::new() }; 2],
+    slap_lp: [const { Biquad::new() }; 2],
     slap_fb: [0.0; 2],
     lfo_trem: Lfo::new(),
 });

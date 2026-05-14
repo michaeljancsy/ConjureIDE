@@ -31,7 +31,7 @@ telemetry! {
 persist!(ENVELOPE: f64 = 0.0);
 
 // Per-block GR scratch for vector telemetry.
-persist_buf!(GR_SCRATCH: [f32; MAX_FR] = [0.0; MAX_FR]);
+persist_mut!(GR_SCRATCH: [f32; MAX_FR] = [0.0; MAX_FR]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;

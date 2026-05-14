@@ -64,22 +64,22 @@ struct Tail {
     lfo_interfere_tone: Lfo,
 }
 
-persist_buf!(FILTERS: Filters = Filters {
-    bp: [Biquad::new(); 2],
-    hp: [Biquad::new(); 2],
+persist_mut!(FILTERS: Filters = Filters {
+    bp: [const { Biquad::new() }; 2],
+    hp: [const { Biquad::new() }; 2],
 });
-persist_buf!(CARRIERS: Carriers = Carriers {
-    lfo_car: [Lfo::new(); 2],
+persist_mut!(CARRIERS: Carriers = Carriers {
+    lfo_car: [const { Lfo::new() }; 2],
     lfo_drift: Lfo::new(),
 });
-persist_buf!(SQUEAL: Squeal = Squeal {
-    dl: [DelayLine::new(); 2],
+persist_mut!(SQUEAL: Squeal = Squeal {
+    dl: [const { DelayLine::new() }; 2],
     fb: [0.0; 2],
 });
-persist_buf!(CRUSHER: Crusher = Crusher {
+persist_mut!(CRUSHER: Crusher = Crusher {
     sh_held: [0.0; 2],
 });
-persist_buf!(TAIL: Tail = Tail {
+persist_mut!(TAIL: Tail = Tail {
     lfo_trem: Lfo::new(),
     lfo_interfere_amp: Lfo::new(),
     lfo_interfere_tone: Lfo::new(),

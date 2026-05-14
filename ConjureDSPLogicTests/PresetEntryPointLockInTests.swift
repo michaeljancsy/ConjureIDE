@@ -67,7 +67,7 @@ struct PresetEntryPointLockInTests {
     }
 
     /// Every factory Rust preset must declare its render-block state via
-    /// `persist!(…)` or `persist_buf!(…)` — never raw `static mut`. The
+    /// `persist!(…)` or `persist_mut!(…)` — never raw `static mut`. The
     /// raw shape works under edition 2024 only because `static_mut_refs`
     /// fires on `&` / `&mut` creation, not on direct `X = v` writes — but
     /// the moment a new preset reaches for `.as_ptr()` or a `&mut self`
@@ -91,11 +91,11 @@ struct PresetEntryPointLockInTests {
         // plan's "Plan B" fallback (with or without
         // `#![allow(static_mut_refs)]`). The list shrinks as state
         // migration completes; each removal is a per-preset
-        // `persist!()` / `persist_buf!()` PR. New additions require
+        // `persist!()` / `persist_mut!()` PR. New additions require
         // reviewer sign-off — they're an explicit step backward from
         // the modernization goal.
         let bypassAllowList: Set<String> = [
-            // Migrated to persist! / persist_buf!:
+            // Migrated to persist! / persist_mut!:
             //   preset_acid_sermon_rust, preset_alien_radio_rust,
             //   preset_astronauts_garden_rust, preset_bitcrush_rust,
             //   preset_black_hole_vespers_rust, preset_broken_fax_lullaby_rust,
@@ -141,7 +141,7 @@ struct PresetEntryPointLockInTests {
             }
             #expect(
                 !hasStaticMut,
-                "\(name)/process.rs declares raw `static mut` — migrate to persist!() or persist_buf!() per plans/an-ai-had-this-starry-moler.md"
+                "\(name)/process.rs declares raw `static mut` — migrate to persist!() or persist_mut!() per plans/an-ai-had-this-starry-moler.md"
             )
             #expect(
                 !hasAllowAttr,

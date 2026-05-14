@@ -29,9 +29,9 @@ const FORMANT_HZ: [f64; 3] = [250.0, 700.0, 2200.0];
 const BREATH_HZ: f64 = 0.3;
 const PRESENCE_HZ: f64 = 1200.0;
 
-persist_buf!(FORMANT: [[Biquad; 3]; 2] = [[Biquad::new(); 3]; 2]);
-persist_buf!(PRESENCE_F: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(BREATH_LFO: Lfo = Lfo::new());
+persist_mut!(FORMANT: [[Biquad; 3]; 2] = [const { [const { Biquad::new() }; 3] }; 2]);
+persist_mut!(PRESENCE_F: [Biquad; 2] = [const { Biquad::new() }; 2]);
+persist_mut!(BREATH_LFO: Lfo = Lfo::new());
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;

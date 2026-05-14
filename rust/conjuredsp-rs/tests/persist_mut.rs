@@ -1,16 +1,16 @@
-//! Tests for [`conjuredsp::PersistBuf`] and the [`persist_buf!`] macro.
+//! Tests for [`conjuredsp::PersistMut`] and the [`persist_mut!`] macro.
 //!
-//! Companion to `tests/persist.rs`; covers in-place buffer mutation
-//! through `with_mut` and the debug-only reentrancy panic.
+//! Companion to `tests/persist.rs`; covers in-place mutation through
+//! `with_mut` and the debug-only reentrancy panic.
 
 use conjuredsp::*;
 
-persist_buf!(BUF_4: [f32; 4] = [0.0; 4]);
+persist_mut!(BUF_4: [f32; 4] = [0.0; 4]);
 
 // Modest stand-in for the production 384 KB delay buffer
 // (`[[f32; 48_000]; 2]`). Keeps the test fast while exercising the
 // large-array path.
-persist_buf!(STEREO_DELAY: [[f32; 1_024]; 2] = [[0.0; 1_024]; 2]);
+persist_mut!(STEREO_DELAY: [[f32; 1_024]; 2] = [[0.0; 1_024]; 2]);
 
 #[test]
 fn with_mut_writes_propagate_to_next_read() {
@@ -61,11 +61,11 @@ fn nested_2d_array_buffer_supports_per_cell_mutation() {
 //
 // Use a dedicated `static` so a flaky run doesn't poison BUF_4 for
 // other tests.
-persist_buf!(REENTRY_PROBE: [u8; 4] = [0u8; 4]);
+persist_mut!(REENTRY_PROBE: [u8; 4] = [0u8; 4]);
 
 #[cfg(all(debug_assertions, target_arch = "wasm32"))]
 #[test]
-#[should_panic(expected = "reentrant PersistBuf::with_mut")]
+#[should_panic(expected = "reentrant PersistMut::with_mut")]
 fn reentrant_with_mut_panics_in_debug() {
     REENTRY_PROBE.with_mut(|_| {
         REENTRY_PROBE.with_mut(|_| {});

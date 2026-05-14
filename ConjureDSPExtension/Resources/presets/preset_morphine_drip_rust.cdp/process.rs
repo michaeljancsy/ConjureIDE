@@ -32,12 +32,12 @@ const DRIFT_HZ: f64 = 0.23;
 const DELAY_MS: f64 = 380.0;
 const DRIFT_BASE_MS: f64 = 15.0;
 
-persist_buf!(DRIP_LFO: Lfo = Lfo::new());
-persist_buf!(DRIFT_LFO: Lfo = Lfo::new());
-persist_buf!(DRIFT_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(DELAY_DL: [DelayLine<MAX_DL>; 2] = [DelayLine::new(); 2]);
-persist_buf!(DELAY_LP: [Biquad; 2] = [Biquad::new(); 2]);
-persist_buf!(DELAY_FB: [f64; 2] = [0.0; 2]);
+persist_mut!(DRIP_LFO: Lfo = Lfo::new());
+persist_mut!(DRIFT_LFO: Lfo = Lfo::new());
+persist_mut!(DRIFT_DL: [DelayLine<MAX_DL>; 2] = [const { DelayLine::new() }; 2]);
+persist_mut!(DELAY_DL: [DelayLine<MAX_DL>; 2] = [const { DelayLine::new() }; 2]);
+persist_mut!(DELAY_LP: [Biquad; 2] = [const { Biquad::new() }; 2]);
+persist_mut!(DELAY_FB: [f64; 2] = [0.0; 2]);
 
 process! { ctx =>
     let sr = ctx.sample_rate() as f64;
