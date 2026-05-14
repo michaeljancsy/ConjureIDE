@@ -636,6 +636,10 @@ enum BundleUIValidator {
             // the CSS2 form (`cdp-xy:before`) and the CSS3 form
             // (`cdp-xy::before`) — `::before` itself contains the substring
             // `:before`. ::part(/::slotted( only exist in the CSS3 form.
+            // Trade-off: an exotic attribute selector whose literal value
+            // includes ":before" / ":after" (e.g. `cdp-xy[data-x=":before"]`)
+            // would also be skipped. Not idiomatic CSS; we accept the
+            // over-broadness rather than tokenize selectors properly.
             if lower.contains("::part(") || lower.contains(":before") ||
                lower.contains(":after") || lower.contains("::slotted(") {
                 continue

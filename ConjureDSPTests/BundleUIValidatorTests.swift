@@ -1415,6 +1415,25 @@ struct BundleUIValidatorTests {
                 "cdp-xy::part(pad) undersize is an accepted static gap (runtime tier covers it); issues: \(report.issues)")
     }
 
+    /// Pseudo-CLASSES (`:hover`, `:focus`, `:nth-child(2)`, `:focus-within`)
+    /// target host states, not shadow parts, so the host-minimum check must
+    /// still fire. Guards against someone later "simplifying" the four
+    /// pseudo-element substring checks into a broader `contains(":")` skip
+    /// that would silently drop pseudo-class coverage.
+    @Test func pseudoClassStillFlaggedAsHost() throws {
+        let ui = """
+        <!doctype html><html><head><style>
+          cdp-slider:hover { width: 30px; height: 8px; }
+        </style></head><body>
+          <cdp-slider param="cutoff"></cdp-slider>
+        </body></html>
+        """
+        let bundle = try makeBundle(manifest: baselineManifest, uiHTML: ui)
+        let report = BundleUIValidator.validate(bundle)
+        #expect(report.issues.contains { $0.check == "control_explicit_size_too_small" },
+                "`cdp-slider:hover { 30×8 }` targets the host — must still warn; issues: \(report.issues)")
+    }
+
     /// CSS2 single-colon pseudo-element syntax (`cdp-xy:before`) is still
     /// honored by browsers. The skip must match both the CSS2 and CSS3
     /// forms; today this is implemented by checking the substring `:before`
