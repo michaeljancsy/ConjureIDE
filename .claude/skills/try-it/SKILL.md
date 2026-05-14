@@ -190,28 +190,22 @@ Codex emits `{"type":"turn.completed", "usage":{...}}` and `{"type":"item.comple
 
    `--scope project` is the default but stating it documents intent. The python3 parse is robust to multi-server settings.json (won't false-match if another server uses the same port) and to prettifier reformatting.
 
-2. **`gemini-2.5-pro` daily quota is tight** — ~2–3 multi-iteration preset-authoring runs and you hit `code: 429, "exhausted your capacity on this model"` with a 12+ hour reset. Detect this in the `result` event (`status:"error"` and `error.message` contains `exhausted`) and **automatically retry the same prompt with `-m gemini-2.5-flash`**. Flash's quota is much more generous and it's still capable enough for most preset tasks.
-
-   Pseudocode for the gemini branch:
+2. **Dispatch once, then read the log and decide.** Don't hard-code a fallback chain in bash — you (the dispatching agent) can inspect the `result` event and reason about recovery yourself. A grep can only match the failure modes someone anticipated at skill-design time; you can also handle never-before-seen errors by surfacing them to the user.
 
    ```bash
-   ( cd "$WORKSPACE" && gemini mcp remove conjuredsp 2>/dev/null )
-   ( cd "$WORKSPACE" && gemini mcp add --scope project --transport http conjuredsp "http://localhost:$MCP_PORT/mcp" )
-   WORKSPACE="$WORKSPACE" MCP_PORT="$MCP_PORT" python3 -c 'import json,os; d=json.load(open(os.environ["WORKSPACE"]+"/.gemini/settings.json")); url=d.get("mcpServers",{}).get("conjuredsp",{}).get("url",""); assert ":"+os.environ["MCP_PORT"]+"/" in url, f"settings.json url={url!r} does not contain port {os.environ[\"MCP_PORT\"]}"' \
-     || { echo "[try-it] $WORKSPACE/.gemini/settings.json missing conjuredsp:$MCP_PORT — gemini config refresh wrote the wrong file." >&2; exit 1; }
-   MODEL_USED="gemini-2.5-pro"
-   ( cd "$WORKSPACE" && gemini --yolo -m "$MODEL_USED" \
+   MODEL=gemini-2.5-pro   # pick the smallest tier likely to handle the prompt; flash-lite is faster + cheaper for simple presets
+   ( cd "$WORKSPACE" && gemini --yolo -m "$MODEL" \
        --output-format stream-json -p "$SUBAGENT_PROMPT" < /dev/null ) > "$LOG" 2>&1
-   if grep -q '"reason":"QUOTA_EXHAUSTED"\|exhausted your capacity' "$LOG"; then
-     MODEL_USED="gemini-2.5-pro→gemini-2.5-flash (quota fallback)"
-     ( cd "$WORKSPACE" && gemini --yolo -m gemini-2.5-flash \
-         --output-format stream-json -p "$SUBAGENT_PROMPT" < /dev/null ) > "$LOG" 2>&1
-   fi
    ```
 
    **Always pipe `< /dev/null`** — same reason as codex.
 
-   In the per-run summary frontmatter, set `agent_model: <MODEL_USED>` so cross-run aggregation knows the fallback fired. When a fallback happened, also add a `[skill]` line in `## Friction findings`: `gemini-2.5-pro quota exhausted; auto-fell back to gemini-2.5-flash.`
+   When the dispatch finishes, look at the final `result` event in `$LOG`:
+   - `status: "success"` with tool calls recorded → parse the digest, carry on.
+   - `status: "error"` with zero tool calls and a familiar quota/capacity error (e.g. "exhausted your capacity on this model", "No capacity available for model X on the server", `code: 429`) → reasonable to retry with a smaller model. pro's daily quota is tight (~2–3 multi-iteration runs before a 12+h reset); server-capacity errors can hit any tier without warning. Typical fallback chain: pro → flash → flash-lite. Mention the retry briefly in your conversation with the user so they see what's happening.
+   - `status: "error"` for an unfamiliar reason → surface the error to the user and ask before retrying. The error string can change as gemini-cli evolves; don't assume past patterns cover the present.
+
+   Record the model that actually produced the output in the per-run summary's `agent_model`. If a fallback fired, format as `<initial>→<final> (<short reason>)`, e.g. `gemini-2.5-pro→gemini-2.5-flash-lite (server capacity)`, so cross-run aggregation can see what's happening upstream. No `[skill]` friction entry is needed for fallbacks that worked — they're an external constraint, not /try-it friction.
 
    **Don't** set `--allowed-mcp-server-names conjuredsp` — that flag has inverted semantics in some gemini-cli builds and silently hides the configured server from the model. Leave the global allowlist alone.
 
@@ -242,7 +236,7 @@ Format: follow `test-run-summaries/_TEMPLATE.md` exactly. Fields and where they 
 - `prompt`: the user's args, verbatim, quoted.
 - `outcome`: `success` if `type:"result"` event has `is_error: false` AND a fresh `.cdp` bundle landed in the App Group `Presets/`; `partial` if the subagent gave up but reported usefully; `failed` if the harness errored or no preset was produced.
 - `agent_harness`: `claude-code` for the default `claude -p` dispatch. For multi-harness sweeps use `codex-cli` or `gemini-cli`.
-- `agent_model`: from the first `type:"system",subtype:"init"` (claude) or `type:"init"` (gemini) event's `model` field. Codex doesn't surface a model field — record `codex-cli` and let the run's `usage` totals carry the signal. **If a gemini quota fallback fired** (Pro 429 → flash retry, see Step 5 multi-harness section), record `agent_model: gemini-2.5-pro→gemini-2.5-flash (quota fallback)` so cross-run aggregation can spot it.
+- `agent_model`: from the first `type:"system",subtype:"init"` (claude) or `type:"init"` (gemini) event's `model` field. Codex doesn't surface a model field — record `codex-cli` and let the run's `usage` totals carry the signal. **If a gemini fallback fired** (you chose to retry with a smaller model after an upstream quota or capacity error — see Step 5's gemini section), record both: `<initial>→<final> (<reason>)`, e.g. `gemini-2.5-pro→gemini-2.5-flash-lite (server capacity)`.
 - `build_commit`: `git rev-parse --short HEAD` at run time.
 - `preset_name`, `preset_path`: from the subagent's digest (it names what it built); confirm by listing `~/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/Presets/` for the freshest `.cdp` bundle.
 - `language`: `rust` or `python` — read from the bundle's `manifest.json`.
@@ -281,6 +275,6 @@ The new preset the subagent saved lives in the user's preset library (App Group 
 
 - Don't auto-accept the subagent's report — surface it verbatim and let the user decide what to file.
 - Don't modify the user's MCP config (`claude mcp add`). The temp config is per-subprocess, scoped to this run.
-- Don't retry the subagent automatically if it errors. Surface the error and let the user decide.
+- Don't retry the subagent blindly. Inspect the log: a familiar quota / capacity error has a reasonable next step you can take yourself (retry with a smaller model); anything unfamiliar should be surfaced to the user before another dispatch.
 - Don't run `/try-it` again immediately to "patch" the subagent's output — each invocation is a fresh experiment with no shared state.
 - Don't run from the project root — the dev-facing AGENTS.md gives the wrong persona. Always cd to `agent-workspace/`.
