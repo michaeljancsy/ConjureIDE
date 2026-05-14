@@ -1220,12 +1220,14 @@ struct ExportDSPIntegrationTests {
                 "Bundle's ui/index.html drifted from PresetBundle.starterIndexHTML() — the scaffold is writing something different than the source of truth")
 
         // 3. Canonical HTML must include the markers that tie the starter
-        //    to the injected `cdp-ui` component library. If someone reverts
-        //    the library integration — swapping back to a hand-rolled slider
-        //    list or breaking the vertical centering layout — this fails
-        //    loudly instead of silently regressing.
-        #expect(canonicalHTML.contains("justify-content: center"),
-                "Starter HTML must center rows vertically (single-param UIs otherwise leave a huge empty region below the slider)")
+        //    to the injected `cdp-ui` component library + flex-column layout.
+        //    If someone reverts the library integration — swapping back to a
+        //    hand-rolled slider list or losing the flex-column wrapper —
+        //    this fails loudly instead of silently regressing.
+        #expect(canonicalHTML.contains("class=\"conjure-ui\""),
+                "Starter HTML must wrap controls in `<main class=\"conjure-ui\">` so the flex-column rules apply")
+        #expect(canonicalHTML.contains("flex-direction: column"),
+                "Starter HTML must lay out rows in a flex column (single-control UIs otherwise pile horizontally)")
         #expect(canonicalHTML.contains("<cdp-panel auto"),
                 "Starter HTML must use the <cdp-panel auto> component from the injected cdp-ui library")
 

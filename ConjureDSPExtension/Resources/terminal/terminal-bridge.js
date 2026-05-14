@@ -67,16 +67,23 @@
     let reconnectAttempts = 0;
     let reconnectTimer = null;
     let wsPort = null;
-    let hasSentFirstInput = false;
+    let hasReportedFirstUserKeystroke = false;
     const MAX_RECONNECT_ATTEMPTS = 50;
 
     function sendUserInput(data) {
         if (!socket || socket.readyState !== WebSocket.OPEN) return;
         socket.send(data);
-        if (!hasSentFirstInput) {
-            hasSentFirstInput = true;
-            postToSwift('firstInput', {});
-        }
+    }
+
+    // `firstInput` must fire only on real user keystrokes — NOT on xterm.js's
+    // automatic responses to shell terminal-capability queries (DA1, DSR, etc.),
+    // which also flow through `terminal.onData -> sendUserInput`. The
+    // terminal-keyboard UI test relies on this marker not appearing until the
+    // user actually types, so we mark it only from the input-proxy listeners.
+    function markFirstUserKeystroke() {
+        if (hasReportedFirstUserKeystroke) return;
+        hasReportedFirstUserKeystroke = true;
+        postToSwift('firstInput', {});
     }
 
     // --- Initialize terminal ---
@@ -163,6 +170,7 @@
             var text = inputProxy.textContent || '';
             if (text) {
                 sendUserInput(text);
+                markFirstUserKeystroke();
             }
             inputProxy.textContent = '';
         });
@@ -219,6 +227,7 @@
             if (data !== null) {
                 e.preventDefault();
                 sendUserInput(data);
+                markFirstUserKeystroke();
             }
         });
 
@@ -249,7 +258,7 @@
 
             socket.onopen = function() {
                 reconnectAttempts = 0;
-                hasSentFirstInput = false;
+                hasReportedFirstUserKeystroke = false;
                 hideStatus();
                 postToSwift('connected', {});
 

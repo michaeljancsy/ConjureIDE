@@ -61,6 +61,89 @@ struct TerminalBridgeFocusTests {
     }
 }
 
+/// Regression tests for the `firstInput` Swift-event attribution rule.
+///
+/// `firstInput` exists so `TerminalKeyboardInputUITests` can assert that real
+/// user keystrokes reach the WebSocket. The signal must NOT fire from the
+/// `terminal.onData` callback xterm.js uses for its own auto-replies to shell
+/// terminal-capability queries (DA1 / DSR / etc.) — otherwise the UI test
+/// races shell startup and the marker may flip before the test types,
+/// hiding a genuine focus-routing regression.
+@Suite("Terminal bridge firstInput attribution")
+struct TerminalBridgeFirstInputTests {
+
+    @Test("xterm.onData (e.g. auto-response to shell capability query) does NOT fire firstInput")
+    func xtermAutoResponseDoesNotFireFirstInput() throws {
+        let harness = try BridgeHarness()
+        harness.openSocket()
+
+        // Shell sends ESC[c (DA1); xterm.js synthesizes a reply through its
+        // onData callback. The reply still needs to reach the PTY, but the
+        // bridge must NOT treat it as the first user keystroke.
+        harness.evaluate("_harness.terminals[0]._onData('\\x1b[?6c');")
+
+        #expect(harness.messageCount(event: "firstInput") == 0,
+                "xterm.onData reentering the bridge must not be treated as user input")
+    }
+
+    @Test("inputProxy 'input' event fires firstInput")
+    func inputProxyInputFiresFirstInput() throws {
+        let harness = try BridgeHarness()
+        harness.openSocket()
+
+        harness.evaluate("""
+        _harness.elements['input-proxy'].textContent = 'a';
+        _harness.elements['input-proxy']._fire('input');
+        """)
+
+        #expect(harness.messageCount(event: "firstInput") == 1)
+    }
+
+    @Test("inputProxy keydown for a key that sends data fires firstInput")
+    func inputProxyKeydownFiresFirstInput() throws {
+        let harness = try BridgeHarness()
+        harness.openSocket()
+
+        harness.evaluate("""
+        _harness.elements['input-proxy']._fire('keydown', {
+            key: 'Enter', preventDefault: function(){}
+        });
+        """)
+
+        #expect(harness.messageCount(event: "firstInput") == 1)
+    }
+
+    @Test("Cmd+C (clipboard, no PTY send) does NOT fire firstInput")
+    func cmdCDoesNotFireFirstInput() throws {
+        let harness = try BridgeHarness()
+        harness.openSocket()
+
+        harness.evaluate("""
+        _harness.elements['input-proxy']._fire('keydown', {
+            metaKey: true, key: 'c', preventDefault: function(){}
+        });
+        """)
+
+        #expect(harness.messageCount(event: "firstInput") == 0,
+                "Cmd+C handles clipboard locally; it must not poison the firstInput marker")
+    }
+
+    @Test("firstInput fires only once per socket connection")
+    func firstInputFiresOncePerConnection() throws {
+        let harness = try BridgeHarness()
+        harness.openSocket()
+
+        for _ in 0..<3 {
+            harness.evaluate("""
+            _harness.elements['input-proxy'].textContent = 'a';
+            _harness.elements['input-proxy']._fire('input');
+            """)
+        }
+
+        #expect(harness.messageCount(event: "firstInput") == 1)
+    }
+}
+
 // MARK: - Harness
 
 /// Loads terminal-bridge.js into a JSContext with stubbed DOM / xterm / WebSocket
@@ -109,6 +192,20 @@ private final class BridgeHarness {
         return Int(value?.toInt32() ?? 0)
     }
 
+    /// Convenience: drive the bridge through `connect` + `socket.onopen` so the
+    /// WebSocket-readyState gate in `sendUserInput` is satisfied. Tests that
+    /// fire keystrokes after this can assume the socket is OPEN.
+    func openSocket() {
+        evaluate("terminalBridge.connect(12345);")
+        evaluate("_harness.sockets[_harness.sockets.length - 1]._triggerOpen();")
+    }
+
+    /// Number of `postToSwift` calls recorded with the given `event` name.
+    func messageCount(event: String) -> Int {
+        let value = context.evaluateScript("_harness.countMessages('\(event)')")
+        return Int(value?.toInt32() ?? 0)
+    }
+
     // MARK: - Source loading
 
     private static func loadTerminalBridgeSource() throws -> String {
@@ -135,6 +232,8 @@ private final class BridgeHarness {
         var focusCounts = Object.create(null);
         var elements = Object.create(null);
         var sockets = [];
+        var terminals = [];
+        var messages = [];
 
         function makeElement(id) {
             var handlers = Object.create(null);
@@ -175,7 +274,7 @@ private final class BridgeHarness {
         globalThis.webkit = {
             messageHandlers: {
                 terminalBridge: {
-                    postMessage: function() {}
+                    postMessage: function(msg) { messages.push(msg); }
                 }
             }
         };
@@ -184,7 +283,7 @@ private final class BridgeHarness {
         // so the tests can distinguish xterm-textarea focus from DOM-element
         // focus on #input-proxy.
         globalThis.Terminal = function(opts) {
-            return {
+            var inst = {
                 options: opts || {},
                 loadAddon: function() {},
                 open: function() {},
@@ -200,6 +299,8 @@ private final class BridgeHarness {
                 cols: 80,
                 rows: 24
             };
+            terminals.push(inst);
+            return inst;
         };
 
         globalThis.FitAddon = {
@@ -244,7 +345,16 @@ private final class BridgeHarness {
             focusCount: function(id) { return focusCounts[id] || 0; },
             xtermFocusCount: function() { return focusCounts['__xterm'] || 0; },
             sockets: sockets,
-            elements: elements
+            elements: elements,
+            terminals: terminals,
+            messages: messages,
+            countMessages: function(event) {
+                var n = 0;
+                for (var i = 0; i < messages.length; i++) {
+                    if (messages[i] && messages[i].event === event) n++;
+                }
+                return n;
+            }
         };
     })();
     """
