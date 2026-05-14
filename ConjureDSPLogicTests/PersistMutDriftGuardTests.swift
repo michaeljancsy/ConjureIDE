@@ -63,6 +63,13 @@ struct PersistMutDriftGuardTests {
         "ConjureDSPExtension/Common/DSPDocumentation.swift",
         "ConjureDSPExtension/Resources/monaco/editor-bridge.js",
         "AGENTS.md",
+        // Hypothetical-language-backend design docs reference the
+        // Rust persist macros in pattern-detection examples. Originally
+        // OOS for the rename (not user teaching surfaces) but added
+        // here after two reviewers flagged the copy-paste hazard for
+        // future backend authors.
+        "docs/adding C support.md",
+        "docs/adding-faust-support.md",
     ]
 
     private static let tier2Pattern =
