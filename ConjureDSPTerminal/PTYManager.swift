@@ -648,7 +648,7 @@ final class PTYManager {
         "mix": mix(),               # 0.0-1.0, default 0.5
         "drive": pct(),             # 0-100%, default 50
         "bypass_eq": toggle(),      # on/off switch (0.0 or 1.0)
-        "mode": choice("Low", "Mid", "High", default="Mid"),  # dropdown (Python only)
+        "mode": choice("Low", "Mid", "High", default="Mid"),  # dropdown
         "ratio": ratio(),           # 1:1-20:1 compression ratio, default 4
     }
 
@@ -727,8 +727,9 @@ final class PTYManager {
     Both languages have a `conjuredsp` library with equivalent DSP building blocks. \
     Call `get_docs` with the relevant topic to see exact signatures and usage for the current language.
 
-    **Parameter builders** — `freq`, `db`, `time_ms`, `mix`, `pct`, `toggle`, `ratio`, `param`. \
-    Python also has `choice` for dropdown menus.
+    **Parameter builders** — `freq`, `db`, `time_ms`, `mix`, `pct`, `toggle`, `choice`, `ratio`, `param`. \
+    Python and Rust spell them differently (kwargs vs. fluent chains, and `choice("Low", "Mid")` \
+    vs. `choice(&["Low", "Mid"])`); call `get_docs("params")` for the language-specific syntax.
 
     **DelayLine** — circular buffer with linear and cubic interpolation.
 
