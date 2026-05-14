@@ -177,7 +177,7 @@ The default dispatch above is `claude -p`. When the user asks for a multi-harnes
 
 Codex emits `{"type":"turn.completed", "usage":{...}}` and `{"type":"item.completed", "item":{"type":"agent_message", "text":...}}` events. The CLI does **not** report a per-run USD cost — capture `usage.input_tokens` / `usage.output_tokens` instead and leave `cost_usd: n/a` in the summary frontmatter.
 
-**Gemini** — has two pitfalls.
+**Gemini** — has one pitfall plus a dispatch recipe.
 
 1. **MCP URL is read from a persistent project-scope config** (`gemini mcp add` writes `<cwd>/.gemini/settings.json` — project scope is the default), not a per-call flag. If the AU was rebuilt since the config was last set, the URL is stale and the agent silently sees zero MCP tools — it'll then fall back to shell-curl probes or just give up. **Always refresh immediately before every gemini invocation, from `$WORKSPACE` so the project-scope file the dispatched subprocess will read is the one we write:**
 
@@ -213,10 +213,17 @@ Codex emits `{"type":"turn.completed", "usage":{...}}` and `{"type":"item.comple
 
    Branch on it:
    - `status: "success"` with non-zero `stats.tool_calls` → parse the digest, carry on.
-   - `status: "error"` and `stats.tool_calls == 0`, error message mentions quota / capacity (e.g. "exhausted your capacity on this model", "No capacity available for model X on the server", `code: 429`) → reasonable to retry with a smaller model. pro's daily quota is tight (~2–3 multi-iteration runs before a 12+h reset); server-capacity errors can hit any tier without warning. Typical fallback chain: pro → flash → flash-lite. Mention the retry briefly in your conversation with the user. Don't forget to re-run Item 1's MCP refresh before the retry dispatch.
+   - `status: "error"` and `stats.tool_calls == 0`, error message mentions quota / capacity (e.g. "exhausted your capacity on this model", "No capacity available for model X on the server", `code: 429`) → reasonable to retry with a smaller model. Specifically:
+       - **Fallback chain:** pro → flash → flash-lite. pro's daily quota is tight (~2–3 multi-iteration runs before a 12+h reset); server-capacity errors can hit any tier without warning.
+       - **Re-run Item 1's MCP refresh** before each retry dispatch — `$MCP_PORT` may have shifted between attempts and `gemini mcp add` writes the URL into the project-scope settings.json.
+       - **Tell the user** briefly in chat so they see the fallback happen.
    - `status: "error"` for an unfamiliar reason → surface the error to the user and ask before retrying. The error string can change as gemini-cli evolves; don't assume past patterns cover the present.
 
-   Record the model that actually produced the output in the per-run summary's `agent_model`. If a fallback fired, format as `<initial>→<final> (<short reason>)`, e.g. `gemini-2.5-pro→gemini-2.5-flash-lite (server capacity)`, so cross-run aggregation can see what's happening upstream. No `[skill]` friction entry is needed for fallbacks that worked — they're an external constraint, not /try-it friction.
+   Record every model attempted, in order, in the per-run summary's `agent_model`. Format `<m1>→<m2>[→<mN>] (<short reason>)` so cross-run aggregation sees the full chain. Examples:
+   - Single fallback: `gemini-2.5-pro→gemini-2.5-flash-lite (server capacity)`.
+   - Multi-hop: `gemini-2.5-pro→gemini-2.5-flash→gemini-2.5-flash-lite (server-capacity fallback chain)`.
+
+   No `[skill]` friction entry is needed for fallbacks that worked — they're an external constraint, not /try-it friction.
 
    **Don't** set `--allowed-mcp-server-names conjuredsp` — that flag has inverted semantics in some gemini-cli builds and silently hides the configured server from the model. Leave the global allowlist alone.
 
@@ -247,7 +254,7 @@ Format: follow `test-run-summaries/_TEMPLATE.md` exactly. Fields and where they 
 - `prompt`: the user's args, verbatim, quoted.
 - `outcome`: `success` if `type:"result"` event has `is_error: false` AND a fresh `.cdp` bundle landed in the App Group `Presets/`; `partial` if the subagent gave up but reported usefully; `failed` if the harness errored or no preset was produced.
 - `agent_harness`: `claude-code` for the default `claude -p` dispatch. For multi-harness sweeps use `codex-cli` or `gemini-cli`.
-- `agent_model`: from the first `type:"system",subtype:"init"` (claude) or `type:"init"` (gemini) event's `model` field. Codex doesn't surface a model field — record `codex-cli` and let the run's `usage` totals carry the signal. **If a gemini fallback fired** (you chose to retry with a smaller model after an upstream quota or capacity error — see Step 5's gemini section), record both: `<initial>→<final> (<reason>)`, e.g. `gemini-2.5-pro→gemini-2.5-flash-lite (server capacity)`.
+- `agent_model`: from the first `type:"system",subtype:"init"` (claude) or `type:"init"` (gemini) event's `model` field. Codex doesn't surface a model field — record `codex-cli` and let the run's `usage` totals carry the signal. **If a gemini fallback fired** (you retried with a smaller model after an upstream quota or capacity error — see Step 5's gemini section), record the chain in order: `<m1>→<m2>[→<mN>] (<reason>)`. Single-hop example: `gemini-2.5-pro→gemini-2.5-flash-lite (server capacity)`. Multi-hop example: `gemini-2.5-pro→gemini-2.5-flash→gemini-2.5-flash-lite (server-capacity fallback chain)`. **Mechanical extraction**: take each gemini log's `type:"init"` event in chronological order, grab the `model` field, and join with `→` — that's the chain. The reason field is your call based on the failing `result` event's `error.message`.
 - `build_commit`: `git rev-parse --short HEAD` at run time.
 - `preset_name`, `preset_path`: from the subagent's digest (it names what it built); confirm by listing `~/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/Presets/` for the freshest `.cdp` bundle.
 - `language`: `rust` or `python` — read from the bundle's `manifest.json`.
