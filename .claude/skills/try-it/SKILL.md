@@ -194,8 +194,11 @@ Codex emits `{"type":"turn.completed", "usage":{...}}` and `{"type":"item.comple
 
    **Setup precondition:** Item 1's `gemini mcp remove` / `add` / python-verify block must run immediately before each dispatch — the subprocess reads `$WORKSPACE/.gemini/settings.json` which Item 1 writes. If you're dispatching gemini multiple times in one /try-it invocation (e.g. after retrying with a smaller model), re-run Item 1's refresh each time, since `gemini mcp add` is idempotent but `$MCP_PORT` may have changed between dispatches.
 
+   Use a per-attempt log filename so init events from earlier attempts survive across retries (the mechanical `agent_model` extraction in Step 7 reads across these files):
+
    ```bash
    MODEL=gemini-2.5-pro   # initial tier. Fall back manually to flash / flash-lite below if pro errors out.
+   LOG=/tmp/conjuredsp-tryit-gemini-${MODEL}.jsonl
    ( cd "$WORKSPACE" && gemini --yolo -m "$MODEL" \
        --output-format stream-json -p "$SUBAGENT_PROMPT" < /dev/null ) > "$LOG" 2>&1
    ```
@@ -211,13 +214,24 @@ Codex emits `{"type":"turn.completed", "usage":{...}}` and `{"type":"item.comple
    {"type":"result","timestamp":"...","status":"error","error":{"type":"unknown","message":"[API Error: No capacity available for model gemini-2.5-pro on the server]"},"stats":{...}}
    ```
 
-   Branch on it:
-   - `status: "success"` with non-zero `stats.tool_calls` → parse the digest, carry on.
-   - `status: "error"` and `stats.tool_calls == 0`, error message mentions quota / capacity (e.g. "exhausted your capacity on this model", "No capacity available for model X on the server", `code: 429`) → reasonable to retry with a smaller model. Specifically:
+   Branch on `status` × `stats.tool_calls`:
+
+   - **success + non-zero `tool_calls`** → parse the digest, carry on.
+   - **success + `tool_calls == 0`** → suspect. Most likely cause: stale MCP URL means the subagent saw zero ConjureDSP tools and produced a content-only "success" that did nothing useful. Don't accept the digest at face value — surface to the user with the diagnosis ("the run reported success but made no tool calls; the MCP server probably wasn't reachable"), then ask whether to retry after re-running Item 1's MCP refresh.
+   - **error + `tool_calls == 0` + familiar quota/capacity message** (e.g. "exhausted your capacity on this model", "No capacity available for model X on the server", `code: 429`) → clean failure with no progress to preserve. Auto-retry with a smaller model:
        - **Fallback chain:** pro → flash → flash-lite. pro's daily quota is tight (~2–3 multi-iteration runs before a 12+h reset); server-capacity errors can hit any tier without warning.
        - **Re-run Item 1's MCP refresh** before each retry dispatch — `$MCP_PORT` may have shifted between attempts and `gemini mcp add` writes the URL into the project-scope settings.json.
+       - **Re-dispatch with a different `$LOG`** filename per attempt so each attempt's `init` event survives:
+
+         ```bash
+         MODEL=gemini-2.5-flash   # next tier down
+         LOG=/tmp/conjuredsp-tryit-gemini-${MODEL}.jsonl
+         ( cd "$WORKSPACE" && gemini --yolo -m "$MODEL" \
+             --output-format stream-json -p "$SUBAGENT_PROMPT" < /dev/null ) > "$LOG" 2>&1
+         ```
        - **Tell the user** briefly in chat so they see the fallback happen.
-   - `status: "error"` for an unfamiliar reason → surface the error to the user and ask before retrying. The error string can change as gemini-cli evolves; don't assume past patterns cover the present.
+   - **error + `tool_calls > 0`** → the run made progress before erroring. Don't auto-retry (a retry restarts from zero and wastes the partial work). Surface the partial digest to the user and let them decide between salvaging what's there, retrying, or stopping.
+   - **error + unfamiliar reason** → surface the error to the user and ask before retrying. The error string can change as gemini-cli evolves; don't assume past patterns cover the present.
 
    Record every model attempted, in order, in the per-run summary's `agent_model`. Format `<m1>→<m2>[→<mN>] (<short reason>)` so cross-run aggregation sees the full chain. Examples:
    - Single fallback: `gemini-2.5-pro→gemini-2.5-flash-lite (server capacity)`.
@@ -254,7 +268,7 @@ Format: follow `test-run-summaries/_TEMPLATE.md` exactly. Fields and where they 
 - `prompt`: the user's args, verbatim, quoted.
 - `outcome`: `success` if `type:"result"` event has `is_error: false` AND a fresh `.cdp` bundle landed in the App Group `Presets/`; `partial` if the subagent gave up but reported usefully; `failed` if the harness errored or no preset was produced.
 - `agent_harness`: `claude-code` for the default `claude -p` dispatch. For multi-harness sweeps use `codex-cli` or `gemini-cli`.
-- `agent_model`: from the first `type:"system",subtype:"init"` (claude) or `type:"init"` (gemini) event's `model` field. Codex doesn't surface a model field — record `codex-cli` and let the run's `usage` totals carry the signal. **If a gemini fallback fired** (you retried with a smaller model after an upstream quota or capacity error — see Step 5's gemini section), record the chain in order: `<m1>→<m2>[→<mN>] (<reason>)`. Single-hop example: `gemini-2.5-pro→gemini-2.5-flash-lite (server capacity)`. Multi-hop example: `gemini-2.5-pro→gemini-2.5-flash→gemini-2.5-flash-lite (server-capacity fallback chain)`. **Mechanical extraction**: take each gemini log's `type:"init"` event in chronological order, grab the `model` field, and join with `→` — that's the chain. The reason field is your call based on the failing `result` event's `error.message`.
+- `agent_model`: from the first `type:"system",subtype:"init"` (claude) or `type:"init"` (gemini) event's `model` field. Codex doesn't surface a model field — record `codex-cli` and let the run's `usage` totals carry the signal. **If a gemini fallback fired** (you retried with a smaller model after an upstream quota or capacity error — see Step 5's gemini section), record the chain in order: `<m1>→<m2>[→<mN>] (<reason>)`. Single-hop example: `gemini-2.5-pro→gemini-2.5-flash-lite (server capacity)`. Multi-hop example: `gemini-2.5-pro→gemini-2.5-flash→gemini-2.5-flash-lite (server-capacity fallback chain)`. **Mechanical extraction**: read each per-attempt log file (`/tmp/conjuredsp-tryit-gemini-<model>.jsonl`, one per attempted model — the convention in Step 5's gemini section), grab each file's `type:"init"` event's `model` field, and join in dispatch order with `→`. The reason field is your call based on the failing `result` event's `error.message`.
 - `build_commit`: `git rev-parse --short HEAD` at run time.
 - `preset_name`, `preset_path`: from the subagent's digest (it names what it built); confirm by listing `~/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/Presets/` for the freshest `.cdp` bundle.
 - `language`: `rust` or `python` — read from the bundle's `manifest.json`.
