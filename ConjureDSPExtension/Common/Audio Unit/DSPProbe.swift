@@ -11,6 +11,7 @@
 //  reloading the source post-probe — lives in the +MCP.swift handler.
 //
 
+import Accelerate
 import Foundation
 
 enum DSPProbe {
@@ -45,6 +46,13 @@ enum DSPProbe {
         let blockSize: Int
         let inStats: Stats
         let outStats: Stats
+        /// Ratio of the output's dominant spectral peak to the input's,
+        /// computed only for sine probes. A value near 1.0 means the
+        /// preset preserves pitch (the only correct answer at unity /
+        /// identity settings); 2.0 means an octave up; 0.5 means an
+        /// octave down; nil means the input was too short for the FFT,
+        /// the output was effectively silent, or the input wasn't sine.
+        let pitchShiftRatio: Float?
     }
 
     // MARK: - Signal generation
@@ -203,6 +211,107 @@ enum DSPProbe {
         return output
     }
 
+    // MARK: - Spectral peak
+
+    /// FFT size for the dominant-frequency detector. 4096 gives ~11.7 Hz
+    /// resolution at 48 kHz, which is more than enough to distinguish
+    /// the bins that pitch-shift detection cares about (octave, fifth,
+    /// fourth, semitone). Quadratic interpolation around the peak refines
+    /// to sub-bin precision so that a perfect identity pass reports
+    /// ratio ≈ 1.000, not the nearest-bin rounding.
+    static let pitchFFTSize = 4096
+
+    /// Find the dominant spectral bin in `samples` and return its
+    /// frequency in Hz. Returns nil when the signal is too short
+    /// (< pitchFFTSize), effectively silent, or contains non-finite values.
+    ///
+    /// Uses the *tail* of the input, not the head: stateful presets
+    /// (delays, granular, reverbs) typically have zero pre-roll for the
+    /// first cycle; sampling from the end of the buffer maximizes the
+    /// probability of catching steady-state output.
+    static func dominantFrequency(_ samples: [Float], sampleRate: Double) -> Double? {
+        let n = pitchFFTSize
+        guard samples.count >= n else { return nil }
+        let halfN = n / 2
+        let log2n = vDSP_Length(log2(Float(n)).rounded())
+
+        // Take the last n samples. Bail if the segment is silent or
+        // contains NaN/Inf — both produce meaningless FFT output.
+        var segment = Array(samples.suffix(n))
+        var peak: Float = 0
+        for x in segment {
+            if !x.isFinite { return nil }
+            let m = abs(x); if m > peak { peak = m }
+        }
+        guard peak > 1e-6 else { return nil }
+
+        // Hann window in place.
+        var window = [Float](repeating: 0, count: n)
+        vDSP_hann_window(&window, vDSP_Length(n), Int32(vDSP_HANN_NORM))
+        vDSP_vmul(segment, 1, window, 1, &segment, 1, vDSP_Length(n))
+
+        guard let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else { return nil }
+        defer { vDSP_destroy_fftsetup(setup) }
+
+        var realp = [Float](repeating: 0, count: halfN)
+        var imagp = [Float](repeating: 0, count: halfN)
+        var mags = [Float](repeating: 0, count: halfN)
+
+        segment.withUnsafeBufferPointer { segPtr in
+            segPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfN) { complexPtr in
+                realp.withUnsafeMutableBufferPointer { rBuf in
+                    imagp.withUnsafeMutableBufferPointer { iBuf in
+                        var split = DSPSplitComplex(realp: rBuf.baseAddress!, imagp: iBuf.baseAddress!)
+                        vDSP_ctoz(complexPtr, 2, &split, 1, vDSP_Length(halfN))
+                        vDSP_fft_zrip(setup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
+                        vDSP_zvmags(&split, 1, &mags, 1, vDSP_Length(halfN))
+                    }
+                }
+            }
+        }
+
+        // Argmax over bins 1..halfN-1 (skip DC at bin 0; skip the
+        // Nyquist sentinel which vDSP packs into imagp[0]).
+        var bestBin = 1
+        var bestMag: Float = mags[1]
+        for k in 2..<halfN {
+            if mags[k] > bestMag { bestMag = mags[k]; bestBin = k }
+        }
+
+        // Parabolic interpolation for sub-bin precision: fit a parabola
+        // through (bestBin-1, bestBin, bestBin+1) and find its vertex.
+        // This is the standard FFT-peak refinement; for a windowed sine
+        // it gets us within ~0.01 bins of the true frequency.
+        let leftBin = max(1, bestBin - 1)
+        let rightBin = min(halfN - 1, bestBin + 1)
+        let y0 = Double(mags[leftBin])
+        let y1 = Double(mags[bestBin])
+        let y2 = Double(mags[rightBin])
+        let denom = y0 - 2 * y1 + y2
+        let binOffset = abs(denom) > 1e-12 ? 0.5 * (y0 - y2) / denom : 0.0
+        let refinedBin = Double(bestBin) + binOffset
+        return refinedBin * sampleRate / Double(n)
+    }
+
+    /// Pitch-shift ratio: output's dominant frequency / input's. Returns
+    /// nil for non-sine signals or when either FFT can't resolve a peak.
+    /// Channel 0 only — most presets that pitch-shift do so identically
+    /// across channels, and a single-channel measurement is sufficient
+    /// to flag the bug.
+    static func computePitchShiftRatio(
+        signal: Signal,
+        input: [[Float]],
+        output: [[Float]],
+        sampleRate: Double
+    ) -> Float? {
+        guard case .sine = signal else { return nil }
+        guard !input.isEmpty, !output.isEmpty else { return nil }
+        guard let inFreq = dominantFrequency(input[0], sampleRate: sampleRate),
+              let outFreq = dominantFrequency(output[0], sampleRate: sampleRate),
+              inFreq > 1.0 else { return nil }
+        return Float(outFreq / inFreq)
+    }
+
     // MARK: - End-to-end
 
     /// Generate test signal, render through `kernel`, return stats.
@@ -225,6 +334,12 @@ enum DSPProbe {
             amplitude: amplitude
         )
         let output = renderOffline(kernel: kernel, input: input, blockSize: blockSize)
+        let pitchRatio = computePitchShiftRatio(
+            signal: signal,
+            input: input,
+            output: output,
+            sampleRate: sampleRate
+        )
         return Result(
             signal: signal,
             sampleRate: sampleRate,
@@ -232,7 +347,8 @@ enum DSPProbe {
             frames: frames,
             blockSize: blockSize,
             inStats: computeStats(input),
-            outStats: computeStats(output)
+            outStats: computeStats(output),
+            pitchShiftRatio: pitchRatio
         )
     }
 }
