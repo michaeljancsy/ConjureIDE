@@ -192,17 +192,28 @@ Codex emits `{"type":"turn.completed", "usage":{...}}` and `{"type":"item.comple
 
 2. **Dispatch once, then read the log and decide.** Don't hard-code a fallback chain in bash — you (the dispatching agent) can inspect the `result` event and reason about recovery yourself. A grep can only match the failure modes someone anticipated at skill-design time; you can also handle never-before-seen errors by surfacing them to the user.
 
+   **Setup precondition:** Item 1's `gemini mcp remove` / `add` / python-verify block must run immediately before each dispatch — the subprocess reads `$WORKSPACE/.gemini/settings.json` which Item 1 writes. If you're dispatching gemini multiple times in one /try-it invocation (e.g. after retrying with a smaller model), re-run Item 1's refresh each time, since `gemini mcp add` is idempotent but `$MCP_PORT` may have changed between dispatches.
+
    ```bash
-   MODEL=gemini-2.5-pro   # pick the smallest tier likely to handle the prompt; flash-lite is faster + cheaper for simple presets
+   MODEL=gemini-2.5-pro   # initial tier. Fall back manually to flash / flash-lite below if pro errors out.
    ( cd "$WORKSPACE" && gemini --yolo -m "$MODEL" \
        --output-format stream-json -p "$SUBAGENT_PROMPT" < /dev/null ) > "$LOG" 2>&1
    ```
 
    **Always pipe `< /dev/null`** — same reason as codex.
 
-   When the dispatch finishes, look at the final `result` event in `$LOG`:
-   - `status: "success"` with tool calls recorded → parse the digest, carry on.
-   - `status: "error"` with zero tool calls and a familiar quota/capacity error (e.g. "exhausted your capacity on this model", "No capacity available for model X on the server", `code: 429`) → reasonable to retry with a smaller model. pro's daily quota is tight (~2–3 multi-iteration runs before a 12+h reset); server-capacity errors can hit any tier without warning. Typical fallback chain: pro → flash → flash-lite. Mention the retry briefly in your conversation with the user so they see what's happening.
+   When the dispatch finishes, look at the final `result` event in `$LOG`. gemini-cli emits one line per event; the last line is `{"type":"result", ...}`. Observed shapes (gemini-cli 0.41):
+
+   ```jsonc
+   // success — has stats, no error
+   {"type":"result","timestamp":"...","status":"success","stats":{"total_tokens":...,"tool_calls":12,...}}
+   // failure — status:"error", error.message carries the upstream string
+   {"type":"result","timestamp":"...","status":"error","error":{"type":"unknown","message":"[API Error: No capacity available for model gemini-2.5-pro on the server]"},"stats":{...}}
+   ```
+
+   Branch on it:
+   - `status: "success"` with non-zero `stats.tool_calls` → parse the digest, carry on.
+   - `status: "error"` and `stats.tool_calls == 0`, error message mentions quota / capacity (e.g. "exhausted your capacity on this model", "No capacity available for model X on the server", `code: 429`) → reasonable to retry with a smaller model. pro's daily quota is tight (~2–3 multi-iteration runs before a 12+h reset); server-capacity errors can hit any tier without warning. Typical fallback chain: pro → flash → flash-lite. Mention the retry briefly in your conversation with the user. Don't forget to re-run Item 1's MCP refresh before the retry dispatch.
    - `status: "error"` for an unfamiliar reason → surface the error to the user and ask before retrying. The error string can change as gemini-cli evolves; don't assume past patterns cover the present.
 
    Record the model that actually produced the output in the per-run summary's `agent_model`. If a fallback fired, format as `<initial>→<final> (<short reason>)`, e.g. `gemini-2.5-pro→gemini-2.5-flash-lite (server capacity)`, so cross-run aggregation can see what's happening upstream. No `[skill]` friction entry is needed for fallbacks that worked — they're an external constraint, not /try-it friction.
@@ -275,6 +286,6 @@ The new preset the subagent saved lives in the user's preset library (App Group 
 
 - Don't auto-accept the subagent's report — surface it verbatim and let the user decide what to file.
 - Don't modify the user's MCP config (`claude mcp add`). The temp config is per-subprocess, scoped to this run.
-- Don't retry the subagent blindly. Inspect the log: a familiar quota / capacity error has a reasonable next step you can take yourself (retry with a smaller model); anything unfamiliar should be surfaced to the user before another dispatch.
+- Don't retry on unfamiliar errors — surface them to the user. (Familiar quota / capacity errors have a documented retry path; see Step 5's gemini section.)
 - Don't run `/try-it` again immediately to "patch" the subagent's output — each invocation is a fresh experiment with no shared state.
 - Don't run from the project root — the dev-facing AGENTS.md gives the wrong persona. Always cd to `agent-workspace/`.
