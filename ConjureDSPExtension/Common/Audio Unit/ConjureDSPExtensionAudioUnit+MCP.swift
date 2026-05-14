@@ -1285,7 +1285,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             dsp_kernel_end_preset_transition(kernelRef)
         }
 
-        let response: [String: Any] = [
+        var response: [String: Any] = [
             "signal": result.signal.name,
             "sample_rate": result.sampleRate,
             "channel_count": result.channelCount,
@@ -1299,6 +1299,9 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             "has_nan": result.outStats.hasNaN,
             "has_inf": result.outStats.hasInf,
         ]
+        if let ratio = result.pitchShiftRatio {
+            response["pitch_shift_ratio"] = Double(ratio)
+        }
         return (jsonStr(response), false)
     }
 
