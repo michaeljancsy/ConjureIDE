@@ -1019,7 +1019,12 @@ enum DSPDocumentation {
       3. `save_preset(name, source, language)` — fork to a new
          editable user bundle. This switches the active preset to
          the new bundle AND reloads the kernel with `source`, so the
-         user can hit play immediately.
+         user can hit play immediately. Pass `scaffold_ui=true` to
+         also write a starter `manifest.json` (with a `ui` block,
+         default 520 × 380) and a starter `ui/index.html` using
+         `<cdp-panel auto>` — for the default panel layout, the
+         recipe collapses to step 3 + step 8, skipping the manual
+         manifest / HTML writes.
       4. `write_bundle_file('manifest.json', …)` — declare params
          and the `ui` block (schemaVersion 2).
       5. `write_bundle_file('ui/index.html', …)` — the HTML.
