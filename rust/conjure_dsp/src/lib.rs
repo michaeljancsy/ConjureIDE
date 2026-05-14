@@ -25,11 +25,71 @@ use std::sync::OnceLock;
 /// setenv() thread-safety issue when multiple AU instances init concurrently.
 static TONES_DIR_INIT: OnceLock<()> = OnceLock::new();
 
+/// Guards `install_panic_logger` so the hook installs exactly once even if
+/// multiple AU instances each call `dsp_kernel_create`.
+#[cfg(debug_assertions)]
+static PANIC_HOOK_INSTALLED: OnceLock<()> = OnceLock::new();
+
+/// Debug-only panic hook that writes the panic message + location +
+/// backtrace to the App Group container before the default hook runs.
+/// Behavior-neutral — does NOT catch the panic, so `extern "C"` boundaries
+/// still abort. Purely diagnostic; the file is the only place the panic
+/// message survives, since AU extension stderr isn't captured anywhere
+/// readable.
+///
+/// Writes to `~/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/
+/// rust-panic.log`. `/tmp` is sandbox-denied from the appex, so we use the
+/// App Group container instead, which the appex has full read+write access
+/// to via its `com.apple.security.application-groups` entitlement.
+///
+/// `cfg(debug_assertions)`-gated so it never ships in Release.
+#[cfg(debug_assertions)]
+fn install_panic_logger() {
+    PANIC_HOOK_INSTALLED.get_or_init(|| {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let mut msg = String::new();
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0);
+            msg.push_str(&format!("[{ts:.3}] RUST PANIC\n"));
+            if let Some(loc) = info.location() {
+                msg.push_str(&format!(
+                    "  location: {}:{}:{}\n",
+                    loc.file(),
+                    loc.line(),
+                    loc.column()
+                ));
+            }
+            msg.push_str(&format!("  payload: {info}\n"));
+            msg.push_str(&format!(
+                "  thread: {:?}\n",
+                std::thread::current().name().unwrap_or("<unnamed>")
+            ));
+            let backtrace = std::backtrace::Backtrace::force_capture();
+            msg.push_str(&format!("  backtrace:\n{backtrace}\n"));
+            if let Ok(home) = std::env::var("HOME") {
+                let path = format!(
+                    "{home}/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/rust-panic.log"
+                );
+                let _ = std::fs::write(&path, &msg);
+            }
+            default_hook(info);
+        }));
+    });
+}
+
+#[cfg(not(debug_assertions))]
+#[inline(always)]
+fn install_panic_logger() {}
+
 /// Opaque handle to the DSP kernel. Swift sees this as `OpaquePointer`.
 pub type DSPKernelRef = *mut DSPKernel;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dsp_kernel_create() -> DSPKernelRef {
+    install_panic_logger();
     Box::into_raw(Box::new(DSPKernel::new()))
 }
 
@@ -896,6 +956,47 @@ pub unsafe extern "C" fn dsp_kernel_state_defaults_json(kernel: DSPKernelRef) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the debug-only panic hook actually writes its log file
+    /// to the App Group container. `dsp_kernel_create` installs the hook;
+    /// we then trigger a panic under `catch_unwind` (so the test process
+    /// survives) with a distinctive marker, and confirm the file contains
+    /// our marker plus the expected RUST PANIC / location / backtrace
+    /// sections.
+    ///
+    /// Other tests in this binary that panic via `assert!` etc. will also
+    /// fire the hook and overwrite the file, so we explicitly trigger
+    /// our own panic last in this test body and rely on file overwrite
+    /// for isolation. Marker is unique so a parallel-test-runner race
+    /// would still be detectable (we'd see a different marker).
+    #[cfg(debug_assertions)]
+    #[test]
+    fn test_panic_logger_writes_to_app_group_container() {
+        let kernel = dsp_kernel_create();
+        unsafe { dsp_kernel_destroy(kernel); }
+
+        let marker = "TEST_PANIC_LOGGER_MARKER_UV92QF";
+        let _ = std::panic::catch_unwind(|| {
+            panic!("{marker}");
+        });
+
+        let home = std::env::var("HOME").expect("HOME is set in test env");
+        let path = format!(
+            "{home}/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/rust-panic.log"
+        );
+        let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("panic log file at {path} should exist after panic: {e}")
+        });
+
+        assert!(
+            content.contains(marker),
+            "log file should contain the test's panic marker. content:\n{content}"
+        );
+        assert!(content.contains("RUST PANIC"), "missing RUST PANIC header. content:\n{content}");
+        assert!(content.contains("location:"), "missing location field. content:\n{content}");
+        assert!(content.contains("payload:"), "missing payload field. content:\n{content}");
+        assert!(content.contains("backtrace:"), "missing backtrace field. content:\n{content}");
+    }
 
     #[test]
     fn test_ffi_create_destroy() {
