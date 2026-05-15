@@ -217,6 +217,20 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             if _latencySamples > 0 {
                 response["latency_samples"] = Int(_latencySamples)
             }
+            // If the post-load benchmark (kernel.rs benchmark_process) hit
+            // a trap on its synthetic-audio runs, the backend's last_error
+            // was drained into the kernel's last_error by capture_backend_error.
+            // Surface that inline so "compiles, but crashes on the first audio
+            // block" is one tool call instead of two (compile_and_run then
+            // get_error). The compile still succeeded — only `runtime_trap`
+            // marks the first-block failure.
+            if let kernel = kernelReference,
+               let errPtr = dsp_kernel_last_error(kernel) {
+                let runtimeErr = String(cString: errPtr)
+                if !runtimeErr.isEmpty {
+                    response["runtime_trap"] = runtimeErr
+                }
+            }
             return MCPCompileResult(
                 json: jsonStr(response), isError: false,
                 processTimeMs: result.processTimeMs, budgetMs: result.budgetMs
@@ -238,11 +252,24 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     }
 
     private func mcpGetError() -> (String, Bool) {
+        // Compile errors take priority — they're the agent's most recent
+        // explicit action and the freshest signal.
         if let error = mcpLastError {
-            return (jsonStr(["error": error]), false)
-        } else {
-            return (jsonStr(["error": NSNull()]), false)
+            return (jsonStr(["error": error, "source": "compile"]), false)
         }
+        // Fall through to runtime traps. The kernel drains the WASM/Python
+        // backend's `last_error` into its own `last_error` from both the
+        // post-load benchmark (kernel.rs benchmark_process → capture_backend_error)
+        // and the live render loop (kernel.rs:1926-1927). A null pointer means
+        // no error; an empty string means one was cleared.
+        if let kernel = kernelReference,
+           let errPtr = dsp_kernel_last_error(kernel) {
+            let runtimeErr = String(cString: errPtr)
+            if !runtimeErr.isEmpty {
+                return (jsonStr(["error": runtimeErr, "source": "runtime"]), false)
+            }
+        }
+        return (jsonStr(["error": NSNull()]), false)
     }
 
     @MainActor
@@ -1243,6 +1270,19 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             return (jsonStr(["error": "Kernel is not initialized."]), true)
         }
 
+        // Snapshot the kernel's error generation + current error string
+        // BEFORE the probe. The kernel maintains a monotonic counter that
+        // bumps on every transition of `last_error`; we use it as an
+        // edge-triggered "did the probe cause a new trap?" gate. Without
+        // this baseline, a pre-existing trap from earlier live audio would
+        // be misreported as the probe's fallback reason.
+        let baselineErrorGen = dsp_kernel_error_generation(kernelRef)
+        let baselineError: String? = {
+            guard let ptr = dsp_kernel_last_error(kernelRef) else { return nil }
+            let s = String(cString: ptr)
+            return s.isEmpty ? nil : s
+        }()
+
         // NOTE: we do NOT wrap the probe in begin/endPresetTransition. That
         // mute envelope is applied to the output of every dsp_kernel_process
         // call regardless of caller — including ours. For continuous signals
@@ -1264,6 +1304,21 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 amplitude: amplitude
             )
         }.value
+
+        // Read the kernel's error state AFTER the probe runs but BEFORE the
+        // post-probe reload below. The reload re-instantiates the WASM
+        // backend, which clears `backend.last_error` via clear_last_error()
+        // (wasm_backend.rs). Once that happens the trap message is gone, so
+        // sample it now while it's still live.
+        var fallbackReason: String? = nil
+        let postProbeErrorGen = dsp_kernel_error_generation(kernelRef)
+        if postProbeErrorGen != baselineErrorGen,
+           let ptr = dsp_kernel_last_error(kernelRef) {
+            let s = String(cString: ptr)
+            if !s.isEmpty && s != baselineError {
+                fallbackReason = s
+            }
+        }
 
         // Reload to reset filter/delay/LFO state polluted by the probe's
         // test-signal samples. Wrap THIS step in the transition envelope
@@ -1301,6 +1356,9 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         ]
         if let ratio = result.pitchShiftRatio {
             response["pitch_shift_ratio"] = Double(ratio)
+        }
+        if let reason = fallbackReason {
+            response["fallback_reason"] = reason
         }
         return (jsonStr(response), false)
     }

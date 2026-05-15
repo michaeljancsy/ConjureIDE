@@ -138,7 +138,6 @@ pub struct WasmBackend {
     block_info_offset: i32,
     channel_count: usize,
     max_frames: u32,
-    fuel_per_callback: u64,
     last_error: Option<String>,
     param_names: HashMap<u8, String>,
     param_metadata: Option<Vec<crate::params::ParamMetadata>>,
@@ -205,13 +204,29 @@ const MEMORY_BASE: i32 = 1024;
 /// Default fuel budget per audio callback (~1M instructions) for hand-written WAT.
 const DEFAULT_FUEL: u64 = 1_000_000;
 
-/// Higher fuel budget for compiled modules (Rust/C via wasm32-wasip1).
-/// Compiled code includes musl overhead, bounds checking, etc.
+/// Fuel budget for one-shot load-time / initialize-time getter calls into the
+/// module (e.g. `get_input_ptr`, `get_state_buf_ptr`). Getters are trivial —
+/// ~tens of WASM ops each — but fuel doesn't roll over between calls when
+/// metering is enabled, so we refuel before every getter. 10M is overkill
+/// for a pointer-returning function but cheap to set and matches the
+/// pre-per-frame-scaling default.
 const COMPILED_FUEL: u64 = 10_000_000;
+
+/// Per-frame fuel budget for compiled (Rust/C) modules on the hot path.
+/// Wasmtime executes ~5–10G wasm-ops/sec on Apple Silicon (the NAM comment
+/// below pins WaveNet standard at ~230M wasm-ops per 21.33 ms buffer ⇒
+/// ~10G/sec). 50K wasm-ops/frame ⇒ ~5–10 µs/frame worst-case trap latency,
+/// well under the per-frame audio-thread deadline (~20.8 µs at 48 kHz).
+/// Scales with `frame_count` so 256-sample buffers (Logic / Live default,
+/// ~5.33 ms budget) get a 12.8M cap and 1024-sample buffers get 51.2M —
+/// no fixed-constant xrun cliff at small buffer sizes.
+const COMPILED_FUEL_PER_FRAME: u64 = 50_000;
 
 /// Much higher fuel budget for NAM-active WASM modules.
 /// WaveNet standard (16ch, 4 arrays × 10 layers) needs ~230M WASM instructions per buffer;
 /// WaveNet large (32ch) needs ~460M. Use 2B to give headroom for all current model sizes.
+/// Stays flat (not per-frame) because NAM inference cost doesn't scale linearly with frame
+/// count — the model's fixed-size receptive field dominates.
 const NAM_FUEL: u64 = 2_000_000_000;
 
 impl WasmBackend {
@@ -294,10 +309,10 @@ impl WasmBackend {
                 BufferMode::FixedOffset
             };
 
-        let fuel_per_callback = match buffer_mode {
-            BufferMode::ModuleAllocated => COMPILED_FUEL,
-            BufferMode::FixedOffset => DEFAULT_FUEL,
-        };
+        // Per-frame fuel scaling is computed in `process()` based on the
+        // current block's `frame_count`, so we no longer cache a fixed
+        // `fuel_per_callback` on the backend. Load-time getter calls below
+        // refuel with `COMPILED_FUEL` directly.
 
         // Try get_param_metadata_ptr/len first (rich metadata), then fall back to get_param_names_json
         let (param_names, param_metadata) = Self::extract_params(
@@ -431,16 +446,6 @@ impl WasmBackend {
             store.data_mut().nam_models = models;
         }
 
-        let has_nam = !nam_paths.is_empty();
-
-        // Use higher fuel budget for NAM-active modules (host import call still
-        // needs fuel for WASM-side copy loops around the import).
-        let fuel_per_callback = if has_nam {
-            NAM_FUEL
-        } else {
-            fuel_per_callback
-        };
-
         // Determine how many params to write: metadata count, or 8 for backward compat
         let param_write_count = param_metadata
             .as_ref()
@@ -502,7 +507,6 @@ impl WasmBackend {
             block_info_offset,
             channel_count: 0,
             max_frames: 0,
-            fuel_per_callback,
             last_error: None,
             param_names,
             param_metadata,
@@ -1180,8 +1184,10 @@ impl Backend for WasmBackend {
                 if let (Some(get_in), Some(get_out)) =
                     (self.get_input_ptr_fn.clone(), self.get_output_ptr_fn.clone())
                 {
-                    // Need fuel for the getter calls
-                    let _ = self.store.set_fuel(self.fuel_per_callback);
+                    // Need fuel for the getter calls. These are one-shot
+                    // pointer-returners, not the hot path — use the flat
+                    // load-time budget rather than the per-frame scale.
+                    let _ = self.store.set_fuel(COMPILED_FUEL);
                     match (
                         get_in.call(&mut self.store, ()),
                         get_out.call(&mut self.store, ()),
@@ -1260,8 +1266,22 @@ impl Backend for WasmBackend {
             return false;
         }
 
-        // Refuel the store for this callback
-        if let Err(e) = self.store.set_fuel(self.fuel_per_callback) {
+        // Refuel the store for this callback. Per-frame scaling for
+        // non-NAM modules so small buffers don't get a fixed-constant
+        // cliff; NAM-active modules stay on the flat NAM_FUEL since their
+        // cost is dominated by the model's fixed receptive field, not by
+        // frame_count. See module-level constant docs for the math.
+        let fuel = if !self.nam_paths.is_empty() {
+            NAM_FUEL
+        } else {
+            match self.buffer_mode {
+                BufferMode::ModuleAllocated => {
+                    COMPILED_FUEL_PER_FRAME.saturating_mul(frame_count as u64)
+                }
+                BufferMode::FixedOffset => DEFAULT_FUEL,
+            }
+        };
+        if let Err(e) = self.store.set_fuel(fuel) {
             self.last_error = Some(format!("Failed to set fuel: {}", e));
             return false;
         }
@@ -2408,20 +2428,56 @@ mod tests {
     }
 
     #[test]
-    fn test_wasm_compiled_module_gets_higher_fuel() {
+    fn test_wasm_compiled_module_gets_per_frame_fuel() {
         // Modules that expose get_input_ptr / get_output_ptr land in
-        // ModuleAllocated buffer mode → higher (COMPILED_FUEL) budget.
+        // ModuleAllocated buffer mode → per-frame scaling on the hot path.
+        // Verify by initializing + processing a block and reading the fuel
+        // the store ended up with: a successful run consumes some fuel,
+        // but the *initial* set on entry to process() should be exactly
+        // COMPILED_FUEL_PER_FRAME * frame_count.
         let wasm = wat_to_wasm(BUFFER_GETTERS_WAT);
-        let backend = WasmBackend::load(&wasm).unwrap();
-        assert_eq!(
-            backend.fuel_per_callback, COMPILED_FUEL,
-            "Modules with buffer getters should get the compiled fuel budget"
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+        backend.initialize(2, 48000.0, 1024);
+
+        // Drive one process() call with a known frame_count; assert the
+        // store was refueled to the per-frame scaled value (minus a bit
+        // of fuel consumed by the trivial WAT body, which is bounded
+        // small). We just need to verify the budget is in the right
+        // ballpark — much higher than DEFAULT_FUEL for ModuleAllocated.
+        let frame_count: usize = 256;
+        let zero_in = vec![0.0_f32; frame_count];
+        let mut zero_out = vec![0.0_f32; frame_count];
+        let in_ptrs: Vec<*const f32> = vec![zero_in.as_ptr(); 2];
+        let out_ptrs: Vec<*mut f32> = vec![zero_out.as_mut_ptr(); 2];
+        let params = [0.0_f32; crate::params::PARAM_COUNT];
+        let transport = TransportState::default();
+        unsafe {
+            backend.process(
+                &in_ptrs,
+                &out_ptrs,
+                2,
+                frame_count,
+                48000.0,
+                &params,
+                &transport,
+                SidechainInput::NONE,
+                &StateSnapshot::empty(),
+            );
+        }
+        // Expected fuel-on-entry: COMPILED_FUEL_PER_FRAME * frame_count.
+        // After the trivial WAT body runs we should still have most of it.
+        let remaining = backend.store.get_fuel().unwrap_or(0);
+        let expected_initial = COMPILED_FUEL_PER_FRAME * frame_count as u64;
+        assert!(
+            remaining > expected_initial / 2 && remaining <= expected_initial,
+            "ModuleAllocated process() should refuel to ~{} (per-frame * 256); got {} remaining after trivial run",
+            expected_initial, remaining
         );
 
         // Modules without buffer getters fall back to FixedOffset →
-        // DEFAULT_FUEL budget. Use a minimal valid fixture (memory +
-        // process + the required get_block_info_ptr) so loading succeeds
-        // but no I/O getters are declared.
+        // DEFAULT_FUEL budget (also flat — getter modules and per-frame
+        // scaling don't apply to legacy WAT). Drive a process() and check
+        // the store was refueled to roughly DEFAULT_FUEL.
         let no_getters_wat = r#"
             (module
               (memory (export "memory") 1)
@@ -2430,10 +2486,33 @@ mod tests {
             )
         "#;
         let wasm = wat_to_wasm(no_getters_wat);
-        let backend = WasmBackend::load(&wasm).unwrap();
-        assert_eq!(
-            backend.fuel_per_callback, DEFAULT_FUEL,
-            "Modules without buffer getters should get the default fuel budget"
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+        backend.initialize(2, 48000.0, 1024);
+        // FixedOffset backends won't have valid input/output offsets, so
+        // process() bails early at the `self.input_offset == 0` guard
+        // *before* refueling. Set the offsets manually for the test so the
+        // refuel path runs. Use the BLOCK_INFO_BUF offset's region (memory
+        // is 1 page = 64K; any small offset within bounds is fine).
+        backend.input_offset = 32;
+        backend.output_offset = 32 + (frame_count as i32) * 4 * 2;
+        unsafe {
+            backend.process(
+                &in_ptrs,
+                &out_ptrs,
+                2,
+                frame_count,
+                48000.0,
+                &params,
+                &transport,
+                SidechainInput::NONE,
+                &StateSnapshot::empty(),
+            );
+        }
+        let remaining = backend.store.get_fuel().unwrap_or(0);
+        assert!(
+            remaining > DEFAULT_FUEL / 2 && remaining <= DEFAULT_FUEL,
+            "FixedOffset process() should refuel to ~{} (DEFAULT_FUEL); got {} remaining",
+            DEFAULT_FUEL, remaining
         );
     }
 

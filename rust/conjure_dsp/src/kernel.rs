@@ -1723,6 +1723,14 @@ impl DSPKernel {
         let result = live.as_mut().map(|b| run(b.as_mut()));
         drop(live);
 
+        // If the benchmark traps every block (e.g. a script that panics on
+        // first sample), `run` returns a wall-clock time but the trap is
+        // captured only in `backend.last_error`. Drain it into the kernel's
+        // `last_error` so `dsp_kernel_last_error` and the MCP surface can
+        // report "compiles but crashes on first block" without waiting for
+        // a live render to retrigger the trap.
+        self.capture_backend_error();
+
         // Reset profiler — benchmark would have contaminated it if we'd routed
         // through self.process(). We don't go through process() any more, but
         // keep the reset for parity with previous behavior.
@@ -5580,5 +5588,57 @@ mod tests {
 
         std::fs::remove_file(&temp1).ok();
         std::fs::remove_file(&temp2).ok();
+    }
+
+    /// A WAT module whose `process` function traps unconditionally via the
+    /// `unreachable` instruction. Used to verify that benchmark_process
+    /// captures the trap into kernel.last_error rather than swallowing it.
+    /// Includes the buffer-getter exports so the backend lands in
+    /// ModuleAllocated buffer_mode, matching the shape of a compiled Rust
+    /// preset that crashes on first sample.
+    const TRAPPING_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+          (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+          (func (export "get_output_ptr")     (result i32) (i32.const 32768))
+          (func (export "process")
+            unreachable
+          )
+        )
+    "#;
+
+    #[test]
+    fn test_benchmark_captures_runtime_trap() {
+        // A script that compiles cleanly but traps on every block must
+        // surface its trap message via kernel.last_error after the
+        // post-load benchmark runs. Without the capture_backend_error
+        // call at the end of benchmark_process, kernel.last_error would
+        // stay None and the MCP get_error tool would lie about runtime
+        // traps to anyone polling between compile_and_run and probe.
+        let wasm_bytes = wat::parse_str(TRAPPING_WAT).expect("Failed to parse TRAPPING_WAT");
+
+        let mut kernel = DSPKernel::new();
+        kernel.initialize(2, 2, 48000.0);
+        kernel.set_maximum_frames_to_render(64);
+        assert!(kernel.last_error().is_none(), "Pre-load kernel.last_error should be None");
+
+        let loaded = kernel.load_wasm(&wasm_bytes);
+        assert!(loaded, "WASM should load successfully even though its process() traps");
+
+        // The load itself runs `dsp_kernel_benchmark_process` via Swift
+        // in production. In tests we trigger it manually.
+        let _ = kernel.benchmark_process();
+
+        // After the benchmark drained the trap, kernel.last_error must
+        // contain the WASM trap message.
+        let err = kernel.last_error();
+        assert!(err.is_some(), "kernel.last_error should be Some after benchmark trapped");
+        let msg = err.unwrap();
+        assert!(
+            msg.contains("WASM process error") || msg.to_lowercase().contains("unreachable"),
+            "Trap message should mention WASM process error or unreachable; got: {}",
+            msg
+        );
     }
 }
