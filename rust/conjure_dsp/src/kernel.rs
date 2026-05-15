@@ -1578,19 +1578,6 @@ impl DSPKernel {
         self.latency_samples
     }
 
-    /// Capture any backend error into `last_error` so it outlives the mutex guard.
-    /// Uses `try_lock` so it's safe to call from any thread (including the
-    /// audio thread); drops the capture on contention.
-    fn capture_backend_error(&self) {
-        if let Ok(backend_guard) = self.backend.try_lock() {
-            if let Some(ref backend) = *backend_guard {
-                if let Some(err) = backend.last_error() {
-                    self.update_last_error_try(Some(err.to_string()));
-                }
-            }
-        }
-    }
-
     /// Benchmark the process function with a 440 Hz sine wave.
     /// Returns the max execution time in seconds over 5 runs (after 1 warm-up),
     /// or None if no backend is loaded or the swap doesn't complete in time.
@@ -1719,17 +1706,39 @@ impl DSPKernel {
         // audio thread already swapped and the fade-in has completed). We
         // can lock `self.backend` directly and leave `pending_backend`
         // untouched so the audio thread's swap machinery is never blocked.
+        // Run the benchmark AND capture the backend's last_error in one
+        // critical section. Two reasons this happens inside the lock:
+        //
+        // 1. Closing a race with the audio thread. If we dropped the lock
+        //    and then did a `try_lock` to read the error, the audio thread
+        //    — which has been starved during the benchmark and runs at a
+        //    higher priority — would almost certainly win the lock first,
+        //    and our try_lock would fail silently. Reading `last_error`
+        //    while we still hold the backend mutex is race-free.
+        //
+        // 2. The captured value is then force-written into kernel.last_error
+        //    via `update_last_error_blocking` AFTER the drop. This is
+        //    deliberate: it overrides any stale entry the audio thread may
+        //    have written from the OLD backend during the fade-out / swap
+        //    window between `load_wasm`'s clear and our acquiring the
+        //    backend lock. The benchmark just observed the *new* backend's
+        //    first synthetic-audio runs — that's the authoritative state
+        //    `mcpCompileAndRun`'s `runtime_trap` is meant to report. If the
+        //    new backend genuinely traps in live audio after we return, the
+        //    audio thread's failure-capture path will re-set last_error to
+        //    a current-backend trap message.
         let mut live = self.backend.lock().ok()?;
-        let result = live.as_mut().map(|b| run(b.as_mut()));
+        let (result, benchmark_trap) = match live.as_mut() {
+            Some(b) => {
+                let r = run(b.as_mut());
+                let e = b.last_error().map(|s| s.to_string());
+                (Some(r), e)
+            }
+            None => (None, None),
+        };
         drop(live);
 
-        // If the benchmark traps every block (e.g. a script that panics on
-        // first sample), `run` returns a wall-clock time but the trap is
-        // captured only in `backend.last_error`. Drain it into the kernel's
-        // `last_error` so `dsp_kernel_last_error` and the MCP surface can
-        // report "compiles but crashes on first block" without waiting for
-        // a live render to retrigger the trap.
-        self.capture_backend_error();
+        self.update_last_error_blocking(benchmark_trap);
 
         // Reset profiler — benchmark would have contaminated it if we'd routed
         // through self.process(). We don't go through process() any more, but
@@ -5607,6 +5616,50 @@ mod tests {
           )
         )
     "#;
+
+    /// A WAT module whose `process` is a no-op — used to verify the
+    /// benchmark's stale-error override behavior with a backend that
+    /// won't trap on its own.
+    const NO_TRAP_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+          (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+          (func (export "get_output_ptr")     (result i32) (i32.const 32768))
+          (func (export "process"))
+        )
+    "#;
+
+    #[test]
+    fn test_benchmark_overrides_stale_last_error() {
+        // Regression: when the audio thread set kernel.last_error from a
+        // previous (trapping) backend during the fade-out / swap window
+        // before benchmark could run, the next compile_and_run on a
+        // non-trapping script would incorrectly report the stale trap as
+        // the new script's `runtime_trap`. The fix makes benchmark_process
+        // force-write its own observation into kernel.last_error.
+        let wasm_bytes = wat::parse_str(NO_TRAP_WAT).expect("Failed to parse NO_TRAP_WAT");
+
+        let mut kernel = DSPKernel::new();
+        kernel.initialize(2, 2, 48000.0);
+        kernel.set_maximum_frames_to_render(64);
+        assert!(kernel.load_wasm(&wasm_bytes), "non-trapping WASM should load");
+
+        // Simulate the audio thread having captured a trap from the
+        // previous (old) backend during the swap window.
+        kernel.set_last_error(Some("stale trap from previous backend".to_string()));
+        assert!(kernel.last_error().is_some(), "precondition: stale error set");
+
+        // Benchmark on the new, non-trapping backend must override the
+        // stale value with its own observation (None).
+        let _ = kernel.benchmark_process();
+
+        assert!(
+            kernel.last_error().is_none(),
+            "benchmark should override stale error with its own observation (None); got: {:?}",
+            kernel.last_error()
+        );
+    }
 
     #[test]
     fn test_benchmark_captures_runtime_trap() {
