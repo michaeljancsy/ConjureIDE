@@ -220,6 +220,10 @@ const COMPILED_FUEL: u64 = 10_000_000;
 /// Scales with `frame_count` so 256-sample buffers (Logic / Live default,
 /// ~5.33 ms budget) get a 12.8M cap and 1024-sample buffers get 51.2M —
 /// no fixed-constant xrun cliff at small buffer sizes.
+///
+/// At very small frame counts (e.g. `frame_count=1` at transport boundaries
+/// in some hosts), `process()` floors the result at `DEFAULT_FUEL` to
+/// cover any heavy fixed per-call overhead a script might have.
 const COMPILED_FUEL_PER_FRAME: u64 = 50_000;
 
 /// Much higher fuel budget for NAM-active WASM modules.
@@ -1271,13 +1275,27 @@ impl Backend for WasmBackend {
         // cliff; NAM-active modules stay on the flat NAM_FUEL since their
         // cost is dominated by the model's fixed receptive field, not by
         // frame_count. See module-level constant docs for the math.
+        //
+        // Floor at DEFAULT_FUEL: per-frame scaling assumes work scales
+        // linearly with frame_count, but compiled modules also pay a
+        // fixed per-call overhead that doesn't (function prologue, param
+        // denormalization, any once-per-block coefficient recomputation).
+        // For typical scripts that overhead is ~100-1000 wasm-ops — well
+        // under the 50K-per-frame budget even at frame_count=1. The floor
+        // is defensive against unusual scripts with heavy fixed init
+        // (large LUT setup, many-section filter coefficient updates) that
+        // could otherwise trap at the transport-boundary frame_count=1
+        // calls some hosts emit. DEFAULT_FUEL = 1M is anchored to the
+        // existing "small but enough" budget for hand-written WAT, and
+        // only takes effect at frame_count < 20 (above that, the
+        // per-frame product dominates).
         let fuel = if !self.nam_paths.is_empty() {
             NAM_FUEL
         } else {
             match self.buffer_mode {
-                BufferMode::ModuleAllocated => {
-                    COMPILED_FUEL_PER_FRAME.saturating_mul(frame_count as u64)
-                }
+                BufferMode::ModuleAllocated => COMPILED_FUEL_PER_FRAME
+                    .saturating_mul(frame_count as u64)
+                    .max(DEFAULT_FUEL),
                 BufferMode::FixedOffset => DEFAULT_FUEL,
             }
         };
@@ -2513,6 +2531,55 @@ mod tests {
             remaining > DEFAULT_FUEL / 2 && remaining <= DEFAULT_FUEL,
             "FixedOffset process() should refuel to ~{} (DEFAULT_FUEL); got {} remaining",
             DEFAULT_FUEL, remaining
+        );
+    }
+
+    #[test]
+    fn test_wasm_compiled_module_fuel_floors_at_small_frame_counts() {
+        // At very small frame_count (transport boundaries, sample-accurate
+        // scheduling) the per-frame product can dip below the fixed
+        // per-call overhead a script might have. The floor at DEFAULT_FUEL
+        // keeps single-sample / few-sample calls usable. Verify by driving
+        // process() at frame_count=1 and checking the store was refueled
+        // to at least DEFAULT_FUEL, not to the bare 50K-per-frame product.
+        let wasm = wat_to_wasm(BUFFER_GETTERS_WAT);
+        let mut backend = WasmBackend::load(&wasm).unwrap();
+        backend.initialize(2, 48000.0, 1024);
+
+        let frame_count: usize = 1;
+        let zero_in = vec![0.0_f32; frame_count];
+        let mut zero_out = vec![0.0_f32; frame_count];
+        let in_ptrs: Vec<*const f32> = vec![zero_in.as_ptr(); 2];
+        let out_ptrs: Vec<*mut f32> = vec![zero_out.as_mut_ptr(); 2];
+        let params = [0.0_f32; crate::params::PARAM_COUNT];
+        let transport = TransportState::default();
+        unsafe {
+            backend.process(
+                &in_ptrs,
+                &out_ptrs,
+                2,
+                frame_count,
+                48000.0,
+                &params,
+                &transport,
+                SidechainInput::NONE,
+                &StateSnapshot::empty(),
+            );
+        }
+        let remaining = backend.store.get_fuel().unwrap_or(0);
+        // Per-frame product alone would be 50K; floored to DEFAULT_FUEL (1M).
+        let bare_product = COMPILED_FUEL_PER_FRAME * frame_count as u64;
+        assert!(
+            remaining > DEFAULT_FUEL / 2,
+            "frame_count=1 should be floored at DEFAULT_FUEL ({}); got {} remaining \
+             (bare per-frame product would have been {})",
+            DEFAULT_FUEL, remaining, bare_product
+        );
+        assert!(
+            remaining > bare_product * 5,
+            "Remaining fuel ({}) should be far higher than the bare per-frame product ({}), \
+             proving the floor took effect, not the bare scaling",
+            remaining, bare_product
         );
     }
 
