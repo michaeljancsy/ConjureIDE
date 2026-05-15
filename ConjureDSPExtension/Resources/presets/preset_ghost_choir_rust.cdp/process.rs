@@ -6,7 +6,7 @@
 // whisper-band parallel layer → 4 modulated comb cathedral wash → 2 allpass
 // diffusers → mid/side widening → breathing tremolo → mix.
 //
-// Params:
+// Controls:
 //   VOICES  (ms)  — chorus depth (0.5–6)
 //   AIR     (Hz)  — formant softening LP cutoff (1500–6000)
 //   WHISPER (pct) — whisper layer level

@@ -9,7 +9,7 @@
 # erratic, chaotic modulation; first use of summed-LFO random-walk and
 # fast-LFO pitch jitter (distinct from Sun-Baked Cassette's slow wow).
 #
-# Params:
+# Controls:
 #   flutter (pct) — tremolo depth
 #   bright  (pct) — bandpass Q
 #   jitter  (pct) — pitch jitter depth

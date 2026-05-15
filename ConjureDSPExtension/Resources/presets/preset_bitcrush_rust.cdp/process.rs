@@ -6,7 +6,7 @@
 // 2. Sample rate reduction: holds every Nth sample, discarding the rest,
 //    which introduces aliasing artifacts and a characteristic stepped sound.
 //
-// Params:
+// Controls:
 //   0 (Bit Depth):  Quantization depth — 1 to 16 bits
 //   1 (Downsample): Sample rate reduction factor — 1x to 16x
 

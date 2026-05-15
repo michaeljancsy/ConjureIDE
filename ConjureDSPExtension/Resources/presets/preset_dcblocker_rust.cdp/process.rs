@@ -6,7 +6,7 @@
 // The cutoff parameter sets the -3dB frequency in Hz; R is computed
 // from the sample rate using the exact exponential formula.
 //
-// Params:
+// Controls:
 //   0 (Cutoff): High-pass cutoff — 4 to 70 Hz
 
 use conjuredsp::*;

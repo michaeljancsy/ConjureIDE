@@ -9,7 +9,7 @@
 # First preset in the set with cross-channel L↔R feedback. Intimate stereo
 # image (the stereo separation is the string, not the room).
 #
-# Params:
+# Controls:
 #   can     (pct) — bandpass narrowness (Q)
 #   string  (pct) — cross-channel feedback amount
 #   clip    (pct) — asymmetric clip drive

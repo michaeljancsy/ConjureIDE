@@ -9,7 +9,7 @@
 # than inharmonic glass spectra, producing bell-like consonant blooms instead
 # of metallic crash. Sub-Hz ring-mod carriers swell rather than buzz.
 #
-# Params:
+# Controls:
 #   bloom    (pct) — resonator Q (10 → 30)
 #   drift    (pct) — sub-Hz ring-mod depth
 #   chorus   (pct) — chorus depth

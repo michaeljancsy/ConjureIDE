@@ -9,7 +9,7 @@
 # square-gate chorus; narcotic mood vs broken-fax mechanical clatter. The
 # drip envelope IS the sound rather than a side stage.
 #
-# Params:
+# Controls:
 #   drip  (pct) — drip envelope depth
 #   haze  (pct) — tanh saturation drive
 #   drift (pct) — slow pitch drift depth

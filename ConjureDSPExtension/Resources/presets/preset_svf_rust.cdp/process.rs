@@ -5,7 +5,7 @@
 // low-pass, high-pass, and band-pass simultaneously.
 // Change MODE constant to select output: 0=LP, 1=HP, 2=BP, 3=Notch.
 //
-// Params:
+// Controls:
 //   0 (Cutoff):    Filter cutoff — 20 to 20000 Hz (log)
 //   1 (Resonance): Resonance Q — 0.5 to 10.0
 

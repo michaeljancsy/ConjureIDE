@@ -6,7 +6,7 @@
 // opens and closes. The hold time prevents the gate from chattering
 // on signals that hover near the threshold.
 //
-// Params:
+// Controls:
 //   0 (Threshold): Gate threshold — -80 to -20 dB
 //   1 (Attack):    Attack time — 0.1 to 10 ms
 //   2 (Release):   Release time — 10 to 500 ms

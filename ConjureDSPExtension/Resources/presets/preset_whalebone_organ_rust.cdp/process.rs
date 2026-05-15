@@ -12,7 +12,7 @@
 // Garden: pipe-organ sustain via per-partial breathing envelopes instead of
 // shared sub-Hz ring modulation.
 //
-// Params:
+// Controls:
 //   PIPES  (pct) — modal resonator Q (12 → 40)
 //   BREATH (pct) — per-partial breathing LFO depth
 //   SUB    (pct) — sub-octave level

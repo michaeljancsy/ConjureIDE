@@ -10,7 +10,7 @@
 # dense; first preset where the pitch shifter lives inside the reverb
 # feedback loop.
 #
-# Params:
+# Controls:
 #   ice     (pct) — tail feedback (length of shimmer)
 #   shimmer (pct) — how much pitch-shifted content re-enters the tail
 #   glass   (pct) — bandpass cluster gain

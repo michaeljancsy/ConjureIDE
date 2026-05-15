@@ -16,7 +16,7 @@ def process(ctx):
     Implements y[n] = (1 - a) * x[n] + a * y[n-1].
     Rolls off at 6 dB/octave above the cutoff frequency.
 
-    Params:
+    Controls:
         cutoff: Cutoff frequency (20–20000 Hz)
     """
     global _prev_out

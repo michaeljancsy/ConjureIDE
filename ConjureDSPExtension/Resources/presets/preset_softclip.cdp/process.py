@@ -15,7 +15,7 @@ def process(ctx):
     the signal is pushed into the nonlinearity. Output is normalized
     so that low-level signals pass through at unity gain.
 
-    Params:
+    Controls:
         drive: Saturation amount (1–15x)
     """
     drive = ctx.params["drive"]

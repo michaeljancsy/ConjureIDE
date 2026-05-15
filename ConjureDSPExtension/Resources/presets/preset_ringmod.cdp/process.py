@@ -20,7 +20,7 @@ def process(ctx):
     amplitude around a bias), ring modulation has no DC offset, so the
     carrier frequency components are always present in the output.
 
-    Params:
+    Controls:
         frequency: Carrier frequency (20–20000 Hz)
     """
     global _lfo

@@ -26,7 +26,7 @@ def process(ctx):
     creates a bouncing stereo effect. For mono input, the bouncing still
     occurs across the single delay line with feedback.
 
-    Params:
+    Controls:
         time:     Delay time per side (50–500 ms)
         feedback: Cross-feedback (0.0–0.95)
         mix:      Wet/dry mix (0.0 = dry, 1.0 = wet)

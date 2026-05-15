@@ -4,7 +4,7 @@
 // a gain control (+/-12 dB) and a bypass toggle. Three biquad filters in
 // series shape the tone without requiring frequency knob adjustments.
 //
-// Params:
+// Controls:
 //   0 (Low Gain):    Low shelf gain — -12 to +12 dB
 //   1 (Mid Gain):    Mid peak gain — -12 to +12 dB
 //   2 (High Gain):   High shelf gain — -12 to +12 dB

@@ -5,7 +5,7 @@
 // hold rate reduction → bit-depth reduction → squelch tremolo → carrier
 // interference (800 Hz beating tone) → mid/side widening → final highpass → mix.
 //
-// Params:
+// Controls:
 //   DRIFT        (pct) — modulates carrier ring-mod offsets
 //   INTERFERENCE (pct) — tremolo depth + carrier bleed amount
 //   STATIC       (pct) — heterodyne squeal feedback amount

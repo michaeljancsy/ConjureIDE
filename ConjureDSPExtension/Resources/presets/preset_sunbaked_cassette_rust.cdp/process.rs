@@ -4,7 +4,7 @@
 // saturation → tone shaping shelves → print-through pre-echo → tape echo
 // (LP in feedback) → head-wear feedback comb → final mix.
 //
-// Params:
+// Controls:
 //   WOW     (ms)  — slow pitch drift depth (0–6)
 //   FLUTTER (ms)  — fast warble depth (0–3)
 //   WEAR    (pct) — drives saturation amount, 0=clean / 100=destroyed

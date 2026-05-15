@@ -7,7 +7,7 @@
 // Unlike a compressor, the ratio is effectively infinite — nothing
 // passes above the ceiling.
 //
-// Params:
+// Controls:
 //   0 (Threshold): Ceiling level — -20 to 0 dB
 //   1 (Attack):    Attack time — 0.01 to 1.0 ms
 //   2 (Release):   Release time — 10 to 500 ms

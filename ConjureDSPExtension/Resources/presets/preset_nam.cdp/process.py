@@ -24,7 +24,7 @@ def process(ctx):
     emulation) on the input signal. Use the Tones browser to download
     models from tone3000.com, then update the load_model() path above.
 
-    Params:
+    Controls:
         input_gain: Drive into the model in dB (-60 to +12)
         mix: Dry/wet blend (0 = fully dry, 1 = fully wet)
     """

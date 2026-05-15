@@ -4,7 +4,7 @@
 // exceeding +/-1.0. Produces a harsh, buzzy distortion with odd harmonics.
 // Higher drive values push more of the signal into clipping.
 //
-// Params:
+// Controls:
 //   0 (Drive): Amplification factor — 1.0 to 20.0
 
 use conjuredsp::*;

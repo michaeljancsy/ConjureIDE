@@ -11,7 +11,7 @@
 # Tin Can Telephone) — but here the routing is a ping-pong delay rather
 # than a fast feedback clip loop.
 #
-# Params:
+# Controls:
 #   ripple (pct) — ping-pong feedback amount
 #   bubble (pct) — base tap LFO depth
 #   drone  (pct) — sub drone level

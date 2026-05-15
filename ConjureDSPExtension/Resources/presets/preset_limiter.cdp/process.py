@@ -23,7 +23,7 @@ def process(ctx):
     Unlike a compressor, the ratio is effectively infinite — nothing
     passes above the ceiling.
 
-    Params:
+    Controls:
         threshold: Ceiling level (-20 to 0 dB)
         attack:    Attack time (0.01–1 ms)
         release:   Release time (10–500 ms)

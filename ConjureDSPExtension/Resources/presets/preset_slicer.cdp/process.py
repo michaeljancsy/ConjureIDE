@@ -25,7 +25,7 @@ def process(ctx):
     reverses direction. Uses double-buffering: one buffer records while
     the other plays back reversed.
 
-    Params:
+    Controls:
         rate: Chunk size (10–500 ms)
     """
     global _record_buf, _play_buf, _write_pos, _chunk_size

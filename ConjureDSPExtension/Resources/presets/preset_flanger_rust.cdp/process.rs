@@ -5,7 +5,7 @@
 // comb filter notches up and down, producing the characteristic flanging
 // jet-plane sweep. Higher feedback intensifies the comb-filter peaks.
 //
-// Params:
+// Controls:
 //   0 (Rate):     LFO rate — 0.1 to 5.0 Hz
 //   1 (Depth):    Modulation depth — 0.5 to 5.0 ms
 //   2 (Delay):    Base delay — 1.0 to 5.0 ms

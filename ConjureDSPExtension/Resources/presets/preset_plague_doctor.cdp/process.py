@@ -9,7 +9,7 @@
 # vowel cluster vs Ghost Choir's wet/wide "ah" formants. Breath envelope is
 # an expressive control rather than decorative modulation.
 #
-# Params:
+# Controls:
 #   mask     (pct) — nasal formant cluster gain
 #   breath   (pct) — breath envelope depth
 #   rasp     (pct) — tanh saturation drive

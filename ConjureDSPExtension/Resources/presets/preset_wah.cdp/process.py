@@ -27,7 +27,7 @@ def process(ctx):
     filter higher; quiet passages bring it back down. The result is the
     classic funk/synth wah effect driven by playing dynamics.
 
-    Params:
+    Controls:
         sensitivity: Input gain for envelope detection (-40 to 0 dB)
         depth:       Frequency sweep range (0–100%)
         min_freq:    Lowest filter frequency (200–800 Hz)

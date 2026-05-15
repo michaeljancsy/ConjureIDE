@@ -10,7 +10,7 @@
 # square gating; detuned-organ texture. Distinct from Underwater Spy: the
 # chorus itself is the rust/character, not a lush doubling effect.
 #
-# Params:
+# Controls:
 #   calliope (pct) — chorus depth
 #   waltz    (pct) — waltz amplitude modulation depth
 #   organ    (pct) — pipe comb feedback

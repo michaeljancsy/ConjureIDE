@@ -19,7 +19,7 @@ def process(ctx):
     The cutoff parameter sets the -3dB frequency in Hz; R is computed
     from the sample rate.
 
-    Params:
+    Controls:
         cutoff: High-pass cutoff frequency (4–70 Hz)
     """
     global _state

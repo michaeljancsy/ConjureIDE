@@ -6,7 +6,7 @@
 // mixed with the dry signal, creates notches that sweep up and down
 // the spectrum. The number of stages determines how many notches appear.
 //
-// Params:
+// Controls:
 //   0 (Rate):     LFO rate — 0.1 to 5.0 Hz
 //   1 (Min Freq): Minimum sweep frequency — 50 to 500 Hz
 //   2 (Max Freq): Maximum sweep frequency — 500 to 10000 Hz

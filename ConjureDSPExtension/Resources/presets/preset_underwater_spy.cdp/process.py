@@ -4,7 +4,7 @@
 # 4-voice chorus → spring-reverb impression (4 cascaded Schroeder allpasses +
 # feedback tank) → Bond-era tape slap → tremolo → mid/side widening → mix.
 #
-# Params:
+# Controls:
 #   depth  (Hz)  — underwater LP cutoff (300–2000, log)
 #   bubble (ms)  — chorus depth (0.5–8)
 #   spring (pct) — spring tank feedback amount (0–100)

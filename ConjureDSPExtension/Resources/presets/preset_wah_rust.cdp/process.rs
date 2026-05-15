@@ -5,7 +5,7 @@
 // filter higher; quiet passages bring it back down. The result is the
 // classic funk/synth wah effect driven by playing dynamics.
 //
-// Params:
+// Controls:
 //   0 (Sensitivity): Input gain for envelope detection — -40 to 0 dB
 //   1 (Depth):       Frequency sweep range — 0 to 100%
 //   2 (Min Freq):    Lowest filter frequency — 200 to 800 Hz (log)

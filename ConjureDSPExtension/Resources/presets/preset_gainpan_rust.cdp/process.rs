@@ -2,7 +2,7 @@
 //
 // Applies gain and constant-power panning to the signal.
 //
-// Params:
+// Controls:
 //   0 (Gain): Volume — -24 to +12 dB
 //   1 (Pan):  Stereo position — 0.0 = hard left, 0.5 = center, 1.0 = hard right
 

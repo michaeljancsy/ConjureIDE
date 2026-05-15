@@ -5,7 +5,7 @@
 // creating a decaying echo. The dry/wet mix controls the balance between
 // the original signal and the delayed signal.
 //
-// Params:
+// Controls:
 //   0 (Time):     Delay time — 10 to 500 ms
 //   1 (Feedback): Feedback amount — 0.0 to 0.95
 //   2 (Mix):      Dry/wet mix — 0.0 to 1.0

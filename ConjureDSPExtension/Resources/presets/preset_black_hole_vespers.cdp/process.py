@@ -9,7 +9,7 @@
 # No distortion — this is the religious/contemplative cousin of Dying Star's
 # catastrophic collapse.
 #
-# Params:
+# Controls:
 #   dilation (pct) — pitch sweep depth/rate
 #   chant    (pct) — vowel formant gain
 #   drone    (pct) — sub bus level

@@ -4,7 +4,7 @@
 // wired). Same gain-computation core as the regular compressor preset;
 // the only difference is which signal drives the envelope follower.
 //
-// Params:
+// Controls:
 //   0 (Threshold): Compression threshold — -40 to -3 dB
 //   1 (Ratio):     Compression ratio — 2:1 to 20:1
 //   2 (Attack):    Attack time — 0.5 to 50 ms

@@ -9,7 +9,7 @@
 # bells blossom independently of what's playing. Distinct from all previous
 # presets where the input drives the resonators.
 #
-# Params:
+# Controls:
 #   density  (pct) — click rate (fewer → more)
 #   shimmer  (pct) — bell resonator Q (18 → 45)
 #   bloom    (pct) — bell level

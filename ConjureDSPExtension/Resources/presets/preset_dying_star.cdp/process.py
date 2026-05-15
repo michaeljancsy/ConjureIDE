@@ -5,7 +5,7 @@
 # → closing one-pole lowpass (collapse-controlled cutoff) → Schwarzschild
 # resonance bandpass at 110 Hz → event-horizon bit reduction → final mix.
 #
-# Params:
+# Controls:
 #   collapse      (pct)    — closes lowpass cutoff + drives bit reduction
 #   gravity       (pct)    — pitch-shift drift rate (Free mode only)
 #   sub           (pct)    — rumble bus level

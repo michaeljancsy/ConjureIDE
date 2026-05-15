@@ -9,7 +9,7 @@
 // First envelope-gated reverb in the set. Juxtaposes stochastic percussive
 // transients against a gentle sub pad.
 //
-// Params:
+// Controls:
 //   IMPACT (pct) — hail noise level
 //   PATTER (pct) — envelope threshold (lower → more hail)
 //   SUBPAD (pct) — sub-pad bed level

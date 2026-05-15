@@ -5,7 +5,7 @@
 // exceeds the threshold, gain reduction is applied to the full-band
 // original signal, taming harshness without affecting the overall tone.
 //
-// Params:
+// Controls:
 //   0 (Frequency): Sibilance center frequency — 2000 to 12000 Hz (log)
 //   1 (Q):         Sidechain bandpass Q — 0.5 to 5
 //   2 (Threshold): Detection threshold — -40 to 0 dB

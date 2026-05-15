@@ -28,7 +28,7 @@ def process(ctx):
     a gain control (+/-12 dB) and a bypass toggle. Three biquad filters in
     series shape the tone without requiring frequency knob adjustments.
 
-    Params:
+    Controls:
         low_gain:    Low shelf gain (-12 to +12 dB)
         mid_gain:    Mid peak gain (-12 to +12 dB)
         high_gain:   High shelf gain (-12 to +12 dB)

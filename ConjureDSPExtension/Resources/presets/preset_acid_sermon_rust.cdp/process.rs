@@ -9,7 +9,7 @@
 // First preset using a wavefolder and hard clip instead of soft tanh;
 // aggressive dry mids instead of a reverb tail. The corrosion IS the sound.
 //
-// Params:
+// Controls:
 //   FOLD     (pct) — wavefolder drive
 //   SERMON   (pct) — formant amplitude modulation depth
 //   PRESENCE (pct) — midrange presence peak gain

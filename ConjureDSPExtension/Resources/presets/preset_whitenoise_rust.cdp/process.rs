@@ -5,7 +5,7 @@
 // across callbacks for a continuous noise stream. Both Python and Rust
 // implementations use the same LCG constants for identical output.
 //
-// Params:
+// Controls:
 //   0 (Level): Noise amplitude — 0.0 to 1.0
 
 use conjuredsp::*;

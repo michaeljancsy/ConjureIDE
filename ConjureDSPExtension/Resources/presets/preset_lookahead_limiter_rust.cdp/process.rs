@@ -5,7 +5,7 @@
 // the delay line, the gain is already reduced — enabling transparent
 // limiting without the artifacts of a fast attack time.
 //
-// Params:
+// Controls:
 //   0 (Threshold): Ceiling level — -24 to 0 dB
 //   1 (Release):   Release time — 10 to 500 ms
 

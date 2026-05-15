@@ -27,7 +27,7 @@ def process(ctx):
     signal, producing a rich, thickened sound. Linear interpolation is used
     for sub-sample delay accuracy.
 
-    Params:
+    Controls:
         rate:  LFO rate (0.1–2 Hz)
         depth: LFO depth (0.5–15 ms)
         delay: Base delay (2–30 ms)

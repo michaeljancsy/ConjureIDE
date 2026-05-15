@@ -6,7 +6,7 @@
 // sub-octave impact thud (rectify → 80 Hz LP) → 4 parallel feedback comb
 // reverb tail (LP in feedback) → final mix.
 //
-// Params:
+// Controls:
 //   SHIMMER  (pct) — octave-up shimmer level
 //   TIME     (pct) — reverb tail feedback
 //   PARTIALS (pct) — modal resonator Q (12 → 35)

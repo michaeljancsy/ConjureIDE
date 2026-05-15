@@ -25,7 +25,7 @@ def process(ctx):
     across callbacks for a continuous noise stream. Both Python and Rust
     implementations use the same LCG constants for identical output.
 
-    Params:
+    Controls:
         level: Output level (0.0 = silence, 1.0 = full level)
     """
     amplitude = ctx.params["level"]

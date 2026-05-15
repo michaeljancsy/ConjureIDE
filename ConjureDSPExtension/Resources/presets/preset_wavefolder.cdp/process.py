@@ -16,7 +16,7 @@ def process(ctx):
     Unlike clipping, wavefolding preserves energy and creates a distinctive
     metallic/buzzy timbre popular in modular synthesis.
 
-    Params:
+    Controls:
         drive: Fold intensity (1–20x)
     """
     drive = ctx.params["drive"]

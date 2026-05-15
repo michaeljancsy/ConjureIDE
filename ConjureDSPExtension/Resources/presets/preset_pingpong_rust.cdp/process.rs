@@ -6,7 +6,7 @@
 // creates a bouncing stereo effect. For mono input, falls back to a
 // simple delay with feedback.
 //
-// Params:
+// Controls:
 //   0 (Time):     Delay time — 50 to 500 ms
 //   1 (Feedback): Feedback amount — 0.0 to 0.95
 //   2 (Mix):      Dry/wet mix — 0.0 to 1.0

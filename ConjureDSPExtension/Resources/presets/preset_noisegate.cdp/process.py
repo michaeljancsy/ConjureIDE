@@ -24,7 +24,7 @@ def process(ctx):
     opens and closes. The hold time prevents the gate from chattering
     on signals that hover near the threshold.
 
-    Params:
+    Controls:
         threshold: Gate threshold (-80 to -20 dB)
         attack:    Gate open speed (0.1–10 ms)
         release:   Gate close speed (10–500 ms)

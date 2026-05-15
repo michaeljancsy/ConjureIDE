@@ -23,7 +23,7 @@ def process(ctx):
     low-pass, high-pass, and band-pass simultaneously, and the MODE
     constant selects which output is used.
 
-    Params:
+    Controls:
         cutoff:    Cutoff frequency (20–20000 Hz)
         resonance: Resonance Q (0.5–10)
     """

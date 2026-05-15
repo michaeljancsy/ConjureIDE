@@ -6,7 +6,7 @@
 // Unlike clipping, wavefolding preserves energy and creates a distinctive
 // metallic/buzzy timbre popular in modular synthesis.
 //
-// Params:
+// Controls:
 //   0 (Drive): Fold drive — 1.0 to 20.0
 
 use conjuredsp::*;

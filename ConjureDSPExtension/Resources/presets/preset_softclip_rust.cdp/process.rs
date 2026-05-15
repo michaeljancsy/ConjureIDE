@@ -5,7 +5,7 @@
 // the signal is pushed into the nonlinearity. Output is normalized
 // so that low-level signals pass through at unity gain.
 //
-// Params:
+// Controls:
 //   0 (Drive): Saturation amount — 1.0 to 15.0
 
 use conjuredsp::*;

@@ -6,7 +6,7 @@
 // reverses direction. Uses double-buffering: one buffer records while
 // the other plays back reversed.
 //
-// Params:
+// Controls:
 //   0 (Rate): Chunk length — 10 to 500 ms
 
 use conjuredsp::*;

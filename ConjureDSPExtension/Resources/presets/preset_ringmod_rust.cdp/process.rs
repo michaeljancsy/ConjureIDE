@@ -6,7 +6,7 @@
 // amplitude around a bias), ring modulation has no DC offset, so the
 // carrier frequency components are always present in the output.
 //
-// Params:
+// Controls:
 //   0 (Frequency): Carrier frequency — 20 to 20000 Hz (log)
 
 use conjuredsp::*;

@@ -9,7 +9,7 @@
 # side stage. Distinct from Haunted Cathedral: narrower, chattier combs fed
 # by a pre-diffused grain bed rather than raw input.
 #
-# Params:
+# Controls:
 #   density (pct) — cloud tap gain + LFO modulation depth
 #   clatter (pct) — resonator Q (6 → 28)
 #   hall    (pct) — comb reverb feedback

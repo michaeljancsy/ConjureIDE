@@ -6,7 +6,7 @@
 // unchanged, and above 1.0 the stereo image is exaggerated.
 // For mono input, the signal passes through unchanged.
 //
-// Params:
+// Controls:
 //   0 (Width): Stereo width — 0.0 to 2.0
 
 use conjuredsp::*;

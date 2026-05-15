@@ -3,7 +3,7 @@
 // Modulates the audio amplitude with a low-frequency sine oscillator (LFO).
 // Supports free-running Hz rate or BPM-synced note divisions.
 //
-// Params:
+// Controls:
 //   0 (Sync):     0 = free Hz, 1 = BPM sync
 //   1 (Rate):     LFO rate in free mode — 0.5 to 20 Hz
 //   2 (Division): Note division in BPM mode — 0=1/1, 1=1/2, 2=1/4, 3=1/8, 4=1/16, 5=1/4T, 6=1/8T

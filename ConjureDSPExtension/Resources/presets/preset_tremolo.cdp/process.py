@@ -24,10 +24,10 @@ def process(ctx):
     Modulates the audio amplitude with a low-frequency sine oscillator (LFO).
     Supports free-running Hz rate or BPM-synced note divisions.
 
-    Params:
+    Controls:
         sync:     0 = free Hz, 1 = BPM sync
         rate:     LFO rate in free mode (0.5–20 Hz)
-        division: Note division in BPM mode (0=1/1 .. 6=1/8T)
+        division: Note division in BPM mode — 1/1, 1/2, 1/4, 1/8, 1/16, 1/4T, 1/8T
         depth:    Tremolo depth (0.0 = no effect, 1.0 = full tremolo)
     """
     global _lfo

@@ -24,7 +24,7 @@ def process(ctx):
     creating a decaying echo. The dry/wet mix controls the balance between
     the original signal and the delayed signal.
 
-    Params:
+    Controls:
         time:     Delay time (10–500 ms)
         feedback: Feedback amount (0.0–0.95)
         mix:      Wet/dry mix (0.0 = dry, 1.0 = wet)

@@ -5,7 +5,7 @@
 // signal, producing a rich, thickened sound. Linear interpolation is used
 // for sub-sample delay accuracy.
 //
-// Params:
+// Controls:
 //   0 (Rate):  LFO rate — 0.1 to 2.0 Hz
 //   1 (Depth): Modulation depth — 0.5 to 15.0 ms
 //   2 (Delay): Base delay — 2.0 to 30.0 ms

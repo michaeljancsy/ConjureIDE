@@ -3,7 +3,7 @@
 // Implements y[n] = (1 - a) * x[n] + a * y[n-1].
 // Rolls off at 6 dB/octave above the cutoff frequency.
 //
-// Params:
+// Controls:
 //   0 (Cutoff): Cutoff frequency — 20 to 20000 Hz (log curve)
 
 use conjuredsp::*;

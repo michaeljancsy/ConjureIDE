@@ -26,8 +26,8 @@ def process(ctx):
     Reads the host DAW's tempo and calculates delay time from musical
     note divisions. Falls back to 250 ms if no tempo is available.
 
-    Params:
-        division: Note division (0=1/1, 1=1/2, 2=1/4, 3=1/8, 4=1/16, 5=1/4T, 6=1/8T)
+    Controls:
+        division: Note division — 1/1, 1/2, 1/4, 1/8, 1/16, 1/4T, 1/8T
         feedback: Feedback amount (0.0–0.95)
         mix:      Wet/dry mix (0.0 = dry, 1.0 = wet)
     """

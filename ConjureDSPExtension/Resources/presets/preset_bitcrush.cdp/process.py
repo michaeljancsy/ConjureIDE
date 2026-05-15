@@ -17,7 +17,7 @@ def process(ctx):
     2. Sample rate reduction: holds every Nth sample, discarding the rest,
        which introduces aliasing artifacts and a characteristic stepped sound.
 
-    Params:
+    Controls:
         bit_depth:  Quantization depth (1–16 bits)
         downsample: Sample rate reduction factor (1–16x)
     """

@@ -27,7 +27,7 @@ def process(ctx):
     mixed with the dry signal, creates notches that sweep up and down
     the spectrum. The number of stages determines how many notches appear.
 
-    Params:
+    Controls:
         rate:     LFO rate (0.1–5 Hz)
         min_freq: Minimum allpass frequency (50–500 Hz)
         max_freq: Maximum allpass frequency (500–10000 Hz)

@@ -26,7 +26,7 @@ def process(ctx):
     the delay line, the gain is already reduced — enabling transparent
     limiting without the artifacts of a fast attack time.
 
-    Params:
+    Controls:
         threshold: Ceiling level (-24 to 0 dB)
         release:   Release time (10–500 ms)
     """

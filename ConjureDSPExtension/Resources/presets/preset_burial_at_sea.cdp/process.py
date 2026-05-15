@@ -9,7 +9,7 @@
 # collapse without the bit-reduction harshness, with a tolling bell instead
 # of Schwarzschild ringing.
 #
-# Params:
+# Controls:
 #   depth   (pct) — closes the lowpass and deepens the descent
 #   descent (pct) — pitch droop rate
 #   bell    (pct) — bell resonator level

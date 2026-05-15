@@ -25,7 +25,7 @@ def process(ctx):
     exceeds the threshold, gain reduction is applied to the full-band
     original signal, taming harshness without affecting the overall tone.
 
-    Params:
+    Controls:
         frequency: Sibilance center frequency (2000–12000 Hz)
         q:         Sidechain bandpass Q (0.5–5)
         threshold: Detection threshold (-40 to 0 dB)

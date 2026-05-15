@@ -27,7 +27,7 @@ def process(ctx):
     comb filter notches up and down, producing the characteristic flanging
     jet-plane sweep. Higher feedback intensifies the comb-filter peaks.
 
-    Params:
+    Controls:
         rate:     LFO rate (0.1–5 Hz)
         depth:    LFO depth (0.5–5 ms)
         delay:    Base delay (1–5 ms)

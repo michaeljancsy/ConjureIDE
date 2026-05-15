@@ -9,7 +9,7 @@
 // The envelope follower operates per-sample across all channels (peak detection),
 // so stereo signals are compressed with linked gain to preserve the stereo image.
 //
-// Params:
+// Controls:
 //   0 (Threshold): Compression threshold — -40 to -3 dB
 //   1 (Ratio):     Compression ratio — 2:1 to 20:1
 //   2 (Attack):    Attack time — 0.5 to 50 ms

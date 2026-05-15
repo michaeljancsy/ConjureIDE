@@ -10,7 +10,7 @@
 # rather than wide stereo broadcast. First preset where dropout density is
 # the primary expressive control.
 #
-# Params:
+# Controls:
 #   radio    (pct) — bandpass narrowness (Q)
 #   dropout  (pct) — dropout density
 #   fuzz     (pct) — tanh saturation drive

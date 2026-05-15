@@ -16,7 +16,7 @@ def process(ctx):
     unchanged, and above 1.0 the stereo image is exaggerated.
     For mono input, the signal passes through unchanged.
 
-    Params:
+    Controls:
         width: Stereo width (0.0 = mono, 1.0 = normal, 2.0 = extra wide)
     """
     width = ctx.params["width"]

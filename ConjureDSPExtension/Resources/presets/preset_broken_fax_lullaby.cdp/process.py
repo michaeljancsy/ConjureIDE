@@ -5,7 +5,7 @@
 # bandpass → sample-and-hold rate reduction → bit-depth reduction →
 # mechanical comb buzz → 60 Hz mains hum → highpass cleanup → mix.
 #
-# Params:
+# Controls:
 #   drift   (pct) — chorus depth (machine-wobble feel)
 #   crush   (pct) — bit reduction amount, 0=clean / 100=destroyed
 #   gate    (Hz)  — dropout rate (0.5–8)
