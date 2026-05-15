@@ -1121,6 +1121,29 @@ impl DSPKernel {
         self.error_generation.load(Ordering::Acquire)
     }
 
+    /// Atomically read `(error_generation, last_error)` under the same
+    /// mutex lock so the pair is coherent. Callers that compare a
+    /// generation snapshot taken at time T1 against a generation read at
+    /// time T2 (e.g. `mcpDspProbe`'s "did the probe trigger a new trap?"
+    /// check) need both halves of the post-T2 read to match each other —
+    /// reading the generation and the string in two separate FFI calls
+    /// lets the audio thread interleave between them, racing the gen and
+    /// string out of sync and losing legitimate traps.
+    ///
+    /// Writer side (`update_last_error_blocking` / `_try`) bumps the
+    /// generation while still holding the `last_error` mutex, so a reader
+    /// that holds the same mutex sees a string-and-generation pair
+    /// produced by the same write.
+    pub fn last_error_with_generation(&self) -> (u64, Option<String>) {
+        if let Ok(guard) = self.last_error.lock() {
+            let err = guard.clone();
+            let generation = self.error_generation.load(Ordering::Acquire);
+            (generation, err)
+        } else {
+            (0, None)
+        }
+    }
+
     /// Writes `err` to `last_error` and bumps `error_generation` if the
     /// value actually changed. Blocks on the mutex — only safe to call
     /// from the main thread (e.g. load paths).
@@ -1696,6 +1719,16 @@ impl DSPKernel {
             if std::time::Instant::now() >= deadline {
                 // Swap is wedged or taking longer than expected — bail out
                 // rather than benchmark a backend that might still be stale.
+                //
+                // Clear any stale error the audio thread may have written
+                // into kernel.last_error from the previous backend during
+                // our wait. Otherwise the next mcpCompileAndRun (or
+                // mcpGetError) read would surface that stale message as
+                // the new script's runtime_trap. This restores the
+                // invariant "benchmark_process always leaves kernel.last_error
+                // reflecting an observation of the CURRENT backend — or
+                // None when we couldn't observe one."
+                self.update_last_error_blocking(None);
                 return None;
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -1727,7 +1760,17 @@ impl DSPKernel {
         //    new backend genuinely traps in live audio after we return, the
         //    audio thread's failure-capture path will re-set last_error to
         //    a current-backend trap message.
-        let mut live = self.backend.lock().ok()?;
+        // Same stale-error invariant on the mutex-poisoned path: if the
+        // backend lock is poisoned we can't observe anything, so clear
+        // kernel.last_error rather than leave whatever the audio thread
+        // last wrote.
+        let mut live = match self.backend.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                self.update_last_error_blocking(None);
+                return None;
+            }
+        };
         let (result, benchmark_trap) = match live.as_mut() {
             Some(b) => {
                 let r = run(b.as_mut());
@@ -5659,6 +5702,39 @@ mod tests {
             "benchmark should override stale error with its own observation (None); got: {:?}",
             kernel.last_error()
         );
+    }
+
+    #[test]
+    fn test_benchmark_timeout_clears_stale_error() {
+        // Regression: when benchmark_process bails on the 100 ms swap-wait
+        // timeout (pending_stage_request / pending_backend_fresh stuck),
+        // it must clear any stale kernel.last_error the audio thread may
+        // have written from a previous (trapping) backend during our wait.
+        // Otherwise the next mcpCompileAndRun read would surface that
+        // stale message as the new script's runtime_trap.
+        let mut kernel = DSPKernel::new();
+
+        // Simulate the audio thread having captured a trap from the
+        // previous (old) backend during the swap window.
+        kernel.set_last_error(Some("stale trap from previous backend".to_string()));
+        assert!(kernel.last_error().is_some(), "precondition: stale error set");
+
+        // Force benchmark_process to the timeout path by raising the
+        // pending-stage flag and never clearing it.
+        kernel.pending_stage_request.store(true, Ordering::Release);
+
+        // benchmark_process should bail out (return None) but clear the
+        // stale error on the way out.
+        let result = kernel.benchmark_process();
+        assert!(result.is_none(), "benchmark should time out");
+        assert!(
+            kernel.last_error().is_none(),
+            "timeout path should clear stale last_error; got: {:?}",
+            kernel.last_error()
+        );
+
+        // Clean up the flag so subsequent tests aren't affected.
+        kernel.pending_stage_request.store(false, Ordering::Release);
     }
 
     #[test]

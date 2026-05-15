@@ -1271,18 +1271,18 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             return (jsonStr(["error": "Kernel is not initialized."]), true)
         }
 
-        // Snapshot the kernel's error generation + current error string
-        // BEFORE the probe. The kernel maintains a monotonic counter that
-        // bumps on every transition of `last_error`; we use it as an
-        // edge-triggered "did the probe cause a new trap?" gate. Without
-        // this baseline, a pre-existing trap from earlier live audio would
-        // be misreported as the probe's fallback reason.
-        let baselineErrorGen = dsp_kernel_error_generation(kernelRef)
-        let baselineError: String? = {
-            guard let ptr = dsp_kernel_last_error(kernelRef) else { return nil }
-            let s = String(cString: ptr)
-            return s.isEmpty ? nil : s
-        }()
+        // Snapshot the kernel's error generation BEFORE the probe. The
+        // kernel maintains a monotonic counter that bumps on every
+        // transition of `last_error`; we use it as an edge-triggered
+        // "did the probe cause a new trap?" gate. Without this baseline,
+        // a pre-existing trap from earlier live audio would be misreported
+        // as the probe's fallback reason. We don't need the baseline
+        // string itself — generation-advance ⇒ value-change in the kernel
+        // (update_last_error_blocking gates the bump on `*guard != err`).
+        var baselineErrorGen: UInt64 = 0
+        _ = withUnsafeMutablePointer(to: &baselineErrorGen) { genPtr in
+            dsp_kernel_last_error_with_generation(kernelRef, genPtr)
+        }
 
         // NOTE: we do NOT wrap the probe in begin/endPresetTransition. That
         // mute envelope is applied to the output of every dsp_kernel_process
@@ -1312,22 +1312,30 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         // (wasm_backend.rs). Once that happens the trap message is gone, so
         // sample it now while it's still live.
         //
-        // Edge-trigger on `error_generation` only, NOT on string inequality
-        // against the baseline. `update_last_error_blocking` (kernel.rs:1130-1139)
-        // already bumps the generation only when the value actually changes,
-        // so generation-advance ⇒ value-change. Adding a `s != baselineError`
-        // guard on top would *miss* a corner case: if live audio cleared
-        // the kernel error (gen 5→6) and the probe then re-trapped with the
-        // same message (gen 6→7), generation advanced but the string is
-        // equal to baseline — we'd drop a real probe-induced trap.
+        // Use the atomic `_with_generation` FFI so the gen we compare
+        // against baseline and the string we extract are produced under
+        // the same kernel-side mutex lock. Two separate FFI calls would
+        // open a TOCTOU window where the audio thread's recovery clear
+        // could land between them, advancing the gen (probe trap was
+        // real) but nulling out the string we'd report.
+        //
+        // Edge-trigger on `error_generation` only. `update_last_error_blocking`
+        // (kernel.rs:1130-1139) already bumps the generation only when
+        // the value actually changes, so generation-advance ⇒ value-change.
+        // Adding a `s != baselineError` guard on top would *miss* a corner
+        // case: if live audio cleared the kernel error (gen 5→6) and the
+        // probe then re-trapped with the same message (gen 6→7), generation
+        // advanced but the string is equal to baseline — we'd drop a real
+        // probe-induced trap.
         var fallbackReason: String? = nil
-        let postProbeErrorGen = dsp_kernel_error_generation(kernelRef)
-        if postProbeErrorGen != baselineErrorGen,
-           let ptr = dsp_kernel_last_error(kernelRef) {
-            let s = String(cString: ptr)
-            if !s.isEmpty {
-                fallbackReason = s
-            }
+        var postProbeErrorGen: UInt64 = 0
+        let postProbeErrorStr: String? = withUnsafeMutablePointer(to: &postProbeErrorGen) { genPtr in
+            guard let strPtr = dsp_kernel_last_error_with_generation(kernelRef, genPtr) else { return nil }
+            let s = String(cString: strPtr)
+            return s.isEmpty ? nil : s
+        }
+        if postProbeErrorGen != baselineErrorGen, let s = postProbeErrorStr {
+            fallbackReason = s
         }
 
         // Reload to reset filter/delay/LFO state polluted by the probe's
