@@ -260,8 +260,9 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         // Fall through to runtime traps. The kernel drains the WASM/Python
         // backend's `last_error` into its own `last_error` from both the
         // post-load benchmark (kernel.rs benchmark_process → capture_backend_error)
-        // and the live render loop (kernel.rs:1926-1927). A null pointer means
-        // no error; an empty string means one was cleared.
+        // and the live render loop's failure-capture branch
+        // (kernel.rs:1934-1935). A null pointer means no error; an empty
+        // string means one was cleared.
         if let kernel = kernelReference,
            let errPtr = dsp_kernel_last_error(kernel) {
             let runtimeErr = String(cString: errPtr)
@@ -1310,12 +1311,21 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         // backend, which clears `backend.last_error` via clear_last_error()
         // (wasm_backend.rs). Once that happens the trap message is gone, so
         // sample it now while it's still live.
+        //
+        // Edge-trigger on `error_generation` only, NOT on string inequality
+        // against the baseline. `update_last_error_blocking` (kernel.rs:1130-1139)
+        // already bumps the generation only when the value actually changes,
+        // so generation-advance ⇒ value-change. Adding a `s != baselineError`
+        // guard on top would *miss* a corner case: if live audio cleared
+        // the kernel error (gen 5→6) and the probe then re-trapped with the
+        // same message (gen 6→7), generation advanced but the string is
+        // equal to baseline — we'd drop a real probe-induced trap.
         var fallbackReason: String? = nil
         let postProbeErrorGen = dsp_kernel_error_generation(kernelRef)
         if postProbeErrorGen != baselineErrorGen,
            let ptr = dsp_kernel_last_error(kernelRef) {
             let s = String(cString: ptr)
-            if !s.isEmpty && s != baselineError {
+            if !s.isEmpty {
                 fallbackReason = s
             }
         }
