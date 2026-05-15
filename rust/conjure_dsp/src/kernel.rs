@@ -1140,6 +1140,16 @@ impl DSPKernel {
             let generation = self.error_generation.load(Ordering::Acquire);
             (generation, err)
         } else {
+            // Mutex poisoned. Impossible in release builds (the workspace
+            // sets `panic = "abort"`, so panics never unwind to poison
+            // anything) and vanishingly rare in debug — the only code
+            // that holds this lock does trivial String swaps + atomic
+            // ops with no realistic panic surface. If we get here in
+            // debug, the panic that caused it is the actionable signal;
+            // sentinel-substituting a fake generation here would only
+            // change internal numeric state without surfacing anything
+            // new to callers (the string is still unrecoverable). Return
+            // (0, None) and let the panic itself drive diagnosis.
             (0, None)
         }
     }
