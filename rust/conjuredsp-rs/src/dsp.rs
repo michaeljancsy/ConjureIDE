@@ -60,6 +60,27 @@ pub fn crossfade(dry: f32, wet: f32, mix: f32) -> f32 {
     dry * (1.0 - mix) + wet * mix
 }
 
+/// Equal-power (constant-power) crossfade between dry and wet signals.
+///
+/// `angle = mix * π/2`, gains are `cos(angle)` for dry and `sin(angle)`
+/// for wet, so `dry_gain² + wet_gain² = 1` for every `mix` in `[0, 1]`.
+/// The perceived loudness of summed uncorrelated signals tracks the
+/// sum of squares, so this curve keeps the apparent level constant
+/// across the sweep — at `mix=0.5` each gain is `√2/2 ≈ 0.707`, ~3 dB
+/// hotter than the linear midpoint of 0.5.
+///
+/// Reach for this when the dry and wet paths are roughly uncorrelated
+/// (reverb / chorus / convolution wet/dry mix, A/B blend of two
+/// distinct sources). Prefer [`crossfade`] when the two signals are
+/// correlated or near-identical (parameter morphing, smoothing a
+/// single source between two states) — there, linear preserves
+/// amplitude and equal-power overshoots.
+#[inline]
+pub fn equal_power_crossfade(dry: f32, wet: f32, mix: f32) -> f32 {
+    let angle = mix * core::f32::consts::FRAC_PI_2;
+    dry * angle.cos() + wet * angle.sin()
+}
+
 /// ConjureDSP house calibration: 0 VU = -18 dBFS (EBU R68).
 ///
 /// Use this constant when scaling RMS or peak detectors to a VU-style
@@ -217,6 +238,42 @@ mod tests {
     #[test]
     fn test_crossfade_mix_half() {
         assert!(approx_eq_f32(crossfade(1.0, 0.5, 0.5), 0.75, 1e-6));
+    }
+
+    // equal_power_crossfade tests
+    #[test]
+    fn test_equal_power_crossfade_mix0_returns_dry() {
+        // cos(0) = 1, sin(0) = 0 → returns dry untouched.
+        assert!(approx_eq_f32(equal_power_crossfade(0.8, 0.3, 0.0), 0.8, 1e-6));
+    }
+
+    #[test]
+    fn test_equal_power_crossfade_mix1_returns_wet() {
+        // cos(π/2) ≈ 0, sin(π/2) = 1 → returns wet untouched.
+        assert!(approx_eq_f32(equal_power_crossfade(0.8, 0.3, 1.0), 0.3, 1e-6));
+    }
+
+    #[test]
+    fn test_equal_power_crossfade_mix_half_both_gains_above_one_half() {
+        // At mix=0.5 each gain is √2/2 ≈ 0.7071 — both >0.5, unlike linear
+        // crossfade where each gain is exactly 0.5. This is the whole
+        // point of equal-power: midpoint is louder, not quieter.
+        let sqrt_half = (0.5_f32).sqrt(); // ≈ 0.70710677
+        let dry = 1.0_f32;
+        let wet = 1.0_f32;
+        let out = equal_power_crossfade(dry, wet, 0.5);
+        // dry * 0.7071 + wet * 0.7071 = 2 * 0.7071 ≈ 1.4142
+        assert!(approx_eq_f32(out, 2.0 * sqrt_half, 1e-6));
+        assert!(out > 0.5 + 0.5, "midpoint sum must exceed linear-crossfade sum, got {}", out);
+    }
+
+    #[test]
+    fn test_equal_power_crossfade_invariant_unity_sum_of_squares() {
+        // The equal-power invariant: dry_gain² + wet_gain² = 1 at every mix.
+        // Probe with dry=1, wet=0 to read dry_gain, then dry=0, wet=1 to read wet_gain.
+        let dry_gain = equal_power_crossfade(1.0, 0.0, 0.5);
+        let wet_gain = equal_power_crossfade(0.0, 1.0, 0.5);
+        assert!(approx_eq_f32(dry_gain * dry_gain + wet_gain * wet_gain, 1.0, 1e-6));
     }
 
     // VU calibration tests (0 VU = -18 dBFS, EBU R68)

@@ -634,9 +634,13 @@ enum DSPDocumentation {
       Buffer-level linear crossfade. Writes to out[:n] in-place.
       dry, wet, out are numpy arrays. mix is a float.
 
-    Python-only: equal_power_crossfade(dry, wet, mix, out, n)
-      Constant-energy crossfade using sine/cosine curves.
-      Preserves perceived loudness at 50% mix (no energy dip).
+    Rust: equal_power_crossfade(dry: f32, wet: f32, mix: f32) -> f32
+      Per-sample constant-energy crossfade (cos/sin curves).
+      Preserves perceived loudness at 50% mix; reach for this on
+      uncorrelated dry/wet paths (reverb, chorus, A/B blend).
+
+    Python: equal_power_crossfade(dry, wet, mix, out, n)
+      Buffer-level equivalent. Writes to out[:n] in-place.
     """
 
     static let accel = """
@@ -2700,6 +2704,12 @@ enum DSPDocumentation {
 
     crossfade(dry: f32, wet: f32, mix: f32) -> f32
       Per-sample linear crossfade. mix=0 → dry, mix=1 → wet.
+
+    equal_power_crossfade(dry: f32, wet: f32, mix: f32) -> f32
+      Per-sample constant-energy crossfade (cos/sin curves).
+      Preserves perceived loudness at 50% mix; reach for this on
+      uncorrelated dry/wet paths (reverb, chorus, A/B blend).
+      Prefer `crossfade` when dry and wet are correlated.
     """
 
     private static let pythonAccel = """
