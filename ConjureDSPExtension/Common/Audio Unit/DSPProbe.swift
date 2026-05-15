@@ -53,6 +53,11 @@ enum DSPProbe {
         /// octave down; nil means the input was too short for the FFT,
         /// the output was effectively silent, or the input wasn't sine.
         let pitchShiftRatio: Float?
+        /// Whether the kernel's declick swap envelope reached IDLE before
+        /// the measured render (see `settleSwapEnvelope`). `false` means a
+        /// fade was still in flight and `inStats` / `outStats` may be
+        /// gain-shaped — the probe should be treated as inconclusive.
+        let swapSettled: Bool
     }
 
     // MARK: - Signal generation
@@ -211,6 +216,55 @@ enum DSPProbe {
         return output
     }
 
+    // MARK: - Swap-envelope settling
+
+    /// `dsp_kernel_swap_phase` value for the IDLE state — no fade in flight.
+    private static let swapPhaseIdle: UInt8 = 0
+
+    /// Feed silent blocks through `kernel` until its declick swap envelope
+    /// reports IDLE, so a following measured render is not gain-shaped by a
+    /// fade left in flight by a preceding script load. `save_preset` /
+    /// `compile_and_run` stage a fresh backend, and the *next*
+    /// `dsp_kernel_process` call turns that into a FADE_OUT → swap → FADE_IN;
+    /// without this drain the probe's own render would eat that ~30 ms fade.
+    ///
+    /// At least one block is always processed, so a backend staged but not
+    /// yet consumed (phase still IDLE) is forced into its FADE_OUT here
+    /// rather than during the measured render. Returns `true` if the kernel
+    /// reached IDLE within a generous sample budget, `false` if it was still
+    /// mid-transition when the budget ran out (a held `transition_depth`
+    /// does this) — the caller should then treat the probe as inconclusive.
+    ///
+    /// Mirrors the drain `WasmSampleHashHarness.render` performs before
+    /// hashing; that harness calls straight into this function.
+    @discardableResult
+    static func settleSwapEnvelope(
+        kernel: OpaquePointer,
+        channels: Int,
+        blockSize: Int,
+        sampleRate: Double
+    ) -> Bool {
+        precondition(blockSize > 0)
+        precondition(channels >= 1)
+
+        let silentBlock = Array(
+            repeating: [Float](repeating: 0, count: blockSize),
+            count: channels
+        )
+        // FADE_OUT + FADE_IN are SWAP_FADE_MS each; 150 ms covers both plus
+        // block-boundary slack and the swap itself at any sample rate. The
+        // loop exits the instant the kernel reports IDLE — the budget is
+        // only a backstop against a transition that never closes.
+        let budget = max(blockSize, Int((0.15 * sampleRate).rounded()))
+        var processed = 0
+        repeat {
+            _ = renderOffline(kernel: kernel, input: silentBlock, blockSize: blockSize)
+            processed += blockSize
+            if dsp_kernel_swap_phase(kernel) == swapPhaseIdle { return true }
+        } while processed < budget
+        return false
+    }
+
     // MARK: - Spectral peak
 
     /// FFT size for the dominant-frequency detector. 4096 gives ~11.7 Hz
@@ -333,6 +387,15 @@ enum DSPProbe {
             channels: channels,
             amplitude: amplitude
         )
+        // Drain any declick swap envelope to IDLE before the measured render,
+        // so a fade left in flight by a preceding script load can't
+        // gain-shape the probe signal (see settleSwapEnvelope).
+        let swapSettled = settleSwapEnvelope(
+            kernel: kernel,
+            channels: channels,
+            blockSize: blockSize,
+            sampleRate: sampleRate
+        )
         let output = renderOffline(kernel: kernel, input: input, blockSize: blockSize)
         let pitchRatio = computePitchShiftRatio(
             signal: signal,
@@ -348,7 +411,8 @@ enum DSPProbe {
             blockSize: blockSize,
             inStats: computeStats(input),
             outStats: computeStats(output),
-            pitchShiftRatio: pitchRatio
+            pitchShiftRatio: pitchRatio,
+            swapSettled: swapSettled
         )
     }
 }

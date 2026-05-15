@@ -1212,12 +1212,22 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
 
     // MARK: - dsp_probe
 
+    /// Serial queue for the synchronous offline probe render. Running the
+    /// render here, rather than in a detached task, serializes concurrent
+    /// `dsp_probe` calls — two probes can't race the shared kernel — while
+    /// keeping the render off the MainActor.
+    private static let probeQueue = DispatchQueue(
+        label: "com.MichaelJancsy.ConjureDSP.dsp-probe",
+        qos: .userInitiated
+    )
+
     /// Render the loaded DSP script offline against a synthesized test signal.
     /// Reuses the live kernel (Python's single shared interpreter forces this —
-    /// a second kernel would race the live one's `sys.modules` state). Mutes
-    /// audio output via the preset-transition envelope while the probe is
-    /// running, then reloads the script to reset DSP state (filter histories,
-    /// delay buffers) so test-signal residue doesn't bleed into reverb tails.
+    /// a second kernel would race the live one's `sys.modules` state). The
+    /// render drains the kernel's declick swap envelope to IDLE before
+    /// measuring (see `DSPProbe.settleSwapEnvelope`), then reloads the script
+    /// afterward to reset DSP state (filter histories, delay buffers) so
+    /// test-signal residue doesn't bleed into reverb tails.
     @MainActor
     private func mcpDspProbe(input: [String: Any]) async -> (String, Bool) {
         // Parse signal kind.
@@ -1284,27 +1294,34 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             dsp_kernel_last_error_with_generation(kernelRef, genPtr)
         }
 
-        // NOTE: we do NOT wrap the probe in begin/endPresetTransition. That
-        // mute envelope is applied to the output of every dsp_kernel_process
-        // call regardless of caller — including ours. For continuous signals
-        // (sine) it only biases the first ~5 ms; for an impulse (whose entire
-        // response lives in those first samples) it would silence the output
-        // completely. So the probe runs against the bare backend. The audio
-        // thread Mutex-contends with us per block — if a DAW is playing
-        // audio through the AU at probe time, the user may hear a brief
-        // glitch and any reverb/delay state will be polluted by the test
-        // signal until the post-probe reload runs.
-        let result: DSPProbe.Result = await Task.detached(priority: .userInitiated) {
-            DSPProbe.run(
-                kernel: kernelRef,
-                signal: signal,
-                sampleRate: sampleRate,
-                channels: channels,
-                blockSize: blockSize,
-                durationMs: durationMs,
-                amplitude: amplitude
-            )
-        }.value
+        // We do NOT wrap the measured render in begin/endPresetTransition: the
+        // swap envelope is applied to the output of every dsp_kernel_process
+        // call regardless of caller, so wrapping would fade the very signal
+        // we're measuring. Instead DSPProbe.run drains any envelope already in
+        // flight — staged by the preceding save_preset / script load — to IDLE
+        // before it measures (see DSPProbe.settleSwapEnvelope). The audio
+        // thread still Mutex-contends with us per block, so if a DAW is playing
+        // through the AU at probe time the user may hear a brief glitch and
+        // reverb/delay state is polluted by the test signal until the
+        // post-probe reload runs.
+        //
+        // The render runs on a dedicated serial queue, not Task.detached:
+        // DSPProbe.run is fully synchronous, so the serial queue serializes
+        // concurrent dsp_probe calls (two probes can't race the shared kernel)
+        // while still keeping the render off the MainActor.
+        let result: DSPProbe.Result = await withCheckedContinuation { continuation in
+            Self.probeQueue.async {
+                continuation.resume(returning: DSPProbe.run(
+                    kernel: kernelRef,
+                    signal: signal,
+                    sampleRate: sampleRate,
+                    channels: channels,
+                    blockSize: blockSize,
+                    durationMs: durationMs,
+                    amplitude: amplitude
+                ))
+            }
+        }
 
         // Read the kernel's error state AFTER the probe runs but BEFORE the
         // post-probe reload below. The reload re-instantiates the WASM
@@ -1377,6 +1394,9 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         }
         if let reason = fallbackReason {
             response["fallback_reason"] = reason
+        }
+        if !result.swapSettled {
+            response["warning"] = "declick swap envelope did not settle before the measured render — out_rms / out_peak may read low; treat this probe as inconclusive"
         }
         return (jsonStr(response), false)
     }
