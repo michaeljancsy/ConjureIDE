@@ -1121,6 +1121,39 @@ impl DSPKernel {
         self.error_generation.load(Ordering::Acquire)
     }
 
+    /// Atomically read `(error_generation, last_error)` under the same
+    /// mutex lock so the pair is coherent. Callers that compare a
+    /// generation snapshot taken at time T1 against a generation read at
+    /// time T2 (e.g. `mcpDspProbe`'s "did the probe trigger a new trap?"
+    /// check) need both halves of the post-T2 read to match each other —
+    /// reading the generation and the string in two separate FFI calls
+    /// lets the audio thread interleave between them, racing the gen and
+    /// string out of sync and losing legitimate traps.
+    ///
+    /// Writer side (`update_last_error_blocking` / `_try`) bumps the
+    /// generation while still holding the `last_error` mutex, so a reader
+    /// that holds the same mutex sees a string-and-generation pair
+    /// produced by the same write.
+    pub fn last_error_with_generation(&self) -> (u64, Option<String>) {
+        if let Ok(guard) = self.last_error.lock() {
+            let err = guard.clone();
+            let generation = self.error_generation.load(Ordering::Acquire);
+            (generation, err)
+        } else {
+            // Mutex poisoned. Impossible in release builds (the workspace
+            // sets `panic = "abort"`, so panics never unwind to poison
+            // anything) and vanishingly rare in debug — the only code
+            // that holds this lock does trivial String swaps + atomic
+            // ops with no realistic panic surface. If we get here in
+            // debug, the panic that caused it is the actionable signal;
+            // sentinel-substituting a fake generation here would only
+            // change internal numeric state without surfacing anything
+            // new to callers (the string is still unrecoverable). Return
+            // (0, None) and let the panic itself drive diagnosis.
+            (0, None)
+        }
+    }
+
     /// Writes `err` to `last_error` and bumps `error_generation` if the
     /// value actually changed. Blocks on the mutex — only safe to call
     /// from the main thread (e.g. load paths).
@@ -1578,19 +1611,6 @@ impl DSPKernel {
         self.latency_samples
     }
 
-    /// Capture any backend error into `last_error` so it outlives the mutex guard.
-    /// Uses `try_lock` so it's safe to call from any thread (including the
-    /// audio thread); drops the capture on contention.
-    fn capture_backend_error(&self) {
-        if let Ok(backend_guard) = self.backend.try_lock() {
-            if let Some(ref backend) = *backend_guard {
-                if let Some(err) = backend.last_error() {
-                    self.update_last_error_try(Some(err.to_string()));
-                }
-            }
-        }
-    }
-
     /// Benchmark the process function with a 440 Hz sine wave.
     /// Returns the max execution time in seconds over 5 runs (after 1 warm-up),
     /// or None if no backend is loaded or the swap doesn't complete in time.
@@ -1709,6 +1729,16 @@ impl DSPKernel {
             if std::time::Instant::now() >= deadline {
                 // Swap is wedged or taking longer than expected — bail out
                 // rather than benchmark a backend that might still be stale.
+                //
+                // Clear any stale error the audio thread may have written
+                // into kernel.last_error from the previous backend during
+                // our wait. Otherwise the next mcpCompileAndRun (or
+                // mcpGetError) read would surface that stale message as
+                // the new script's runtime_trap. This restores the
+                // invariant "benchmark_process always leaves kernel.last_error
+                // reflecting an observation of the CURRENT backend — or
+                // None when we couldn't observe one."
+                self.update_last_error_blocking(None);
                 return None;
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -1719,9 +1749,49 @@ impl DSPKernel {
         // audio thread already swapped and the fade-in has completed). We
         // can lock `self.backend` directly and leave `pending_backend`
         // untouched so the audio thread's swap machinery is never blocked.
-        let mut live = self.backend.lock().ok()?;
-        let result = live.as_mut().map(|b| run(b.as_mut()));
+        // Run the benchmark AND capture the backend's last_error in one
+        // critical section. Two reasons this happens inside the lock:
+        //
+        // 1. Closing a race with the audio thread. If we dropped the lock
+        //    and then did a `try_lock` to read the error, the audio thread
+        //    — which has been starved during the benchmark and runs at a
+        //    higher priority — would almost certainly win the lock first,
+        //    and our try_lock would fail silently. Reading `last_error`
+        //    while we still hold the backend mutex is race-free.
+        //
+        // 2. The captured value is then force-written into kernel.last_error
+        //    via `update_last_error_blocking` AFTER the drop. This is
+        //    deliberate: it overrides any stale entry the audio thread may
+        //    have written from the OLD backend during the fade-out / swap
+        //    window between `load_wasm`'s clear and our acquiring the
+        //    backend lock. The benchmark just observed the *new* backend's
+        //    first synthetic-audio runs — that's the authoritative state
+        //    `mcpCompileAndRun`'s `runtime_trap` is meant to report. If the
+        //    new backend genuinely traps in live audio after we return, the
+        //    audio thread's failure-capture path will re-set last_error to
+        //    a current-backend trap message.
+        // Same stale-error invariant on the mutex-poisoned path: if the
+        // backend lock is poisoned we can't observe anything, so clear
+        // kernel.last_error rather than leave whatever the audio thread
+        // last wrote.
+        let mut live = match self.backend.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                self.update_last_error_blocking(None);
+                return None;
+            }
+        };
+        let (result, benchmark_trap) = match live.as_mut() {
+            Some(b) => {
+                let r = run(b.as_mut());
+                let e = b.last_error().map(|s| s.to_string());
+                (Some(r), e)
+            }
+            None => (None, None),
+        };
         drop(live);
+
+        self.update_last_error_blocking(benchmark_trap);
 
         // Reset profiler — benchmark would have contaminated it if we'd routed
         // through self.process(). We don't go through process() any more, but
@@ -5580,5 +5650,134 @@ mod tests {
 
         std::fs::remove_file(&temp1).ok();
         std::fs::remove_file(&temp2).ok();
+    }
+
+    /// A WAT module whose `process` function traps unconditionally via the
+    /// `unreachable` instruction. Used to verify that benchmark_process
+    /// captures the trap into kernel.last_error rather than swallowing it.
+    /// Includes the buffer-getter exports so the backend lands in
+    /// ModuleAllocated buffer_mode, matching the shape of a compiled Rust
+    /// preset that crashes on first sample.
+    const TRAPPING_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+          (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+          (func (export "get_output_ptr")     (result i32) (i32.const 32768))
+          (func (export "process")
+            unreachable
+          )
+        )
+    "#;
+
+    /// A WAT module whose `process` is a no-op — used to verify the
+    /// benchmark's stale-error override behavior with a backend that
+    /// won't trap on its own.
+    const NO_TRAP_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "get_block_info_ptr") (result i32) (i32.const 16))
+          (func (export "get_input_ptr")      (result i32) (i32.const 1024))
+          (func (export "get_output_ptr")     (result i32) (i32.const 32768))
+          (func (export "process"))
+        )
+    "#;
+
+    #[test]
+    fn test_benchmark_overrides_stale_last_error() {
+        // Regression: when the audio thread set kernel.last_error from a
+        // previous (trapping) backend during the fade-out / swap window
+        // before benchmark could run, the next compile_and_run on a
+        // non-trapping script would incorrectly report the stale trap as
+        // the new script's `runtime_trap`. The fix makes benchmark_process
+        // force-write its own observation into kernel.last_error.
+        let wasm_bytes = wat::parse_str(NO_TRAP_WAT).expect("Failed to parse NO_TRAP_WAT");
+
+        let mut kernel = DSPKernel::new();
+        kernel.initialize(2, 2, 48000.0);
+        kernel.set_maximum_frames_to_render(64);
+        assert!(kernel.load_wasm(&wasm_bytes), "non-trapping WASM should load");
+
+        // Simulate the audio thread having captured a trap from the
+        // previous (old) backend during the swap window.
+        kernel.set_last_error(Some("stale trap from previous backend".to_string()));
+        assert!(kernel.last_error().is_some(), "precondition: stale error set");
+
+        // Benchmark on the new, non-trapping backend must override the
+        // stale value with its own observation (None).
+        let _ = kernel.benchmark_process();
+
+        assert!(
+            kernel.last_error().is_none(),
+            "benchmark should override stale error with its own observation (None); got: {:?}",
+            kernel.last_error()
+        );
+    }
+
+    #[test]
+    fn test_benchmark_timeout_clears_stale_error() {
+        // Regression: when benchmark_process bails on the 100 ms swap-wait
+        // timeout (pending_stage_request / pending_backend_fresh stuck),
+        // it must clear any stale kernel.last_error the audio thread may
+        // have written from a previous (trapping) backend during our wait.
+        // Otherwise the next mcpCompileAndRun read would surface that
+        // stale message as the new script's runtime_trap.
+        let mut kernel = DSPKernel::new();
+
+        // Simulate the audio thread having captured a trap from the
+        // previous (old) backend during the swap window.
+        kernel.set_last_error(Some("stale trap from previous backend".to_string()));
+        assert!(kernel.last_error().is_some(), "precondition: stale error set");
+
+        // Force benchmark_process to the timeout path by raising the
+        // pending-stage flag and never clearing it.
+        kernel.pending_stage_request.store(true, Ordering::Release);
+
+        // benchmark_process should bail out (return None) but clear the
+        // stale error on the way out.
+        let result = kernel.benchmark_process();
+        assert!(result.is_none(), "benchmark should time out");
+        assert!(
+            kernel.last_error().is_none(),
+            "timeout path should clear stale last_error; got: {:?}",
+            kernel.last_error()
+        );
+
+        // Clean up the flag so subsequent tests aren't affected.
+        kernel.pending_stage_request.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn test_benchmark_captures_runtime_trap() {
+        // A script that compiles cleanly but traps on every block must
+        // surface its trap message via kernel.last_error after the
+        // post-load benchmark runs. Without the capture_backend_error
+        // call at the end of benchmark_process, kernel.last_error would
+        // stay None and the MCP get_error tool would lie about runtime
+        // traps to anyone polling between compile_and_run and probe.
+        let wasm_bytes = wat::parse_str(TRAPPING_WAT).expect("Failed to parse TRAPPING_WAT");
+
+        let mut kernel = DSPKernel::new();
+        kernel.initialize(2, 2, 48000.0);
+        kernel.set_maximum_frames_to_render(64);
+        assert!(kernel.last_error().is_none(), "Pre-load kernel.last_error should be None");
+
+        let loaded = kernel.load_wasm(&wasm_bytes);
+        assert!(loaded, "WASM should load successfully even though its process() traps");
+
+        // The load itself runs `dsp_kernel_benchmark_process` via Swift
+        // in production. In tests we trigger it manually.
+        let _ = kernel.benchmark_process();
+
+        // After the benchmark drained the trap, kernel.last_error must
+        // contain the WASM trap message.
+        let err = kernel.last_error();
+        assert!(err.is_some(), "kernel.last_error should be Some after benchmark trapped");
+        let msg = err.unwrap();
+        assert!(
+            msg.contains("WASM process error") || msg.to_lowercase().contains("unreachable"),
+            "Trap message should mention WASM process error or unreachable; got: {}",
+            msg
+        );
     }
 }

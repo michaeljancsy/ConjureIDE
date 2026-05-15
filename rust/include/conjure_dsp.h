@@ -333,6 +333,25 @@ uint64_t dsp_kernel_error_generation(DSPKernelRef kernel);
 const char *dsp_kernel_last_error(DSPKernelRef kernel);
 
 /**
+ * Atomic variant of `dsp_kernel_last_error` + `dsp_kernel_error_generation`.
+ * Writes the current `error_generation` into `*out_generation` AND returns
+ * the last error string (or null), with both values produced under the
+ * same mutex lock so the pair is coherent. Use this when you've taken a
+ * baseline `error_generation` and want to detect "did the kernel
+ * transition to a new error since baseline?" without racing the audio
+ * thread between the gen-read and string-read.
+ *
+ * Same thread-local CString contract as `dsp_kernel_last_error`: the
+ * returned pointer is valid until the next call to either function on
+ * this thread or until `dsp_kernel_destroy`.
+ *
+ * # Safety
+ * `kernel` must be a valid pointer returned by `dsp_kernel_create`.
+ * `out_generation` must be a valid `*mut u64` (may not be null).
+ */
+const char *dsp_kernel_last_error_with_generation(DSPKernelRef kernel, uint64_t *out_generation);
+
+/**
  * Returns script-declared parameter names as a null-terminated JSON C string,
  * e.g. `{"0":"Cutoff","1":"Resonance"}`.
  * Returns null if the loaded script does not declare parameter names.
