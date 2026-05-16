@@ -197,4 +197,55 @@ struct DSPProbeTests {
         #expect(result.frames == 9648)
         #expect(abs(result.inStats.rms - result.outStats.rms) < 0.001)
     }
+
+    // MARK: - Swap-envelope contamination regression
+
+    /// Regression: a probe must measure the bare backend, not the kernel's
+    /// declick fade. A passthrough kernel is a bit-exact identity; with the
+    /// swap envelope armed — the state every `save_preset` leaves behind for
+    /// the next probe — the probe must still read a sine back unattenuated
+    /// and an impulse back at full peak, and the two signals must agree.
+    /// Before `DSPProbe.run` drained the envelope, the armed fade gain-shaped
+    /// the head of the render, dragging sine `out_rms` ~2.7% low while
+    /// leaving the impulse (whose energy sits on fade gain 1.0) untouched.
+    @Test func probeReadsIdentityBitExactThroughArmedSwapEnvelope() {
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+        dsp_kernel_initialize(kernel, 1, 1, 48_000)
+        defer { dsp_kernel_deinitialize(kernel) }
+        dsp_kernel_set_max_frames(kernel, 256)
+
+        // Arm the declick swap envelope without a backend: begin a transition,
+        // run one silent block so the kernel moves IDLE → FADE_OUT, then end
+        // the transition so the fade is free to complete on later renders.
+        func armSwapEnvelope() {
+            dsp_kernel_begin_preset_transition(kernel)
+            _ = DSPProbe.renderOffline(
+                kernel: kernel,
+                input: [[Float](repeating: 0, count: 256)],
+                blockSize: 256
+            )
+            dsp_kernel_end_preset_transition(kernel)
+        }
+
+        armSwapEnvelope()
+        #expect(dsp_kernel_swap_phase(kernel) != DSPProbe.swapPhaseIdle)  // fade armed
+        let sine = DSPProbe.run(
+            kernel: kernel, signal: .sine(freqHz: 1000), sampleRate: 48_000,
+            channels: 1, blockSize: 256, durationMs: 200, amplitude: 0.5
+        )
+        #expect(sine.swapSettled)
+        #expect(abs(sine.inStats.rms - sine.outStats.rms) < 1e-5)
+        #expect(abs(sine.inStats.peak - sine.outStats.peak) < 1e-5)
+
+        armSwapEnvelope()
+        #expect(dsp_kernel_swap_phase(kernel) != DSPProbe.swapPhaseIdle)
+        let impulse = DSPProbe.run(
+            kernel: kernel, signal: .impulse, sampleRate: 48_000,
+            channels: 1, blockSize: 256, durationMs: 200, amplitude: 0.5
+        )
+        #expect(impulse.swapSettled)
+        #expect(abs(impulse.inStats.rms - impulse.outStats.rms) < 1e-5)
+        #expect(abs(impulse.inStats.peak - impulse.outStats.peak) < 1e-5)
+    }
 }

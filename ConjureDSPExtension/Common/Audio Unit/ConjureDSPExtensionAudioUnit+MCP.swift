@@ -1212,14 +1212,41 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
 
     // MARK: - dsp_probe
 
+    /// Serial queue for the synchronous offline probe render. Running the
+    /// render here, rather than in a detached task, serializes concurrent
+    /// `dsp_probe` *renders* off the MainActor. Whole-probe mutual exclusion
+    /// — render plus the post-probe reload, which would otherwise re-arm the
+    /// swap envelope inside another probe's render — is enforced by the
+    /// `isProbing` guard in `mcpDspProbe`.
+    private static let probeQueue = DispatchQueue(
+        label: "com.MichaelJancsy.ConjureDSP.dsp-probe",
+        qos: .userInitiated
+    )
+
+    /// `true` while a `dsp_probe` is in flight (render + post-probe reload).
+    /// A second concurrent probe is rejected rather than queued. MainActor-
+    /// isolated, so the check-and-set in `mcpDspProbe` needs no extra lock.
+    @MainActor private static var isProbing = false
+
     /// Render the loaded DSP script offline against a synthesized test signal.
     /// Reuses the live kernel (Python's single shared interpreter forces this —
-    /// a second kernel would race the live one's `sys.modules` state). Mutes
-    /// audio output via the preset-transition envelope while the probe is
-    /// running, then reloads the script to reset DSP state (filter histories,
-    /// delay buffers) so test-signal residue doesn't bleed into reverb tails.
+    /// a second kernel would race the live one's `sys.modules` state). The
+    /// render drains the kernel's declick swap envelope to IDLE before
+    /// measuring (see `DSPProbe.settleSwapEnvelope`), then reloads the script
+    /// afterward to reset DSP state (filter histories, delay buffers) so
+    /// test-signal residue doesn't bleed into reverb tails.
     @MainActor
     private func mcpDspProbe(input: [String: Any]) async -> (String, Bool) {
+        // Reject a second concurrent probe rather than letting it race the
+        // shared kernel. The check-then-set runs on the MainActor with no
+        // await between, so it is race-free; the defer clears the flag on
+        // every return path, including the input-validation guards below.
+        if Self.isProbing {
+            return (jsonStr(["error": "another dsp_probe is already running; probes run one at a time"]), true)
+        }
+        Self.isProbing = true
+        defer { Self.isProbing = false }
+
         // Parse signal kind.
         guard let signalRaw = input["signal"] as? String else {
             return (jsonStr(["error": "Missing required parameter: signal"]), true)
@@ -1284,27 +1311,35 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
             dsp_kernel_last_error_with_generation(kernelRef, genPtr)
         }
 
-        // NOTE: we do NOT wrap the probe in begin/endPresetTransition. That
-        // mute envelope is applied to the output of every dsp_kernel_process
-        // call regardless of caller — including ours. For continuous signals
-        // (sine) it only biases the first ~5 ms; for an impulse (whose entire
-        // response lives in those first samples) it would silence the output
-        // completely. So the probe runs against the bare backend. The audio
-        // thread Mutex-contends with us per block — if a DAW is playing
-        // audio through the AU at probe time, the user may hear a brief
-        // glitch and any reverb/delay state will be polluted by the test
-        // signal until the post-probe reload runs.
-        let result: DSPProbe.Result = await Task.detached(priority: .userInitiated) {
-            DSPProbe.run(
-                kernel: kernelRef,
-                signal: signal,
-                sampleRate: sampleRate,
-                channels: channels,
-                blockSize: blockSize,
-                durationMs: durationMs,
-                amplitude: amplitude
-            )
-        }.value
+        // We do NOT wrap the measured render in begin/endPresetTransition: the
+        // swap envelope is applied to the output of every dsp_kernel_process
+        // call regardless of caller, so wrapping would fade the very signal
+        // we're measuring. Instead DSPProbe.run drains any envelope already in
+        // flight — staged by the preceding save_preset / script load — to IDLE
+        // before it measures (see DSPProbe.settleSwapEnvelope). The audio
+        // thread still Mutex-contends with us per block, so if a DAW is playing
+        // through the AU at probe time the user may hear a brief glitch and
+        // reverb/delay state is polluted by the test signal until the
+        // post-probe reload runs.
+        //
+        // The render runs on a dedicated serial queue, not Task.detached:
+        // DSPProbe.run is fully synchronous, so the serial queue serializes
+        // concurrent dsp_probe renders off the MainActor. (Whole-probe
+        // exclusion against another probe's post-probe reload is handled by
+        // the isProbing guard at the top of this function.)
+        let result: DSPProbe.Result = await withCheckedContinuation { continuation in
+            Self.probeQueue.async {
+                continuation.resume(returning: DSPProbe.run(
+                    kernel: kernelRef,
+                    signal: signal,
+                    sampleRate: sampleRate,
+                    channels: channels,
+                    blockSize: blockSize,
+                    durationMs: durationMs,
+                    amplitude: amplitude
+                ))
+            }
+        }
 
         // Read the kernel's error state AFTER the probe runs but BEFORE the
         // post-probe reload below. The reload re-instantiates the WASM
@@ -1377,6 +1412,9 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         }
         if let reason = fallbackReason {
             response["fallback_reason"] = reason
+        }
+        if !result.swapSettled {
+            response["warning"] = "declick swap envelope did not settle before the measured render — out_rms / out_peak may read low; treat this probe as inconclusive"
         }
         return (jsonStr(response), false)
     }

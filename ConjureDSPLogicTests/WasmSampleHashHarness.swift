@@ -134,14 +134,14 @@ enum WasmSampleHashHarness {
             dsp_kernel_set_parameter(kernel, address, value)
         }
 
-        // Drive the swap state machine to IDLE before hashable rendering.
-        // FADE_OUT + FADE_IN at 15 ms each = 30 ms (~1323 samples at 44.1 kHz);
-        // 10 blocks of `blockSize` ≥ 256 cover this with margin.
-        let warmupBlock = Array(repeating: [Float](repeating: 0, count: blockSize), count: channelCount)
-        for _ in 0..<10 {
-            _ = DSPProbe.renderOffline(kernel: kernel, input: warmupBlock, blockSize: blockSize)
-            if dsp_kernel_swap_phase(kernel) == 0 { break }
-        }
+        // Drive the swap state machine to IDLE before hashable rendering so
+        // the hash reflects pure backend output (no swap-fade attenuation).
+        DSPProbe.settleSwapEnvelope(
+            kernel: kernel,
+            channels: channelCount,
+            blockSize: blockSize,
+            sampleRate: sampleRate
+        )
 
         let output = DSPProbe.renderOffline(kernel: kernel, input: input, blockSize: blockSize)
 

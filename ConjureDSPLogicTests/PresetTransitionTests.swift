@@ -103,4 +103,72 @@ struct PresetTransitionTests {
 
         dsp_kernel_deinitialize(kernel)
     }
+
+    // MARK: - settleSwapEnvelope
+
+    /// `DSPProbe.settleSwapEnvelope` drains an armed declick fade back to
+    /// IDLE — the pre-render step that stops `dsp_probe` from measuring
+    /// through the envelope.
+    @Test func settleSwapEnvelopeDrainsArmedFadeToIdle() {
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+        dsp_kernel_initialize(kernel, 1, 1, 48_000)
+        defer { dsp_kernel_deinitialize(kernel) }
+        dsp_kernel_set_max_frames(kernel, 256)
+
+        // Arm FADE_OUT: begin a transition, run one block, end it.
+        dsp_kernel_begin_preset_transition(kernel)
+        _ = DSPProbe.renderOffline(
+            kernel: kernel,
+            input: [[Float](repeating: 0, count: 256)],
+            blockSize: 256
+        )
+        dsp_kernel_end_preset_transition(kernel)
+        #expect(dsp_kernel_swap_phase(kernel) == SWAP_PHASE_FADE_OUT)
+
+        let settled = DSPProbe.settleSwapEnvelope(
+            kernel: kernel, channels: 1, blockSize: 256, sampleRate: 48_000)
+        #expect(settled)
+        #expect(dsp_kernel_swap_phase(kernel) == SWAP_PHASE_IDLE)
+    }
+
+    /// On a fresh IDLE kernel `settleSwapEnvelope` is a no-op: it reports
+    /// settled and leaves the phase IDLE.
+    @Test func settleSwapEnvelopeIsNoOpOnIdleKernel() {
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+        dsp_kernel_initialize(kernel, 1, 1, 48_000)
+        defer { dsp_kernel_deinitialize(kernel) }
+        dsp_kernel_set_max_frames(kernel, 256)
+
+        #expect(dsp_kernel_swap_phase(kernel) == SWAP_PHASE_IDLE)
+        let settled = DSPProbe.settleSwapEnvelope(
+            kernel: kernel, channels: 1, blockSize: 256, sampleRate: 48_000)
+        #expect(settled)
+        #expect(dsp_kernel_swap_phase(kernel) == SWAP_PHASE_IDLE)
+    }
+
+    /// When a preset transition is held open (begin without a matching end),
+    /// the swap phase never returns to IDLE, so settleSwapEnvelope exhausts
+    /// its sample budget and reports false — the signal mcpDspProbe turns
+    /// into a `warning` so a contaminated probe isn't trusted silently.
+    @Test func settleSwapEnvelopeReportsFalseWhenTransitionHeld() {
+        let kernel = dsp_kernel_create()!
+        defer { dsp_kernel_destroy(kernel) }
+        dsp_kernel_initialize(kernel, 1, 1, 48_000)
+        defer { dsp_kernel_deinitialize(kernel) }
+        dsp_kernel_set_max_frames(kernel, 256)
+
+        // Begin a transition and never end it: transition_depth stays > 0, so
+        // apply_transition_state holds the phase out of IDLE. The 150 ms drain
+        // budget exhausts long before the 2 s transition watchdog.
+        dsp_kernel_begin_preset_transition(kernel)
+
+        let settled = DSPProbe.settleSwapEnvelope(
+            kernel: kernel, channels: 1, blockSize: 256, sampleRate: 48_000)
+        #expect(settled == false)
+        #expect(dsp_kernel_swap_phase(kernel) != SWAP_PHASE_IDLE)
+
+        dsp_kernel_end_preset_transition(kernel)
+    }
 }
