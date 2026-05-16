@@ -219,7 +219,7 @@ enum DSPProbe {
     // MARK: - Swap-envelope settling
 
     /// `dsp_kernel_swap_phase` value for the IDLE state — no fade in flight.
-    private static let swapPhaseIdle: UInt8 = 0
+    static let swapPhaseIdle: UInt8 = 0
 
     /// Feed silent blocks through `kernel` until its declick swap envelope
     /// reports IDLE, so a following measured render is not gain-shaped by a

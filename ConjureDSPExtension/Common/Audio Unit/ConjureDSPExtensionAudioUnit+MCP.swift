@@ -1214,12 +1214,19 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
 
     /// Serial queue for the synchronous offline probe render. Running the
     /// render here, rather than in a detached task, serializes concurrent
-    /// `dsp_probe` calls — two probes can't race the shared kernel — while
-    /// keeping the render off the MainActor.
+    /// `dsp_probe` *renders* off the MainActor. Whole-probe mutual exclusion
+    /// — render plus the post-probe reload, which would otherwise re-arm the
+    /// swap envelope inside another probe's render — is enforced by the
+    /// `isProbing` guard in `mcpDspProbe`.
     private static let probeQueue = DispatchQueue(
         label: "com.MichaelJancsy.ConjureDSP.dsp-probe",
         qos: .userInitiated
     )
+
+    /// `true` while a `dsp_probe` is in flight (render + post-probe reload).
+    /// A second concurrent probe is rejected rather than queued. MainActor-
+    /// isolated, so the check-and-set in `mcpDspProbe` needs no extra lock.
+    @MainActor private static var isProbing = false
 
     /// Render the loaded DSP script offline against a synthesized test signal.
     /// Reuses the live kernel (Python's single shared interpreter forces this —
@@ -1230,6 +1237,16 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
     /// test-signal residue doesn't bleed into reverb tails.
     @MainActor
     private func mcpDspProbe(input: [String: Any]) async -> (String, Bool) {
+        // Reject a second concurrent probe rather than letting it race the
+        // shared kernel. The check-then-set runs on the MainActor with no
+        // await between, so it is race-free; the defer clears the flag on
+        // every return path, including the input-validation guards below.
+        if Self.isProbing {
+            return (jsonStr(["error": "another dsp_probe is already running; probes run one at a time"]), true)
+        }
+        Self.isProbing = true
+        defer { Self.isProbing = false }
+
         // Parse signal kind.
         guard let signalRaw = input["signal"] as? String else {
             return (jsonStr(["error": "Missing required parameter: signal"]), true)
@@ -1307,8 +1324,9 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
         //
         // The render runs on a dedicated serial queue, not Task.detached:
         // DSPProbe.run is fully synchronous, so the serial queue serializes
-        // concurrent dsp_probe calls (two probes can't race the shared kernel)
-        // while still keeping the render off the MainActor.
+        // concurrent dsp_probe renders off the MainActor. (Whole-probe
+        // exclusion against another probe's post-probe reload is handled by
+        // the isProbing guard at the top of this function.)
         let result: DSPProbe.Result = await withCheckedContinuation { continuation in
             Self.probeQueue.async {
                 continuation.resume(returning: DSPProbe.run(

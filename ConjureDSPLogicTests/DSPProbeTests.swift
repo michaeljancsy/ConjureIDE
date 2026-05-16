@@ -229,20 +229,22 @@ struct DSPProbeTests {
         }
 
         armSwapEnvelope()
-        #expect(dsp_kernel_swap_phase(kernel) != 0)  // not IDLE — fade armed
+        #expect(dsp_kernel_swap_phase(kernel) != DSPProbe.swapPhaseIdle)  // fade armed
         let sine = DSPProbe.run(
             kernel: kernel, signal: .sine(freqHz: 1000), sampleRate: 48_000,
             channels: 1, blockSize: 256, durationMs: 200, amplitude: 0.5
         )
+        #expect(sine.swapSettled)
         #expect(abs(sine.inStats.rms - sine.outStats.rms) < 1e-5)
         #expect(abs(sine.inStats.peak - sine.outStats.peak) < 1e-5)
 
         armSwapEnvelope()
-        #expect(dsp_kernel_swap_phase(kernel) != 0)
+        #expect(dsp_kernel_swap_phase(kernel) != DSPProbe.swapPhaseIdle)
         let impulse = DSPProbe.run(
             kernel: kernel, signal: .impulse, sampleRate: 48_000,
             channels: 1, blockSize: 256, durationMs: 200, amplitude: 0.5
         )
+        #expect(impulse.swapSettled)
         #expect(abs(impulse.inStats.rms - impulse.outStats.rms) < 1e-5)
         #expect(abs(impulse.inStats.peak - impulse.outStats.peak) < 1e-5)
     }
