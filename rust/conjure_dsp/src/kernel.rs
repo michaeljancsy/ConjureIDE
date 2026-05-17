@@ -166,6 +166,14 @@ pub struct DSPKernel {
     /// When false, ring buffers are not written to (saves CPU when spectrogram is hidden).
     /// UI thread sets this via `set_capture_enabled`; audio thread checks before writing.
     capture_enabled: AtomicBool,
+    /// Set by the UI thread when capture is (re)enabled. The audio thread
+    /// swaps it false and clears both rings *on the audio thread*, in the
+    /// same callback as the ring writes. Clearing from the UI thread instead
+    /// raced the per-callback writes: a render callback landing between the
+    /// two `clear()` calls left input_ring and output_ring permanently
+    /// offset by one block, so the difference spectrogram showed a spurious
+    /// non-zero diff on passthrough.
+    capture_clear_pending: AtomicBool,
     /// Scratch buffer for mono downmix (avoids per-callback allocation).
     /// Sized to `max_frames_to_render`.
     capture_scratch: Vec<f32>,
@@ -414,6 +422,7 @@ impl DSPKernel {
             input_ring: AudioRingBuffer::new(AudioRingBuffer::DEFAULT_CAPACITY),
             output_ring: AudioRingBuffer::new(AudioRingBuffer::DEFAULT_CAPACITY),
             capture_enabled: AtomicBool::new(false),
+            capture_clear_pending: AtomicBool::new(false),
             capture_scratch: vec![0.0; 1024],
             licensed: AtomicBool::new(false),
             demo_samples_processed: AtomicU64::new(0),
@@ -983,10 +992,14 @@ impl DSPKernel {
     /// Called from the UI thread. When disabled, the audio thread skips
     /// writing to ring buffers.
     pub fn set_capture_enabled(&self, enabled: bool) {
-        self.capture_enabled.store(enabled, Ordering::Relaxed);
-        if !enabled {
-            self.input_ring.clear();
-            self.output_ring.clear();
+        let was_enabled = self.capture_enabled.swap(enabled, Ordering::Relaxed);
+        if enabled && !was_enabled {
+            // Genuine off→on transition: schedule a one-shot clear so the
+            // next capture session starts fresh. Deferred to the audio
+            // thread (see `capture_clear_pending`) — clearing the two rings
+            // here on the UI thread raced the audio thread's per-callback
+            // writes and left input_ring / output_ring permanently offset.
+            self.capture_clear_pending.store(true, Ordering::Relaxed);
         }
     }
 
@@ -1884,6 +1897,14 @@ impl DSPKernel {
 
         // Capture input audio for spectrogram (before processing)
         if capturing {
+            // Honor a pending clear here, on the audio thread, so it cannot
+            // interleave with the per-callback ring writes and leave the
+            // input/output rings offset (which renders as a spurious
+            // difference on passthrough).
+            if self.capture_clear_pending.swap(false, Ordering::Relaxed) {
+                self.input_ring.clear();
+                self.output_ring.clear();
+            }
             self.capture_to_ring(inputs, channel_count, frame_count, &self.input_ring);
         }
 

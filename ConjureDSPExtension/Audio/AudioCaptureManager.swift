@@ -786,14 +786,29 @@ final class AudioCaptureManager: ObservableObject {
         vDSP_vsub(input, 1, output, 1, &diffScratch, 1, vDSP_Length(count))
     }
 
+    /// Per-bin power level (dB) below which a bin is treated as carrying no
+    /// real signal — used to bin out the FFT noise floor in the normalized
+    /// difference (see `computeNormalizedDifference`).
+    private static let normalizedDiffNoiseFloorDB: Float = -90.0
+
     /// Compute per-bin normalized difference: (S_out - S_in) / (S_out + S_in)
     /// where S = 10^(dB/10) converts from dB back to linear power.
     /// Result is in [-1, 1], written into pre-allocated `normDiffScratch`.
+    ///
+    /// Bins that are near-silent in BOTH input and output contribute 0: with
+    /// no real signal there, the division amplifies sub-dB FFT-noise-floor
+    /// wobble into a large [-1, 1] value, swamping the panel with meaningless
+    /// color even when input and output barely differ.
     private func computeNormalizedDifference(inputDB: [Float], outputDB: [Float]) {
         let count = min(inputDB.count, outputDB.count)
         guard count > 0 && count <= normDiffScratch.count else { return }
 
+        let floorDB = Self.normalizedDiffNoiseFloorDB
         for i in 0..<count {
+            if inputDB[i] < floorDB && outputDB[i] < floorDB {
+                normDiffScratch[i] = 0
+                continue
+            }
             let sIn = powf(10.0, inputDB[i] / 10.0)
             let sOut = powf(10.0, outputDB[i] / 10.0)
             let denom = sOut + sIn
