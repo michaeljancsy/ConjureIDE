@@ -552,8 +552,13 @@ struct ConjureDSPExtensionMainView: View {
 
                 Divider()
 
-                // Both panes stay mounted; opacity / hit-testing / accessibility
-                // switch them so neither WKWebView is torn down on a toggle.
+                // Both panes stay mounted so neither WKWebView is torn down on
+                // a toggle. A WKWebView (Monaco / CustomUIWebView) ignores
+                // SwiftUI .opacity and .offset — its content composites from a
+                // separate remote layer — so the inactive pane cannot be
+                // hidden that way. Instead each pane has an opaque background
+                // and the active one is raised with .zIndex: it then fully
+                // covers (and hides) the inactive pane's webview behind it.
                 ZStack {
                     // Code pane — Monaco editor + its file picker.
                     VStack(spacing: 0) {
@@ -578,7 +583,9 @@ struct ConjureDSPExtensionMainView: View {
                         .padding(.horizontal)
                         .padding(.top, 8)
                     }
-                    .opacity(editorShowsUI ? 0 : 1)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .zIndex(editorShowsUI ? 0 : 1)
                     .allowsHitTesting(!editorShowsUI)
                     .accessibilityHidden(editorShowsUI)
 
@@ -622,11 +629,13 @@ struct ConjureDSPExtensionMainView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .opacity(editorShowsUI ? 1 : 0)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .zIndex(editorShowsUI ? 1 : 0)
                     .allowsHitTesting(editorShowsUI)
                     .accessibilityHidden(!editorShowsUI)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
 
                 // Persistent status bar — visible in both panes.
                 StatusBarView(
