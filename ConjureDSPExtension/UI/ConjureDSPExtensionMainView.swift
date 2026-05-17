@@ -591,30 +591,32 @@ struct ConjureDSPExtensionMainView: View {
                         customUIToggleBar(showingCustom: useCustom)
 
                         if useCustom, let bundle = activeBundle {
-                            // Pin to the manifest-declared width + height.
-                            // Without a width constraint the webview takes the
-                            // full editor width — wider than the manifest
-                            // declares — so a preset looks roomy here and
-                            // squashed in the exported AU (which honors
-                            // manifest.ui.width). Pin both so what you see is
-                            // what you get; the Spacer pair letterboxes the
-                            // surplus width evenly on both sides.
+                            // Pin the webview to the manifest-declared size so
+                            // it matches the exported AU (which honors
+                            // manifest.ui.width/height). Render it as an
+                            // overlay on a flexible Color.clear so the fixed
+                            // width does NOT propagate up as a minimum: the
+                            // kept-alive UI pane must stay free to shrink, or
+                            // it forces the editor column — and the whole
+                            // window — at least uiW wide, overflowing the row
+                            // and clipping the terminal panel. Centered;
+                            // clipped if the pane is ever narrower than uiW.
                             let uiW = CGFloat(bundle.manifest.ui?.width ?? 520)
                             let uiH = CGFloat(bundle.manifest.ui?.height ?? 220)
-                            HStack(spacing: 0) {
-                                Spacer(minLength: 0)
-                                CustomUIWebView(
-                                    parameterState: parameterState,
-                                    bundle: bundle,
-                                    theme: colorScheme,
-                                    captureManager: captureManager,
-                                    transportManager: transportManager,
-                                    stateManager: stateManager
-                                )
-                                .frame(width: uiW, height: uiH)
-                                .id(bundle.uiIndexURL)
-                                Spacer(minLength: 0)
-                            }
+                            Color.clear
+                                .overlay {
+                                    CustomUIWebView(
+                                        parameterState: parameterState,
+                                        bundle: bundle,
+                                        theme: colorScheme,
+                                        captureManager: captureManager,
+                                        transportManager: transportManager,
+                                        stateManager: stateManager
+                                    )
+                                    .frame(width: uiW, height: uiH)
+                                    .id(bundle.uiIndexURL)
+                                }
+                                .clipped()
                         } else {
                             ParameterSlidersView(parameterState: parameterState)
                         }

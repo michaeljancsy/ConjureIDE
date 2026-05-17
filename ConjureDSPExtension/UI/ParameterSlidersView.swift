@@ -62,7 +62,11 @@ struct ParameterSlidersView: View {
                             )
                         }
                     }
-                    .containerRelativeFrame(.horizontal) { width, _ in width * 0.75 }
+                    // Cap the row block at a comfortable width. NOT
+                    // containerRelativeFrame: that sizes to the *window*, so
+                    // inside the editor panel's column it demanded 0.75×window
+                    // and overflowed the column, clipping the terminal panel.
+                    .frame(maxWidth: 520)
                     .padding(.vertical, 4)
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
