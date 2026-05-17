@@ -181,12 +181,18 @@ final class ConjureDSPUITests: XCTestCase {
     @MainActor
     func testParameterSlidersPanelExists() throws {
         let app = Self.sharedApp!
+        // The editor panel opens in Code mode; the parameter UI lives behind
+        // the "UI" tab. Switch to it before asserting the sliders panel exists.
+        let uiTab = app.descendants(matching: .any)["editorPaneUITab"].firstMatch
+        XCTAssertTrue(uiTab.waitForExistence(timeout: 10),
+                      "Editor panel UI tab should exist")
+        uiTab.click()
         let panel = app.disclosureTriangles["parameterSlidersPanel"].firstMatch
         // DisclosureGroup may surface as different element types through ViewBridge;
         // fall back to searching any element with the identifier.
         let anyMatch = app.descendants(matching: .any)["parameterSlidersPanel"].firstMatch
         XCTAssertTrue(panel.waitForExistence(timeout: 10) || anyMatch.waitForExistence(timeout: 2),
-                      "Parameter sliders panel should be visible after launch")
+                      "Parameter sliders panel should be visible after switching to the UI tab")
     }
 
     // Note: testParameterSliderExists was removed because SwiftUI Sliders
