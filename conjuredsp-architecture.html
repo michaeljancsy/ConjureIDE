@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ConjureDSP — Architecture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0b0e14;
+    --panel: #141925;
+    --panel-2: #1b2130;
+    --border: #283041;
+    --border-bright: #3a4459;
+    --ink: #e4e9f2;
+    --muted: #8e98ad;
+    --faint: #5d6678;
+    --accent: #7aa2f7;
+    --swift: #ff9e64;
+    --rust: #f0746a;
+    --python: #6cb6ff;
+    --wasm: #c39bff;
+    --web: #e7c84b;
+    --cloud: #4fd0c0;
+    --audio: #5fd98a;
+  }
+  html { scroll-behavior: smooth; }
+  body {
+    background:
+      radial-gradient(900px 500px at 80% -120px, rgba(122,162,247,.10), transparent),
+      radial-gradient(700px 500px at -10% 200px, rgba(195,155,255,.07), transparent),
+      var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding-bottom: 60px;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 26px; }
+  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  code {
+    font-size: .86em; background: var(--panel-2); border: 1px solid var(--border);
+    padding: 1px 5px; border-radius: 5px; color: #cbd4e6;
+  }
+
+  /* ---------- hero ---------- */
+  header.hero { padding: 70px 0 30px; }
+  .eyebrow {
+    font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600; margin-bottom: 14px;
+  }
+  .hero h1 {
+    font-size: 46px; line-height: 1.08; font-weight: 800; letter-spacing: -.02em;
+    background: linear-gradient(120deg, #fff 10%, #b9c6e6 55%, var(--accent));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero .sub { color: var(--muted); font-size: 18px; margin-top: 14px; max-width: 74ch; }
+  .facts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+  .fact {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 13px; font-size: 12.5px; color: var(--muted);
+  }
+  .fact b { color: var(--ink); font-weight: 650; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 26px;
+    padding: 15px 18px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  .legend .lk { font-size: 12px; color: var(--faint); width: 100%; margin-bottom: 2px; }
+  .legend .chip { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+  .legend .sw { width: 13px; height: 13px; border-radius: 4px; flex-shrink: 0; }
+
+  /* ---------- nav ---------- */
+  nav.toc {
+    position: sticky; top: 0; z-index: 50; margin-top: 34px;
+    background: rgba(11,14,20,.86); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  }
+  nav.toc .wrap { display: flex; gap: 4px; overflow-x: auto; padding-top: 8px; padding-bottom: 8px; }
+  nav.toc a {
+    flex-shrink: 0; font-size: 12.5px; color: var(--muted); text-decoration: none;
+    padding: 6px 11px; border-radius: 8px; white-space: nowrap; transition: background .15s, color .15s;
+  }
+  nav.toc a:hover { color: var(--ink); background: var(--panel-2); }
+  nav.toc a.active { color: #fff; background: color-mix(in srgb, var(--accent) 30%, var(--panel-2)); }
+  nav.toc a .n { color: var(--faint); margin-right: 5px; }
+  nav.toc a.active .n { color: var(--accent); }
+
+  /* ---------- sections ---------- */
+  section { padding: 52px 0; border-top: 1px solid var(--border); scroll-margin-top: 58px; }
+  .sec-h { display: flex; align-items: baseline; gap: 14px; margin-bottom: 8px; flex-wrap: wrap; }
+  .sec-n {
+    font-family: ui-monospace, Menlo, monospace; font-size: 13px; font-weight: 700;
+    color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    padding: 3px 8px; border-radius: 6px;
+  }
+  h2 { font-size: 27px; font-weight: 750; letter-spacing: -.015em; }
+  .lead { color: var(--muted); font-size: 14.5px; max-width: 86ch; margin: 12px 0 26px; }
+  .lead code { font-size: .92em; }
+
+  /* ---------- diagram primitives ---------- */
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 22px; }
+  .panel + .panel { margin-top: 16px; }
+
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .row.center { justify-content: center; }
+  .row.stretch > * { flex: 1; }
+  .col { display: flex; flex-direction: column; gap: 10px; flex: 1; min-width: 230px; }
+  .grow { flex: 1; }
+
+  .node {
+    --c: var(--faint);
+    background: color-mix(in srgb, var(--c) 11%, var(--panel-2));
+    border: 1px solid var(--border); border-left: 3px solid var(--c);
+    border-radius: 10px; padding: 11px 13px; transition: transform .12s ease, border-color .12s;
+  }
+  .node:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--c) 50%, var(--border)); }
+  .node .nt { font-weight: 650; font-size: 13.5px; color: var(--ink); }
+  .node .nd { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .node .nm { font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; color: color-mix(in srgb, var(--c) 75%, var(--muted)); margin-top: 5px; }
+  .node.lg { padding: 15px 17px; }
+  .node.lg .nt { font-size: 15px; }
+
+  .n-swift  { --c: var(--swift); }
+  .n-rust   { --c: var(--rust); }
+  .n-python { --c: var(--python); }
+  .n-wasm   { --c: var(--wasm); }
+  .n-web    { --c: var(--web); }
+  .n-cloud  { --c: var(--cloud); }
+  .n-audio  { --c: var(--audio); }
+  .n-ext    { --c: var(--faint); }
+
+  /* connectors */
+  .arr { position: relative; display: flex; align-items: center; justify-content: center; min-height: 48px; }
+  .arr::before {
+    content: ""; position: absolute; left: 50%; top: 5px; bottom: 13px; width: 2px;
+    transform: translateX(-50%); background: var(--border-bright);
+  }
+  .arr::after {
+    content: "▾"; position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
+    color: var(--border-bright); font-size: 13px; line-height: 1;
+  }
+  .arr.bi::after { content: "⇅"; bottom: 50%; transform: translate(-50%, 50%); font-size: 15px; }
+  .arr.bi::before { background: var(--border-bright); }
+  .arr span {
+    position: relative; z-index: 1; background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 12px; font-size: 11.5px; color: var(--muted); text-align: center;
+  }
+  .arr.hot::before, .arr.hot::after { background: color-mix(in srgb, var(--audio) 60%, var(--border-bright)); color: var(--audio); }
+  .arr.short { min-height: 32px; }
+
+  .arr-h { display: flex; align-items: center; color: var(--border-bright); font-size: 18px; padding: 0 2px; }
+
+  /* boundary container */
+  .boundary {
+    position: relative; border: 1.5px dashed var(--border-bright); border-radius: 14px;
+    padding: 30px 16px 16px; margin-top: 10px;
+  }
+  .boundary > .blabel {
+    position: absolute; top: -11px; left: 16px; font-size: 11px; font-weight: 650;
+    letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+    background: var(--panel); border: 1px solid var(--border); padding: 2px 10px; border-radius: 6px;
+  }
+  .boundary.tint-rust { border-color: color-mix(in srgb, var(--rust) 40%, var(--border)); }
+  .boundary.tint-swift { border-color: color-mix(in srgb, var(--swift) 40%, var(--border)); }
+  .boundary.tint-cloud { border-color: color-mix(in srgb, var(--cloud) 40%, var(--border)); }
+
+  /* callout */
+  .callout {
+    background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+    border-left: 3px solid var(--accent);
+    border-radius: 10px; padding: 13px 16px; font-size: 13px; color: var(--muted); margin-top: 16px;
+  }
+  .callout b { color: var(--ink); font-weight: 650; }
+  .callout.audio { background: color-mix(in srgb, var(--audio) 9%, var(--panel)); border-color: color-mix(in srgb, var(--audio) 30%, var(--border)); border-left-color: var(--audio); }
+
+  /* FFI divider bar */
+  .ffi-bar {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    border: 1px dashed var(--border-bright); border-radius: 8px; padding: 8px 14px;
+    font-size: 12px; color: var(--muted); background: repeating-linear-gradient(45deg, transparent, transparent 9px, rgba(255,255,255,.018) 9px, rgba(255,255,255,.018) 18px);
+  }
+  .ffi-bar b { color: var(--ink); }
+
+  /* stepper */
+  .stepper { display: flex; flex-direction: column; }
+  .step { display: flex; gap: 16px; }
+  .step .marker { display: flex; flex-direction: column; align-items: center; }
+  .step .num {
+    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; color: #0b0e14;
+    background: var(--c, var(--accent));
+  }
+  .step .stem { width: 2px; flex: 1; min-height: 12px; background: var(--border-bright); margin: 4px 0; }
+  .step:last-child .stem { display: none; }
+  .step .body { padding-bottom: 20px; flex: 1; }
+  .step .st { font-weight: 650; font-size: 14px; }
+  .step .sd { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .step .sd code { font-size: .9em; }
+  .step.c-swift { --c: var(--swift); }
+  .step.c-rust { --c: var(--rust); }
+  .step.c-audio { --c: var(--audio); }
+  .step.c-ffi .num { background: var(--ink); }
+
+  /* pill list */
+  .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .pill {
+    font-size: 11px; padding: 3px 9px; border-radius: 999px;
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+  }
+  .pill.mono { font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; }
+
+  /* grids */
+  .grid { display: grid; gap: 12px; }
+  .g2 { grid-template-columns: repeat(2, 1fr); }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .g4 { grid-template-columns: repeat(4, 1fr); }
+
+  /* group card (mcp tool groups) */
+  .group { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+  .group h4 { font-size: 13px; font-weight: 700; margin-bottom: 3px; }
+  .group .gsub { font-size: 11px; color: var(--faint); margin-bottom: 9px; }
+  .group ul { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+  .group li {
+    font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: #cbd4e6;
+    padding: 3px 7px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  }
+  .group li span { color: var(--faint); font-family: -apple-system, sans-serif; }
+
+  .col-title {
+    font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--faint); margin-bottom: 4px;
+  }
+
+  /* tree */
+  .tree {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 20px 22px; overflow-x: auto;
+  }
+  .tree pre {
+    font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.65;
+    color: var(--muted); white-space: pre;
+  }
+  .tree .d { color: var(--accent); font-weight: 600; }
+  .tree .star { color: var(--swift); }
+  .tree .c { color: var(--faint); }
+  .tree .rust { color: var(--rust); }
+  .tree .py { color: var(--python); }
+  .tree .cloud { color: var(--cloud); }
+
+  footer { text-align: center; color: var(--faint); font-size: 12px; margin-top: 56px; }
+  footer code { font-size: 11px; }
+
+  @media (max-width: 760px) {
+    .hero h1 { font-size: 33px; }
+    .g4, .g3, .g2 { grid-template-columns: 1fr; }
+    .wrap { padding: 0 16px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Architecture Reference</div>
+    <h1>ConjureDSP</h1>
+    <p class="sub">An AUv3 audio-effect plugin for macOS whose DSP is written, compiled, and hot-reloaded
+    <em>inside the plugin</em> — in Python or Rust — with an embedded AI coding assistant. This page maps how the
+    pieces fit together, from the DAW's render callback down to the embedded interpreter.</p>
+
+    <div class="facts">
+      <div class="fact"><b>Platform</b> · macOS 15+ · AUv3 <code>aufx / CONJ</code></div>
+      <div class="fact"><b>5 languages</b> · Swift · Rust · Python · WASM · TypeScript</div>
+      <div class="fact"><b>3 first-party apps</b> + a cloud backend</div>
+      <div class="fact"><b>2 DSP backends</b> + passthrough fallback</div>
+      <div class="fact"><b>19 MCP tools</b> for the AI assistant</div>
+      <div class="fact"><b>16</b> automatable parameters</div>
+    </div>
+
+    <div class="legend">
+      <div class="lk">Colour = implementation language / layer</div>
+      <div class="chip"><span class="sw" style="background:var(--swift)"></span> Swift · SwiftUI</div>
+      <div class="chip"><span class="sw" style="background:var(--rust)"></span> Rust (DSP kernel)</div>
+      <div class="chip"><span class="sw" style="background:var(--python)"></span> Python</div>
+      <div class="chip"><span class="sw" style="background:var(--wasm)"></span> Rust → WASM</div>
+      <div class="chip"><span class="sw" style="background:var(--web)"></span> Web (HTML / JS / CSS)</div>
+      <div class="chip"><span class="sw" style="background:var(--cloud)"></span> Cloud (TypeScript)</div>
+      <div class="chip"><span class="sw" style="background:var(--audio)"></span> Real-time audio thread</div>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <a href="#map"><span class="n">01</span>System map</a>
+    <a href="#processes"><span class="n">02</span>Processes &amp; sandboxes</a>
+    <a href="#stack"><span class="n">03</span>Layered stack</a>
+    <a href="#render"><span class="n">04</span>Audio render path</a>
+    <a href="#kernel"><span class="n">05</span>DSP kernel &amp; backends</a>
+    <a href="#langs"><span class="n">06</span>Multi-language DSP</a>
+    <a href="#mcp"><span class="n">07</span>MCP &amp; terminal</a>
+    <a href="#bundles"><span class="n">08</span>Presets &amp; custom UIs</a>
+    <a href="#ipc"><span class="n">09</span>IPC &amp; App Group</a>
+    <a href="#license"><span class="n">10</span>Licensing</a>
+    <a href="#export"><span class="n">11</span>Export</a>
+    <a href="#repo"><span class="n">12</span>Repo map</a>
+  </div>
+</nav>
+
+<!-- ============================================================ 01 -->
+<section id="map">
+  <div class="wrap">
+    <div class="sec-h"><span class="sec-n">01</span><h2>System map</h2></div>
+    <p class="lead">The 10,000-foot view. A DAW hosts the <b>AU extension</b> — that is the product. Two satellites
+    orbit it: a <b>companion app</b> that runs the things a sandboxed plugin cannot, and a <b>cloud backend</b>
+    that issues subscription licenses.</p>
+
+    <div class="panel">
+      <div class="row center">
+        <div class="node n-swift" style="max-width:320px">
+          <div class="nt">DAW Host</div>
+          <div class="nd">Logic Pro · Ableton Live · any AUv3 host</div>
+          <div class="nm">discovers component aufx / CONJ</div>
+        </div>
+        <div class="node n-swift" style="max-width:320px">
+          <div class="nt">ConjureDSP Host App</div>
+          <div class="nd">A development harness only — it provides <em>no</em> runtime services to the plugin.</div>
+          <div class="nm">ConjureDSP.app</div>
+        </div>
+      </div>
+
+      <div class="arr"><span>load &amp; host the AUv3 — real-time render callbacks + parameter automation</span></div>
+
+      <div class="node n-ext lg">
+        <div class="nt">⌁ ConjureDSP AU Extension &nbsp;·&nbsp; <code>ConjureDSPExtension.appex</code></div>
+        <div class="nd">The whole product. A sandboxed AUv3 extension: a SwiftUI front-end, an embedded Rust DSP
+        kernel, and a set of WKWebViews. Everything that ships must work here — the host app is never running in a real DAW.</div>
+        <div class="pills">
+          <span class="pill">SwiftUI editor &amp; visualisers</span>
+          <span class="pill">Rust DSP kernel</span>
+          <span class="pill">Embedded Python 3.14 + wasmtime</span>
+          <span class="pill">MCP server</span>
+          <span class="pill">Monaco / Custom-UI / Terminal WebViews</span>
+          <span class="pill">Presets · Export · Git · Subscription</span>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:6px">
+        <div class="col">
+          <div class="arr bi"><span>⇅ App Group container — file-queue IPC&nbsp;&nbsp;+&nbsp;&nbsp;localhost sockets (MCP / WebSocket)</span></div>
+          <div class="node n-swift">
+            <div class="nt">ConjureDSPTerminal</div>
+            <div class="nd">Companion app. Runs outside the appex sandbox so it can fork processes the extension cannot — Claude Code, git, uv, cargo.</div>
+            <div class="nm">ConjureDSPTerminal.app</div>
+          </div>
+          <div class="arr short"><span>forkpty + execve</span></div>
+          <div class="node n-ext">
+            <div class="nt">Claude Code CLI</div>
+            <div class="nd">Anthropic's CLI in a PTY — the in-plugin AI assistant. Connects <em>back</em> into the extension's MCP server to drive the AU directly.</div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="arr"><span>HTTPS — activate / refresh license</span></div>
+          <div class="node n-cloud">
+            <div class="nt">Cloudflare Workers — Subscription API</div>
+            <div class="nd">Issues Ed25519-signed, time-limited license tokens. D1 SQLite store.</div>
+            <div class="nm">server/</div>
+          </div>
+          <div class="arr bi"><span>⇅ billing webhooks</span></div>
+          <div class="node n-cloud">
+            <div class="nt">Paddle Billing</div>
+            <div class="nd">Checkout, subscription lifecycle, payment events.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 02 -->
+<section id="processes">
+  <div class="wrap">
+    <div class="sec-h"><span class="sec-n">02</span><h2>Processes &amp; sandboxes</h2></div>
+    <p class="lead">Why two apps instead of one? A DAW-hosted AU extension runs under a strict App Sandbox that
+    forbids spawning external binaries. Claude Code, <code>git</code>, and <code>uv</code> all need to fork — so
+    they live in a companion app. The two processes never call each other directly; they communicate only through
+    a shared App Group container.</p>
+
+    <div class="row stretch">
+      <div class="boundary tint-rust col" style="min-width:300px">
+        <span class="blabel">Process · sandboxed appex</span>
+        <div class="node n-ext lg">
+          <div class="nt">AU Extension</div>
+          <div class="nd">Hardened runtime + App Sandbox. Holds the <code>group.com.MichaelJancsy.ConjureDSP</code> entitlement.</div>
+        </div>
+        <div class="node n-swift"><div class="nt">SwiftUI front-end</div><div class="nd">Editor, spectrogram, browsers, settings</div></div>
+        <div class="node n-swift"><div class="nt">AUAudioUnit + render block</div><div class="nd">Real-time audio + event loop</div></div>
+        <div class="node n-rust"><div class="nt">Rust DSP kernel</div><div class="nd"><code>libconjure_dsp.a</code> — embeds CPython 3.14ᶠᵗ + wasmtime</div></div>
+        <div class="node n-swift"><div class="nt">MCP server</div><div class="nd">localhost HTTP, for the AI assistant</div></div>
+        <div class="callout" style="margin-top:4px">✗ <b>Cannot</b> fork processes · ✗ cannot write to its own bundle Resources</div>
+      </div>
+
+      <div class="boundary tint-swift col" style="min-width:300px">
+        <span class="blabel">Process · companion app</span>
+        <div class="node n-swift lg">
+          <div class="nt">ConjureDSPTerminal</div>
+          <div class="nd">An ordinary app — <em>can</em> fork. Drains work queues on a 500&nbsp;ms reconcile loop.</div>
+        </div>
+        <div class="node n-swift"><div class="nt">PTYManager</div><div class="nd">forkpty + execve → Claude Code CLI</div></div>
+        <div class="node n-swift"><div class="nt">WebSocketServer</div><div class="nd">Relays PTY I/O ⇄ xterm.js</div></div>
+        <div class="node n-swift"><div class="nt">GitWorker</div><div class="nd">Shells out to system <code>git</code></div></div>
+        <div class="node n-swift"><div class="nt">PackageInstaller · CrateInstaller</div><div class="nd"><code>uv</code> (Python) · <code>cargo</code> (Rust→WASM)</div></div>
+        <div class="node n-swift"><div class="nt">ExportFinalizer</div><div class="nd">Signs &amp; registers exported AUs</div></div>
+      </div>
+
+      <div class="col" style="min-width:260px">
+        <div class="boundary col">
+          <span class="blabel">WebContent processes</span>
+          <div class="nd" style="font-size:12px;color:var(--muted);margin-bottom:4px">Each WKWebView spawns its own sandboxed process. They reach bundle files only through a custom URL scheme handler.</div>
+          <div class="node n-web"><div class="nt">Monaco editor</div><div class="nd">Code editing surface</div></div>
+          <div class="node n-web"><div class="nt">Custom-UI renderer</div><div class="nd">Preset HTML/JS UIs</div></div>
+          <div class="node n-web"><div class="nt">xterm.js terminal</div><div class="nd">Claude Code front-end</div></div>
+        </div>
+        <div class="boundary tint-cloud col">
+          <span class="blabel">Cloud</span>
+          <div class="node n-cloud"><div class="nt">Cloudflare Workers</div><div class="nd">D1 SQLite · Ed25519 signing</div></div>
+          <div class="node n-cloud"><div class="nt">Paddle</div><div class="nd">Billing platform</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="callout"><b>Fail-open by design.</b> If the companion app is down, saves still write to disk and git/package
+    requests queue on the filesystem; they drain whenever the terminal next comes up. The plugin's audio path never depends on it.</div>
+  </div>
+</section>
+
+<!-- ============================================================ 03 -->
+<section id="stack">
+  <div class="wrap">
+    <div class="sec-h"><span class="sec-n">03</span><h2>Layered stack inside the extension</h2></div>
+    <p class="lead">Read top-to-bottom: user-facing Swift &amp; web UI, a Swift coordination layer, the C FFI seam,
+    the Rust DSP kernel, its pluggable backends, the embedded language runtimes, and finally the user's own DSP code.</p>
+
+    <div class="panel">
+      <div class="node n-swift lg">
+        <div class="nt">① UI Layer — SwiftUI + WKWebViews</div>
+        <div class="nd">Monaco code editor · spectrogram &amp; frequency axis · preset / tone / package browsers · parameter sliders · the Claude Code terminal · settings panes</div>
+      </div>
+      <div class="arr short"></div>
+      <div class="node n-swift lg">
+        <div class="nt">② Coordination Layer — Swift</div>
+        <div class="nd">AUAudioUnit subclass &amp; render block · ParameterState · PresetManager / PresetBundle · ScriptCompiler · ExportManager · PresetGitCoordinator · SubscriptionManager · MCP server</div>
+      </div>
+      <div class="arr short"></div>
+      <div class="ffi-bar">↕ &nbsp;<b>C FFI boundary</b> &nbsp;·&nbsp; bridging header imports <code>conjure_dsp.h</code> (generated by cbindgen) &nbsp;·&nbsp; 58 <code>dsp_kernel_*</code> functions</div>
+      <div class="arr short"></div>
+      <div class="node n-rust lg">
+        <div class="nt">③ DSP Kernel — Rust &nbsp;(<code>libconjure_dsp.a</code>)</div>
+        <div class="nd"><code>kernel.rs</code> owns backend selection, the 16-slot parameter store, lock-free ring buffers, license/demo state, and the bundle-private STATE channel</div>
+      </div>
+      <div class="arr short"></div>
+      <div class="row stretch" style="margin:2px 0">
+        <div class="node n-rust"><div class="nt">④ Backend trait</div><div class="nd">PythonBackend · WasmBackend · PassthroughBackend</div></div>
+        <div class="node n-python"><div class="nt">CPython 3.14 (free-threaded)</div><div class="nd">Embedded via pyo3 + numpy</div></div>
+        <div class="node n-wasm"><div class="nt">wasmtime</div><div class="nd">WASM runtime, fuel-metered</div></div>
+      </div>
+      <div class="arr short"></div>
+      <div class="row stretch">
+        <div class="node n-python"><div class="nt">⑤ User script — <code>process.py</code></div><div class="nd">+ <code>conjuredsp</code> Python library</div></div>
+        <div class="node n-wasm"><div class="nt">⑤ User script — <code>process.rs</code></div><div class="nd">+ <code>conjuredsp</code> Rust library (rlib)</div></div>
+      </div>
+      <div class="callout"><b>Cross-cutting:</b> Sentry (crash reporting) and Mixpanel (analytics) instrument the Swift layers;
+      they sit alongside the stack rather than inside the audio path.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 04 -->
+<section id="render">
+  <div class="wrap">
+    <div class="sec-h"><span class="sec-n">04</span><h2>Audio render path — the real-time hot path</h2></div>
+    <p class="lead">What happens on every render callback, inside <code>ConjureDSPExtensionAudioUnit.swift</code>'s
+    <code>internalRenderBlock</code>. This runs on the audio thread, so it avoids heap allocation and unbounded waiting. Steps 6–8 happen within a single FFI call into Rust.</p>
+
+    <div class="panel">
+      <div class="callout audio" style="margin-top:0;margin-bottom:20px">⚡ <b>Hard real-time.</b> numpy arrays are pre-allocated once at
+      <code>allocateRenderResources()</code> · parameters are lock-free <code>AtomicU32</code> · the spectrogram feed is an SPSC ring buffer ·
+      per-segment temp pointer arrays use <code>withUnsafeTemporaryAllocation</code> (stack, not heap) · the kernel never blocks — a backend swap uses <code>try_lock</code> and falls back to passthrough on contention.</div>
+
+      <div class="stepper">
+        <div class="step c-swift">
+          <div class="marker"><div class="num">1</div><div class="stem"></div></div>
+          <div class="body"><div class="st">DAW invokes the render block</div>
+            <div class="sd">Host calls <code>internalRenderBlock</code> with a timestamp, frame count, and output buffer list.</div></div>
+        </div>
+        <div class="step c-swift">
+          <div class="marker"><div class="num">2</div><div class="stem"></div></div>
+          <div class="body"><div class="st">Pull input audio</div>
+            <div class="sd">Pulls the main bus, plus sidechain bus 1 if the host has audio routed there — sets the <code>sidechainConnected</code> flag. Handles in-place buffers.</div></div>
+        </div>
+        <div class="step c-swift">
+          <div class="marker"><div class="num">3</div><div class="stem"></div></div>
+          <div class="body"><div class="st">Capture transport state</div>
+            <div class="sd">Reads tempo, beat position, time signature, play state → <code>dsp_kernel_set_transport()</code>. Also stored to a brief-locked snapshot (<code>TransportPushManager</code>) that custom UIs poll at ~30&nbsp;Hz.</div></div>
+        </div>
+        <div class="step c-swift">
+          <div class="marker"><div class="num">4</div><div class="stem"></div></div>
+          <div class="body"><div class="st">Walk the AU event list</div>
+            <div class="sd">Iterates the real-time event list; parameter-automation events split the block into segments. MIDI events in the list are skipped — the DSP kernel has no MIDI path.</div></div>
+        </div>
+        <div class="step c-swift">
+          <div class="marker"><div class="num">5</div><div class="stem"></div></div>
+          <div class="body"><div class="st">Apply parameter events</div>
+            <div class="sd">Each automation event → <code>dsp_kernel_set_parameter()</code>. The DAW's real-world value is normalised to 0–1 via the parameter metadata first.</div></div>
+        </div>
+        <div class="step c-ffi">
+          <div class="marker"><div class="num">6</div><div class="stem"></div></div>
+          <div class="body"><div class="st">Cross the FFI — process each segment</div>
+            <div class="sd"><code>dsp_kernel_process_with_sidechain()</code> passes input/output/sidechain channel pointers into Rust. One call per segment between events.</div></div>
+        </div>
+        <div class="step c-rust">
+          <div class="marker"><div class="num">7</div><div class="stem"></div></div>
+          <div class="body"><div class="st">Rust kernel dispatches to the active backend</div>
+            <div class="sd"><b>Python:</b> copy audio into pre-built numpy rows → rebind <code>ctx</code> slices → call <code>process(ctx)</code> → copy back. &nbsp;<b>WASM:</b> wasmtime exports, fuel-metered. &nbsp;<b>Fallback:</b> passthrough copy on any error.</div></div>
+        </div>
+        <div class="step c-rust">
+          <div class="marker"><div class="num">8</div><div class="stem"></div></div>
+          <div class="body"><div class="st">License &amp; demo gate — inside the same call</div>
+            <div class="sd">Before output is written, the kernel checks an <code>AtomicBool</code> mirrored from <code>SubscriptionStatus</code>. Unlicensed demo mode passes ~60&nbsp;s of audio, then silences output.</div></div>
+        </div>
+        <div class="step c-audio">
+          <div class="marker"><div class="num">9</div><div class="stem"></div></div>
+          <div class="body"><div class="st">Return to the DAW</div>
+            <div class="sd">The kernel fills the SPSC spectrogram &amp; telemetry ring buffers during processing; the Swift render block then hands the output buffers back to the host. The UI drains those ring buffers on its own timer.</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 05 -->
+<section id="kernel">
+  <div class="wrap">
+    <div class="sec-h"><span class="sec-n">05</span><h2>DSP kernel &amp; pluggable backends</h2></div>
+    <p class="lead">The Rust crate <code>conjure_dsp</code> is the engine room. <code>kernel.rs</code> is a façade over a
+    <code>Backend</code> trait — three implementations satisfy it, and the kernel can swap between them at runtime.</p>
+
+    <div class="row stretch">
+      <div class="panel col" style="min-width:300px">
+        <div class="col-title">Kernel — owns &amp; coordinates</div>
+        <div class="node n-rust"><div class="nt">Backend selection</div><div class="nd">Holds the active <code>Box&lt;dyn Backend&gt;</code>; phased hot-swap on script reload (declick envelope)</div><div class="nm">kernel.rs</div></div>
+        <div class="node n-rust"><div class="nt">Parameter store</div><div class="nd">16 slots, normalised 0–1 in an <code>AtomicU32</code> array; metadata cached as JSON</div><div class="nm">params.rs</div></div>
+        <div class="node n-rust"><div class="nt">Ring buffers</div><div class="nd">SPSC lock-free — input / output scope feeds + sparse telemetry</div><div class="nm">ring_buffer.rs</div></div>
+        <div class="node n-rust"><div class="nt">License &amp; demo state</div><div class="nd">Ed25519 verify, grace window, demo countdown</div><div class="nm">license.rs</div></div>
+        <div class="node n-rust"><div class="nt">STATE channel</div><div class="nd">Atomically-swapped JSON buffer — bundle-private persistence</div></div>
+      </div>
+
+      <div class="col" style="min-width:300px;justify-content:center">
+        <div class="ffi-bar"><b>Backend trait</b> — <code>initialize()</code> · <code>process()</code> · <code>param_metadata()</code> + lifecycle</div>
+        <div class="arr"><span>kernel routes the active segment to one implementation</span></div>
+        <div class="node n-python lg">
+          <div class="nt">PythonBackend</div>
+          <div class="nd">pyo3-embedded free-threaded CPython 3.14 (no GIL). numpy interop; <code>process(ctx)</code> receives pre-allocated 2-D <code>float32</code> arrays. <b>Instant load.</b></div>
+          <div class="nm">python_backend.rs</div>
+        </div>
+        <div class="node n-wasm lg">
+          <div class="nt">WasmBackend</div>
+          <div class="nd">wasmtime executes <code>wasm32-wasip1</code> modules. Fuel metering caps runaway loops. I/O via memory exports.</div>
+          <div class="nm">wasm_backend.rs</div>
+        </div>
+        <div class="node n-rust lg">
+          <div class="nt">PassthroughBackend</div>
+          <div class="nd">Bit-exact input→output copy. The safety net whenever a script fails to load or traps at runtime.</div>
+          <div class="nm">passthrough_backend.rs</div>
+        </div>
+      </div>
+    </div>
+    <div class="callout">The same kernel binary also exposes profiling (<code>dsp_kernel_profiler_*</code>), benchmarking
+    (<code>dsp_kernel_benchmark_process</code>), memory accounting, and NAM (Neural Amp Modeler) tone-model slots — all over the C FFI.</div>
+  </div>
+</section>
+
+<!-- ============================================================ 06 -->
+<section id="langs">
+  <div class="wrap">
+    <div class="sec-h"><span class="sec-n">06</span><h2>Multi-language DSP &amp; the compile pipeline</h2></div>
+    <p class="lead">A user writes a DSP script in <b>Python</b> or <b>Rust</b>. <code>ScriptLanguage</code> auto-detects which
+    (e.g. <code>fn process()</code> ⇒ Rust). The two languages take different routes to the same kernel.</p>
+
+    <div class="panel">
+      <div class="node n-ext lg" style="text-align:center">
+        <div class="nt">User DSP script &nbsp;+&nbsp; the <code>conjuredsp</code> library</div>
+        <div class="nd">Equivalent capability, language-idiomatic surface — Biquad, DelayLine, LFO, parameter builders, <code>accel</code> vector math</div>
+      </div>
+      <div class="arr"><span>ScriptLanguage — heuristic auto-detection</span></div>
+
+      <div class="row stretch">
+        <div class="boundary col" style="min-width:280px">
+          <span class="blabel" style="color:var(--python)">Python lane · instant</span>
+          <div class="node n-python"><div class="nt">dsp_kernel_load_script()</div><div class="nd">Source handed straight to the kernel</div></div>
+          <div class="arr short"></div>
+          <div class="node n-python"><div class="nt">pyo3 imports the module</div><div class="nd">Caches the <code>process</code> function; reads the <code>PARAMS</code> dict</div></div>
+          <div class="arr short"></div>
+          <div class="node n-python"><div class="nt">→ PythonBackend</div><div class="nd">No build step — ready immediately</div></div>
+        </div>
+
+        <div class="boundary col" style="min-width:280px">
+          <span class="blabel" style="color:var(--wasm)">Rust lane · compiled &amp; cached</span>
+          <div class="node n-wasm"><div class="nt">RustCompiler</div><div class="nd">Bundled standalone <code>rustc</code> → target <code>wasm32-wasip1</code>, <code>--extern conjuredsp=…rlib</code></div></div>
+          <div class="arr short"></div>
+          <div class="node n-wasm"><div class="nt">WasmCache</div><div class="nd">Stores compiled <code>.wasm</code> keyed by SHA-256 — recompiles only on real change</div></div>
+          <div class="arr short"></div>
+          <div class="node n-wasm"><div class="nt">→ WasmBackend</div><div class="nd"><code>dsp_kernel_load_wasm()</code> into wasmtime</div></div>
+        </div>
+      </div>
+
+      <div class="arr"><span>parameter metadata (<code>PARAMS</code> dict / <code>params!</code> macro) → JSON</span></div>
+      <div class="node n-swift lg" style="text-align:center">
+        <div class="nt">Swift rebuilds the AU parameter tree</div>
+        <div class="nd"><code>rebuildParameterTree()</code> creates up to 16 <code>AUParameter</code>s with real ranges, units, log curves,
+        toggle / choice styles — so the DAW and custom UIs show meaningful values.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 07 -->
+<section id="mcp">
+  <div class="wrap">
+    <div class="sec-h"><span class="sec-n">07</span><h2>MCP server &amp; the Claude Code terminal</h2></div>
+    <p class="lead">The plugin embeds an AI coding assistant. The AU extension runs an <b>MCP server</b> exposing 19 tools
+    for direct control of the live audio unit; the companion app runs the <b>Claude Code CLI</b> that calls them.</p>
+
+    <div class="panel">
+      <div class="row stretch">
+        <div class="col" style="min-width:300px">
+          <div class="col-title">In the AU extension</div>
+          <div class="node n-swift">
+            <div class="nt">MCP Server</div>
+            <div class="nd">HTTP + SSE, JSON-RPC 2.0, on a random localhost port (NWListener). Endpoints <code>POST /mcp</code> and <code>GET /mcp</code>.</div>
+            <div class="nm">Terminal/MCPServer.swift · MCPProtocol.swift</div>
+          </div>
+          <div class="node n-web">
+            <div class="nt">xterm.js terminal WebView</div>
+            <div class="nd">The visible terminal — keystrokes &amp; output relayed over a WebSocket.</div>
+          </div>
+        </div>
+        <div class="col" style="min-width:300px">
+          <div class="col-title">In the companion app</div>
+          <div class="node n-swift"><div class="nt">PTYManager → Claude Code CLI</div><div class="nd">Spawns the CLI in a PTY; writes its MCP config pointing at the discovered port</div></div>
+          <div class="node n-swift"><div class="nt">WebSocketServer</div><div class="nd">Bridges PTY bytes ⇄ xterm.js through the AU ViewBridge</div></div>
+          <div class="node n-swift"><div class="nt">GitWorker · PackageInstaller · CrateInstaller · ExportFinalizer</div><div class="nd">Forked-process work the appex can't do itself</div></div>
+        </div>
+      </div>
+
+      <div class="arr"><span>Claude Code CLI → MCP tool calls over localhost HTTP → live AU</span></div>
+
+      <div class="grid g4">
+        <div class="group">
+          <h4>DSP scripting</h4>
+          <div class="gsub">author &amp; debug code</div>
+          <ul>
+            <li>compile_and_run</li><li>get_script</li><li>get_error</li>
+            <li>get_docs</li><li>list_packages</li><li>dsp_probe</li>
+          </ul>
+        </div>
+        <div class="group">
+          <h4>Parameters &amp; audio</h4>
+          <div class="gsub">inspect &amp; drive state</div>
+          <ul>
+            <li>set_parameter</li><li>get_parameters</li>
+            <li>get_audio_state</li><li>toggle_bypass</li>
+          </ul>
+        </div>
+        <div class="group">
+          <h4>Presets &amp; tones</h4>
+          <div class="gsub">the bundle library</div>
+          <ul>
+            <li>list_presets</li><li>save_preset</li>
+            <li>duplicate_bundle</li><li>list_tones</li>
+          </ul>
+        </div>
+        <div class="group">
+          <h4>Custom-UI authoring</h4>
+          <div class="gsub">build &amp; validate UIs</div>
+          <ul>
+            <li>get_bundle_info</li><li>read_bundle_file</li>
+            <li>write_bundle_file</li><li>validate_bundle</li><li>smoke_test_ui</li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout">Each AU instance registers itself in <code>&lt;AppGroup&gt;/mcp-instances/&lt;id&gt;.json</code> with its
+      <code>mcpPort</code> and <code>wsPort</code> (5&nbsp;s heartbeat) — that file is how the companion app and CLI discover a specific live plugin.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 08 -->
+<section id="bundles">
+  <div class="wrap">
+    <div class="sec-h"><span class="sec-n">08</span><h2>Preset bundles &amp; custom HTML/JS UIs</h2></div>
+    <p class="lead">Every preset is a <code>.cdp</code> bundle directory. When a bundle ships a <code>ui/</code> subtree, the
+    plugin renders that HTML in place of the stock sliders — a sandboxed mini web-app wired to the audio unit.</p>
+
+    <div class="row stretch">
+      <div class="panel col" style="min-width:300px">
+        <div class="col-title">Bundle layout — <code>.cdp</code></div>
+        <div class="tree" style="border:0;padding:0;background:transparent">
+<pre><span class="d">MyPreset.cdp/</span>
+├── manifest.json     <span class="c">schemaVersion 2 · params · ui</span>
+├── <span class="py">process.py</span> <span class="c">|</span> <span class="rust">process.rs</span>
+└── <span class="d">ui/</span>
+    ├── index.html    <span class="c">optional custom UI</span>
+    └── <span class="d">assets/</span>        <span class="c">css · js · images</span></pre>
+        </div>
+        <div class="node n-ext"><div class="nt">Factory bundles</div><div class="nd">Shipped in appex Resources — read-only. "Save As" forks an editable copy.</div></div>
+        <div class="node n-swift"><div class="nt">User bundles</div><div class="nd">In <code>&lt;AppGroup&gt;/Presets/</code> — a git repository (see §09–10)</div></div>
+      </div>
+
+      <div class="panel col" style="min-width:320px">
+        <div class="col-title">Custom-UI render path</div>
+        <div class="node n-swift"><div class="nt">manifest declares <code>ui</code> + <code>ui/index.html</code> exists?</div><div class="nd">Yes → CustomUIWebView &nbsp;·&nbsp; No → stock ParameterSlidersView</div></div>
+        <div class="arr short"></div>
+        <div class="node n-swift"><div class="nt">BundleAssetSchemeHandler</div><div class="nd">Serves files via <code>conjuredsp-preset://</code> — avoids TCC prompts; injects a strict <code>Content-Security-Policy</code> that blocks all network egress</div></div>
+        <div class="arr short"></div>
+        <div class="node n-web"><div class="nt">Injected at document-start</div><div class="nd"><code>customui-bridge.js</code> + <code>cdp-ui.js</code> component library — <code>&lt;cdp-slider&gt;</code>, <code>&lt;cdp-knob&gt;</code>, <code>&lt;cdp-xy&gt;</code>, <code>&lt;cdp-scope&gt;</code>, <code>&lt;cdp-meter&gt;</code> …</div></div>
+        <div class="arr short"></div>
+        <div class="node n-web"><div class="nt"><code>window.ConjureDSP</code> bridge</div><div class="nd"><code>parameters</code> · <code>state</code> · <code>theme</code> · <code>audio.onFrame</code> — param writes route through the same path as DAW automation</div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="col-title">Authoring guardrails</div>
+      <div class="grid g3">
+        <div class="node n-swift"><div class="nt">BundleUIValidator — static</div><div class="nd">Tiers 1/2: lints manifest + HTML for orphan files, unresolved <code>param=</code> refs, CSP-blocked assets, low contrast, theme-breaking colours</div></div>
+        <div class="node n-swift"><div class="nt">BundleUISmokeTester — runtime</div><div class="nd">Tier 3: loads the UI in an offscreen WKWebView, reports JS errors, callback exceptions, per-component binding state</div></div>
+        <div class="node n-swift"><div class="nt">BundleFileWatcher — hot reload</div><div class="nd">FSEventStream watches <code>ui/</code>; edits from Monaco, VS Code, or MCP reload the webview within ~300&nbsp;ms</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 09 -->
+<section id="ipc">
+  <div class="wrap">
+    <div class="sec-h"><span class="sec-n">09</span><h2>IPC — the App Group container</h2></div>
+    <p class="lead">The extension and the companion app share one directory:
+    <code>~/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/</code>. Most channels are file-based queues
+    (write a request, poll for a result); two are localhost sockets discovered <em>through</em> the container.</p>
+
+    <div class="panel">
+      <div class="row stretch">
+        <div class="node n-ext col" style="min-width:170px;justify-content:center;text-align:center">
+          <div class="nt">AU Extension</div>
+          <div class="nd">writes requests · reads results</div>
+        </div>
+
+        <div class="boundary col grow" style="min-width:330px">
+          <span class="blabel">Shared App Group container</span>
+          <div class="node n-swift"><div class="nt">mcp-instances/&lt;id&gt;.json</div><div class="nd">Port discovery — <code>mcpPort</code>, <code>wsPort</code>, <code>pid</code>; 5&nbsp;s heartbeat</div></div>
+          <div class="node n-swift"><div class="nt">git-queue/ {requests, results, tokens}</div><div class="nd">Preset-repo ops; short-lived 0600 PAT token files</div></div>
+          <div class="node n-swift"><div class="nt">package-install-*.json</div><div class="nd">Python package (uv) install / uninstall queue</div></div>
+          <div class="node n-swift"><div class="nt">crate-install-*.json · RustCrates/</div><div class="nd">Rust-crate compile queue + compiled <code>rlib</code> output</div></div>
+          <div class="node n-swift"><div class="nt">Presets/</div><div class="nd">User preset bundles — itself a git repo</div></div>
+          <div class="node n-swift"><div class="nt">subscription_token</div><div class="nd">Ed25519-signed license token</div></div>
+          <div class="node n-python"><div class="nt">PythonRuntime/</div><div class="nd">Shared CPython runtime — provisioned by the companion app</div></div>
+        </div>
+
+        <div class="node n-swift col" style="min-width:170px;justify-content:center;text-align:center">
+          <div class="nt">ConjureDSPTerminal</div>
+          <div class="nd">drains queues · writes results</div>
+        </div>
+      </div>
+
+      <div class="arr short"></div>
+      <div class="row stretch">
+        <div class="node n-ext"><div class="nt">localhost socket · MCP</div><div class="nd">HTTP+SSE — Claude Code CLI → AU extension (port from <code>mcp-instances</code>)</div></div>
+        <div class="node n-ext"><div class="nt">localhost socket · WebSocket</div><div class="nd">PTY I/O ⇄ xterm.js (port from <code>mcp-instances</code>)</div></div>
+      </div>
+
+      <div class="callout"><b>Git-backed preset library.</b> <code>&lt;AppGroup&gt;/Presets/</code> is a real git repo. Every Save /
+      Save&nbsp;As / Delete / Rename routes through <code>PresetGitCoordinator → GitQueueClient →</code> the git-queue, and
+      <code>GitWorker</code> in the companion app shells out to <code>git</code> to commit (and optionally push to a configured remote).</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 10 -->
+<section id="license">
+  <div class="wrap">
+    <div class="sec-h"><span class="sec-n">10</span><h2>Subscription &amp; licensing</h2></div>
+    <p class="lead">A Paddle subscription model with a Cloudflare Workers backend. The server signs short-lived
+    tokens; the app verifies them <em>locally</em> with an embedded public key — so it works offline for up to a 7-day grace window.</p>
+
+    <div class="panel">
+      <div class="row stretch">
+        <div class="node n-cloud col" style="min-width:240px">
+          <div class="col-title" style="margin-bottom:6px">Cloud</div>
+          <div class="nt">Paddle → Cloudflare Workers</div>
+          <div class="nd">Webhooks update a D1 SQLite store. <code>/activate</code> and <code>/verify</code> sign a JSON payload with the Ed25519 <b>private</b> key.</div>
+          <div class="nm">server/ — activate.ts · verify.ts · webhook.ts · token.ts</div>
+        </div>
+        <div class="arr-h">→</div>
+        <div class="node n-swift col" style="min-width:240px">
+          <div class="col-title" style="margin-bottom:6px">App — Swift</div>
+          <div class="nt">SubscriptionManager</div>
+          <div class="nd">Stores the token in the App Group container; refresh loop (15&nbsp;min active / 1&nbsp;h grace). Demo mode = ~60&nbsp;s of audio.</div>
+          <div class="nm">Model/SubscriptionManager.swift · SubscriptionAPI.swift</div>
+        </div>
+        <div class="arr-h">→</div>
+        <div class="node n-rust col" style="min-width:240px">
+          <div class="col-title" style="margin-bottom:6px">Kernel — Rust</div>
+          <div class="nt">license.rs</div>
+          <div class="nd">Verifies the Ed25519 signature with the embedded <b>public</b> key, checks the grace window, and sets the audio-thread <code>AtomicBool licensed</code> flag.</div>
+        </div>
+      </div>
+      <div class="callout">Status drives the audio path directly: <b>Active</b> and <b>GracePeriod</b> grant full processing;
+      anything else falls back to demo mode, which silences output after 60 seconds (see render step 8).</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 11 -->
+<section id="export">
+  <div class="wrap">
+    <div class="sec-h"><span class="sec-n">11</span><h2>Export — preset as a standalone AUv3</h2></div>
+    <p class="lead">Licensed users can export any preset as its own standalone AUv3 plugin. The pipeline copies a
+    pre-built template AU, patches it, injects the preset, and signs it — the exported plugin then runs freely.</p>
+
+    <div class="panel">
+      <div class="row center">
+        <div class="node n-swift"><div class="nt">ExportManager</div><div class="nd">Drives the pipeline</div><div class="nm">Export/</div></div>
+        <div class="arr-h">→</div>
+        <div class="node n-ext"><div class="nt">Copy template AU</div><div class="nd"><code>ConjureDSPExportAUTemplate</code> — a complete pre-built AU</div></div>
+        <div class="arr-h">→</div>
+        <div class="node n-ext"><div class="nt">Patch &amp; inject</div><div class="nd">Unique subtype, plist edits, the preset script + <code>ui/</code> + a <code>runtime-config.json</code></div></div>
+        <div class="arr-h">→</div>
+        <div class="node n-swift"><div class="nt">ExportFinalizer</div><div class="nd">Ad-hoc sign + LaunchServices registration (companion app)</div></div>
+        <div class="arr-h">→</div>
+        <div class="node n-audio"><div class="nt">Standalone .appex</div><div class="nd">Carries its own UI; runs in any DAW, no license</div></div>
+      </div>
+      <div class="callout">Both Python and Rust/WASM presets export. The exported AU bundles the custom UI and renders it with
+      the same bridge JS; a Python preset resolves its runtime from a bundled <code>python-dist</code> copy or the shared <code>PythonRuntime/</code> in the App Group container.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 12 -->
+<section id="repo">
+  <div class="wrap">
+    <div class="sec-h"><span class="sec-n">12</span><h2>Repository map</h2></div>
+    <p class="lead">Where each piece of this diagram lives in the source tree.</p>
+
+    <div class="tree">
+<pre><span class="d">conjuredsp-application/</span>
+├── <span class="d">ConjureDSP/</span>                  <span class="c">Host app — dev harness (loads &amp; tests the AU)</span>
+│   ├── Model/                   <span class="c">AudioUnitHostModel · AudioUnitViewModel · PaddleCheckoutManager</span>
+│   └── Common/Audio · MIDI/      <span class="c">SimplePlayEngine (AVAudioEngine) · MIDIManager</span>
+├── <span class="d"><span class="star">★</span> ConjureDSPExtension/</span>       <span class="c">THE AUv3 PLUGIN — all shipping functionality</span>
+│   ├── Common/Audio Unit/       <span class="c">ConjureDSPExtensionAudioUnit — AUAudioUnit + render block</span>
+│   ├── Compilation/             <span class="c">RustCompiler · ScriptLanguage · WasmCache</span>
+│   ├── Terminal/                <span class="c">MCPServer · MCPProtocol (19 tools) · TerminalServer</span>
+│   ├── UI/                      <span class="c">Monaco · Spectrogram · CustomUIWebView · browsers · settings</span>
+│   ├── Model/                   <span class="c">SubscriptionManager · PresetManager · PresetBundle · validators</span>
+│   ├── Export/ · Git/ · GitHub/  <span class="c">ExportManager · PresetGitCoordinator · GitHubService</span>
+│   ├── State/ · Audio/ · Parameters/ · Tone3000/
+│   └── Resources/               <span class="c">cdp-ui.js · customui-bridge.js · monaco/ · presets/ (factory .cdp bundles)</span>
+├── <span class="d">ConjureDSPTerminal/</span>          <span class="c">Companion app — runs Claude Code CLI outside the sandbox</span>
+│                                <span class="c">PTYManager · WebSocketServer · GitWorker · PackageInstaller · CrateInstaller</span>
+├── <span class="d">ConjureDSPExportAUTemplate/</span>  <span class="c">Pre-built template for standalone-AU export</span>
+├── <span class="d">rust/</span>
+│   ├── <span class="rust">conjure_dsp/src/</span>         <span class="c">DSP kernel — lib.rs (FFI) · kernel · backends · params · license</span>
+│   ├── <span class="py">conjuredsp/</span>              <span class="c">Python DSP library → bundled Python site-packages</span>
+│   └── <span class="rust">conjuredsp-rs/</span>          <span class="c">Rust DSP library → wasm32-wasip1 rlib</span>
+├── <span class="d"><span class="cloud">server/</span></span>                      <span class="c">Cloudflare Workers subscription API (D1 · Paddle · Ed25519)</span>
+├── <span class="d">ConjureDSPLogicTests/</span>        <span class="c">Fast FFI/logic tests · ConjureDSPTests · ConjureDSPUITests</span>
+├── <span class="d">scripts/</span>                     <span class="c">Build · setup · release · notarize</span>
+└── <span class="d">docs/ · plans/</span>               <span class="c">Design docs &amp; implementation plans</span></pre>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    ConjureDSP architecture overview · generated from a read-only codebase survey · static self-contained HTML, no external dependencies
+  </div>
+</footer>
+
+<script>
+  // scroll-spy: highlight the nav link for the section in view
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a'));
+    var byId = {};
+    links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+    var obs = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          links.forEach(function (l) { l.classList.remove('active'); });
+          if (byId[e.target.id]) byId[e.target.id].classList.add('active');
+        }
+      });
+    }, { rootMargin: '-45% 0px -50% 0px', threshold: 0 });
+    document.querySelectorAll('section[id]').forEach(function (s) { obs.observe(s); });
+  })();
+</script>
+
+</body>
+</html>
