@@ -445,6 +445,12 @@ struct ConjureDSPExtensionMainView: View {
                 }
                 .frame(width: showChat ? chatWidth : 0)
                 .clipped()
+                // `.frame(width:)` is a SwiftUI preference, not a hard
+                // constraint — without a priority bump the editor's
+                // `maxWidth: .infinity` can squeeze the terminal below
+                // chatWidth at narrow window sizes, clipping the tab
+                // labels. `.layoutPriority(1)` makes the preference bind.
+                .layoutPriority(1)
                 .accessibilityHidden(!showChat)
 
                 // Resizable divider between terminal and editor
@@ -1158,14 +1164,14 @@ struct ConjureDSPExtensionMainView: View {
         let editable = isCurrentBundleEditable
 
         HStack(spacing: 6) {
-
-            Spacer()
             Image(systemName: showingCustom ? "paintpalette" : "slider.horizontal.3")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text(showingCustom ? "Custom UI" : "Basic UI")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
 
             if hasCustom {
                 // Segmented toggle — same binding as before, just with a
@@ -1220,6 +1226,9 @@ struct ConjureDSPExtensionMainView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
+        // Clip residual overflow so the bar never paints past the editor
+        // region's right edge — protects the toggle/CTA at narrow widths.
+        .clipped()
     }
 
     /// Drop a starter `ui/index.html` into the current user bundle and
@@ -1572,6 +1581,7 @@ struct ConjureDSPExtensionMainView: View {
             Text(label)
                 .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
                 .foregroundColor(isSelected ? .primary : .secondary)
+                .lineLimit(1)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(
                     isSelected
@@ -1596,6 +1606,7 @@ struct ConjureDSPExtensionMainView: View {
             Text(label)
                 .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
                 .foregroundColor(isSelected ? .primary : .secondary)
+                .lineLimit(1)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(
                     isSelected
