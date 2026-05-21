@@ -40,6 +40,14 @@ struct MonacoEditorView: NSViewRepresentable {
 
         webView.setAccessibilityIdentifier("scriptEditor")
 
+        #if DEBUG
+        // Expose to Safari's Web Inspector (Develop → [Mac name] → ConjureDSP)
+        // so we can debug Monaco's internal DOM/CSS during development.
+        // Replaces the deprecated `WebKitDeveloperExtras` global default
+        // (macOS 13.3+ requires per-webview opt-in). Off in Release.
+        webView.isInspectable = true
+        #endif
+
         // Load Monaco HTML from extension bundle (not Bundle.main, which may be the host app)
         let bundle = Bundle(for: Coordinator.self)
         if let monacoDir = bundle.url(forResource: "monaco", withExtension: nil),
