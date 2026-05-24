@@ -116,7 +116,12 @@ struct CustomUIWebView: NSViewRepresentable {
         webView.setAccessibilityIdentifier("customUI")
 
         #if DEBUG
+        // macOS 13.3+ uses `isInspectable` per webview; the older
+        // `developerExtrasEnabled` private key is deprecated and no longer
+        // surfaces the webview in Safari's Develop menu on its own. Keep
+        // both so older OS revisions still expose the inspector.
         webView.configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        webView.isInspectable = true
         #endif
 
         context.coordinator.webView = webView

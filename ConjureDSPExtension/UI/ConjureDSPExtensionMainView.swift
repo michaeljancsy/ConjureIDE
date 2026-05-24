@@ -126,6 +126,12 @@ struct ConjureDSPExtensionMainView: View {
     /// Each appears as a hidden `terminalAgentInstalled_<name>` marker for UI tests.
     @State private var terminalInstalledAgents: Set<String> = []
     @State private var showAIPromptTab: Bool = false
+    /// Picks which surface fills the central editor region: `false` =
+    /// Monaco editor (default), `true` = the parameter / custom-UI panel.
+    /// Both stay mounted in a `ZStack` so toggling doesn't tear down
+    /// either WKWebView (same pattern as `showAIPromptTab` for the
+    /// Terminal / AI-Prompt sidebar).
+    @State private var showUITab: Bool = false
     @State private var chatWidth: CGFloat = 360
     @State private var isExporting: Bool = false
     @State private var exportAlertMessage: String?
@@ -162,11 +168,6 @@ struct ConjureDSPExtensionMainView: View {
     /// bar can briefly flash a "Saved to disk" label. Disk-write feedback,
     /// NOT commit feedback — commit is a separate, explicit action.
     @State private var lastDiskSaveAt: Date? = nil
-    /// Collapse state for the custom-UI webview. Defaults to expanded so
-    /// first-time users see the UI, but authors can collapse it to reclaim
-    /// editor real estate while iterating on the script. Mirrors
-    /// ParameterSlidersView's built-in collapse.
-    @AppStorage("customUI.expanded") private var isCustomUIExpanded: Bool = true
     /// Whether the bundle-file sidebar is visible. Defaults to collapsed so
     /// DSP-only authors who never touch `ui/` don't lose real estate; the
     /// toolbar's Files button + ⇧⌘E flip it open.
@@ -332,73 +333,6 @@ struct ConjureDSPExtensionMainView: View {
 
             Divider()
 
-            // UI area: the custom HTML/JS UI (when a bundle ships one and the
-            // toggle is set to it) or the generated slider panel. The toggle
-            // bar above advertises both modes and — for user bundles without
-            // a custom UI yet — surfaces the "+ Add Custom UI" CTA so adding
-            // one is a single click instead of a hidden filesystem dance.
-            let activeBundle = presetManager.currentBundle
-            let hasCustom = activeBundle?.hasCustomUI ?? false
-            let useCustom = hasCustom && customUIPreference.showCustomUI
-
-            VStack(spacing: 0) {
-                // Always render the bar so users in scratchpad (post-New,
-                // pre-Save-As) can still see what UI mode they're in and
-                // find the one-click path to Custom UI. Without this, a
-                // new script looks like "sliders with no toggle anywhere"
-                // and authors have to guess that Save As is the gateway.
-                customUIToggleBar(showingCustom: useCustom)
-
-                if useCustom, let bundle = activeBundle {
-                    if isCustomUIExpanded {
-                        // Pin to the manifest-declared height + width (not
-                        // `minHeight` / no width constraint at all).
-                        //
-                        // Without a height upper bound, SwiftUI's outer
-                        // VStack hands the webview all the spare vertical
-                        // space the window has, producing a tall dark void
-                        // around a preset that wants 260pt.
-                        //
-                        // Without a width constraint, the webview gets the
-                        // full editor width (often 1000pt+) which is much
-                        // more than the manifest declares — so a preset
-                        // looks roomy in the extension and squashed in the
-                        // exported AU (which honors manifest.ui.width).
-                        // Authors design against the extension width and
-                        // get surprised by the export. Pin both dimensions
-                        // here so what you see is what you get.
-                        //
-                        // Centered with a Spacer pair so the surplus
-                        // editor width letterboxes evenly on both sides
-                        // instead of left-aligning.
-                        let uiW = CGFloat(bundle.manifest.ui?.width ?? 520)
-                        let uiH = CGFloat(bundle.manifest.ui?.height ?? 220)
-                        HStack(spacing: 0) {
-                            Spacer(minLength: 0)
-                            CustomUIWebView(
-                                parameterState: parameterState,
-                                bundle: bundle,
-                                theme: colorScheme,
-                                captureManager: captureManager,
-                                transportManager: transportManager,
-                                stateManager: stateManager
-                            )
-                            .frame(width: uiW, height: uiH)
-                            .id(bundle.uiIndexURL)
-                            Spacer(minLength: 0)
-                        }
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-                } else {
-                    // ParameterSlidersView has its own collapse chevron, so
-                    // no wrapper needed here — the toggle bar + its internal
-                    // header together give users the same two-step control.
-                    ParameterSlidersView(parameterState: parameterState)
-                }
-            }
-
-            Divider()
-
             ZStack {
             HStack(spacing: 0) {
             // Terminal panel — rendered lazily on first open, then kept alive
@@ -511,6 +445,12 @@ struct ConjureDSPExtensionMainView: View {
                 }
                 .frame(width: showChat ? chatWidth : 0)
                 .clipped()
+                // `.frame(width:)` is a SwiftUI preference, not a hard
+                // constraint — without a priority bump the editor's
+                // `maxWidth: .infinity` can squeeze the terminal below
+                // chatWidth at narrow window sizes, clipping the tab
+                // labels. `.layoutPriority(1)` makes the preference bind.
+                .layoutPriority(1)
                 .accessibilityHidden(!showChat)
 
                 // Resizable divider between terminal and editor
@@ -591,27 +531,60 @@ struct ConjureDSPExtensionMainView: View {
             }
 
             VStack(spacing: 0) {
-                // File picker — present only when the active preset is
-                // a bundle with more than one editable file. Factory
-                // bundles render the picker read-only (no writes allowed
-                // into the app bundle's Resources). Users can still
-                // browse every file's contents, just not modify them.
-                if let bundle = presetManager.currentBundle {
+                // Editor | UI tab header. Both panes stay mounted in the
+                // ZStack below — switching is opacity + hit-testing only,
+                // so neither WKWebView is torn down on toggle (same
+                // pattern as the Terminal / AI-Prompt switcher above).
+                HStack(spacing: 0) {
+                    editorTabButton(label: "Editor", isSelected: !showUITab) {
+                        showUITab = false
+                    }
+                    editorTabButton(label: "UI", isSelected: showUITab) {
+                        showUITab = true
+                    }
+                }
+                .frame(height: 28)
+                .clipped()
+                .background(colorScheme == .dark
+                    ? Color(white: 0.10)
+                    : Color(nsColor: .windowBackgroundColor))
+
+                Divider()
+
+                // File picker — editor-tab-only. Present only when the
+                // active preset is a bundle with more than one editable
+                // file. Factory bundles render the picker read-only (no
+                // writes allowed into the app bundle's Resources). Users
+                // can still browse every file's contents, just not
+                // modify them.
+                if !showUITab, let bundle = presetManager.currentBundle {
                     bundleFilePickerBar(bundle: bundle)
                 }
 
-                bundleEditor(editable: isCurrentBundleEditable)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // Paint the container with the system text-background color
-                // so the transparent WKWebView has something matching the
-                // current theme to show during Monaco's ~100ms boot. Without
-                // this, file-switches flash white (HTML default) before the
-                // theme JS applies, producing a visible flicker in dark mode.
-                .background(Color(nsColor: .textBackgroundColor))
-                .border(Color.secondary.opacity(0.3), width: 1)
-                .padding(.horizontal)
-                .padding(.top, 8)
+                ZStack {
+                    // Editor — kept alive, hidden when UI tab is active.
+                    bundleEditor(editable: isCurrentBundleEditable)
+                        // Paint the container with the system text-background
+                        // color so the transparent WKWebView has something
+                        // matching the current theme to show during Monaco's
+                        // ~100ms boot. Without this, file-switches flash white
+                        // (HTML default) before the theme JS applies,
+                        // producing a visible flicker in dark mode.
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .border(Color.secondary.opacity(0.3), width: 1)
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                        .opacity(showUITab ? 0 : 1)
+                        .allowsHitTesting(!showUITab)
+                        .accessibilityHidden(showUITab)
 
+                    // UI panel — kept alive, hidden when editor tab is active.
+                    uiPanel
+                        .opacity(showUITab ? 1 : 0)
+                        .allowsHitTesting(showUITab)
+                        .accessibilityHidden(!showUITab)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // Persistent status bar
                 StatusBarView(
                     isCompiling: isCompiling,
@@ -1111,6 +1084,64 @@ struct ConjureDSPExtensionMainView: View {
         }
     }
 
+
+    /// The contents of the UI tab — the existing custom-UI toggle bar
+    /// (Custom UI ↔ Basic UI sub-toggle + Add/Save-As CTAs) on top, and
+    /// either the bundle's custom HTML/JS UI or the generated slider
+    /// panel below. Pulled into its own ViewBuilder so the editor VStack
+    /// can swap between Monaco and this surface inside a ZStack without
+    /// either being torn down.
+    @ViewBuilder
+    private var uiPanel: some View {
+        let activeBundle = presetManager.currentBundle
+        let hasCustom = activeBundle?.hasCustomUI ?? false
+        let useCustom = hasCustom && customUIPreference.showCustomUI
+
+        VStack(spacing: 0) {
+            // Always render the bar so users in scratchpad (post-New,
+            // pre-Save-As) can still see what UI mode they're in and
+            // find the one-click path to Custom UI.
+            customUIToggleBar(showingCustom: useCustom)
+
+            if useCustom, let bundle = activeBundle {
+                // Pin to the manifest-declared width + height so the
+                // extension preview matches the exported AU (which
+                // honors manifest.ui dimensions). Centered with a
+                // Spacer pair so the surplus tab width letterboxes
+                // evenly on both sides instead of left-aligning.
+                let uiW = CGFloat(bundle.manifest.ui?.width ?? 520)
+                let uiH = CGFloat(bundle.manifest.ui?.height ?? 220)
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    CustomUIWebView(
+                        parameterState: parameterState,
+                        bundle: bundle,
+                        theme: colorScheme,
+                        captureManager: captureManager,
+                        transportManager: transportManager,
+                        stateManager: stateManager
+                    )
+                    .frame(width: uiW, height: uiH)
+                    .id(bundle.uiIndexURL)
+                    Spacer(minLength: 0)
+                }
+            } else {
+                ParameterSlidersView(parameterState: parameterState)
+            }
+
+            // Top-align: let the panel claim only as much vertical
+            // space as it needs and letterbox the rest.
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Opaque background so the kept-alive Monaco WKWebView underneath
+        // in the ZStack can't bleed through. SwiftUI's .opacity(0) doesn't
+        // reliably suppress WKWebView's CALayer composition on macOS — its
+        // remote process paints independently — so we cover it with a paint
+        // layer instead of relying on the opacity modifier alone.
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
     /// Row that sits above the parameter panel. Doubles as a UI-mode picker
     /// *and* the discovery surface for custom HTML/JS UIs: user bundles
     /// without a UI yet get a `+ Add Custom UI` button in the same slot
@@ -1133,34 +1164,14 @@ struct ConjureDSPExtensionMainView: View {
         let editable = isCurrentBundleEditable
 
         HStack(spacing: 6) {
-            // Disclosure chevron — only meaningful when the custom UI is
-            // actually rendering below (otherwise the sliders view has its
-            // own collapse header).
-            if showingCustom {
-                Button(action: {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        isCustomUIExpanded.toggle()
-                    }
-                }) {
-                    Image(systemName: "chevron.right")
-                        .rotationEffect(.degrees(isCustomUIExpanded ? 90 : 0))
-                        .animation(.easeOut(duration: 0.15), value: isCustomUIExpanded)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 10)
-                }
-                .buttonStyle(.plain)
-                .help(isCustomUIExpanded ? "Collapse custom UI" : "Expand custom UI")
-                .accessibilityIdentifier("customUICollapseButton")
-            }
-
-            Spacer()
             Image(systemName: showingCustom ? "paintpalette" : "slider.horizontal.3")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text(showingCustom ? "Custom UI" : "Basic UI")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
 
             if hasCustom {
                 // Segmented toggle — same binding as before, just with a
@@ -1215,6 +1226,9 @@ struct ConjureDSPExtensionMainView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
+        // Clip residual overflow so the bar never paints past the editor
+        // region's right edge — protects the toggle/CTA at narrow widths.
+        .clipped()
     }
 
     /// Drop a starter `ui/index.html` into the current user bundle and
@@ -1567,6 +1581,32 @@ struct ConjureDSPExtensionMainView: View {
             Text(label)
                 .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
                 .foregroundColor(isSelected ? .primary : .secondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    isSelected
+                        ? (colorScheme == .dark
+                            ? Color(white: 0.20)
+                            : Color(nsColor: .controlBackgroundColor))
+                        : Color.clear
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
+    }
+
+    /// Tab button for the Editor / UI tab switcher. Same shape as
+    /// `chatTabButton`, with editor-specific accessibility identifiers
+    /// so UI tests can target the new tabs without colliding with the
+    /// Terminal / AI-Prompt ones.
+    private func editorTabButton(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        let identifier = label == "Editor" ? "editorTabButton" : "uiTabButton"
+        return Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                .foregroundColor(isSelected ? .primary : .secondary)
+                .lineLimit(1)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(
                     isSelected
