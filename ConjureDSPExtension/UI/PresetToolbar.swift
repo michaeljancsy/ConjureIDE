@@ -196,9 +196,37 @@ struct PresetToolbar: View {
                 .background(Color.secondary.opacity(0.15))
                 .cornerRadius(4)
 
+            // Beta / Demo mode indicator — links to subscribe page.
+            // Pinned to the identity/status zone next to the preset menu +
+            // language badge so the badge reads as "what mode you're in"
+            // rather than interrupting an unrelated button row.
+            if subscriptionManager.isBetaActive {
+                Link(destination: SubscriptionSettingsView.subscribeURL) {
+                    Text("BETA")
+                        .font(.caption2.bold())
+                        .foregroundColor(.cyan)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.cyan.opacity(0.15))
+                        .cornerRadius(3)
+                }
+                .accessibilityIdentifier("betaIndicator")
+            } else if !subscriptionManager.isLicensed {
+                Link(destination: SubscriptionSettingsView.subscribeURL) {
+                    Text("DEMO")
+                        .font(.caption2.bold())
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.orange.opacity(0.15))
+                        .cornerRadius(3)
+                }
+                .accessibilityIdentifier("demoIndicator")
+            }
+
             Spacer()
 
-            // — Script actions zone —
+            // — Live audio (transport + monitor) —
             Divider().frame(height: 28)
 
             // Run
@@ -240,6 +268,54 @@ struct PresetToolbar: View {
             .fixedSize()
             .toolbarTooltip(bypassed ? "Bypass ON — click to enable processing" : "Bypass processing (A/B compare)")
             .accessibilityIdentifier("bypassButton")
+
+            // Spectrogram toggle — grouped with Run/Bypass because all three
+            // act on or observe the running DSP (run it / A-B against bypass /
+            // watch its spectrum).
+            Button(action: { showSpectrogram.toggle() }) {
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: showSpectrogram ? "waveform.path.ecg.rectangle" : "waveform.path.ecg")
+                        .frame(height: 16)
+                    Text("Spectrogram")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .buttonStyle(.borderless)
+            .fixedSize()
+            .toolbarTooltip(showSpectrogram ? "Hide spectrogram" : "Show spectrogram")
+            .accessibilityIdentifier("spectrogramToggleButton")
+
+            // — Preset CRUD —
+            Divider().frame(height: 28)
+
+            // New script
+            Button(action: { showNewScriptDialog = true }) {
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: "doc.badge.plus")
+                        .frame(height: 16)
+                    Text("New")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .buttonStyle(.borderless)
+            .fixedSize()
+            .toolbarTooltip("New (\u{2318}N)")
+            .accessibilityIdentifier("newScriptButton")
+            .popover(isPresented: $showNewScriptDialog) {
+                NewPresetPopover(
+                    existingNames: Set(presetManager.presets.filter { !$0.isFactory }.map(\.name)),
+                    onCreate: { name, language, includeCustomUI in
+                        if let err = onNew(name, language, includeCustomUI) {
+                            return err
+                        }
+                        showNewScriptDialog = false
+                        return nil
+                    },
+                    onCancel: { showNewScriptDialog = false }
+                )
+            }
 
             // Save (overwrite current user preset). In alwaysPrompt mode,
             // show a small popover to collect a commit message first. In
@@ -324,35 +400,7 @@ struct PresetToolbar: View {
                 )
             }
 
-            // New script
-            Button(action: { showNewScriptDialog = true }) {
-                VStack(alignment: .center, spacing: 1) {
-                    Image(systemName: "doc.badge.plus")
-                        .frame(height: 16)
-                    Text("New")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                }
-            }
-            .buttonStyle(.borderless)
-            .fixedSize()
-            .toolbarTooltip("New (\u{2318}N)")
-            .accessibilityIdentifier("newScriptButton")
-            .popover(isPresented: $showNewScriptDialog) {
-                NewPresetPopover(
-                    existingNames: Set(presetManager.presets.filter { !$0.isFactory }.map(\.name)),
-                    onCreate: { name, language, includeCustomUI in
-                        if let err = onNew(name, language, includeCustomUI) {
-                            return err
-                        }
-                        showNewScriptDialog = false
-                        return nil
-                    },
-                    onCancel: { showNewScriptDialog = false }
-                )
-            }
-
-            // Delete and Rename (user/repo presets only)
+            // Rename, Delete, Reveal (user/repo presets only)
             if currentIsMutable {
                 Button(action: {
                     renameName = presetManager.currentPreset?.name ?? ""
@@ -441,31 +489,11 @@ struct PresetToolbar: View {
                     .toolbarTooltip("Reveal preset bundle in Finder")
                     .accessibilityIdentifier("revealBundleButton")
                 }
-
-                // Manually reload the custom UI. Redundant with the hot-reload
-                // file watcher for most editors, but useful when an editor
-                // writes via a path the FSEventStream doesn't flag (iCloud,
-                // network mounts, some remote-edit tools).
-                if currentBundleHasCustomUI {
-                    Button(action: {
-                        NotificationCenter.default.post(name: .reloadCustomUI, object: nil)
-                    }) {
-                        VStack(alignment: .center, spacing: 1) {
-                            Image(systemName: "arrow.clockwise")
-                                .frame(height: 16)
-                            Text("Reload UI")
-                                .font(.system(size: 9))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .buttonStyle(.borderless)
-                    .fixedSize()
-                    .toolbarTooltip("Reload custom UI")
-                    .accessibilityIdentifier("reloadCustomUIButton")
-                }
             }
 
-            // — Panel toggles zone —
+            // — Export —
+            // Heavy, rare, license-gated output action. Its own slot so it
+            // doesn't dilute either the CRUD group or the panel-toggle group.
             Divider().frame(height: 28)
 
             // Export as standalone AU
@@ -507,85 +535,10 @@ struct PresetToolbar: View {
                 )
             }
 
-            // Git push/sync status button will be wired up in Checkpoint 4
-            // when RemoteSyncSettingsView + PresetGitCoordinator are fully
-            // surfaced. For now the toolbar has no sync affordance.
-
-            // File browser toggle — sidebar with the active bundle's files.
-            // Only meaningful when a bundle is loaded (user or factory).
-            if presetManager.currentBundle != nil {
-                Button(action: { showFileBrowser.toggle() }) {
-                    VStack(alignment: .center, spacing: 1) {
-                        Image(systemName: showFileBrowser ? "sidebar.left" : "sidebar.leading")
-                            .frame(height: 16)
-                        Text("Files")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .buttonStyle(.borderless)
-                .fixedSize()
-                .toolbarTooltip(showFileBrowser ? "Hide files sidebar" : "Show files sidebar (\u{21E7}\u{2318}E)")
-                .accessibilityIdentifier("fileBrowserToggleButton")
-            }
-
-            // Claude Code terminal toggle
-            Button(action: { showChat.toggle() }) {
-                VStack(alignment: .center, spacing: 1) {
-                    Image(systemName: showChat ? "terminal.fill" : "terminal")
-                        .frame(height: 16)
-                    Text("Terminal")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                }
-            }
-            .buttonStyle(.borderless)
-            .fixedSize()
-            .toolbarTooltip(showChat ? "Hide Claude Code" : "Show Claude Code")
-            .accessibilityIdentifier("chatToggleButton")
-
-            // Spectrogram toggle
-            Button(action: { showSpectrogram.toggle() }) {
-                VStack(alignment: .center, spacing: 1) {
-                    Image(systemName: showSpectrogram ? "waveform.path.ecg.rectangle" : "waveform.path.ecg")
-                        .frame(height: 16)
-                    Text("Spectrogram")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                }
-            }
-            .buttonStyle(.borderless)
-            .fixedSize()
-            .toolbarTooltip(showSpectrogram ? "Hide spectrogram" : "Show spectrogram")
-            .accessibilityIdentifier("spectrogramToggleButton")
-
-            // — Status/settings zone —
+            // — Authoring resources —
+            // Popover launchers for inserting external code/content into a
+            // script (Python/Rust deps, NAM tones).
             Divider().frame(height: 28)
-
-            // Beta / Demo mode indicator — links to subscribe page
-            if subscriptionManager.isBetaActive {
-                Link(destination: SubscriptionSettingsView.subscribeURL) {
-                    Text("BETA")
-                        .font(.caption2.bold())
-                        .foregroundColor(.cyan)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color.cyan.opacity(0.15))
-                        .cornerRadius(3)
-                }
-                .accessibilityIdentifier("betaIndicator")
-            } else if !subscriptionManager.isLicensed {
-                Link(destination: SubscriptionSettingsView.subscribeURL) {
-                    Text("DEMO")
-                        .font(.caption2.bold())
-                        .foregroundColor(.orange)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color.orange.opacity(0.15))
-                        .cornerRadius(3)
-                }
-                .accessibilityIdentifier("demoIndicator")
-            }
 
             // Packages / Crates
             Button(action: { showingPackages = true }) {
@@ -637,6 +590,72 @@ struct PresetToolbar: View {
                     }
                 )
             }
+
+            // — Editor panel toggles —
+            // Stateful show/hide-a-panel toggles tied to the script-editor
+            // workflow (bundle file sidebar, Claude Code terminal, custom-UI
+            // WebView reload).
+            Divider().frame(height: 28)
+
+            // File browser toggle — sidebar with the active bundle's files.
+            // Only meaningful when a bundle is loaded (user or factory).
+            if presetManager.currentBundle != nil {
+                Button(action: { showFileBrowser.toggle() }) {
+                    VStack(alignment: .center, spacing: 1) {
+                        Image(systemName: showFileBrowser ? "sidebar.left" : "sidebar.leading")
+                            .frame(height: 16)
+                        Text("Files")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .fixedSize()
+                .toolbarTooltip(showFileBrowser ? "Hide files sidebar" : "Show files sidebar (\u{21E7}\u{2318}E)")
+                .accessibilityIdentifier("fileBrowserToggleButton")
+            }
+
+            // Claude Code terminal toggle
+            Button(action: { showChat.toggle() }) {
+                VStack(alignment: .center, spacing: 1) {
+                    Image(systemName: showChat ? "terminal.fill" : "terminal")
+                        .frame(height: 16)
+                    Text("Terminal")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .buttonStyle(.borderless)
+            .fixedSize()
+            .toolbarTooltip(showChat ? "Hide Claude Code" : "Show Claude Code")
+            .accessibilityIdentifier("chatToggleButton")
+
+            // Manually reload the custom UI. Redundant with the hot-reload
+            // file watcher for most editors, but useful when an editor writes
+            // via a path the FSEventStream doesn't flag (iCloud, network
+            // mounts, some remote-edit tools). Gated on a mutable bundle with
+            // a custom UI — factory bundles are read-only and don't get
+            // re-edited externally.
+            if currentIsMutable && currentBundleHasCustomUI {
+                Button(action: {
+                    NotificationCenter.default.post(name: .reloadCustomUI, object: nil)
+                }) {
+                    VStack(alignment: .center, spacing: 1) {
+                        Image(systemName: "arrow.clockwise")
+                            .frame(height: 16)
+                        Text("Reload UI")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .fixedSize()
+                .toolbarTooltip("Reload custom UI")
+                .accessibilityIdentifier("reloadCustomUIButton")
+            }
+
+            // — App meta —
+            Divider().frame(height: 28)
 
             // Settings (License + AI)
             Button(action: { showingSettings = true }) {
