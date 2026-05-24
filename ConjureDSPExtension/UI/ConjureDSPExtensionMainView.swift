@@ -1164,6 +1164,10 @@ struct ConjureDSPExtensionMainView: View {
         let editable = isCurrentBundleEditable
 
         HStack(spacing: 6) {
+            // Pin the whole cluster (icon + label + toggle/CTA) to the right
+            // edge so the label sits adjacent to the control it describes,
+            // instead of stranded at the opposite side of the bar.
+            Spacer(minLength: 4)
             Image(systemName: showingCustom ? "paintpalette" : "slider.horizontal.3")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1171,7 +1175,6 @@ struct ConjureDSPExtensionMainView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            Spacer(minLength: 4)
 
             if hasCustom {
                 // Segmented toggle — same binding as before, just with a
