@@ -445,12 +445,6 @@ struct ConjureDSPExtensionMainView: View {
                 }
                 .frame(width: showChat ? chatWidth : 0)
                 .clipped()
-                // `.frame(width:)` is a SwiftUI preference, not a hard
-                // constraint — without a priority bump the editor's
-                // `maxWidth: .infinity` can squeeze the terminal below
-                // chatWidth at narrow window sizes, clipping the tab
-                // labels. `.layoutPriority(1)` makes the preference bind.
-                .layoutPriority(1)
                 .accessibilityHidden(!showChat)
 
                 // Resizable divider between terminal and editor
@@ -564,6 +558,13 @@ struct ConjureDSPExtensionMainView: View {
                 ZStack {
                     // Editor — kept alive, hidden when UI tab is active.
                     bundleEditor(editable: isCurrentBundleEditable)
+                        // Flexible frame DIRECTLY on the webview, as in v2.0.2
+                        // (#347 moved it onto the enclosing ZStack). Keeps the
+                        // Monaco WKWebView's content-based fitting size from
+                        // leaking up as the column's ideal width. (The primary
+                        // editor-shrink fix is in ParameterSlidersView — see
+                        // the `containerRelativeFrame` → `.frame` change there.)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         // Paint the container with the system text-background
                         // color so the transparent WKWebView has something
                         // matching the current theme to show during Monaco's

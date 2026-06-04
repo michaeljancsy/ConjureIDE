@@ -62,7 +62,17 @@ struct ParameterSlidersView: View {
                             )
                         }
                     }
-                    .containerRelativeFrame(.horizontal) { width, _ in width * 0.75 }
+                    // Cap the sliders at a comfortable width, centered by the
+                    // enclosing VStack. Previously this used
+                    // `containerRelativeFrame(.horizontal)`, which measures the
+                    // *window* (not this view's container) — fine when the
+                    // panel was a window-wide region, but since the panel now
+                    // lives inside the editor column (kept alive in a ZStack),
+                    // a window-relative width forced the column's minimum to
+                    // ~75% of the window and stopped the editor shrinking when
+                    // the spectrogram opened, pushing the terminal off-screen.
+                    .frame(maxWidth: 600)
+                    .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
