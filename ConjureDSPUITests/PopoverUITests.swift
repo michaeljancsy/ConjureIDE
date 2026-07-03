@@ -144,18 +144,4 @@ final class PopoverUITests: XCTestCase {
         XCTAssertTrue(panel.waitForNonExistence(timeout: 3),
                       "Spectrogram panel should disappear after toggling off")
     }
-
-    // MARK: - Status Indicators
-
-    @MainActor
-    func testDemoExpiredOverlayNotShownByDefault() throws {
-        let app = Self.sharedApp!
-
-        let overlay = app.descendants(matching: .any)["demoExpiredOverlay"].firstMatch
-        // Give the app a moment to settle, then verify the overlay is NOT present.
-        // The demo timer starts fresh on each launch, so it should not be expired.
-        usleep(500_000) // 0.5s
-        XCTAssertFalse(overlay.exists,
-                       "Demo expired overlay should not be shown on fresh launch")
-    }
 }

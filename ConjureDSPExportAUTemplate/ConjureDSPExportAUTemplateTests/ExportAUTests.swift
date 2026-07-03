@@ -216,14 +216,6 @@ struct RustFFITests {
         #expect(abs(value - 0.42) < 0.001)
     }
 
-    @Test("Kernel set licensed")
-    func kernelSetLicensed() {
-        let kernel = dsp_kernel_create()!
-        defer { dsp_kernel_destroy(kernel) }
-        dsp_kernel_set_licensed(kernel, true)
-        #expect(dsp_kernel_is_licensed(kernel) == true)
-    }
-
     @Test("WASM passthrough preset loads")
     func wasmPresetLoads() async throws {
         let desc = try discoverComponentDescription()

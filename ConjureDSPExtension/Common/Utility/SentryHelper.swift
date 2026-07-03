@@ -75,17 +75,4 @@ enum SentryHelper {
         SentrySDK.addBreadcrumb(crumb)
         #endif
     }
-
-    static func configureUser(subscriptionStatus: String, email: String?) {
-        #if DEBUG
-        return
-        #else
-        SentrySDK.configureScope { scope in
-            let user = User()
-            user.email = email
-            scope.setUser(user)
-            scope.setTag(value: subscriptionStatus, key: "subscription_status")
-        }
-        #endif
-    }
 }

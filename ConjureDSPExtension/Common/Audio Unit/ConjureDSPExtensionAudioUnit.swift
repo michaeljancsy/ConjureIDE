@@ -1765,50 +1765,6 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		return (result.success, result.error, nil, result.processTimeMs, result.budgetMs)
 	}
 
-	// MARK: - Subscription
-
-	/// Verify a subscription token's signature and expiry, set kernel state.
-	/// Returns the SubscriptionStatus raw value (0=Active, 1=GracePeriod, 2=Expired, 3=Cancelled, 4=NoSubscription).
-	func verifyToken(_ token: String) -> UInt8 {
-		return dsp_kernel_verify_token(kernel, token)
-	}
-
-	/// Set the subscription status directly.
-	func setSubscriptionStatus(_ status: UInt8) {
-		dsp_kernel_set_subscription_status(kernel, status)
-	}
-
-	/// Get the current subscription status.
-	func subscriptionStatus() -> UInt8 {
-		return dsp_kernel_subscription_status(kernel)
-	}
-
-	/// Get the grace period deadline as Unix seconds.
-	func graceDeadlineUnix() -> Int64 {
-		return dsp_kernel_grace_deadline_unix(kernel)
-	}
-
-	/// Check if kernel is currently licensed.
-	func isLicensed() -> Bool {
-		return dsp_kernel_is_licensed(kernel)
-	}
-
-	/// Get remaining demo seconds at current sample rate.
-	func demoSecondsRemaining() -> Double {
-		let sampleRate = _outputBus?.format.sampleRate ?? 48000.0
-		return dsp_kernel_demo_seconds_remaining(kernel, sampleRate)
-	}
-
-	/// Reset the demo counter, giving another 60 seconds of demo time.
-	func resetDemo() {
-		dsp_kernel_reset_demo(kernel)
-	}
-
-	/// Set the licensed state directly (used by tests).
-	func setLicensed(_ licensed: Bool) {
-		dsp_kernel_set_licensed(kernel, licensed)
-	}
-
 	deinit {
 		// `Timer.invalidate()` must be called on the same thread the timer
 		// was scheduled on (RunLoop.main, see `startKernelPollTimer`). This

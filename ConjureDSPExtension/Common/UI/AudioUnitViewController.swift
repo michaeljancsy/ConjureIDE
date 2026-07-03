@@ -142,7 +142,6 @@ process! { ctx =>
     private var processProfiler: ProcessProfiler?
     private var memoryMonitor: MemoryMonitor?
     private var parameterState: ParameterState?
-    private var subscriptionManager: SubscriptionManager?
     private var gitHubService: GitHubService?
     private var gitCoordinator: PresetGitCoordinator?
     private var terminalServer: TerminalServer?
@@ -387,11 +386,6 @@ process! { ctx =>
                 }
         }
 
-        if subscriptionManager == nil {
-            subscriptionManager = SubscriptionManager(appGroupContainerURL: appGroupContainerURL)
-        }
-        let lm = subscriptionManager!
-
         if gitHubService == nil {
             gitHubService = GitHubService()
         }
@@ -440,23 +434,6 @@ process! { ctx =>
                     )
                 }
             }
-        lm.verifyTokenWithKernel = { [weak au] token in
-            au?.verifyToken(token) ?? SubscriptionStatus.noSubscription.rawValue
-        }
-        lm.setSubscriptionStatusInKernel = { [weak au] status in
-            au?.setSubscriptionStatus(status)
-        }
-        lm.getDemoSecondsRemaining = { [weak au] in
-            au?.demoSecondsRemaining() ?? 0
-        }
-        lm.resetDemoInKernel = { [weak au] in
-            au?.resetDemo()
-        }
-        lm.getGraceDeadlineUnix = { [weak au] in
-            au?.graceDeadlineUnix() ?? 0
-        }
-        lm.buildID = Bundle(for: type(of: self)).infoDictionary?["BuildID"] as? Int ?? 0
-        lm.loadAndVerify()
 
         // Run: detect language, compile if needed, load into kernel + benchmark
         let onRun: (String) async -> ScriptSaveResult = { [weak au] source in
@@ -920,7 +897,6 @@ process! { ctx =>
             memoryMonitor: memMon,
             parameterState: ps,
             stateManager: stateMgr,
-            subscriptionManager: lm,
             gitHubService: gh,
             gitCoordinator: gc,
             onRun: onRun,

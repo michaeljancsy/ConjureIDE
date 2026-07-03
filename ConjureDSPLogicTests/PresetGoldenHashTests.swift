@@ -140,7 +140,6 @@ struct PresetGoldenHashTests {
     private func probeNamRequirement(wasmBytes: Data) -> String? {
         guard let kernel = dsp_kernel_create() else { return nil }
         defer { dsp_kernel_destroy(kernel) }
-        dsp_kernel_set_licensed(kernel, true)
         dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
         defer { dsp_kernel_deinitialize(kernel) }
         dsp_kernel_set_max_frames(kernel, UInt32(Self.blockSize))

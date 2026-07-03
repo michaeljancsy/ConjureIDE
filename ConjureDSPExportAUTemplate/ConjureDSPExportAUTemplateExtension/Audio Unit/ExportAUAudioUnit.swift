@@ -113,9 +113,6 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
         buildParameterTree()
 
-        // Exported AUs run freely — no demo timer
-        dsp_kernel_set_licensed(kernel, true)
-
         // Load preset from bundle (language determined by runtime-config.json)
         loadPresetFromBundle()
 

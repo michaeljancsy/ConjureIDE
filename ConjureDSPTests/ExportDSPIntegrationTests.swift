@@ -264,7 +264,6 @@ struct ExportDSPIntegrationTests {
         // 4. Load into fresh kernel and process audio
         let kernel = dsp_kernel_create()!
         defer { dsp_kernel_destroy(kernel) }
-        dsp_kernel_set_licensed(kernel, true)
         dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
         dsp_kernel_set_max_frames(kernel, UInt32(Self.chunkSize))
 
@@ -328,7 +327,6 @@ struct ExportDSPIntegrationTests {
 
         let kernel = dsp_kernel_create()!
         defer { dsp_kernel_destroy(kernel) }
-        dsp_kernel_set_licensed(kernel, true)
         dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
         dsp_kernel_set_max_frames(kernel, UInt32(Self.chunkSize))
 
@@ -391,7 +389,6 @@ struct ExportDSPIntegrationTests {
 
         let kernel = dsp_kernel_create()!
         defer { dsp_kernel_destroy(kernel) }
-        dsp_kernel_set_licensed(kernel, true)
         dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
         dsp_kernel_set_max_frames(kernel, UInt32(Self.chunkSize))
 
@@ -647,7 +644,6 @@ struct ExportDSPIntegrationTests {
         // 2. Create kernel and load WASM
         let kernel = dsp_kernel_create()!
         defer { dsp_kernel_destroy(kernel) }
-        dsp_kernel_set_licensed(kernel, true)
         dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
         dsp_kernel_set_max_frames(kernel, UInt32(Self.chunkSize))
 
@@ -712,7 +708,6 @@ struct ExportDSPIntegrationTests {
         // 2. Create kernel and load WASM
         let kernel = dsp_kernel_create()!
         defer { dsp_kernel_destroy(kernel) }
-        dsp_kernel_set_licensed(kernel, true)
         dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
         dsp_kernel_set_max_frames(kernel, UInt32(Self.chunkSize))
 
@@ -892,7 +887,6 @@ struct ExportDSPIntegrationTests {
 
         let kernel = dsp_kernel_create()!
         defer { dsp_kernel_destroy(kernel) }
-        dsp_kernel_set_licensed(kernel, true)
         dsp_kernel_initialize(kernel, Int32(Self.channels), Int32(Self.channels), Self.sampleRate)
         dsp_kernel_set_max_frames(kernel, UInt32(Self.chunkSize))
 

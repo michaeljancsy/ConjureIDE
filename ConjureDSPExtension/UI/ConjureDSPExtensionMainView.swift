@@ -61,9 +61,6 @@ struct ConjureDSPExtensionMainView: View {
     /// CustomUIWebView so the JS bridge's `state.set` / `state.reset`
     /// calls route through the same actor as MCP and DAW persistence.
     var stateManager: PresetStateManager
-    // subscriptionManager MUST be @ObservedObject — the demo expired overlay
-    // reads isLicensed and demoSecondsRemaining directly in this view's body.
-    @ObservedObject var subscriptionManager: SubscriptionManager
     var gitHubService: GitHubService
     @Bindable var gitCoordinator: PresetGitCoordinator
     var onRun: (String) async -> ScriptSaveResult
@@ -212,7 +209,6 @@ struct ConjureDSPExtensionMainView: View {
             // Preset toolbar
             PresetToolbar(
                 presetManager: presetManager,
-                subscriptionManager: subscriptionManager,
                 gitHubService: gitHubService,
                 gitCoordinator: gitCoordinator,
                 isCompiling: isCompiling,
@@ -650,64 +646,6 @@ struct ConjureDSPExtensionMainView: View {
             } // HStack
             .animation(.easeOut(duration: 0.15), value: showChat)
             .animation(.easeOut(duration: 0.15), value: showSpectrogram)
-
-            // Demo expired overlay
-            if !subscriptionManager.isLicensed && subscriptionManager.demoSecondsRemaining <= 0 {
-                Color.black.opacity(0.6)
-                    .ignoresSafeArea()
-
-                VStack(spacing: 16) {
-                    Image(systemName: "speaker.slash.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(.orange)
-
-                    Text("Demo Expired")
-                        .font(.title2.bold())
-                        .foregroundColor(.white)
-
-                    Text("Audio output is silenced.")
-                        .font(.body)
-                        .foregroundColor(.white.opacity(0.8))
-
-                    VStack(spacing: 10) {
-                        Button {
-                            subscriptionManager.restartDemo()
-                        } label: {
-                            Text("Restart Demo")
-                                .frame(minWidth: 160)
-                        }
-                        .controlSize(.large)
-                        .accessibilityIdentifier("restartDemoButton")
-
-                        Link(destination: SubscriptionSettingsView.subscribeURL) {
-                            Text("Subscribe")
-                                .frame(minWidth: 160)
-                        }
-                        .controlSize(.large)
-                        .buttonStyle(.borderedProminent)
-                        .accessibilityIdentifier("subscribeLinkOverlay")
-
-                        Button {
-                            showingSaveAs = false // dismiss any other popover
-                            // Open settings by triggering the toolbar gear button
-                            NotificationCenter.default.post(name: .openLicenseSettings, object: nil)
-                        } label: {
-                            Text("Enter License Key")
-                                .frame(minWidth: 160)
-                        }
-                        .controlSize(.large)
-                        .accessibilityIdentifier("enterLicenseKeyButton")
-                    }
-                    .padding(.top, 4)
-                }
-                .padding(32)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color(nsColor: .windowBackgroundColor))
-                        .shadow(radius: 20)
-                )
-                .accessibilityIdentifier("demoExpiredOverlay")
-            }
             } // ZStack
         }
         .alert("Export", isPresented: $showExportAlert) {

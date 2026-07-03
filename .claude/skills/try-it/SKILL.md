@@ -23,13 +23,12 @@ If `args` is non-empty, treat it as the user's prompt verbatim (e.g. "build a 3-
 
 If `args` is empty, ask with AskUserQuestion: "What should the subagent build?" Wait for the answer.
 
-## Step 2: Build + launch (Debug + Beta — don't ask)
+## Step 2: Build + launch (Debug — don't ask)
 
-The experimental cycle benefits from the fastest rebuild AND full licensing without demo-timer interruptions. Hard-code Debug + Beta — don't ask.
+The experimental cycle benefits from the fastest rebuild. Hard-code Debug — don't ask.
 
 ```bash
-xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP -configuration Debug build \
-  SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG BETA_BUILD' 2>&1 | tail -60
+xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP -configuration Debug build 2>&1 | tail -60
 ```
 
 Use a 600000 ms (10 min) timeout — Rust rebuilds can be slow on a clean build.

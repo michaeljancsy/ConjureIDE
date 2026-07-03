@@ -16,7 +16,6 @@ enum AnalyticsEvent: String {
     case presetSave = "Preset Save"
     case export = "Export"
     case aiGenerate = "AI Generate"
-    case subscriptionActivate = "Subscription Activate"
 }
 
 enum Analytics {
@@ -48,11 +47,5 @@ enum Analytics {
     static func flush() {
         guard !token.isEmpty else { return }
         Mixpanel.mainInstance().flush()
-    }
-
-    static func identify(licenseHash: String) {
-        guard !token.isEmpty else { return }
-        Mixpanel.mainInstance().identify(distinctId: licenseHash)
-        Mixpanel.mainInstance().people.set(properties: ["licensed": true])
     }
 }

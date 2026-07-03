@@ -104,9 +104,6 @@ enum WasmSampleHashHarness {
 
         let channelCount = input.count
 
-        // License so the demo gate never silences the output mid-render.
-        dsp_kernel_set_licensed(kernel, true)
-
         dsp_kernel_initialize(kernel, Int32(channelCount), Int32(channelCount), sampleRate)
         defer { dsp_kernel_deinitialize(kernel) }
         dsp_kernel_set_max_frames(kernel, UInt32(blockSize))
