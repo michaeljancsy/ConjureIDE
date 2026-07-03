@@ -1,9 +1,5 @@
 import SwiftUI
 
-extension Notification.Name {
-    static let openLicenseSettings = Notification.Name("openLicenseSettings")
-}
-
 /// Tooltip that works through the AU ViewBridge (NSView .toolbarTooltip() / .toolTip doesn't).
 /// Shows a floating label below the view after a short hover delay.
 private struct ToolbarTooltip: ViewModifier {
@@ -50,7 +46,6 @@ private extension View {
 /// Toolbar for browsing, running, saving, and deleting presets.
 struct PresetToolbar: View {
     @ObservedObject var presetManager: PresetManager
-    @ObservedObject var subscriptionManager: SubscriptionManager
     @ObservedObject var gitHubService: GitHubService
     @Bindable var gitCoordinator: PresetGitCoordinator
     var isCompiling: Bool = false
@@ -99,10 +94,9 @@ struct PresetToolbar: View {
     @State private var renameName = ""
     @State private var renameError: String?
     @State private var showingSettings = false
-    @State private var settingsTab: SettingsTab = .license
+    @State private var settingsTab: SettingsTab = .sync
 
     private enum SettingsTab: String, CaseIterable, Identifiable {
-        case license = "License"
         case sync    = "Sync"
         case editor  = "Editor"
         case terminal = "Terminal"
@@ -195,34 +189,6 @@ struct PresetToolbar: View {
                 .padding(.vertical, 2)
                 .background(Color.secondary.opacity(0.15))
                 .cornerRadius(4)
-
-            // Beta / Demo mode indicator — links to subscribe page.
-            // Pinned to the identity/status zone next to the preset menu +
-            // language badge so the badge reads as "what mode you're in"
-            // rather than interrupting an unrelated button row.
-            if subscriptionManager.isBetaActive {
-                Link(destination: SubscriptionSettingsView.subscribeURL) {
-                    Text("BETA")
-                        .font(.caption2.bold())
-                        .foregroundColor(.cyan)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color.cyan.opacity(0.15))
-                        .cornerRadius(3)
-                }
-                .accessibilityIdentifier("betaIndicator")
-            } else if !subscriptionManager.isLicensed {
-                Link(destination: SubscriptionSettingsView.subscribeURL) {
-                    Text("DEMO")
-                        .font(.caption2.bold())
-                        .foregroundColor(.orange)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color.orange.opacity(0.15))
-                        .cornerRadius(3)
-                }
-                .accessibilityIdentifier("demoIndicator")
-            }
 
             Spacer()
 
@@ -518,14 +484,13 @@ struct PresetToolbar: View {
             }
             .buttonStyle(.borderless)
             .fixedSize()
-            .disabled(!subscriptionManager.isLicensed || isExporting || isCompiling)
-            .toolbarTooltip(subscriptionManager.isLicensed ? "Export as standalone AU" : "License required to export")
+            .disabled(isExporting || isCompiling)
+            .toolbarTooltip("Export as standalone AU")
             .accessibilityIdentifier("exportButton")
             .popover(isPresented: $showingExport) {
                 ExportPopover(
                     exportName: $exportName,
                     language: selectedLanguage,
-                    isLicensed: subscriptionManager.isLicensed,
                     containsNamTone: containsNamTone,
                     onExport: { name in
                         showingExport = false
@@ -687,8 +652,6 @@ struct PresetToolbar: View {
                     // tab in its own ScrollView rather than constraining here.
                     VStack(alignment: .leading, spacing: 16) {
                         switch settingsTab {
-                        case .license:
-                            SubscriptionSettingsView(subscriptionManager: subscriptionManager)
                         case .sync:
                             RemoteSyncSettingsView(
                                 gitHubService: gitHubService,
@@ -712,9 +675,6 @@ struct PresetToolbar: View {
         .font(.system(size: 14))
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .onReceive(NotificationCenter.default.publisher(for: .openLicenseSettings)) { _ in
-            showingSettings = true
-        }
         .popover(isPresented: $showingImportURL) {
             ImportURLPopover(
                 presetManager: presetManager,

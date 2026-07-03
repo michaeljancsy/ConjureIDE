@@ -9,7 +9,6 @@
 
 mod backend;
 mod kernel;
-mod license;
 mod params;
 mod passthrough_backend;
 mod python_backend;
@@ -694,135 +693,6 @@ pub unsafe extern "C" fn dsp_kernel_read_output_ring(
     (*kernel).read_output_ring(output) as u32
 }
 
-/// Verify a subscription token's signature and expiry, then set the kernel's
-/// subscription status and licensed flag.
-///
-/// Returns a `SubscriptionStatus` value (0=Active, 1=GracePeriod, 2=Expired,
-/// 3=Cancelled, 4=NoSubscription).
-///
-/// # Safety
-/// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-/// - `token` must be a valid null-terminated C string.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn dsp_kernel_verify_token(
-    kernel: DSPKernelRef,
-    token: *const c_char,
-) -> u8 {
-    let token_str = match CStr::from_ptr(token).to_str() {
-        Ok(s) => s,
-        Err(_) => return license::SubscriptionStatus::NoSubscription as u8,
-    };
-    match license::verify_token(token_str) {
-        Ok(payload) => {
-            // Get current Unix time
-            let now_unix = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            let status = license::check_token_status(&payload, now_unix);
-            let deadline = license::grace_deadline_from_token(&payload);
-            (*kernel).set_subscription_status(status);
-            (*kernel).set_grace_deadline_unix(deadline);
-            status as u8
-        }
-        Err(e) => {
-            (*kernel).set_last_error(Some(format!("Token verification failed: {}", e)));
-            (*kernel).set_subscription_status(license::SubscriptionStatus::NoSubscription);
-            license::SubscriptionStatus::NoSubscription as u8
-        }
-    }
-}
-
-/// Check if the kernel has a valid license.
-///
-/// # Safety
-/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn dsp_kernel_is_licensed(kernel: DSPKernelRef) -> bool {
-    (*kernel).is_licensed()
-}
-
-/// Get the remaining demo time in seconds at the given sample rate.
-/// Returns infinity if licensed.
-///
-/// # Safety
-/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn dsp_kernel_demo_seconds_remaining(
-    kernel: DSPKernelRef,
-    sample_rate: f64,
-) -> f64 {
-    (*kernel).demo_seconds_remaining(sample_rate)
-}
-
-/// Set the subscription status directly (for restoring from cached token
-/// or when the Swift layer determines the status via server call).
-///
-/// Status values: 0=Active, 1=GracePeriod, 2=Expired, 3=Cancelled, 4=NoSubscription
-///
-/// # Safety
-/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn dsp_kernel_set_subscription_status(kernel: DSPKernelRef, status: u8) {
-    let s = license::SubscriptionStatus::from_u8(status);
-    (*kernel).set_subscription_status(s);
-}
-
-/// Get the current subscription status.
-///
-/// Returns: 0=Active, 1=GracePeriod, 2=Expired, 3=Cancelled, 4=NoSubscription
-///
-/// # Safety
-/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn dsp_kernel_subscription_status(kernel: DSPKernelRef) -> u8 {
-    (*kernel).subscription_status() as u8
-}
-
-/// Get the grace period deadline as Unix seconds.
-/// Returns 0 if no token has been verified.
-///
-/// # Safety
-/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn dsp_kernel_grace_deadline_unix(kernel: DSPKernelRef) -> i64 {
-    (*kernel).grace_deadline_unix()
-}
-
-/// Set the licensed state directly (for restoring from persisted license).
-///
-/// # Safety
-/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn dsp_kernel_set_licensed(kernel: DSPKernelRef, licensed: bool) {
-    (*kernel).set_licensed(licensed);
-}
-
-/// Reset the demo sample counter, giving another 60 seconds of demo time.
-///
-/// # Safety
-/// `kernel` must be a valid pointer returned by `dsp_kernel_create`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn dsp_kernel_reset_demo(kernel: DSPKernelRef) {
-    (*kernel).reset_demo();
-}
-
-/// Return a pointer to the embedded Ed25519 public key (32 bytes).
-/// Only available in debug builds for diagnostics. Returns null in release.
-#[unsafe(no_mangle)]
-pub extern "C" fn dsp_kernel_public_key() -> *const u8 {
-    #[cfg(debug_assertions)]
-    {
-        // Leak a boxed copy so the pointer is stable for the caller.
-        let key = Box::new(license::public_key_bytes());
-        Box::leak(key).as_ptr()
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        std::ptr::null()
-    }
-}
-
 /// Get the most recent backend.process() duration in microseconds.
 /// Returns 0 when no backend has processed yet.
 ///
@@ -1436,84 +1306,6 @@ mod tests {
         }
     }
 
-    // --- License FFI tests ---
-
-    #[test]
-    fn test_ffi_license_default_unlicensed() {
-        let kernel = dsp_kernel_create();
-        unsafe {
-            assert!(!dsp_kernel_is_licensed(kernel));
-            dsp_kernel_destroy(kernel);
-        }
-    }
-
-    #[test]
-    fn test_ffi_set_licensed_roundtrip() {
-        let kernel = dsp_kernel_create();
-        unsafe {
-            assert!(!dsp_kernel_is_licensed(kernel));
-            dsp_kernel_set_licensed(kernel, true);
-            assert!(dsp_kernel_is_licensed(kernel));
-            dsp_kernel_set_licensed(kernel, false);
-            assert!(!dsp_kernel_is_licensed(kernel));
-            dsp_kernel_destroy(kernel);
-        }
-    }
-
-    #[test]
-    fn test_ffi_demo_seconds_remaining() {
-        let kernel = dsp_kernel_create();
-        unsafe {
-            dsp_kernel_initialize(kernel, 1, 1, 48000.0);
-            let remaining = dsp_kernel_demo_seconds_remaining(kernel, 48000.0);
-            assert!((remaining - 60.0).abs() < 0.1);
-
-            dsp_kernel_set_licensed(kernel, true);
-            let remaining = dsp_kernel_demo_seconds_remaining(kernel, 48000.0);
-            assert!(remaining.is_infinite());
-
-            dsp_kernel_destroy(kernel);
-        }
-    }
-
-    #[test]
-    fn test_ffi_verify_token_invalid() {
-        let kernel = dsp_kernel_create();
-        unsafe {
-            let token = std::ffi::CString::new("invalid.token").unwrap();
-            let result = dsp_kernel_verify_token(kernel, token.as_ptr());
-            assert_eq!(result, license::SubscriptionStatus::NoSubscription as u8);
-            assert!(!dsp_kernel_is_licensed(kernel));
-
-            // Should have set an error message
-            let err = dsp_kernel_last_error(kernel);
-            assert!(!err.is_null());
-
-            dsp_kernel_destroy(kernel);
-        }
-    }
-
-    #[test]
-    fn test_ffi_subscription_status() {
-        let kernel = dsp_kernel_create();
-        unsafe {
-            // Default is NoSubscription
-            assert_eq!(dsp_kernel_subscription_status(kernel), 4);
-
-            // Set to Active
-            dsp_kernel_set_subscription_status(kernel, 0);
-            assert_eq!(dsp_kernel_subscription_status(kernel), 0);
-            assert!(dsp_kernel_is_licensed(kernel));
-
-            // Set to Expired
-            dsp_kernel_set_subscription_status(kernel, 2);
-            assert_eq!(dsp_kernel_subscription_status(kernel), 2);
-            assert!(!dsp_kernel_is_licensed(kernel));
-
-            dsp_kernel_destroy(kernel);
-        }
-    }
-
     #[test]
     fn test_ffi_param_names_json_no_script() {
         let kernel = dsp_kernel_create();
@@ -1785,12 +1577,16 @@ mod tests {
         let kernel = dsp_kernel_create();
         unsafe {
             // Prime with a valid rate first so we have a known baseline.
-            dsp_kernel_initialize(kernel, 2, 2, 44100.0);
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
             // Zero is invalid — initialize() must be a no-op.
-            dsp_kernel_initialize(kernel, 2, 2, 0.0);
-            // demo_seconds_remaining should still be finite (not NaN/Inf).
-            let rem = dsp_kernel_demo_seconds_remaining(kernel, 44100.0);
-            assert!(rem.is_finite(), "demo_seconds_remaining should be finite after zero-sr rejection, got {rem}");
+            dsp_kernel_initialize(kernel, 1, 1, 0.0);
+            // Processing must still produce finite output (kernel uncorrupted).
+            let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+            assert!(output.iter().all(|v| v.is_finite()), "output should be finite after zero-sr rejection, got {output:?}");
             dsp_kernel_destroy(kernel);
         }
     }
@@ -1800,10 +1596,14 @@ mod tests {
     fn test_ffi_initialize_nan_sample_rate_rejected() {
         let kernel = dsp_kernel_create();
         unsafe {
-            dsp_kernel_initialize(kernel, 2, 2, 44100.0);
-            dsp_kernel_initialize(kernel, 2, 2, f64::NAN);
-            let rem = dsp_kernel_demo_seconds_remaining(kernel, 44100.0);
-            assert!(rem.is_finite(), "demo_seconds_remaining should be finite after NaN-sr rejection, got {rem}");
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+            dsp_kernel_initialize(kernel, 1, 1, f64::NAN);
+            let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+            assert!(output.iter().all(|v| v.is_finite()), "output should be finite after NaN-sr rejection, got {output:?}");
             dsp_kernel_destroy(kernel);
         }
     }
@@ -1813,10 +1613,14 @@ mod tests {
     fn test_ffi_initialize_negative_sample_rate_rejected() {
         let kernel = dsp_kernel_create();
         unsafe {
-            dsp_kernel_initialize(kernel, 2, 2, 44100.0);
-            dsp_kernel_initialize(kernel, 2, 2, -48000.0);
-            let rem = dsp_kernel_demo_seconds_remaining(kernel, 44100.0);
-            assert!(rem.is_finite(), "demo_seconds_remaining should be finite after negative-sr rejection, got {rem}");
+            dsp_kernel_initialize(kernel, 1, 1, 44100.0);
+            dsp_kernel_initialize(kernel, 1, 1, -48000.0);
+            let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+            let mut output: [f32; 4] = [0.0; 4];
+            let ip: *const f32 = input.as_ptr();
+            let op: *mut f32 = output.as_mut_ptr();
+            dsp_kernel_process(kernel, &ip, &op, 1, 4);
+            assert!(output.iter().all(|v| v.is_finite()), "output should be finite after negative-sr rejection, got {output:?}");
             dsp_kernel_destroy(kernel);
         }
     }
@@ -1887,9 +1691,13 @@ mod tests {
         for &sr in &[8000.0f64, 44100.0, 48000.0, 96000.0, 192000.0, 384000.0] {
             let kernel = dsp_kernel_create();
             unsafe {
-                dsp_kernel_initialize(kernel, 2, 2, sr);
-                let rem = dsp_kernel_demo_seconds_remaining(kernel, sr);
-                assert!(rem.is_finite(), "demo_seconds_remaining should be finite for sr={sr}, got {rem}");
+                dsp_kernel_initialize(kernel, 1, 1, sr);
+                let input: [f32; 4] = [0.1, 0.2, 0.3, 0.4];
+                let mut output: [f32; 4] = [0.0; 4];
+                let ip: *const f32 = input.as_ptr();
+                let op: *mut f32 = output.as_mut_ptr();
+                dsp_kernel_process(kernel, &ip, &op, 1, 4);
+                assert!(output.iter().all(|v| v.is_finite()), "output should be finite for sr={sr}, got {output:?}");
                 dsp_kernel_destroy(kernel);
             }
         }

@@ -2,7 +2,7 @@
 //  SettingsPopoverUITests.swift
 //  ConjureDSPUITests
 //
-//  UI tests for the settings popover and its sub-views: subscription status,
+//  UI tests for the settings popover and its sub-views:
 //  GitHub settings, editor settings, and third-party licenses.
 //
 //  Note: SwiftUI elements inside popovers are inconsistently accessible through
@@ -52,36 +52,6 @@ final class SettingsPopoverUITests: XCTestCase {
             throw XCTSkip("Settings button not found")
         }
         app.buttons["settingsButton"].click()
-    }
-
-    // MARK: - Subscription Status Display
-
-    @MainActor
-    func testDemoModeShownByDefault() throws {
-        let app = Self.sharedApp!
-
-        try openSettingsPopover(app: app)
-
-        // Look for "Subscribe" button in the popover (demo mode default)
-        let subscribeButton = app.buttons["subscribeButton"]
-        try XCTSkipUnless(subscribeButton.waitForExistence(timeout: 10),
-                          "Popover elements not accessible through AU ViewBridge")
-
-        XCTAssertTrue(subscribeButton.exists, "Subscribe button should be visible in demo mode")
-    }
-
-    @MainActor
-    func testRestartDemoButton() throws {
-        let app = Self.sharedApp!
-
-        try openSettingsPopover(app: app)
-
-        // Look for "Restart Demo" button
-        let restartButton = app.buttons["restartDemoButton"]
-        try XCTSkipUnless(restartButton.waitForExistence(timeout: 10),
-                          "Popover elements not accessible through AU ViewBridge")
-
-        XCTAssertTrue(restartButton.exists, "Restart Demo button should be visible in demo mode")
     }
 
     // MARK: - GitHub Settings

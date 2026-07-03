@@ -16,7 +16,6 @@ enum AnalyticsEvent: String {
     case presetSave = "Preset Save"
     case export = "Export"
     case aiGenerate = "AI Generate"
-    case subscriptionActivate = "Subscription Activate"
     case terminalToggle = "Terminal Toggle"
     case spectrogramToggle = "Spectrogram Toggle"
     case githubRepoConnect = "GitHub Repo Connect"
@@ -38,25 +37,20 @@ enum Analytics {
     private static var initialized = false
 
     /// Broad classification of the running binary, attached to every Mixpanel
-    /// event as a `build_mode` super property so dev / beta / production traffic
-    /// can be distinguished. `debug` wins over everything (only relevant if the
-    /// DEBUG token is ever populated); `beta` means BETA_BUILD is active and
-    /// within its 30-day window; `licensed` and `demo` reflect subscription state
-    /// for a regular Release build.
+    /// event as a `build_mode` super property so dev traffic can be
+    /// distinguished from production. `debug` wins when the DEBUG token is ever
+    /// populated; otherwise `release`.
     enum BuildMode: String {
         case debug
-        case beta
-        case licensed
-        case demo
+        case release
     }
 
-    /// Compute the current build mode from compile flags + runtime license state.
-    static func currentMode(licensed: Bool, betaActive: Bool) -> BuildMode {
+    /// The current build mode, derived purely from compile flags.
+    static var currentMode: BuildMode {
         #if DEBUG
         return .debug
         #else
-        if betaActive { return .beta }
-        return licensed ? .licensed : .demo
+        return .release
         #endif
     }
 
@@ -66,22 +60,10 @@ enum Analytics {
         Mixpanel.initialize(token: token)
 
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
-        // Seed `build_mode` with compile-flag-only state. SubscriptionManager
-        // calls `updateMode` once it has verified the license, which overwrites
-        // this with the real licensed/demo/beta value.
         Mixpanel.mainInstance().registerSuperProperties([
             "app_version": version,
             "platform": "macOS",
-            "build_mode": currentMode(licensed: false, betaActive: false).rawValue,
-        ])
-    }
-
-    /// Refresh the `build_mode` super property. Safe to call before `initialize()`
-    /// (no-op in that case) and before Mixpanel has a token (DEBUG builds).
-    static func updateMode(licensed: Bool, betaActive: Bool) {
-        guard !token.isEmpty, initialized else { return }
-        Mixpanel.mainInstance().registerSuperProperties([
-            "build_mode": currentMode(licensed: licensed, betaActive: betaActive).rawValue,
+            "build_mode": currentMode.rawValue,
         ])
     }
 
@@ -93,11 +75,5 @@ enum Analytics {
     static func flush() {
         guard !token.isEmpty else { return }
         Mixpanel.mainInstance().flush()
-    }
-
-    static func identify(licenseHash: String) {
-        guard !token.isEmpty else { return }
-        Mixpanel.mainInstance().identify(distinctId: licenseHash)
-        Mixpanel.mainInstance().people.set(properties: ["licensed": true])
     }
 }

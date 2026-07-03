@@ -14,7 +14,6 @@ import SwiftUI
 struct ConjureDSPApp: App {
     private let hostModel = AudioUnitHostModel()
     private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
-    @StateObject private var checkoutManager = PaddleCheckoutManager()
 
     init() {
         SentrySetup.start()
@@ -28,9 +27,6 @@ struct ConjureDSPApp: App {
                     Analytics.track(.appOpen)
                     Analytics.flush()
                 }
-                .onOpenURL { url in
-                    handleURL(url)
-                }
         }
         .defaultSize(width: 700, height: 650)
         .commands {
@@ -42,17 +38,6 @@ struct ConjureDSPApp: App {
                     }
                 }
             }
-        }
-    }
-
-    private func handleURL(_ url: URL) {
-        guard url.scheme == "conjuredsp" else { return }
-
-        switch url.host {
-        case "subscribe":
-            checkoutManager.startCheckout()
-        default:
-            break
         }
     }
 }

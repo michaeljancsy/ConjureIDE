@@ -33,12 +33,11 @@ xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:C
 xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPUITests/ConjureDSPUITests
 
 # Specific UI test method
-xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPUITests/LicenseUITests/testLicenseActivationUI
+xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:ConjureDSPUITests/ConjureDSPUITests/testRunButton
 ```
 
 UI test classes and what they cover:
 - `ConjureDSPUITests` — script editor, run button, preset toolbar, save button, build ID label, parameter sliders panel, typing in editor
-- `LicenseUITests` — license activation flow, invalid serial error, activate button state
 - `ConjureDSPUITestsLaunchTests` — app launch screenshot
 
 ### Test-driven development
@@ -231,14 +230,14 @@ Fail-open: if the terminal is down when a save happens, the request queues on di
 ### Spectrogram Visualization
 Lock-free ring buffers (written by audio thread, read by UI) feed FFT computation via Accelerate/vDSP on the main thread (CADisplayLink-synced). Supports 4 modes: input, output, difference, and normalized difference. Log and linear frequency scales with diverging colormaps for difference modes.
 
-### Subscription System
-Paddle Billing subscription model with a Cloudflare Workers backend (`server/`). The server issues Ed25519-signed time-limited tokens on subscription activation and refresh. The app verifies tokens locally (offline OK for up to 7 days grace period) using an embedded public key. Tokens stored in the App Group container (`group.com.MichaelJancsy.ConjureDSP`) shared between host app and AU extension. `SubscriptionManager.swift` handles periodic server refresh (6h when active, 1h during grace). Demo mode allows 60 seconds of unlicensed processing before silencing output. The `AtomicBool` licensed flag on the audio thread is set by `SubscriptionStatus` — Active and GracePeriod grant access, everything else falls back to demo.
+### Licensing
+ConjureDSP is free — there is no subscription, demo, or beta gating. The plugin runs at full capability (including standalone-AU export) with no license check. The prior Paddle/Cloudflare subscription system was fully removed; see `docs/subscription-removal-notes.md` for what was removed and how to restore it. App auto-updates are independent of this and remain live (Sparkle + the `updates.conjuredsp.com` R2 feed).
 
 ## Project Structure
 
 ```
 ConjureDSP/                  Host app — loads and tests the AU extension
-  Model/                     AudioUnitHostModel, AudioUnitViewModel, PaddleCheckoutManager
+  Model/                     AudioUnitHostModel, AudioUnitViewModel
   Common/Audio/              SimplePlayEngine (AVAudioEngine wrapper)
   Common/MIDI/               MIDIManager
   SentrySetup.swift          Sentry crash reporting initialization
@@ -251,8 +250,7 @@ ConjureDSPExtension/         The AU plugin itself
   Export/                    ExportManager (standalone AUv3 pipeline), ExportRegistry, SubtypeGenerator
   Git/                       PresetGitCoordinator, GitQueueClient, GitRequest — orchestrates git-backed preset history
   GitHub/                    GitHubService (PAT + remote URL), GitHubURLResolver (URL import helper)
-  Model/                     SubscriptionManager (token verification + server refresh), SubscriptionAPI (server comms),
-                             Preset, PresetManager, PresetBundle (parsed .cdp view), PresetManifest (Codable)
+  Model/                     Preset, PresetManager, PresetBundle (parsed .cdp view), PresetManifest (Codable)
   Parameters/                Parameter addresses (Swift enum)
   UI/                        MonacoEditorView, SpectrogramView, TerminalView,
                              PresetBrowserView, ParameterSlidersView, RemoteSyncSettingsView (in GitHubSettingsView.swift),
@@ -283,13 +281,12 @@ ConjureDSPExportAUTemplate/  Standalone export AU template project
 rust/                        Rust DSP crate
   conjure_dsp/src/
     lib.rs                   C FFI entry points
-    kernel.rs                DSPKernel — manages backends, parameters, license/demo state, ring buffers
+    kernel.rs                DSPKernel — manages backends, parameters, ring buffers
     backend.rs               Backend trait (pluggable processing interface)
     python_backend.rs        pyo3-based Python 3.14 embedding, numpy array interop
     wasm_backend.rs          wasmtime-based WASM execution with fuel metering
     params.rs                ParamMetadata, denormalize/normalize with log curve support
     ring_buffer.rs           SPSC lock-free ring buffer (audio thread → UI)
-    license.rs               Ed25519 token verification + subscription status (embedded server public key)
   multi_instance_test/       Standalone Rust harness — exercises multi-instance pyo3 init/teardown outside the AU host
   include/                   Generated C header (conjure_dsp.h)
   build-rust.sh              Xcode build phase script
@@ -306,7 +303,6 @@ rust/                        Rust DSP crate
     src/json.rs              Const-fn JSON serialization for compile-time metadata
     src/context.rs           Context struct for safe buffer access
   python-dist/               Bundled Python runtime (gitignored)
-server/                      Cloudflare Workers subscription API (D1 SQLite, Paddle webhooks, Ed25519 token signing)
 scripts/                     Build and setup scripts
   setup-rustc.sh             Downloads standalone Rust compiler for WASM compilation
   setup-monaco.sh            Downloads Monaco Editor for code editing UI
@@ -465,7 +461,7 @@ Export ConjureDSP presets as standalone AUv3 plugins. All 5 phases complete. Ful
 - Pre-built template AU (`ConjureDSPExportAUTemplate/`) — copy, patch plist, inject preset, ad-hoc sign
 - App Group container for sandbox-safe writes from DAW-hosted AU extension
 - Shared Python runtime at `~/Library/Application Support/ConjureDSP/PythonRuntime-3.14/`
-- Licensed users only can export; exported AUs run freely
+- Export is available to everyone; exported AUs run freely
 - Post-export validation: checks preset file integrity (WASM magic bytes, Python `def process`), runtime-config.json validity
 - Rich parameter metadata flows through export: `ParamMetadata` → `runtime-config.json` → exported AU parameter tree
 

@@ -16,7 +16,6 @@ struct ExportPopover: View {
 
     @Binding var exportName: String
     let language: ScriptLanguage
-    let isLicensed: Bool
     let containsNamTone: Bool
     let onExport: (String) -> Void
     let onCancel: () -> Void
@@ -44,12 +43,6 @@ struct ExportPopover: View {
             }
             .font(.caption)
 
-            if !isLicensed {
-                Text("Subscription required to export presets.")
-                    .font(.caption)
-                    .foregroundColor(.orange)
-            }
-
             if containsNamTone {
                 namCertificationSection
             }
@@ -67,7 +60,6 @@ struct ExportPopover: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(
                     exportName.trimmingCharacters(in: .whitespaces).isEmpty
-                        || !isLicensed
                         || (containsNamTone && namCertification == nil)
                 )
                 .accessibilityIdentifier("confirmExportButton")
@@ -118,7 +110,7 @@ struct ExportPopover: View {
 
     private func attemptExport() {
         let trimmed = exportName.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, isLicensed else { return }
+        guard !trimmed.isEmpty else { return }
         if containsNamTone && namCertification == nil { return }
         onExport(trimmed)
     }
