@@ -28,7 +28,7 @@ struct ConjureDSPApp: App {
                     Analytics.flush()
                 }
         }
-        .defaultSize(width: 700, height: 650)
+        .defaultSize(width: 1080, height: 720)
         .commands {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updater: updaterController.updater)
