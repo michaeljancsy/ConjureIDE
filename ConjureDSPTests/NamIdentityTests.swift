@@ -203,9 +203,11 @@ struct NamIdentityTests {
 
     /// Full-scale input (0 dBFS, amplitude 1.0).
     ///
-    /// The WaveNet standard model scales amplitude down ~9× at this level
-    /// (outputRms ≈ 0.08), so rmsError ≈ 0.65. The assertions here only
-    /// catch catastrophic failures (silent output, garbage noise).
+    /// 0 dBFS is far above the level the identity tone was trained at, so the
+    /// model's response can deviate (compression / level mismatch); the
+    /// assertions bound gross behavior only. The `maxError > 0` check pins
+    /// that the model actually ran — a NAM script-load failure falls back to
+    /// bit-exact passthrough, which previously masqueraded as a pass.
     @Test func identityNamAtFullScale() async throws {
         let m = try await renderIdentityNam(amplitude: 1.0)
 
@@ -220,6 +222,8 @@ struct NamIdentityTests {
               Shape error (norm.): \(String(format: "%.6f", m.normalizedShapeError))
             """)
 
+        #expect(m.maxError > 0,
+                "Output is bit-exact passthrough — the NAM script failed to load")
         #expect(m.outputRms > 0.01,
                 "Output RMS \(m.outputRms) is near-zero — model likely failed to load")
         #expect(m.rmsError < 1.2,
@@ -229,9 +233,10 @@ struct NamIdentityTests {
     /// Training-level input (≈ −20 dBFS, amplitude 0.1).
     ///
     /// NAM models are typically captured from guitar signals around −20 dBFS.
-    /// At this level the model's amplitude response is closer to unity and the
-    /// shape error (after gain normalization) is expected to be meaningfully lower
-    /// than at full scale.
+    /// With correct weight parsing the identity tone tracks its input closely
+    /// at this level (RMS error ≈ 0.0002 measured against the reference
+    /// implementation); the 0.01 bound leaves an order of magnitude of margin
+    /// while still failing hard on any weight-order / conv-math regression.
     @Test func identityNamAtTrainingLevel() async throws {
         let m = try await renderIdentityNam(amplitude: 0.1)
 
@@ -246,9 +251,11 @@ struct NamIdentityTests {
               Shape error (norm.): \(String(format: "%.6f", m.normalizedShapeError))
             """)
 
+        #expect(m.maxError > 0,
+                "Output is bit-exact passthrough — the NAM script failed to load")
         #expect(m.outputRms > 0.001,
                 "Output RMS \(m.outputRms) is near-zero — model likely failed to load")
-        #expect(m.rmsError < 0.12,
-                "RMS error \(m.rmsError) exceeds 0.12 — model may not be approximating identity at training level")
+        #expect(m.rmsError < 0.01,
+                "RMS error \(m.rmsError) exceeds 0.01 — identity tone no longer tracks input; weight parsing may have regressed")
     }
 }

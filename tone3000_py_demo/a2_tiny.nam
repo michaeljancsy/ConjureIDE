@@ -1,0 +1,418 @@
+{
+ "version": "0.7.0",
+ "architecture": "SlimmableContainer",
+ "metadata": {
+  "name": "tiny \"a2\" fixture",
+  "generator": "make_a2_tiny_fixture.py"
+ },
+ "config": {
+  "submodels": [
+   {
+    "max_value": 0.5,
+    "model": {
+     "version": "0.7.0",
+     "architecture": "WaveNet",
+     "metadata": {
+      "name": "a2-tiny-lite (silent)"
+     },
+     "config": {
+      "layers": [
+       {
+        "input_size": 1,
+        "condition_size": 1,
+        "channels": 2,
+        "bottleneck": 2,
+        "kernel_sizes": [
+         3,
+         3,
+         5
+        ],
+        "dilations": [
+         1,
+         3,
+         9
+        ],
+        "activation": [
+         {
+          "type": "LeakyReLU",
+          "negative_slope": 0.01
+         },
+         {
+          "type": "LeakyReLU",
+          "negative_slope": 0.01
+         },
+         {
+          "type": "LeakyReLU",
+          "negative_slope": 0.01
+         }
+        ],
+        "gating_mode": [
+         "none",
+         "none",
+         "none"
+        ],
+        "secondary_activation": [
+         null,
+         null,
+         null
+        ],
+        "layer1x1": {
+         "active": true,
+         "groups": 1
+        },
+        "head1x1": {
+         "active": false,
+         "out_channels": 1,
+         "groups": 1
+        },
+        "head": {
+         "out_channels": 1,
+         "kernel_size": 4,
+         "bias": true
+        },
+        "groups_input": 1,
+        "groups_input_mixin": 1,
+        "conv_pre_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "conv_post_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "input_mixin_pre_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "input_mixin_post_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "activation_pre_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "activation_post_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "layer1x1_post_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "head1x1_post_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "slimmable": null
+       }
+      ],
+      "head": null,
+      "head_scale": 0.01
+     },
+     "weights": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "sample_rate": 48000
+    }
+   },
+   {
+    "max_value": 1.0,
+    "model": {
+     "version": "0.7.0",
+     "architecture": "WaveNet",
+     "metadata": {
+      "name": "a2-tiny-full"
+     },
+     "config": {
+      "layers": [
+       {
+        "input_size": 1,
+        "condition_size": 1,
+        "channels": 2,
+        "bottleneck": 2,
+        "kernel_sizes": [
+         3,
+         3,
+         5
+        ],
+        "dilations": [
+         1,
+         3,
+         9
+        ],
+        "activation": [
+         {
+          "type": "LeakyReLU",
+          "negative_slope": 0.01
+         },
+         {
+          "type": "LeakyReLU",
+          "negative_slope": 0.01
+         },
+         {
+          "type": "LeakyReLU",
+          "negative_slope": 0.01
+         }
+        ],
+        "gating_mode": [
+         "none",
+         "none",
+         "none"
+        ],
+        "secondary_activation": [
+         null,
+         null,
+         null
+        ],
+        "layer1x1": {
+         "active": true,
+         "groups": 1
+        },
+        "head1x1": {
+         "active": false,
+         "out_channels": 1,
+         "groups": 1
+        },
+        "head": {
+         "out_channels": 1,
+         "kernel_size": 4,
+         "bias": true
+        },
+        "groups_input": 1,
+        "groups_input_mixin": 1,
+        "conv_pre_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "conv_post_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "input_mixin_pre_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "input_mixin_post_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "activation_pre_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "activation_post_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "layer1x1_post_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "head1x1_post_film": {
+         "active": false,
+         "shift": true,
+         "groups": 1
+        },
+        "slimmable": null
+       }
+      ],
+      "head": null,
+      "head_scale": 0.01
+     },
+     "weights": [
+      -0.126233,
+      -0.231648,
+      -0.138536,
+      -0.04755,
+      -0.224356,
+      0.251277,
+      -0.106489,
+      0.18749,
+      -0.13732,
+      0.298915,
+      -0.252704,
+      0.154194,
+      -0.058375,
+      -0.147575,
+      0.08287,
+      -0.07194,
+      0.205945,
+      -0.135403,
+      -0.001113,
+      -0.163189,
+      0.065576,
+      -0.023866,
+      0.087476,
+      -0.207015,
+      -0.179496,
+      -0.260953,
+      0.005153,
+      0.225572,
+      0.099776,
+      0.000522,
+      -0.263041,
+      0.031667,
+      -0.170352,
+      0.28099,
+      0.184569,
+      -0.205694,
+      0.256697,
+      0.140385,
+      -0.260346,
+      0.033154,
+      0.249115,
+      0.035145,
+      0.287103,
+      -0.174743,
+      0.076479,
+      0.238969,
+      0.076097,
+      0.243738,
+      -0.287057,
+      0.266408,
+      -0.019896,
+      0.123064,
+      -0.022989,
+      0.151331,
+      -0.299395,
+      0.005646,
+      0.041892,
+      -0.011241,
+      0.015377,
+      -0.225888,
+      -0.025362,
+      0.167226,
+      -0.241337,
+      -0.208147,
+      -0.296409,
+      -0.077314,
+      0.280793,
+      0.004121,
+      0.276712,
+      -0.062566,
+      -0.014983,
+      -0.246888,
+      0.05029,
+      -0.134759,
+      -0.146635,
+      -0.133261,
+      -0.200373,
+      -0.128713,
+      0.218557,
+      -0.229409,
+      0.279675,
+      0.221425,
+      -0.236819,
+      -0.017323,
+      -0.084538,
+      0.5
+     ],
+     "sample_rate": 48000
+    }
+   }
+  ]
+ },
+ "weights": [],
+ "sample_rate": 48000.0
+}

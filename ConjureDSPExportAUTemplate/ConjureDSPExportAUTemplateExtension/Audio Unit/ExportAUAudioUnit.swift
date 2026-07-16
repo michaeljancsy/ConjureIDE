@@ -457,8 +457,8 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
     }
 
     /// Load and inject an embedded .nam model file from the bundle Resources.
-    /// For WASM presets, reads the .nam JSON, serializes to binary protocol,
-    /// and calls dsp_kernel_inject_nam_slot() at slot 0.
+    /// Passes the raw file bytes to the kernel — all parsing (including the
+    /// SlimmableContainer wrapper used by NAM A2) happens in Rust.
     private func injectEmbeddedNamModel(from bundle: Bundle) {
         guard let namFileName = config?.namModelFile else { return }
 
@@ -475,53 +475,20 @@ public class ExportAUAudioUnit: AUAudioUnit, @unchecked Sendable {
 
         trace(.info, "nam", "loaded NAM model file (\(namData.count) bytes)")
 
-        // Parse .nam JSON and serialize to binary protocol for WASM injection
-        guard let namJson = try? JSONSerialization.jsonObject(with: namData) as? [String: Any],
-              let architecture = namJson["architecture"] as? String,
-              let configObj = namJson["config"],
-              let weightsArray = namJson["weights"] as? [Double] else {
-            trace(.error, "nam", "failed to parse embedded .nam file")
-            return
-        }
-
-        let arch: UInt32 = architecture == "LSTM" ? 1 : 0
-        let sampleRate = Float((namJson["sample_rate"] as? Double) ?? (namJson["sample_rate"] as? Int).map(Double.init) ?? 48000.0)
-
-        // Serialize config JSON
-        guard let configData = try? JSONSerialization.data(withJSONObject: configObj) else {
-            trace(.error, "nam", "failed to serialize NAM config JSON")
-            return
-        }
-
-        // Build binary protocol
-        var binary = Data()
-        var archLE = arch.littleEndian
-        binary.append(Data(bytes: &archLE, count: 4))
-        var srLE = sampleRate.bitPattern.littleEndian
-        binary.append(Data(bytes: &srLE, count: 4))
-        var configLen = UInt32(configData.count).littleEndian
-        binary.append(Data(bytes: &configLen, count: 4))
-        binary.append(configData)
-        var weightCount = UInt32(weightsArray.count).littleEndian
-        binary.append(Data(bytes: &weightCount, count: 4))
-        for w in weightsArray {
-            var f = Float(w).bitPattern.littleEndian
-            binary.append(Data(bytes: &f, count: 4))
-        }
-
-        let success = binary.withUnsafeBytes { rawBuffer -> Bool in
+        let success = namData.withUnsafeBytes { rawBuffer -> Bool in
             guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
                 return false
             }
             // Single-slot export: the export pipeline currently embeds at most
             // one .nam model, which always lives in slot 0.
-            return dsp_kernel_inject_nam_slot(kernel, 0, ptr, UInt(binary.count))
+            return dsp_kernel_inject_nam_file(kernel, 0, ptr, UInt(namData.count))
         }
 
         if success {
-            trace(.info, "nam", "injected embedded NAM model (\(binary.count) bytes, arch=\(architecture), sr=\(sampleRate))")
+            trace(.info, "nam", "injected embedded NAM model (\(namData.count) bytes)")
         } else {
-            trace(.error, "nam", "failed to inject embedded NAM model (dsp_kernel_inject_nam_slot returned false)")
+            let err = kernelErrorString() ?? "dsp_kernel_inject_nam_file returned false"
+            trace(.error, "nam", "failed to inject embedded NAM model: \(err)")
         }
     }
 

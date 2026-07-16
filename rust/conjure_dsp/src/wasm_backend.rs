@@ -1624,12 +1624,14 @@ impl WasmBackend {
         &self.nam_paths
     }
 
-    /// Parse NAM model binary data and store natively in the given slot for
-    /// host-side inference. The WASM module calls `__conjuredsp_nam_process_slot`
-    /// which routes to this model when invoked with the matching slot index.
-    pub fn inject_nam_model_slot(&mut self, slot: u32, binary_data: &[u8]) -> Result<(), String> {
-        let model = conjuredsp::NamModel::from_binary(binary_data)
-            .ok_or_else(|| "Failed to parse NAM model from binary data".to_string())?;
+    /// Parse a raw `.nam` file (JSON bytes) and store the model natively in the
+    /// given slot for host-side inference. The WASM module calls
+    /// `__conjuredsp_nam_process_slot` which routes to this model when invoked
+    /// with the matching slot index.
+    pub fn inject_nam_model_slot(&mut self, slot: u32, nam_file_bytes: &[u8]) -> Result<(), String> {
+        let text = std::str::from_utf8(nam_file_bytes)
+            .map_err(|e| format!(".nam file is not valid UTF-8: {}", e))?;
+        let model = conjuredsp::NamModel::from_json(text)?;
         let slot_idx = slot as usize;
         let models = &mut self.store.data_mut().nam_models;
         if slot_idx >= models.len() {
@@ -2712,10 +2714,10 @@ fn main() {}
             eprintln!("Skipping: wavenet_tiny.nam not found");
             return;
         }
-        let nam_binary = serialize_nam_file_to_binary(nam_path);
+        let nam_bytes = std::fs::read(nam_path).expect("Failed to read .nam file");
 
         // Inject model into slot 0 (the legacy `nam!()` macro declares one slot)
-        backend.inject_nam_model_slot(0, &nam_binary)
+        backend.inject_nam_model_slot(0, &nam_bytes)
             .expect("Failed to inject NAM model");
 
         // Initialize
@@ -2740,7 +2742,8 @@ fn main() {}
         assert!(ok, "Process should succeed");
 
         // Also compute the expected output directly with native NamModel
-        let mut native_model = conjuredsp::NamModel::from_binary(&nam_binary)
+        let mut native_model = conjuredsp::NamModel::from_json(
+            std::str::from_utf8(&nam_bytes).unwrap())
             .expect("Failed to parse NAM model natively");
         let mut expected = vec![0.0f32; n];
         native_model.process_buffer(&input, &mut expected, 0);
@@ -2855,9 +2858,9 @@ fn main() {}
             eprintln!("Skipping: wavenet_tiny.nam not found");
             return;
         }
-        let nam_binary = serialize_nam_file_to_binary(nam_path);
-        backend.inject_nam_model_slot(0, &nam_binary).expect("inject slot 0");
-        backend.inject_nam_model_slot(1, &nam_binary).expect("inject slot 1");
+        let nam_bytes = std::fs::read(nam_path).expect("Failed to read .nam file");
+        backend.inject_nam_model_slot(0, &nam_bytes).expect("inject slot 0");
+        backend.inject_nam_model_slot(1, &nam_bytes).expect("inject slot 1");
 
         backend.initialize(1, 48000.0, 512);
 
@@ -2880,9 +2883,9 @@ fn main() {}
 
         // Native parity: same model applied twice in series, with each pass
         // owning its own NamModel instance (matches the per-slot state model).
-        let mut native_a = conjuredsp::NamModel::from_binary(&nam_binary)
+        let mut native_a = conjuredsp::NamModel::from_json(std::str::from_utf8(&nam_bytes).unwrap())
             .expect("Failed to parse NAM model natively (a)");
-        let mut native_b = conjuredsp::NamModel::from_binary(&nam_binary)
+        let mut native_b = conjuredsp::NamModel::from_json(std::str::from_utf8(&nam_bytes).unwrap())
             .expect("Failed to parse NAM model natively (b)");
         let mut intermediate = vec![0.0f32; n];
         let mut expected = vec![0.0f32; n];
@@ -2918,7 +2921,7 @@ fn main() {}
         // Verify that an unloaded slot returns 0 from the host import (call into
         // a fresh backend with paths declared but slot 1 left empty).
         let mut backend2 = WasmBackend::load(&wasm_bytes).expect("reload module");
-        backend2.inject_nam_model_slot(0, &nam_binary).expect("inject slot 0 only");
+        backend2.inject_nam_model_slot(0, &nam_bytes).expect("inject slot 0 only");
         backend2.initialize(1, 48000.0, 512);
         let mut output2 = vec![0.0f32; n];
         let ok2 = unsafe {
@@ -2944,62 +2947,127 @@ fn main() {}
         );
     }
 
-    /// Serialize a .nam JSON file to the binary protocol (same as Swift's injectNamModelIfNeeded).
-    fn serialize_nam_file_to_binary(path: &str) -> Vec<u8> {
-        let json_str = std::fs::read_to_string(path).unwrap();
-
-        // Extract architecture
-        let arch_start = json_str.find("\"architecture\"").unwrap();
-        let arch_val_start = json_str[arch_start..].find(':').unwrap() + arch_start + 1;
-        let arch_str_start = json_str[arch_val_start..].find('"').unwrap() + arch_val_start + 1;
-        let arch_str_end = json_str[arch_str_start..].find('"').unwrap() + arch_str_start;
-        let architecture = &json_str[arch_str_start..arch_str_end];
-
-        let sample_rate: f32 = if let Some(sr_start) = json_str.find("\"sample_rate\"") {
-            let sr_val_start = json_str[sr_start..].find(':').unwrap() + sr_start + 1;
-            let sr_val_str = json_str[sr_val_start..].trim_start();
-            let sr_end = sr_val_str.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(sr_val_str.len());
-            sr_val_str[..sr_end].trim().parse().unwrap_or(48000.0)
-        } else {
-            48000.0
-        };
-
-        // Extract config object
-        let config_key = json_str.find("\"config\"").unwrap();
-        let config_colon = json_str[config_key..].find(':').unwrap() + config_key + 1;
-        let config_start = json_str[config_colon..].find('{').unwrap() + config_colon;
-        let mut depth = 0;
-        let mut config_end = config_start;
-        for (i, c) in json_str[config_start..].chars().enumerate() {
-            match c { '{' => depth += 1, '}' => { depth -= 1; if depth == 0 { config_end = config_start + i + 1; break; } } _ => {} }
+    #[test]
+    fn test_nam_inject_surfaces_parse_error() {
+        // A module with a declared NAM slot must surface the exact parser
+        // error when handed garbage bytes (not a generic failure).
+        let rustc = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rustc-dist/bin/rustc");
+        if !std::path::Path::new(rustc).exists() {
+            eprintln!("Skipping: bundled rustc not found");
+            return;
         }
-        let config_json = &json_str[config_start..config_end];
+        let wasm_bytes = compile_nam_test_module("tmp_test_nam_parse_err");
+        let mut backend = WasmBackend::load(&wasm_bytes).expect("load NAM WASM module");
 
-        // Re-serialize config through serde_json (mimics Swift JSONSerialization)
-        let config_value: serde_json::Value = serde_json::from_str(config_json).unwrap();
-        let config_bytes = serde_json::to_vec(&config_value).unwrap();
+        let err = backend.inject_nam_model_slot(0, b"not a nam file")
+            .expect_err("garbage bytes should fail to parse");
+        assert!(err.contains("not a JSON object"), "unexpected error: {}", err);
 
-        // Extract weights
-        let weights_key = json_str.find("\"weights\"").unwrap();
-        let weights_bracket = json_str[weights_key..].find('[').unwrap() + weights_key;
-        let weights_end = json_str[weights_bracket..].find(']').unwrap() + weights_bracket + 1;
-        let weights_str = &json_str[weights_bracket + 1..weights_end - 1];
-        let weights: Vec<f32> = weights_str.split(',')
-            .filter_map(|s| s.trim().parse::<f64>().ok())
-            .map(|v| v as f32)
+        let err = backend.inject_nam_model_slot(
+            0,
+            br#"{"architecture": "Transformer", "config": {}, "weights": []}"#,
+        ).expect_err("unknown architecture should fail");
+        assert!(err.contains("Unsupported NAM architecture"), "unexpected error: {}", err);
+        assert!(err.contains("Transformer"), "error should name the architecture: {}", err);
+    }
+
+    #[test]
+    fn test_nam_inject_a2_container_end_to_end() {
+        // Inject the raw A2 container fixture and compare WASM→host output
+        // against native from_json inference (proves the container resolves to
+        // the same submodel through the full injection path).
+        let rustc = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rustc-dist/bin/rustc");
+        if !std::path::Path::new(rustc).exists() {
+            eprintln!("Skipping: bundled rustc not found");
+            return;
+        }
+        let nam_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tone3000_py_demo/a2_tiny.nam");
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: a2_tiny.nam not found");
+            return;
+        }
+
+        let wasm_bytes = compile_nam_test_module("tmp_test_nam_a2");
+        let mut backend = WasmBackend::load(&wasm_bytes).expect("load NAM WASM module");
+
+        let nam_bytes = std::fs::read(nam_path).expect("read a2_tiny.nam");
+        backend.inject_nam_model_slot(0, &nam_bytes).expect("inject A2 container");
+
+        backend.initialize(1, 48000.0, 512);
+
+        let n = 512;
+        let input: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 48000.0).sin() * 0.5)
             .collect();
+        let mut output = vec![0.0f32; n];
+        let params = [0.0f32; 16];
+        let transport = crate::kernel::TransportState::default();
+        let ok = unsafe {
+            backend.process(
+                &[input.as_ptr()], &[output.as_mut_ptr()],
+                1, n, 48000.0, &params, &transport, crate::backend::SidechainInput::NONE,
+                &crate::backend::StateSnapshot::empty(),
+            )
+        };
+        assert!(ok, "Process should succeed");
 
-        // Build binary protocol
-        let arch: u32 = if architecture == "LSTM" { 1 } else { 0 };
-        let mut binary = Vec::new();
-        binary.extend_from_slice(&arch.to_le_bytes());
-        binary.extend_from_slice(&sample_rate.to_bits().to_le_bytes());
-        binary.extend_from_slice(&(config_bytes.len() as u32).to_le_bytes());
-        binary.extend_from_slice(&config_bytes);
-        binary.extend_from_slice(&(weights.len() as u32).to_le_bytes());
-        for w in &weights {
-            binary.extend_from_slice(&w.to_bits().to_le_bytes());
+        let mut native = conjuredsp::NamModel::from_json(
+            std::str::from_utf8(&nam_bytes).unwrap()).expect("native parse");
+        let mut expected = vec![0.0f32; n];
+        native.process_buffer(&input, &mut expected, 0);
+
+        let mut max_err = 0.0f32;
+        for i in 0..n {
+            max_err = max_err.max((output[i] - expected[i]).abs());
         }
-        binary
+        let exp_rms = (expected.iter().map(|x| x * x).sum::<f32>() / n as f32).sqrt();
+        eprintln!("A2 container e2e: max_err={:.6}, native rms={:.6}", max_err, exp_rms);
+        assert!(exp_rms > 1e-5, "native reference silent — Lite submodel selected?");
+        assert!(max_err < 1e-4, "WASM-vs-native mismatch: max_err={}", max_err);
+    }
+
+    /// Compile the standard single-slot `nam!()` test module with the bundled
+    /// rustc.  `tag` keeps concurrent tests' temp files apart.
+    fn compile_nam_test_module(tag: &str) -> Vec<u8> {
+        let rustc = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rustc-dist/bin/rustc");
+        let sysroot = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rustc-dist");
+        let rlib = concat!(env!("CARGO_MANIFEST_DIR"), "/../../rustc-dist/lib/libconjuredsp.rlib");
+
+        let src = r#"
+use conjuredsp::*;
+nam!("tone3000://test/model");
+params! { GAIN = db().default(0.0), }
+process! { ctx =>
+    unsafe {
+        for c in 0..ctx.channels() {
+            let n = ctx.frames();
+            for i in 0..n { NAM_IN[i] = ctx.input(c, i); }
+            nam_process(&NAM_IN[..n], &mut NAM_OUT[..n], c);
+            for i in 0..n { ctx.set_output(c, i, NAM_OUT[i]); }
+        }
+    }
+}
+fn main() {}
+"#;
+        let src_path = format!("{}/../../{}.rs", env!("CARGO_MANIFEST_DIR"), tag);
+        let wasm_path = format!("{}/../../{}.wasm", env!("CARGO_MANIFEST_DIR"), tag);
+        std::fs::write(&src_path, src).unwrap();
+
+        let output = std::process::Command::new(rustc)
+            .args(&["--target", "wasm32-wasip1", "--edition", "2021",
+                    "--crate-type", "cdylib", "-C", "opt-level=2",
+                    "--sysroot", sysroot,
+                    "--extern", &format!("conjuredsp={}", rlib),
+                    "-o", &wasm_path, &src_path])
+            .output()
+            .expect("Failed to run rustc");
+        if !output.status.success() {
+            panic!("WASM compilation failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+
+        let wasm_bytes = std::fs::read(&wasm_path).expect("Failed to read compiled WASM");
+        let _ = std::fs::remove_file(&wasm_path);
+        let _ = std::fs::remove_file(&src_path);
+        wasm_bytes
     }
 }

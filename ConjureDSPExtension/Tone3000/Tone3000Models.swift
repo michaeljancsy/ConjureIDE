@@ -62,12 +62,19 @@ struct Tone: Codable, Identifiable, Hashable {
     let downloadsCount: Int?
     let url: String?
     let platform: String?
+    /// Per-architecture model counts, always returned by the API since A2.
+    let a1ModelsCount: Int?
+    let a2ModelsCount: Int?
+    let customModelsCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case id, title, description, user, gear, images, sizes, makes, tags, url, platform
         case modelsCount = "models_count"
         case favoritesCount = "favorites_count"
         case downloadsCount = "downloads_count"
+        case a1ModelsCount = "a1_models_count"
+        case a2ModelsCount = "a2_models_count"
+        case customModelsCount = "custom_models_count"
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -92,11 +99,15 @@ struct ToneModel: Codable, Identifiable, Hashable {
     let size: String?
     let modelUrl: String?
     let toneId: IntOrString?
+    /// NAM architecture version: "1" (A1), "2" (A2), or "custom".
+    /// nil for non-NAM models (e.g. IRs).
+    let architectureVersion: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, size
         case modelUrl = "model_url"
         case toneId = "tone_id"
+        case architectureVersion = "architecture_version"
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -172,6 +183,23 @@ enum ToneSize: String, CaseIterable {
     case nano
 
     var displayName: String { rawValue.capitalized }
+}
+
+/// NAM model architecture filter for search/browse (`architecture` query
+/// param).  The API accepts a single value; omitting it returns the legacy
+/// A1 + Custom set and EXCLUDES A2, so the client always sends one.
+enum ToneArchitecture: String, CaseIterable {
+    case a2 = "2"
+    case a1 = "1"
+    case custom
+
+    var displayName: String {
+        switch self {
+        case .a1: return "A1"
+        case .a2: return "A2"
+        case .custom: return "Custom"
+        }
+    }
 }
 
 // MARK: - Auth Response
