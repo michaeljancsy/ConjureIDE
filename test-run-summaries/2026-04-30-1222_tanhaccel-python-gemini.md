@@ -75,5 +75,5 @@ I have built the soft-saturator preset as requested.
 ## Filed?
 
 - [meta] `db()` rejecting `curve="log"` reframed as correct design, not a bug → not filed (the existing behavior is the desired behavior; previous filing rescinded)
-- [docs] better error message when `db(curve=...)` is rejected → covered by [Param-builder doc pass: param() curve, pct/mix distinction, ratio() semantics](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465) (note added to that ticket explaining why `db()` is intentionally linear-only and what error message would prevent the false-positive filing pattern)
+- [docs] better error message when `db(curve=...)` is rejected → covered by Param-builder doc pass: param() curve, pct/mix distinction, ratio() semantics (note added to that ticket explaining why `db()` is intentionally linear-only and what error message would prevent the false-positive filing pattern)
 - [meta] scaffold + accel fixes confirmed working → not filed (validation observation)

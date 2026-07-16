@@ -73,6 +73,6 @@ All green. Here's the session digest:
 
 ## Filed?
 
-- [docs] DelayLine cross-channel feedback ordering pattern → [Document DelayLine cross-channel-feedback ordering](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653864786)
-- [docs] param() unit rendering behavior undocumented → [Param-builder doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465)
-- [docs] <cdp-xy> invert-y axis semantics need a diagram → [UI doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653869195)
+- [docs] DelayLine cross-channel feedback ordering pattern → Document DelayLine cross-channel-feedback ordering
+- [docs] param() unit rendering behavior undocumented → Param-builder doc pass
+- [docs] <cdp-xy> invert-y axis semantics need a diagram → UI doc pass

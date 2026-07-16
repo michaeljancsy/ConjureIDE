@@ -3,10 +3,9 @@
 **Status:** Draft (design only — no implementation in this PR).
 **Author:** Claude Code session, 2026-05-08.
 **Surfaced by:** Slice-n-Dice /try-it sweep on 2026-05-08, runs 09 + 10
-(granular freeze experiments). Asana ticket
-[1214648868510486](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214648868510486).
-**Related prior art:** `.claude/plans/vector-telemetry.md` (the
-existing scalar/vector design).
+(granular freeze experiments).
+**Related prior art:** the vector-telemetry design (the existing
+scalar/vector shapes).
 
 ---
 
@@ -69,8 +68,8 @@ End-to-end, layer by layer. The macro-shape twin of the existing
 ### 2.1 Author API — Rust
 
 A new constructor in `rust/conjuredsp-rs/src/params.rs` and a new
-macro-emitted method on `Context` (analogous to
-`set_telemetry_vector` from `vector-telemetry.md`):
+macro-emitted method on `Context` (analogous to the existing
+`set_telemetry_vector`):
 
 ```rust
 use conjuredsp::*;
@@ -605,11 +604,10 @@ Touched files, rough line-count, dependencies. No code in this RFC.
 - `ConjureDSPExtension/Common/DSPDocumentation.swift` — `telemetry`
   topic gains an "events" section.
 - `docs/custom-ui-component-library.md` — `<cdp-events>` reference.
-- This RFC moves to `docs/sparse-telemetry.md` (or merges into the
-  existing `vector-telemetry.md` plan) once accepted.
+- This RFC moves to `docs/sparse-telemetry.md` once accepted.
 
 **Total estimate:** ~900 lines across 12 files, ~3 days of
-implementation work (sized similarly to the vector-telemetry plan,
+implementation work (sized similarly to the vector-telemetry work,
 which is the closest precedent). No new dependencies; the format
 re-uses pyo3 list/numpy interop, wasmtime memory reads, JSON
 serialization, and the seqlock pattern that vector telemetry already

@@ -50,7 +50,7 @@ A 3-mode (LP/HP/BP) biquad filter with `cutoff`, `resonance`, and `mode` as host
 
 ## Filed?
 
-- [bug] manifest.language/entry not rewritten on save → [save_preset doesn't update manifest.language/entry when script language changes](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214622834383370)
-- [bug] Rust state_struct! macro broken → [Rust state_struct! macro fails to compile (serde unresolved + Default conflict)](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214622807859822)
-- [ux] validate_bundle warning contradicts suggestion → [validate_bundle 'state_keys_unparseable' warning contradicts its own suggestion text](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214623075491710)
-- [ux] add `state` get_docs topic → [Add `state` as first-class get_docs topic](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214623075413980)
+- [bug] manifest.language/entry not rewritten on save → save_preset doesn't update manifest.language/entry when script language changes
+- [bug] Rust state_struct! macro broken → Rust state_struct! macro fails to compile (serde unresolved + Default conflict)
+- [ux] validate_bundle warning contradicts suggestion → validate_bundle 'state_keys_unparseable' warning contradicts its own suggestion text
+- [ux] add `state` get_docs topic → Add `state` as first-class get_docs topic

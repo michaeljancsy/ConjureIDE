@@ -19,11 +19,8 @@ enum AnalyticsEvent: String {
 }
 
 enum Analytics {
-    #if DEBUG
+    /// The test target never sends analytics.
     private static let token = ""
-    #else
-    private static let token = "54ee78fc2e8026396e096f94b87e51f2"
-    #endif
 
     private static var initialized = false
 

@@ -1,0 +1,19 @@
+// Base build configuration for ConjureDSP.
+//
+// Public-source defaults: telemetry disabled (empty token/DSN) and no code
+// signing team. Per-developer values live in Config/Local.xcconfig, which is
+// gitignored — copy Config/Local.xcconfig.template to Config/Local.xcconfig
+// and set your Apple development team id to build.
+
+// Apple Developer team used for code signing (required to build).
+DEVELOPMENT_TEAM =
+
+// Mixpanel project token (analytics). Empty = analytics disabled.
+CONJURE_MIXPANEL_TOKEN =
+
+// Sentry DSN (crash reporting). Empty = crash reporting disabled.
+// Note: "//" starts a comment anywhere in an xcconfig line — write DSNs as
+// https:/$()/host/path so the value survives parsing.
+CONJURE_SENTRY_DSN =
+
+#include? "Local.xcconfig"

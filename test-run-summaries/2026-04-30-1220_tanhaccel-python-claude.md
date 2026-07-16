@@ -70,7 +70,7 @@ Smoke test passes — both knobs bound, no JS errors, ready in ~70ms.
 
 ## Filed?
 
-- [docs] `db()` curve / range guidance → [Param-builder doc pass: param() curve, pct/mix distinction, ratio() semantics](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465)
-- [docs] `pct()` vs `mix()` distinction → [Param-builder doc pass: param() curve, pct/mix distinction, ratio() semantics](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465)
+- [docs] `db()` curve / range guidance → Param-builder doc pass: param() curve, pct/mix distinction, ratio() semantics
+- [docs] `pct()` vs `mix()` distinction → Param-builder doc pass: param() curve, pct/mix distinction, ratio() semantics
 - [docs] `vec_tanh` aliasing semantics → not filed (low priority; would file if a 2nd run hits it)
 - [meta] scaffold + accel fixes confirmed working → not filed (validation observation, not a backlog item)

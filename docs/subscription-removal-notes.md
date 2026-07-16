@@ -73,24 +73,18 @@ Worker: `/activate`, `/verify`, `/webhooks/paddle`, `/health`, D1 `schema.sql`,
 
 ## External infrastructure (NOT code — separate ops teardown)
 
-These live outside the repo and only supported the subscription. They are being
-decommissioned via Asana tasks. To restore the paywall you would re-provision:
-
-- Cloudflare Worker at `api.conjuredsp.com` (+ its DNS/route) — `wrangler deploy`.
-- Cloudflare D1 database `conjuredsp-db`.
-- Worker secrets: `PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`, `ED25519_PRIVATE_KEY`.
-- Paddle Billing product/plan + webhook destination.
-- The Ed25519 license-signing keypair (dev-machine Keychain). **Keep this if you
-  might restore** — losing it means every previously issued token is
-  unverifiable. It is distinct from the Sparkle EdDSA update key
-  (`https://sparkle-project.org` Keychain item) — do not confuse or delete that.
-
-Note: `plans/activation-tracking-soft-limit.md` is a now-obsolete plan against
-the removed server; kept only as historical context.
+The subscription also relied on external services (a serverless worker +
+database and a Paddle Billing account) that were decommissioned separately.
+To restore the paywall you would re-provision those services and their
+secrets, and you would need the original Ed25519 license-signing keypair
+(dev-machine Keychain). **Keep that keypair if you might restore** — losing it
+means every previously issued token is unverifiable. It is distinct from the
+Sparkle EdDSA update key (`https://sparkle-project.org` Keychain item) — do
+not confuse or delete that.
 
 ## Re-enable checklist (future you)
 
 1. `git revert <removal-sha>` (or cherry-pick the pre-removal files from `0cb82d7`).
-2. Redeploy the Worker + recreate D1 + re-add secrets; re-point Paddle's webhook.
-3. Restore the Ed25519 keypair to the dev Keychain (see `scripts/restore-keypair.sh`).
+2. Redeploy the worker + recreate the database + re-add secrets; re-point Paddle's webhook.
+3. Restore the Ed25519 keypair to the dev Keychain.
 4. Rebuild; verify demo silencing, export gating, and token verification.

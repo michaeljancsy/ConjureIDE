@@ -67,6 +67,6 @@ exit_code: 0
 
 ## Filed?
 
-- [scaffold] manifest.params omission → [save_preset(scaffold_ui=true) should populate manifest.params](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717064)
-- [scaffold] audioFrames:true set unconditionally → [scaffold_ui=true sets audioFrames:true unconditionally](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214408880304802)
-- [docs] mix() vs pct() distinction not called out → [Param-builder doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465)
+- [scaffold] manifest.params omission → save_preset(scaffold_ui=true) should populate manifest.params
+- [scaffold] audioFrames:true set unconditionally → scaffold_ui=true sets audioFrames:true unconditionally
+- [docs] mix() vs pct() distinction not called out → Param-builder doc pass

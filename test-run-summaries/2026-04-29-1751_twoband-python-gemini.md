@@ -73,6 +73,6 @@ I have completed the two-band compressor preset.
 
 ## Filed?
 
-- [docs] ratio() default unit string :1 not stated → [Param-builder doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465)
-- [docs] <cdp-panel> as layout container vs fallback widget unclear → [UI doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653869195)
-- [scaffold] manifest.params not auto-synced → [save_preset(scaffold_ui=true) should populate manifest.params](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717064)
+- [docs] ratio() default unit string :1 not stated → Param-builder doc pass
+- [docs] <cdp-panel> as layout container vs fallback widget unclear → UI doc pass
+- [scaffold] manifest.params not auto-synced → save_preset(scaffold_ui=true) should populate manifest.params

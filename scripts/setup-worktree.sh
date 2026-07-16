@@ -131,6 +131,12 @@ ensure_dir "Rust compiler" \
     "\"${SCRIPT_DIR}/setup-rustc.sh\"" \
     || FAILED=1
 
+ensure_files "Local.xcconfig (signing/telemetry)" \
+    "Config" \
+    "Local.xcconfig" \
+    "cp \"${REPO_ROOT}/Config/Local.xcconfig.template\" \"${REPO_ROOT}/Config/Local.xcconfig\" && echo 'note: created Config/Local.xcconfig from template — set DEVELOPMENT_TEAM to your Apple team id before building'" \
+    || FAILED=1
+
 if [ "${FAILED}" -ne 0 ]; then
     echo ""
     echo "Some assets could not be set up. Check the errors above."

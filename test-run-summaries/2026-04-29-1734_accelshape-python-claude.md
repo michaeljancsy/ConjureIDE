@@ -88,5 +88,5 @@ Custom UI: two `<cdp-knob>` controls ("Drive" / "Output Trim") flanking a vertic
 
 ## Filed?
 
-- [bug] conjuredsp.accel Python module documented but not installed → [Ship conjuredsp.accel Python module](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214408880304866)
-- [ux] save_preset partial-success: bundle written but kernel_reloaded:false → [save_preset partial-success: split bundle_written from kernel_reloaded](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409226483172)
+- [bug] conjuredsp.accel Python module documented but not installed → Ship conjuredsp.accel Python module
+- [ux] save_preset partial-success: bundle written but kernel_reloaded:false → save_preset partial-success: split bundle_written from kernel_reloaded

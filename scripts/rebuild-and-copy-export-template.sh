@@ -64,7 +64,9 @@ fi
 # environment (extension build settings) from leaking into the template
 # build. Without this, inherited env vars cause the Swift compiler to
 # generate an extension entry point (_NSExtensionMain) instead of the
-# app's _main, crashing the exported app on launch.
+# app's _main, crashing the exported app on launch. The template project
+# reads DEVELOPMENT_TEAM from ../Config/Base.xcconfig (+ Local.xcconfig),
+# the same as the main project, so no signing overrides are needed here.
 if [ -f "${TEMPLATE_PROJECT}/project.pbxproj" ]; then
     if [ "${needs_clean}" = "true" ]; then
         echo "Cleaning export template (${TEMPLATE_CONFIG})..."

@@ -46,7 +46,7 @@ _None — compiled and probed on the first attempt._
 
 (Revised 2026-05-13 after opus subagent critique pass — titles + scope updated; severity downgrade on Lfo bug.)
 
-- [docs] State size/perf threshold for persist! vs persist_buf! (not Copy vs non-Copy) → [Asana 1214782996911434](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214782996911434) (UX, two-run signal w/ Gemini)
-- [bug] Lfo::new() hardcodes 44.1 kHz; skipping .init(sr,…) → silent wrong-pitch → [Asana 1214782922470620](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214782922470620) (Bugs; severity downgraded — no factory preset is broken, Option B in original fix was dead code in user WASM)
-- [meta] AGENTS.md addendum — scaffold_ui on UI-shape prompt cues → [Asana 1214782875108753](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214782875108753) (UX, three-run signal; narrowed — dropped ≤3-params rule, added MIDI carve-out)
+- [docs] State size/perf threshold for persist! vs persist_buf! (not Copy vs non-Copy) → Asana 1214782996911434 (UX, two-run signal w/ Gemini)
+- [bug] Lfo::new() hardcodes 44.1 kHz; skipping .init(sr,…) → silent wrong-pitch → Asana 1214782922470620 (Bugs; severity downgraded — no factory preset is broken, Option B in original fix was dead code in user WASM)
+- [meta] AGENTS.md addendum — scaffold_ui on UI-shape prompt cues → Asana 1214782875108753 (UX, three-run signal; narrowed — dropped ≤3-params rule, added MIDI carve-out)
 - [docs] No "one macro-param drives many derived coefs" example → not filed (single-run signal; will track if it repeats)

@@ -85,6 +85,6 @@ None. Clean run from docs → save → UI → smoke test.
 
 ## Filed?
 
-- [docs] CLAUDE.md import line missing Biquad/BiquadCoeffs → [CLAUDE.md import line](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717128)
-- [docs] param() unit/default keyword arg ordering not in quick-reference → [Param-builder doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465)
-- [docs] <cdp-knob> default face size undocumented → [UI doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653869195)
+- [docs] CLAUDE.md import line missing Biquad/BiquadCoeffs → CLAUDE.md import line
+- [docs] param() unit/default keyword arg ordering not in quick-reference → Param-builder doc pass
+- [docs] <cdp-knob> default face size undocumented → UI doc pass

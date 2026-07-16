@@ -4,6 +4,12 @@
 <dict>
 	<key>BuildID</key>
 	<integer>CD_BUILD_ID</integer>
+	<key>ConjureMixpanelToken</key>
+	<string>$(CONJURE_MIXPANEL_TOKEN)</string>
+	<key>ConjureSentryDSN</key>
+	<string>$(CONJURE_SENTRY_DSN)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>

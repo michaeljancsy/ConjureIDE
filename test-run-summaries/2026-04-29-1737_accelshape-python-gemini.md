@@ -79,5 +79,5 @@ I have built a neural-amp-style waveshaper preset in Python, optimized for zero-
 
 ## Filed?
 
-- [bug] conjuredsp.accel Python module gap → [Ship conjuredsp.accel Python module](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214408880304866)
-- [scaffold] manifest.params omission (caused stray _v2 bundle) → [save_preset(scaffold_ui=true) should populate manifest.params](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717064)
+- [bug] conjuredsp.accel Python module gap → Ship conjuredsp.accel Python module
+- [scaffold] manifest.params omission (caused stray _v2 bundle) → save_preset(scaffold_ui=true) should populate manifest.params

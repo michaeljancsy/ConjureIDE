@@ -57,6 +57,6 @@ exit_code: 0
 
 ## Filed?
 
-- [scaffold] audioFrames default → already filed: [scaffold_ui=true sets audioFrames:true unconditionally](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214408880304802)
+- [scaffold] audioFrames default → already filed: scaffold_ui=true sets audioFrames:true unconditionally
 - [ux] cdp-knob default label/value contrast → not filed (would file with a 2nd-run confirmation)
 - [meta] scaffold + accel fixes confirmed working → not filed (validation observation)

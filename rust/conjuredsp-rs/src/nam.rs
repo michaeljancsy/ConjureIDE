@@ -5,6 +5,13 @@
 //! `.nam` JSON via [`NamModel::from_json`]; WASM modules never see model
 //! data — they call back into the host through `__conjuredsp_nam_process_slot`.
 //!
+//! This is an independent reimplementation of the `.nam` model format and
+//! reference inference defined by Steven Atkinson's MIT-licensed
+//! [neural-amp-modeler](https://github.com/sdatkinson/neural-amp-modeler) /
+//! [NeuralAmpModelerCore](https://github.com/sdatkinson/NeuralAmpModelerCore)
+//! projects, and is parity-tested against their example models.
+//! See ACKNOWLEDGEMENTS.md at the repository root.
+//!
 //! # Quick start
 //!
 //! `process!` invokes `setup!()` internally, so don't write `setup!();`

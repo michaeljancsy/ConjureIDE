@@ -58,5 +58,5 @@ exit_code: 0
 
 ## Filed?
 
-- [bug] conjuredsp.accel Python module gap (third independent confirmation) → [Ship conjuredsp.accel Python module](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214408880304866)
-- [scaffold] manifest.params omission → [save_preset(scaffold_ui=true) should populate manifest.params](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717064)
+- [bug] conjuredsp.accel Python module gap (third independent confirmation) → Ship conjuredsp.accel Python module
+- [scaffold] manifest.params omission → save_preset(scaffold_ui=true) should populate manifest.params

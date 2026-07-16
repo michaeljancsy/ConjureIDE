@@ -61,6 +61,7 @@ The only legitimate exception is subjective correctness (UI layout, "does this s
 - Monaco Editor (one-time setup): `./scripts/setup-monaco.sh`
 - xterm.js terminal (one-time setup): `./scripts/setup-xterm.sh`
 - Bundled uv package manager (one-time setup): `./scripts/setup-uv.sh`
+- Signing config (one-time setup): `cp Config/Local.xcconfig.template Config/Local.xcconfig`, then set `DEVELOPMENT_TEAM` to your Apple team id. The same gitignored file optionally sets `CONJURE_MIXPANEL_TOKEN` / `CONJURE_SENTRY_DSN`; when they're empty (the default), builds have no telemetry.
 
 Deployment targets: macOS 15 (Sequoia)+.
 
@@ -231,7 +232,7 @@ Fail-open: if the terminal is down when a save happens, the request queues on di
 Lock-free ring buffers (written by audio thread, read by UI) feed FFT computation via Accelerate/vDSP on the main thread (CADisplayLink-synced). Supports 4 modes: input, output, difference, and normalized difference. Log and linear frequency scales with diverging colormaps for difference modes.
 
 ### Licensing
-ConjureDSP is free — there is no subscription, demo, or beta gating. The plugin runs at full capability (including standalone-AU export) with no license check. The prior Paddle/Cloudflare subscription system was fully removed; see `docs/subscription-removal-notes.md` for what was removed and how to restore it. App auto-updates are independent of this and remain live (Sparkle + the `updates.conjuredsp.com` R2 feed).
+ConjureDSP is free, open-source software (GPL-3.0 — see `LICENSE`; Apple sample-code and NAM attributions in `ACKNOWLEDGEMENTS.md`). There is no subscription, demo, or beta gating; the plugin runs at full capability (including standalone-AU export) with no license check. The prior Paddle/Cloudflare subscription system was fully removed; see `docs/subscription-removal-notes.md` for what was removed and how to restore it. App auto-updates are independent of this and remain live (Sparkle + the `updates.conjuredsp.com` R2 feed).
 
 ## Project Structure
 
@@ -313,13 +314,13 @@ scripts/                     Build and setup scripts
   notarize.sh                Submits to Apple notarization service
   upload-dsyms.sh            Uploads debug symbols to Sentry
   pre-build-clean.sh         Moves /Applications install out of DerivedData's way
-  generate-test-serial.sh    Generates test license serial numbers
-  backup-keypair.sh          Backs up Ed25519 license keypair
-  restore-keypair.sh         Restores Ed25519 license keypair
   rebuild-and-copy-export-template.sh  Builds export AU template and copies into main app
   setup-xterm.sh             Downloads xterm.js for terminal UI
 assets/                      App icons (app-icon.png, export-icon.png)
-tools/generate-license/      Rust CLI for generating license keys
+Config/                      Build configuration — Base.xcconfig (public defaults; wired as the
+                             project-level xcconfig of both the main and export-template projects)
+                             + Local.xcconfig.template (copy to gitignored Local.xcconfig for
+                             DEVELOPMENT_TEAM and optional telemetry keys)
 plans/                       Implementation plans (host-app-daw-controls, scripting-languages, visualization-diagnostics, etc.)
 rustc-dist/                  Bundled Rust compiler + wasm32-wasip1 target (gitignored)
 docs/                        Design docs (export-au-plan, python-package-management, preset-repo-format, etc.)
@@ -475,11 +476,4 @@ The test target (`ConjureDSPTests`) has its own copy of `ExportManager.swift` wi
 
 ## Backlog Management
 
-The backlog lives in the Asana project **ConjureDSP Backlog** (gid `1214126484601018`), organized into sections: `In Progress`, `v1 Release`, `Post-Launch`, `Bugs`, `UX`, `Optimization`, `Other`. Access it via the Asana MCP connector.
-
-At the start of every session, list open tasks in the project and briefly summarize current status. At the end of every session (or when completing/starting features), update Asana to reflect:
-- Newly completed features — mark the task complete (completion date is tracked automatically)
-- Any new feature requests or ideas that came up during the session — create a task in the appropriate section
-- Any items that moved to "In Progress" — move the task into the `In Progress` section
-
-Asana is the source of truth for project status.
+The backlog lives in GitHub Issues on this repository. When completing a feature or discovering a bug or idea worth tracking, file or update an issue (via `gh issue`) so the public backlog stays current.

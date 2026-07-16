@@ -88,7 +88,7 @@ None. Clean run from first save to passing smoke test.
 
 ## Filed?
 
-- [docs] no q() builder for filter Q → [Add q() builder](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653853846)
-- [docs] scaffold UI content undocumented → [UI doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653869195)
-- [docs] Rust params! title-case canonicalization undocumented → [Rust authoring doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409359605210)
-- [docs] max channel count / static array sizing undocumented → [Rust authoring doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409359605210)
+- [docs] no q() builder for filter Q → Add q() builder
+- [docs] scaffold UI content undocumented → UI doc pass
+- [docs] Rust params! title-case canonicalization undocumented → Rust authoring doc pass
+- [docs] max channel count / static array sizing undocumented → Rust authoring doc pass

@@ -48,8 +48,8 @@ Saturation + stereo chorus. `DRIVE` feeds `soft_clip(input, 1.0 + drive * 4.0)` 
 
 (Revised 2026-05-13 after opus subagent critique pass — titles + scope updated, ticket #4 moved Other → Bugs.)
 
-- [bug] gemini-cli loads project-scope MCP config from cwd; doesn't surface connect failure to model → [Asana 1214782787555274](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214782787555274) (Other; upstream)
-- [bug] /try-it skill has stale gemini-cli config refresh + wrong prose claim → [Asana 1214782875206735](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214782875206735) (Bugs; moved from Other after critique found a second bug at SKILL.md:182)
-- [api] Unify soft_clip signature across Python/Rust (5 sites, 10-min change) → [Asana 1214782922371575](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214782922371575) (Other; section moved from UX in round-4 revision — Rust API change isn't really a UX concern. Real fix is API unification, not docs expansion; get_docs already auto-appends both signatures.)
-- [docs] State size/perf threshold for persist! vs persist_buf! (not Copy vs non-Copy) → [Asana 1214782996911434](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214782996911434) (UX, two-run signal w/ Claude; reframed — Copy-vs-non-Copy framing was wrong, all DSP types are Copy regardless of size)
+- [bug] gemini-cli loads project-scope MCP config from cwd; doesn't surface connect failure to model → Asana 1214782787555274 (Other; upstream)
+- [bug] /try-it skill has stale gemini-cli config refresh + wrong prose claim → Asana 1214782875206735 (Bugs; moved from Other after critique found a second bug at SKILL.md:182)
+- [api] Unify soft_clip signature across Python/Rust (5 sites, 10-min change) → Asana 1214782922371575 (Other; section moved from UX in round-4 revision — Rust API change isn't really a UX concern. Real fix is API unification, not docs expansion; get_docs already auto-appends both signatures.)
+- [docs] State size/perf threshold for persist! vs persist_buf! (not Copy vs non-Copy) → Asana 1214782996911434 (UX, two-run signal w/ Claude; reframed — Copy-vs-non-Copy framing was wrong, all DSP types are Copy regardless of size)
 - [meta] Two-of-three runs landed on chorus / modulated-delay design → not filed (observation only)

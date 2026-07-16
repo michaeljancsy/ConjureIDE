@@ -90,6 +90,6 @@ None. Clean run end-to-end.
 
 ## Filed?
 
-- [docs] param() curve=log not in quick-summary table → [Param-builder doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465)
-- [docs] <cdp-panel> without auto undocumented → [UI doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653869195)
-- [docs] no cross-ref between named builders and generic param() → [Param-builder doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465)
+- [docs] param() curve=log not in quick-summary table → Param-builder doc pass
+- [docs] <cdp-panel> without auto undocumented → UI doc pass
+- [docs] no cross-ref between named builders and generic param() → Param-builder doc pass

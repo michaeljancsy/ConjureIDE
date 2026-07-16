@@ -70,6 +70,6 @@ The preset is ready for use in your session.
 
 ## Filed?
 
-- [ux] LFO.set_waveform_index helper missing → [Python LFO.set_waveform_index(i)](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409226450065)
-- [ux] smoke_test_ui should suggest manifest dimensions → [smoke_test_ui should suggest corrected manifest dimensions](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653864694)
-- [scaffold] manifest.params omission → [save_preset(scaffold_ui=true) should populate manifest.params](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717064)
+- [ux] LFO.set_waveform_index helper missing → Python LFO.set_waveform_index(i)
+- [ux] smoke_test_ui should suggest manifest dimensions → smoke_test_ui should suggest corrected manifest dimensions
+- [scaffold] manifest.params omission → save_preset(scaffold_ui=true) should populate manifest.params

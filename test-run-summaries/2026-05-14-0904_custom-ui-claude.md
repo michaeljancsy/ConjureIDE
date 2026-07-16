@@ -46,6 +46,6 @@ A 4-knob filter+saturation effect: biquad lowpass (Cutoff 40–18 kHz log, Reson
 
 ## Filed?
 
-- [ux] cdp-xy puck size validator vs docs example → [Asana 1214807488581466](https://app.asana.com/0/1214126484601018/1214807488581466)
-- [skill] stale agent-workspace files → [Asana 1214807472125116](https://app.asana.com/0/1214126484601018/1214807472125116) (resolution: replace on-disk files with an MCP `read_context` tool)
-- [docs] get_docs("ui") quickstart → [Asana 1214807582518925](https://app.asana.com/0/1214126484601018/1214807582518925)
+- [ux] cdp-xy puck size validator vs docs example → Asana 1214807488581466
+- [skill] stale agent-workspace files → Asana 1214807472125116 (resolution: replace on-disk files with an MCP `read_context` tool)
+- [docs] get_docs("ui") quickstart → Asana 1214807582518925

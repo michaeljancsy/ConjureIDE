@@ -98,7 +98,7 @@ None. The build was clean on the first attempt.
 
 ## Filed?
 
-- [docs] audio.onFrame rms*/peak* shape (scalar vs per-channel) undocumented → [Document audio.onFrame rmsIn/peakIn as scalars](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214408880251577)
-- [docs] gain_to_db/db_to_gain missing from utilities topic → [Add get_docs("utilities") topic](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159716999)
-- [docs] time_ms() log-curve override behavior unclear → [Param-builder doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465)
-- [docs] params! title-case canonicalization undocumented → [Rust authoring doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409359605210)
+- [docs] audio.onFrame rms*/peak* shape (scalar vs per-channel) undocumented → Document audio.onFrame rmsIn/peakIn as scalars
+- [docs] gain_to_db/db_to_gain missing from utilities topic → Add get_docs("utilities") topic
+- [docs] time_ms() log-curve override behavior unclear → Param-builder doc pass
+- [docs] params! title-case canonicalization undocumented → Rust authoring doc pass
