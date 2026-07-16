@@ -57,6 +57,6 @@ exit_code: 0
 
 ## Filed?
 
-- [bug] Python runtime exports LFO + strings (not Lfo + Waveform); docs mismatch → [Python LFO.set_waveform_index(i)](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409226450065)
-- [scaffold] manifest.params omission → [save_preset(scaffold_ui=true) should populate manifest.params](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717064)
-- [ux] smoke_test_ui overflow report should suggest dimensions → [smoke_test_ui should suggest corrected manifest dimensions](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653864694)
+- [bug] Python runtime exports LFO + strings (not Lfo + Waveform); docs mismatch → Python LFO.set_waveform_index(i)
+- [scaffold] manifest.params omission → save_preset(scaffold_ui=true) should populate manifest.params
+- [ux] smoke_test_ui overflow report should suggest dimensions → smoke_test_ui should suggest corrected manifest dimensions

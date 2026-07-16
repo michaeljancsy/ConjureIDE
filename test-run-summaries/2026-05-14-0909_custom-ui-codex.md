@@ -49,5 +49,5 @@ A 6-param tone-shaping drive: low/high shelf "tilt" pivoted on a movable focus p
 
 ## Filed?
 
-- [ux] cdp-xy puck size validator vs docs example → [Asana 1214807488581466](https://app.asana.com/0/1214126484601018/1214807488581466)
-- [ux] smoke_test_ui can't verify live-audio components → [Asana 1214807745765561](https://app.asana.com/0/1214126484601018/1214807745765561) (resolution: inject synthetic audio.onFrame ticks + DOM-probe)
+- [ux] cdp-xy puck size validator vs docs example → Asana 1214807488581466
+- [ux] smoke_test_ui can't verify live-audio components → Asana 1214807745765561 (resolution: inject synthetic audio.onFrame ticks + DOM-probe)

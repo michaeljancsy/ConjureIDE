@@ -27,19 +27,28 @@ enum AnalyticsEvent: String {
     case terminalFirstInput = "Terminal First Input"
 }
 
+/// Resolves the bundle this file was compiled into — unlike Bundle.main,
+/// which is the host DAW's bundle when the AU is loaded in-process.
+private final class AnalyticsBundleToken {}
+
 enum Analytics {
+    /// Populated from the ConjureMixpanelToken Info.plist key, which mirrors
+    /// the CONJURE_MIXPANEL_TOKEN build setting (Config/Local.xcconfig).
+    /// Empty or missing means analytics stays disabled. DEBUG builds never
+    /// send analytics regardless.
     #if DEBUG
     private static let token = ""
     #else
-    private static let token = "54ee78fc2e8026396e096f94b87e51f2"
+    private static let token = Bundle(for: AnalyticsBundleToken.self)
+        .object(forInfoDictionaryKey: "ConjureMixpanelToken") as? String ?? ""
     #endif
 
     private static var initialized = false
 
     /// Broad classification of the running binary, attached to every Mixpanel
     /// event as a `build_mode` super property so dev traffic can be
-    /// distinguished from production. `debug` wins when the DEBUG token is ever
-    /// populated; otherwise `release`.
+    /// distinguished from production. DEBUG builds use an empty token, so
+    /// they never send events at all.
     enum BuildMode: String {
         case debug
         case release

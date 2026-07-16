@@ -1,0 +1,15 @@
+// Copy this file to Config/Local.xcconfig (gitignored) and fill in values.
+// Config/Base.xcconfig includes Local.xcconfig when present.
+
+// REQUIRED to build: set your Apple Developer team id after the `=` (find it
+// in Xcode → Settings → Accounts, or the developer.apple.com membership
+// page). Set it here — not in Xcode's Signing & Capabilities pane, which
+// would write your team id into the shared project.pbxproj.
+DEVELOPMENT_TEAM =
+
+// OPTIONAL — telemetry for builds you distribute yourself. Leave empty to
+// keep analytics and crash reporting disabled. "//" starts a comment in
+// xcconfig files, so escape DSN slashes with $() like this:
+// CONJURE_SENTRY_DSN = https:/$()/publickey@o0.ingest.sentry.io/0
+CONJURE_MIXPANEL_TOKEN =
+CONJURE_SENTRY_DSN =

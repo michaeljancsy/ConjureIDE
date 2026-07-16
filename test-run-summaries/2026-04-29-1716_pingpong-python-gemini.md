@@ -72,5 +72,5 @@ I have completed the stereo ping-pong delay preset with a custom XY-pad interfac
 
 ## Filed?
 
-- [docs] pct() doesn't accept custom min/max — docs ambiguous → [Param-builder doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465)
-- [scaffold] manifest.params not auto-populated → [save_preset(scaffold_ui=true) should populate manifest.params](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717064)
+- [docs] pct() doesn't accept custom min/max — docs ambiguous → Param-builder doc pass
+- [scaffold] manifest.params not auto-populated → save_preset(scaffold_ui=true) should populate manifest.params

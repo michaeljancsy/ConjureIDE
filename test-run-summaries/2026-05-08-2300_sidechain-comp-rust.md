@@ -46,4 +46,4 @@ Rust sidechain ducking compressor. Peak envelope follower on the detector signal
 
 ## Filed?
 
-- [bug] save_preset overwrites different-language bundle → [save_preset silently overwrites bundle of different language with same name](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214671618931260)
+- [bug] save_preset overwrites different-language bundle → save_preset silently overwrites bundle of different language with same name

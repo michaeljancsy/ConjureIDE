@@ -1,80 +1,129 @@
 # ConjureDSP
 
-An AUv3 audio effect plugin for macOS that runs a Python script on every audio render callback. The plugin bundles a free-threaded (no-GIL) Python 3.14 runtime with numpy, allowing you to write DSP in Python with pre-allocated numpy arrays.
+An AUv3 audio effect plugin for macOS where the DSP is a script you can edit
+while audio runs. Write the processing in **Python** (bundled free-threaded
+Python 3.14 with numpy/scipy, instant reload) or **Rust** (compiled to WASM by
+a bundled rustc and executed in wasmtime), live inside any DAW.
 
-When no Python script is loaded or if Python errors at runtime, the plugin falls back to a built-in Rust gain processor.
+## Features
 
-## How it works
+- **Two DSP languages, one parameter system** — Python scripts load instantly;
+  Rust scripts compile to `wasm32-wasip1` with fuel-metered execution. Both
+  declare up to 16 rich parameters (ranges, units, log curves, toggles,
+  choices) that appear as real, automatable DAW parameters.
+- **`conjuredsp` DSP library** for both languages: biquads, delay lines, LFOs,
+  parameter builders, dB/time utilities, and hardware-accelerated vector math
+  (Accelerate-backed in WASM, numpy-backed in Python).
+- **Neural Amp Modeler (NAM) inference** in both languages, with a built-in
+  browser for [TONE3000](https://www.tone3000.com) tone captures.
+- **Preset bundles with custom UIs** — presets are `.cdp` bundles that can
+  ship an HTML/JS interface (rendered in place of the stock sliders) built on
+  the `cdp-ui` web-component library, with hot reload while you edit.
+- **In-plugin coding agent** — a terminal running Claude Code, wired to the
+  plugin through an in-process MCP server (compile/run scripts, set
+  parameters, read audio state, author preset UIs).
+- **Monaco editor** (VS Code's editor) embedded in the plugin.
+- **Spectrogram view** — input, output, and difference modes.
+- **Git-backed preset library** — every save is a commit; optional push to
+  your own GitHub repo.
+- **Export presets as standalone AUv3 plugins** that run without ConjureDSP
+  installed.
 
-1. A Rust DSP kernel embeds Python 3.14 via [pyo3](https://pyo3.rs/) and [numpy](https://github.com/PyO3/rust-numpy)
-2. On plugin init, the kernel loads `process.py` from the app bundle and caches the `process()` function
-3. On each audio render callback, input samples are copied into pre-allocated numpy arrays, `process()` is called, and output samples are copied back
-4. The Python runtime is free-threaded (PEP 703) — no GIL contention
+## Building
 
-## Quick start
+Prerequisites: macOS 15 (Sequoia)+, Xcode, a Rust toolchain (`rustup`,
+`cargo`) with the `aarch64-apple-darwin` target, `cbindgen`
+(`cargo install cbindgen`), and an Apple Developer team (a free account
+works for local development).
 
 ```bash
-# 1. Download bundled Python 3.14 + numpy (one-time, ~100MB)
-cd rust && ./setup-python.sh
+# One-time setup — downloads the bundled runtimes and editor assets
+(cd rust && ./setup-python.sh)   # free-threaded Python 3.14 + numpy + scipy (~100 MB)
+./scripts/setup-rustc.sh         # standalone rustc + wasm32-wasip1 sysroot
+./scripts/setup-monaco.sh        # Monaco editor
+./scripts/setup-xterm.sh         # xterm.js terminal UI
+./scripts/setup-uv.sh            # uv package manager
 
-# 2. Open in Xcode and build
-open ConjureDSP.xcodeproj
-```
+# One-time signing config — set your Apple development team id
+cp Config/Local.xcconfig.template Config/Local.xcconfig
+$EDITOR Config/Local.xcconfig
 
-Or build from the command line:
-
-```bash
+# Build
 xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP build
+# …or open ConjureDSP.xcodeproj in Xcode and run the ConjureDSP scheme
 ```
 
-### Prerequisites
-
-- macOS 15 (Sequoia)+
-- Xcode with Swift 5.0+
-- Rust toolchain (`rustup`, `cargo`) with target `aarch64-apple-darwin`
-- `cbindgen` (`cargo install cbindgen`)
+Running the ConjureDSP host app registers the AU extension with macOS; after
+that the plugin appears in any AUv3 host (Logic Pro, GarageBand, Reaper, …).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide,
+including tests and signing details.
 
 ## Writing a DSP script
 
-Edit `ConjureDSPExtension/Resources/process.py`. The `process()` function is called on every audio render callback:
+Python:
 
 ```python
-import numpy as np
+from conjuredsp import db
+
+PARAMS = {"gain": db(min=-40, max=6, default=0)}
 
 def process(ctx):
-    # ctx.inputs / ctx.outputs are 2D numpy arrays sliced to
-    # (channels, frame_count). Whole-array ops broadcast across channels.
-    np.multiply(ctx.inputs, 0.5, out=ctx.outputs)
+    # ctx.inputs / ctx.outputs are (channels, frame_count) float32 arrays
+    ctx.outputs[:] = ctx.inputs * (10.0 ** (ctx.params["gain"] / 20.0))
 ```
 
-The single accepted signature is `def process(ctx):`. The host calls
-`process()` once per render callback with a `ctx` namespace exposing the
-audio buffers and host state.
+Rust:
 
-**`ctx` fields:**
-- `ctx.inputs` — 2D `numpy.ndarray[float32]` of shape `(channel_count, frame_count)`. Whole-array ops (`np.tanh(ctx.inputs, out=ctx.outputs)`, `ctx.outputs[:] = ctx.inputs * gain`) broadcast across channels in a single SIMD-vectorized call. Per-channel access via `ctx.inputs[ch]` returns a contiguous 1D row view.
-- `ctx.outputs` — same shape and access pattern as `ctx.inputs`. Writes go in-place via `ctx.outputs[:] = …`, `out=ctx.outputs`, or row-index assignment `ctx.outputs[ch] = …`. Only rebinding the attribute itself (`ctx.outputs = …`) is silently discarded — that one points the local name at a fresh array Rust never reads.
-- `ctx.frame_count` — number of samples in this block. The 2D arrays are already sliced to `[:, :frame_count]`, so explicit `[:frame_count]` slicing is unnecessary.
-- `ctx.sample_rate` — current sample rate (e.g. 44100.0)
-- `ctx.params` — read-only view supporting both `ctx.params["name"]` and `ctx.params.name` access when a `PARAMS` dict is declared
-- `ctx.transport` — read-only namespace with `bpm`, `beat`, `is_playing`, `time_sig_numerator`, `time_sig_denominator`, `sample_position`
-- `ctx.telemetry` — write per-block scalar readouts (when a `TELEMETRY` dict is declared)
-- `ctx.state` — read-only mapping over the bundle-private STATE channel
-- `ctx.sidechain` — 2D `numpy.ndarray[float32]` mirroring `ctx.inputs`'s shape; zero-filled when the host hasn't connected a sidechain bus
+```rust
+use conjuredsp::*;
 
-## Project structure
+params! { GAIN = db().min(-40.0).max(6.0).default(0.0) }
 
+process! { ctx =>
+    let gain = db_to_gain(ctx.param(GAIN));
+    for ch in 0..ctx.channels() {
+        for i in 0..ctx.frames() {
+            ctx.set_output(ch, i, ctx.input(ch, i) * gain);
+        }
+    }
+}
 ```
-ConjureDSP/                  Host app
-ConjureDSPExtension/         AUv3 plugin
-  Resources/process.py       Python DSP script
-  Common/Audio Unit/         AUAudioUnit subclass + render block
-rust/
-  conjure_dsp/src/       Rust DSP kernel with embedded Python
-  setup-python.sh            Downloads Python 3.14 + numpy
-  build-rust.sh              Xcode build phase script
-```
+
+The `ctx` object also exposes `sample_rate`, `transport` (BPM, beat,
+playhead), `sidechain`, `telemetry` (feed custom UI meters/scopes), and
+`state` (per-bundle persistent values). In-plugin documentation covers the
+full API (the agent reaches the same docs through the `get_docs` MCP tool).
 
 ## Architecture
 
-**Swift** handles the UI, host app, audio buffer management, and AU render block. **Rust** implements the DSP kernel and embeds Python via pyo3. **Python** runs the user-editable `process.py` script with numpy arrays on each render callback. Swift and Rust communicate through a C FFI bridging header.
+**Swift/SwiftUI** implements the plugin UI, host app, and AU render block.
+**Rust** implements the DSP kernel, embedding Python via pyo3 and WASM via
+wasmtime behind a common backend trait, bridged to Swift over C FFI. The
+**ConjureDSPTerminal** companion app runs the Claude Code CLI and other
+helpers that the sandboxed AU extension cannot spawn itself, communicating
+through an App Group container. `AGENTS.md` documents the full architecture.
+
+## Telemetry
+
+Builds from source have **no telemetry**: analytics (Mixpanel) and crash
+reporting (Sentry) initialize only when a token/DSN is supplied at build time
+via `Config/Local.xcconfig`, and that file is empty by default. Official
+releases distributed from conjuredsp.com set both.
+
+## Updates
+
+Official builds check `updates.conjuredsp.com` for Sparkle auto-updates,
+verified against the public key in `ConjureDSP/Info.plist`. If you fork and
+distribute your own builds, replace `SUFeedURL` and `SUPublicEDKey` with your
+own feed and key (or remove them).
+
+## License
+
+ConjureDSP is free software, licensed under the
+[GNU General Public License v3.0](LICENSE). Portions derive from Apple sample
+code and other projects — see [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+
+ConjureDSP is not affiliated with or endorsed by TONE3000; tone captures
+downloaded through the integration carry their capturers' own licenses.
+
+To report a security issue, see [SECURITY.md](SECURITY.md).

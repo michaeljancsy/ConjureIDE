@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>ConjureMixpanelToken</key>
+	<string>$(CONJURE_MIXPANEL_TOKEN)</string>
+	<key>ConjureSentryDSN</key>
+	<string>$(CONJURE_SENTRY_DSN)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>SUFeedURL</key>
 	<string>https://updates.conjuredsp.com/appcast.xml</string>
 	<key>SUPublicEDKey</key>

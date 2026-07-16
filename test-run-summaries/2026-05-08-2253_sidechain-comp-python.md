@@ -45,4 +45,4 @@ Sidechain ducking compressor: per-channel one-pole envelope follower with separa
 
 ## Filed?
 
-- [docs] hidden defaults in conjuredsp param builders → [conjuredsp param builders carry hidden defaults that fail when min/max excludes them](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214651884772858)
+- [docs] hidden defaults in conjuredsp param builders → conjuredsp param builders carry hidden defaults that fail when min/max excludes them

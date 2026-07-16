@@ -67,6 +67,6 @@ I have built the two-band compressor preset as requested.
 
 ## Filed?
 
-- [docs] Biquad.process_sample/set_coeffs ordering ambiguous in "all" topic → [Rust authoring doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409359605210)
-- [docs] ratio() :1 unit default not stated → [Param-builder doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465)
-- [scaffold] manifest.params omission → [save_preset(scaffold_ui=true) should populate manifest.params](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717064)
+- [docs] Biquad.process_sample/set_coeffs ordering ambiguous in "all" topic → Rust authoring doc pass
+- [docs] ratio() :1 unit default not stated → Param-builder doc pass
+- [scaffold] manifest.params omission → save_preset(scaffold_ui=true) should populate manifest.params

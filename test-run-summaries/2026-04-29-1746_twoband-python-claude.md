@@ -102,7 +102,7 @@ None. First-pass writes passed both static lint and runtime smoke test.
 
 ## Filed?
 
-- [docs] smooth_coeff/db_to_gain/gain_to_db imports not in CLAUDE.md → [CLAUDE.md import line](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717128)
-- [docs] ratio() runtime value semantics undocumented → [Param-builder doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653866465)
-- [docs] frame.rmsIn is mono-averaged, not per-channel → [Document audio.onFrame rmsIn/peakIn as scalars](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214408880251577)
+- [docs] smooth_coeff/db_to_gain/gain_to_db imports not in CLAUDE.md → CLAUDE.md import line
+- [docs] ratio() runtime value semantics undocumented → Param-builder doc pass
+- [docs] frame.rmsIn is mono-averaged, not per-channel → Document audio.onFrame rmsIn/peakIn as scalars
 - [docs] 7-arg `process(..., telemetry)` signature not cross-referenced from UI/telemetry docs → not filed (covered indirectly by ui-doc-pass)

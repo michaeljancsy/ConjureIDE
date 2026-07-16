@@ -3,6 +3,13 @@
 //! Supports WaveNet and LSTM architectures.  Model data is injected into WASM
 //! linear memory by the host via a binary protocol (see [`NamModel::from_binary`]).
 //!
+//! This is an independent reimplementation of the `.nam` model format and
+//! reference inference defined by Steven Atkinson's MIT-licensed
+//! [neural-amp-modeler](https://github.com/sdatkinson/neural-amp-modeler) /
+//! [NeuralAmpModelerCore](https://github.com/sdatkinson/NeuralAmpModelerCore)
+//! projects, and is parity-tested against their example models.
+//! See ACKNOWLEDGEMENTS.md at the repository root.
+//!
 //! # Quick start
 //!
 //! `process!` invokes `setup!()` internally, so don't write `setup!();`

@@ -50,6 +50,6 @@ _None — clean run, no compile/save/validation errors._
 
 (Revised 2026-05-13 after opus subagent critique pass — scaffold_ui ticket narrowed.)
 
-- [meta] AGENTS.md addendum — scaffold_ui on UI-shape prompt cues → [Asana 1214782875108753](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214782875108753) (UX, three-run signal; scope narrowed — dropped ≤3-params auto-rule, added MIDI hardware-knob carve-out)
+- [meta] AGENTS.md addendum — scaffold_ui on UI-shape prompt cues → Asana 1214782875108753 (UX, three-run signal; scope narrowed — dropped ≤3-params auto-rule, added MIDI hardware-knob carve-out)
 - [meta] `dsp_probe` ≠ naturalness — agents should disclaim "audition with real take" for dynamics/de-esser → not filed (observation worth carrying forward but not actionable as a single ticket; revisit if it shows up in user feedback)
 - [meta] Rust-default may be over-tuned for simple prompts → not filed (needs more data; track in future sweeps)

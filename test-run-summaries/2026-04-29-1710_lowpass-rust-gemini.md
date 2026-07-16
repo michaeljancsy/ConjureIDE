@@ -69,6 +69,6 @@ I have built the resonant low-pass filter preset as requested.
 
 ## Filed?
 
-- [scaffold] manifest.params not auto-synced from params!{} → [save_preset(scaffold_ui=true) should populate manifest.params](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717064)
+- [scaffold] manifest.params not auto-synced from params!{} → save_preset(scaffold_ui=true) should populate manifest.params
 - [ux] save_preset Rust compile-success signal implicit → not filed (would duplicate scaffold-params response shape work)
-- [docs] UI layout recipes / centering cookbook missing → [UI doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653869195)
+- [docs] UI layout recipes / centering cookbook missing → UI doc pass

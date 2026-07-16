@@ -95,7 +95,7 @@ None. The build, manifest write, UI write, and smoke test all passed first try.
 
 ## Filed?
 
-- [docs] no vec_mul_scalar in accel API → [accel::vec_mul_scalar](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214408880245850)
-- [docs] db_to_gain not in fetched utility docs → [Add get_docs("utilities") topic](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159716999)
-- [docs] MAX_FR const undocumented → [Rust authoring doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409359605210)
-- [skill] /try-it always reads get_docs(nam) — irrelevant for non-NAM → [/try-it: get_docs("nam") conditional](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214408880279803)
+- [docs] no vec_mul_scalar in accel API → accel::vec_mul_scalar
+- [docs] db_to_gain not in fetched utility docs → Add get_docs("utilities") topic
+- [docs] MAX_FR const undocumented → Rust authoring doc pass
+- [skill] /try-it always reads get_docs(nam) — irrelevant for non-NAM → /try-it: get_docs("nam") conditional

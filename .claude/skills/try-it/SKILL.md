@@ -13,7 +13,7 @@ Replicates the live-experiment flow used to validate embedded-agent guidance + M
 3. Spawn a **fresh subagent subprocess** from `agent-workspace/` with the MCP server pre-wired (subagent uses ConjureDSP MCP tools natively).
 4. Feed the user's prompt to that subprocess and capture its tool-call timeline + final report.
 5. Show the report.
-6. Write a structured per-run summary to `test-run-summaries/` and offer to file findings as Asana tickets.
+6. Write a structured per-run summary to `test-run-summaries/` and offer to file findings as GitHub issues.
 
 Use this whenever you want to validate that a fresh agent (no shared context with this conversation) can productively author a preset using the documented tools and guidance. Friction is the signal — most outcomes turn into backlog tickets, and the per-run summary builds an aggregable record across many invocations.
 
@@ -255,19 +255,19 @@ Format: follow `test-run-summaries/_TEMPLATE.md` exactly. Fields and where they 
 - `## What worked` — concrete bullets (tool flows, validator catches, naming resolutions). No vague praise.
 - `## Errors + recoveries` — one line per error: what failed, what fixed it. Leave empty for clean runs.
 - `## Friction findings` — bullets with category tags in brackets, then a one-liner. Categories: `[docs]` (wording / examples / coverage), `[ux]` (tool descriptions, response messages, validator feedback shape), `[scaffold]` (what `save_preset(scaffold_ui=true)` emits or omits), `[bug]` (broken behavior), `[skill]` (friction in `/try-it` itself — port poll, build, dispatch), `[meta]` (observation about agent behavior, e.g. recurring design choices). Tags make cross-run aggregation cheap (`grep '\[scaffold\]' test-run-summaries/*.md`).
-- `## Filed?` — leave empty initially; populated in Step 8 as Asana tickets land.
+- `## Filed?` — leave empty initially; populated in Step 8 as GitHub issues land.
 
 Write the file with the Write tool. Tell the user where it landed using a markdown link.
 
-## Step 8: Offer to file findings as Asana tickets
+## Step 8: Offer to file findings as GitHub issues
 
-Ask: "File any findings as Asana tickets in the ConjureDSP Backlog?"
+Ask: "File any findings as GitHub issues?"
 
-For each finding the user wants filed, create an Asana task in project gid `1214126484601018`, **section `try-it motivated tasks` (gid `1214784911414048`)**. All `/try-it`-spawned tickets land in this one section so the user can see in one place what came out of this experimental flow vs other backlog work — don't fan them out across `Bugs` / `UX` / `Other` by topic.
+For each finding the user wants filed, create a GitHub issue via `gh issue create` with the label `try-it`. The shared label keeps everything spawned by this experimental flow findable in one place (`gh issue list --label try-it`) — don't rely on topical labels alone.
 
-Title in imperative form, body summarizing the friction. Include a pointer to the log file path so future sessions can reference what the subagent saw. If the body description suggests a topical home (the finding is really a bug vs a docs change vs a UX tweak), record that in the body or title prefix (`Bug:` / `Docs:` / `UX:` / `API:`) rather than via section placement.
+Title in imperative form, body summarizing the friction. Include a pointer to the log file path so future sessions can reference what the subagent saw. If the finding is really a bug vs a docs change vs a UX tweak, record that with a title prefix (`Bug:` / `Docs:` / `UX:` / `API:`).
 
-After each ticket lands, **edit the summary file's `## Filed?` section** to add a line: `- [tag] one-liner → [Asana task title](url)`. This keeps the persistent record in sync with what's in flight.
+After each issue lands, **edit the summary file's `## Filed?` section** to add a line: `- [tag] one-liner → [issue title](url)`. This keeps the persistent record in sync with what's in flight.
 
 ## Cleanup
 

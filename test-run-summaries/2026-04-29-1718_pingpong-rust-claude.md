@@ -90,7 +90,7 @@ exit_code: 0
 
 ## Filed?
 
-- [docs] DelayLine read-vs-write ordering ambiguity → [Document DelayLine cross-channel-feedback ordering](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653864786)
-- [docs] <cdp-xy> ::part(pad) default size undocumented → [UI doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653869195)
-- [docs] max sample rate + DelayLine const-size guidance → [Rust authoring doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409359605210)
-- [docs] param(min,max) positional form not in canonical examples → [Rust authoring doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409359605210)
+- [docs] DelayLine read-vs-write ordering ambiguity → Document DelayLine cross-channel-feedback ordering
+- [docs] <cdp-xy> ::part(pad) default size undocumented → UI doc pass
+- [docs] max sample rate + DelayLine const-size guidance → Rust authoring doc pass
+- [docs] param(min,max) positional form not in canonical examples → Rust authoring doc pass

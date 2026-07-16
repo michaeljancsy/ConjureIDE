@@ -46,7 +46,7 @@ A standard bit-crusher: drive → quantize-to-N-levels (2^bit_depth) → wet/dry
 
 ## Filed?
 
-- [scaffold] cdp-panel auto duplicates already-bound params → [Asana 1214807470065136](https://app.asana.com/0/1214126484601018/1214807470065136)
-- [docs/bug] CSS body Canvas/CanvasText slip past validator → [Asana 1214807393467420](https://app.asana.com/0/1214126484601018/1214807393467420)
+- [scaffold] cdp-panel auto duplicates already-bound params → Asana 1214807470065136
+- [docs/bug] CSS body Canvas/CanvasText slip past validator → Asana 1214807393467420
 - [skill] gemini-cli "No capacity available" not in skill's fallback grep → resolved directly by [PR #332](https://github.com/michaeljancsy/conjuredsp-application/pull/332) (no Asana task; fix shipped in the same PR as this summary)
 - [meta] 3-provider, 1-prompt sweep produced 3 unrelated DSP designs — not filed (observation, not a fix)

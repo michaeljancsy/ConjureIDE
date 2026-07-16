@@ -53,5 +53,5 @@ exit_code: 0
 
 ## Filed?
 
-- [scaffold] manifest.params omission → [save_preset(scaffold_ui=true) should populate manifest.params](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717064)
-- [ux] smoke_test_ui can't verify meter responds to live audio → [smoke_test_ui should optionally inject test audio](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409359612474)
+- [scaffold] manifest.params omission → save_preset(scaffold_ui=true) should populate manifest.params
+- [ux] smoke_test_ui can't verify meter responds to live audio → smoke_test_ui should optionally inject test audio

@@ -76,7 +76,7 @@ I have completed the tremolo preset.
 
 ## Filed?
 
-- [docs] Rust choice() workaround misleading message → [Document Rust choice() workaround](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409226607560)
-- [docs] Lfo::new() const-ness undocumented → [Rust authoring doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409359605210)
-- [bug] get_error returns stale Python traceback during Rust run → [get_error returns stale tracebacks](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409359640538)
-- [ux] smoke_test_ui width-overflow loop needs suggestion → [smoke_test_ui should suggest corrected manifest dimensions](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653864694)
+- [docs] Rust choice() workaround misleading message → Document Rust choice() workaround
+- [docs] Lfo::new() const-ness undocumented → Rust authoring doc pass
+- [bug] get_error returns stale Python traceback during Rust run → get_error returns stale tracebacks
+- [ux] smoke_test_ui width-overflow loop needs suggestion → smoke_test_ui should suggest corrected manifest dimensions

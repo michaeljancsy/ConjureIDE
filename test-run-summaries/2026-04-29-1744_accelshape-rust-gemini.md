@@ -66,6 +66,6 @@ I have completed the waveshaper preset.
 
 ## Filed?
 
-- [docs] no vec_mul_scalar (independent confirmation) → [accel::vec_mul_scalar](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214408880245850)
-- [docs] ctx.input(c,i) requires usize casts → [Rust authoring doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409359605210)
-- [scaffold] manifest.params omission → [save_preset(scaffold_ui=true) should populate manifest.params](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717064)
+- [docs] no vec_mul_scalar (independent confirmation) → accel::vec_mul_scalar
+- [docs] ctx.input(c,i) requires usize casts → Rust authoring doc pass
+- [scaffold] manifest.params omission → save_preset(scaffold_ui=true) should populate manifest.params

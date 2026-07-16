@@ -5,11 +5,14 @@ options:
     macOS: "15.0"
   xcodeVersion: "16.3"
 
+configFiles:
+  Debug: ../Config/Base.xcconfig
+  Release: ../Config/Base.xcconfig
+
 settings:
   base:
     SWIFT_VERSION: "5.0"
     CODE_SIGN_STYLE: Automatic
-    DEVELOPMENT_TEAM: A4R63LAVLS
     ARCHS: arm64
 
 targets:

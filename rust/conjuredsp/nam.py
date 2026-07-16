@@ -3,6 +3,12 @@
 Load and run NAM models (.nam files) within your ``process()`` function.
 Supports both WaveNet and LSTM architectures.
 
+This is an independent reimplementation of the ``.nam`` model format and
+reference inference defined by Steven Atkinson's MIT-licensed
+neural-amp-modeler / NeuralAmpModelerCore projects
+(https://github.com/sdatkinson/neural-amp-modeler), and is parity-tested
+against their example models. See ACKNOWLEDGEMENTS.md at the repository root.
+
 Quick start::
 
     from conjuredsp.nam import load_model

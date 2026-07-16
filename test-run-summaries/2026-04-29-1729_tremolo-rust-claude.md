@@ -94,6 +94,6 @@ Clean `pass` — no overflow, all bindings confirmed. Done.
 
 ## Filed?
 
-- [docs] Rust choice() workaround undocumented → [Document Rust choice() workaround](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409226607560)
-- [docs] Lfo::init() phase-reset behavior undocumented → [Rust authoring doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409359605210)
-- [meta] <cdp-choice> rendered width hint missing → [UI doc pass](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214425653869195)
+- [docs] Rust choice() workaround undocumented → Document Rust choice() workaround
+- [docs] Lfo::init() phase-reset behavior undocumented → Rust authoring doc pass
+- [meta] <cdp-choice> rendered width hint missing → UI doc pass

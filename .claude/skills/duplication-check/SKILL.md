@@ -94,7 +94,7 @@ multiple files. Already known:
 | `…/UI/BundleAssetSchemeHandler.swift` | `…/UI/BundleAssetSchemeHandler.swift` | Symlink (commit `7eae15e`) |
 | `…/UI/CustomUIWebView.swift` | `…/UI/ExportCustomUIWebView.swift` | **Duplicate** (caused `c30d891`) |
 | `…/UI/ParameterState.swift` | `…/UI/ExportParameterState.swift` | **Duplicate** (slider-drag fix `d5dc463` had to be applied twice) |
-| `…/Audio/AudioCaptureManager.swift` | `…/Audio/ExportAudioCaptureManager.swift` | **Duplicate** (flagged in Asana backlog `1214270155716952`) |
+| `…/Audio/AudioCaptureManager.swift` | `…/Audio/ExportAudioCaptureManager.swift` | **Duplicate** (known, tracked) |
 | `…/Common/Audio Unit/ConjureDSPExtensionAudioUnit.swift` (parameter-tree builder + render-thread event handler) | `ExportAUAudioUnit.swift` (same) | **Partial duplicate** (commit `537aef8` was a "we forgot to mirror this" fix) |
 | `ParamMetadata` struct in `ConjureDSPExtensionAudioUnit.swift` | `ExportParamMetadata` struct in `RuntimeConfig.swift` | **Duplicate**; also a third copy in `ConjureDSPLogicTests/ExportManager.swift` |
 | `ExportManager.swift` (production) | `ConjureDSPLogicTests/ExportManager.swift`, `ConjureDSPTests/ExportManager.swift` | **Duplicate** (test targets can't import the extension module) |

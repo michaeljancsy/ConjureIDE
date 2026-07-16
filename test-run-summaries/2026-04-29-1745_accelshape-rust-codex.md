@@ -55,5 +55,5 @@ exit_code: 0
 
 ## Filed?
 
-- [bug] setup!() reserved buffer names INPUT_BUF/OUTPUT_BUF collide → [setup!() reserved buffer names collide silently](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159670772)
-- [scaffold] manifest.params omission → [save_preset(scaffold_ui=true) should populate manifest.params](https://app.asana.com/1/946492598125108/project/1214126484601018/task/1214409159717064)
+- [bug] setup!() reserved buffer names INPUT_BUF/OUTPUT_BUF collide → setup!() reserved buffer names collide silently
+- [scaffold] manifest.params omission → save_preset(scaffold_ui=true) should populate manifest.params

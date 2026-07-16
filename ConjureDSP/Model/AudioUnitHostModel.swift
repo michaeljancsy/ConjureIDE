@@ -4,6 +4,10 @@
 //
 //  Created by Michael Jancsy on 2/25/26.
 //
+//  Derived from Apple's AUv3 sample-code host harness ("Creating custom
+//  audio effects"). Portions copyright © Apple Inc. Used under the Apple
+//  Sample Code License — see ACKNOWLEDGEMENTS.md at the repository root.
+//
 
 import SwiftUI
 import CoreMIDI
