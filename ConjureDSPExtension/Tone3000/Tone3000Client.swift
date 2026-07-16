@@ -153,6 +153,7 @@ final class Tone3000Client {
         sort: ToneSort = .bestMatch,
         gear: [ToneGear] = [],
         sizes: [ToneSize] = [],
+        architecture: ToneArchitecture = .a2,
         page: Int = 1
     ) async throws -> ToneSearchResult {
         var components = URLComponents(string: "\(Self.baseURL)/tones/search")!
@@ -160,6 +161,9 @@ final class Tone3000Client {
             URLQueryItem(name: "page", value: "\(page)"),
             URLQueryItem(name: "page_size", value: "15"),
             URLQueryItem(name: "sort", value: sort.rawValue),
+            // The API accepts a single architecture value; omitting it falls
+            // back to the legacy A1 + Custom set and hides every A2 tone.
+            URLQueryItem(name: "architecture", value: architecture.rawValue),
         ]
         if !query.isEmpty {
             queryItems.append(URLQueryItem(name: "query", value: query))
@@ -184,10 +188,18 @@ final class Tone3000Client {
         return try await authenticatedGet(url: url)
     }
 
+    /// All models for a tone, across architectures.  The API's `architecture`
+    /// param is single-valued and omitting it returns only A1 + Custom, so
+    /// fetch that legacy set plus A2 and merge (A2 first — the re-trained
+    /// higher-fidelity captures).
     func models(forToneId toneId: String) async throws -> [ToneModel] {
-        let url = URL(string: "\(Self.baseURL)/models?tone_id=\(toneId)&page_size=25")!
-        let result: ToneModelsResult = try await authenticatedGet(url: url)
-        return result.items
+        async let a2Result: ToneModelsResult = authenticatedGet(
+            url: URL(string: "\(Self.baseURL)/models?tone_id=\(toneId)&page_size=25&architecture=2")!)
+        async let legacyResult: ToneModelsResult = authenticatedGet(
+            url: URL(string: "\(Self.baseURL)/models?tone_id=\(toneId)&page_size=25")!)
+        let (a2, legacy) = try await (a2Result, legacyResult)
+        var seen = Set<IntOrString>()
+        return (a2.items + legacy.items).filter { seen.insert($0.id).inserted }
     }
 
     // MARK: - Helpers

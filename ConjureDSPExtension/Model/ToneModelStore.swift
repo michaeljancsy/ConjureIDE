@@ -33,6 +33,9 @@ final class ToneModelStore {
         let toneUrl: String?
         let modelName: String
         let modelSize: String    // e.g. "standard", "lite"
+        /// NAM architecture version: "1" (A1), "2" (A2), or "custom".
+        /// nil for models downloaded before architecture tracking.
+        let architectureVersion: String?
         let gear: String
         let author: String
         let tags: [String]
@@ -59,6 +62,9 @@ final class ToneModelStore {
         let modelId: String
         let modelName: String
         let modelSize: String
+        /// Optional so metadata.json written before architecture tracking
+        /// still decodes.
+        let architectureVersion: String?
         let downloadDate: Date
     }
 
@@ -82,6 +88,7 @@ final class ToneModelStore {
         modelId: String,
         modelName: String,
         modelSize: String,
+        architectureVersion: String?,
         modelURL: URL,
         accessToken: String
     ) async throws {
@@ -121,7 +128,8 @@ final class ToneModelStore {
         var models = metadata.models.filter { $0.modelId != modelId }
         models.append(ModelMetadata(
             modelId: modelId, modelName: modelName,
-            modelSize: modelSize, downloadDate: Date()
+            modelSize: modelSize, architectureVersion: architectureVersion,
+            downloadDate: Date()
         ))
         metadata = ToneMetadata(
             toneId: toneId, toneName: toneName, toneUrl: toneUrl ?? metadata.toneUrl, gear: gear, author: author, tags: tags, makes: makes, models: models
@@ -134,6 +142,7 @@ final class ToneModelStore {
             "tone_name": toneName,
             "model_name": modelName,
             "model_size": modelSize,
+            "architecture": architectureVersion ?? "unknown",
             "bytes": data.count,
         ])
 
@@ -226,6 +235,7 @@ final class ToneModelStore {
                     toneUrl: metadata?.toneUrl,
                     modelName: modelMeta?.modelName ?? modelId,
                     modelSize: modelMeta?.modelSize ?? "unknown",
+                    architectureVersion: modelMeta?.architectureVersion,
                     gear: metadata?.gear ?? "",
                     author: metadata?.author ?? "",
                     tags: metadata?.tags ?? [],

@@ -436,15 +436,18 @@ pub unsafe extern "C" fn dsp_kernel_nam_path_at(
     })
 }
 
-/// Inject NAM model binary data into the loaded WASM backend at the given slot.
-/// Call after `dsp_kernel_load_wasm` for each path returned by `dsp_kernel_nam_path_at`.
-/// Returns true on success.
+/// Inject a raw `.nam` file (JSON bytes, exactly as read from disk) into the
+/// loaded WASM backend at the given slot.  All parsing — including the
+/// SlimmableContainer wrapper used by NAM A2 — happens in Rust.
+/// Call after `dsp_kernel_load_wasm` for each path returned by
+/// `dsp_kernel_nam_path_at`.  Returns true on success; on false, read the
+/// exact error via `dsp_kernel_last_error`.
 ///
 /// # Safety
 /// - `kernel` must be a valid pointer returned by `dsp_kernel_create`.
 /// - `data` must point to `len` valid bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn dsp_kernel_inject_nam_slot(
+pub unsafe extern "C" fn dsp_kernel_inject_nam_file(
     kernel: DSPKernelRef,
     slot: u32,
     data: *const u8,

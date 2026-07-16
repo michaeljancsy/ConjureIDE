@@ -738,9 +738,13 @@ enum DSPDocumentation {
     ### NamModel
 
     Properties:
-      .architecture — "WaveNet" or "LSTM"
-      .receptive_field — number of history samples needed (WaveNet only)
-      .sample_rate — sample rate the model was trained at
+      .architecture — "WaveNet" or "LSTM" after loading. A2 tones (.nam files
+        with architecture "SlimmableContainer") load transparently: the
+        highest-quality packed submodel (A2-Full) is selected automatically
+        and reports as "WaveNet".
+      .receptive_field — number of history samples needed (WaveNet only);
+        ~4093 for an A1 standard model, ~6347 for A2
+      .sample_rate — sample rate the model was trained at (48000 for A2)
 
     Methods:
       .process(audio: np.ndarray, channel: int) -> np.ndarray
@@ -832,10 +836,15 @@ enum DSPDocumentation {
 
     ## Notes
 
+    - Supported architectures: WaveNet and LSTM (A1), plus SlimmableContainer
+      (A2 — the current tone3000 generation). Models using features outside
+      this set (FiLM conditioning, gating, grouped convolutions, channel
+      slicing) fail to load with an exact "Unsupported NAM feature" error.
     - NAM models are mono — inference runs independently per channel with shared weights
     - WaveNet models maintain a sliding history window across callbacks (automatic)
     - If model sample rate != DAW sample rate, a warning is logged on first process() call
-    - Use list_tones tool to see downloaded tones and their tone3000:// paths
+    - Use list_tones tool to see downloaded tones, their architecture (A1/A2),
+      and their tone3000:// paths
     """
 
     static let state = """

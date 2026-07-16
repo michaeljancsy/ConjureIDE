@@ -1,7 +1,9 @@
 //! NAM (Neural Amp Modeler) inference for ConjureDSP Rust/WASM presets.
 //!
-//! Supports WaveNet and LSTM architectures.  Model data is injected into WASM
-//! linear memory by the host via a binary protocol (see [`NamModel::from_binary`]).
+//! Supports WaveNet and LSTM architectures, plus the `SlimmableContainer`
+//! wrapper used by NAM A2 (.nam file version 0.7.0).  The host parses raw
+//! `.nam` JSON via [`NamModel::from_json`]; WASM modules never see model
+//! data — they call back into the host through `__conjuredsp_nam_process_slot`.
 //!
 //! # Quick start
 //!
@@ -33,6 +35,8 @@
 //! ```
 
 extern crate alloc;
+use alloc::format;
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -78,8 +82,13 @@ fn reluf(x: f32) -> f32 {
     if x > 0.0 { x } else { 0.0 }
 }
 
+#[inline]
+fn leaky_reluf(x: f32, negative_slope: f32) -> f32 {
+    if x > 0.0 { x } else { negative_slope * x }
+}
+
 // ---------------------------------------------------------------------------
-// Weight reader (for binary protocol)
+// Weight reader
 // ---------------------------------------------------------------------------
 
 struct WeightReader<'a> {
@@ -92,14 +101,24 @@ impl<'a> WeightReader<'a> {
         Self { data, offset: 0 }
     }
 
-    fn read(&mut self, count: usize) -> &'a [f32] {
+    fn read(&mut self, count: usize) -> Result<&'a [f32], String> {
+        if self.offset + count > self.data.len() {
+            return Err(format!(
+                "NAM weights exhausted: needed {} more at offset {}, only {} total — weight-order mismatch or truncated file",
+                count, self.offset, self.data.len()
+            ));
+        }
         let slice = &self.data[self.offset..self.offset + count];
         self.offset += count;
-        slice
+        Ok(slice)
     }
 
-    fn read_to_vec(&mut self, count: usize) -> Vec<f32> {
-        self.read(count).to_vec()
+    fn read_to_vec(&mut self, count: usize) -> Result<Vec<f32>, String> {
+        Ok(self.read(count)?.to_vec())
+    }
+
+    fn remaining(&self) -> usize {
+        self.data.len() - self.offset
     }
 }
 
@@ -112,14 +131,37 @@ enum Activation {
     Tanh,
     Relu,
     Sigmoid,
+    LeakyRelu(f32),
 }
 
 impl Activation {
-    fn from_str(s: &str) -> Self {
-        match s {
-            "ReLU" => Activation::Relu,
-            "Sigmoid" => Activation::Sigmoid,
-            _ => Activation::Tanh,
+    /// Parse an activation from its .nam JSON form: either a string
+    /// (`"Tanh"`, `"ReLU"`, …) or an object (`{"type": "LeakyReLU",
+    /// "negative_slope": 0.01}`).  `default` is used when the value is
+    /// absent (JSON null).  Unknown activations are a hard error so
+    /// unsupported models fail loudly instead of sounding wrong.
+    fn from_json(v: &JsonValue, default: Activation) -> Result<Self, String> {
+        let name = match v {
+            JsonValue::Null => return Ok(default),
+            JsonValue::Str(s) => s.as_str(),
+            JsonValue::Object(_) => match v.get("type") {
+                JsonValue::Str(s) => s.as_str(),
+                _ => return Err(String::from("Unsupported NAM feature: activation object without a \"type\" string")),
+            },
+            _ => return Err(String::from("Unsupported NAM feature: activation must be a string or object")),
+        };
+        match name {
+            "Tanh" => Ok(Activation::Tanh),
+            "ReLU" => Ok(Activation::Relu),
+            "Sigmoid" => Ok(Activation::Sigmoid),
+            "LeakyReLU" => {
+                let slope = match v.get("negative_slope") {
+                    JsonValue::Null => 0.01,
+                    s => s.as_f32(),
+                };
+                Ok(Activation::LeakyRelu(slope))
+            }
+            other => Err(format!("Unsupported NAM feature: activation \"{}\"", other)),
         }
     }
 
@@ -130,6 +172,7 @@ impl Activation {
             Activation::Tanh => tanhf(x),
             Activation::Relu => reluf(x),
             Activation::Sigmoid => sigmoidf(x),
+            Activation::LeakyRelu(slope) => leaky_reluf(x, slope),
         }
     }
 }
@@ -159,12 +202,17 @@ fn conv1d(
 
     let cik = c_in * kernel;
 
-    // Build im2col matrix in scratch [cik × l_out]
-    for k in 0..kernel {
-        let offset = (kernel - 1 - k) * dilation;
-        for c in 0..c_in {
-            let src_row = c * l_in;
-            let dst_row = (k * c_in + c) * l_out;
+    // Build im2col matrix in scratch [cik × l_out].  Row order MUST match the
+    // weight's inner layout: .nam serializes Conv1D weights as [out][in][tap],
+    // so scratch row (c * kernel + k) pairs with weight element [c][k].
+    // Tap orientation follows PyTorch Conv1d / NeuralAmpModelerCore: tap k
+    // multiplies x[t + k·d] within the window, i.e. the LAST tap sees the
+    // newest sample.
+    for c in 0..c_in {
+        let src_row = c * l_in;
+        for k in 0..kernel {
+            let offset = k * dilation;
+            let dst_row = (c * kernel + k) * l_out;
             for j in 0..l_out {
                 scratch[dst_row + j] = x[src_row + offset + j];
             }
@@ -217,6 +265,7 @@ struct WaveNetLayer {
     channels: usize,
     dilation: usize,
     kernel_size: usize,
+    bottleneck: usize,
     gated: bool,
     activation: Activation,
     // Weights stored as flat Vec<f32>
@@ -224,70 +273,90 @@ struct WaveNetLayer {
     conv_b: Vec<f32>,   // [mid_ch]
     mix_w: Vec<f32>,    // [mid_ch × condition_size]
     has_layer1x1: bool,
-    l1x1_w: Vec<f32>,   // [channels × channels]
+    l1x1_w: Vec<f32>,   // [channels × bottleneck]
+    l1x1_b: Vec<f32>,   // [channels]
     has_head1x1: bool,
-    h1x1_w: Vec<f32>,   // [head1x1_out × channels]
+    h1x1_w: Vec<f32>,   // [head1x1_out × bottleneck]
+    h1x1_b: Vec<f32>,   // [head1x1_out]
     head1x1_out: usize,
     mid_ch: usize,
     condition_size: usize,
 }
 
 struct WaveNetLayerArray {
+    /// Total receptive field: conv stack (1 + Σ(kᵢ−1)·dᵢ) plus head_kernel − 1.
     receptive_field: usize,
     channels: usize,
     rechannel_w: Vec<f32>,  // [channels × input_size]
     input_size: usize,
     layers: Vec<WaveNetLayer>,
-    head_rechannel_w: Vec<f32>,  // [head_size × skip_ch]
+    head_rechannel_w: Vec<f32>,  // [head_size × skip_ch × head_kernel]
     head_rechannel_b: Vec<f32>,  // [head_size]
     head_size: usize,
+    head_kernel: usize,
     skip_ch: usize,
 }
 
 impl WaveNetLayerArray {
-    fn from_config(cfg: &WaveNetLayerArrayConfig, reader: &mut WeightReader) -> Self {
+    fn from_config(cfg: &WaveNetLayerArrayConfig, reader: &mut WeightReader) -> Result<Self, String> {
         let channels = cfg.channels;
         let input_size = cfg.input_size;
         let condition_size = cfg.condition_size;
-        let head_size = cfg.head_size;
-        let kernel_size = cfg.kernel_size;
+        let bottleneck = cfg.bottleneck;
+        let head_size = cfg.head.out_channels;
+        let head_kernel = cfg.head.kernel_size;
         let gated = cfg.gated;
-        let activation = Activation::from_str(&cfg.activation);
         let has_layer1x1 = cfg.has_layer1x1;
         let has_head1x1 = cfg.has_head1x1;
         let head1x1_out = cfg.head1x1_out;
 
-        let receptive_field = 1 + cfg.dilations.iter().map(|&d| (kernel_size - 1) * d).sum::<usize>();
+        let receptive_field = 1 + cfg.dilations.iter().zip(cfg.kernel_sizes.iter())
+            .map(|(&d, &k)| (k - 1) * d)
+            .sum::<usize>()
+            + (head_kernel - 1);
 
-        let rechannel_w = reader.read_to_vec(channels * input_size);
+        let rechannel_w = reader.read_to_vec(channels * input_size)?;
 
-        let mid_ch = if gated { 2 * channels } else { channels };
+        let mid_ch = if gated { 2 * bottleneck } else { bottleneck };
 
         let mut layers = Vec::with_capacity(cfg.dilations.len());
-        for &dil in &cfg.dilations {
-            let conv_w = reader.read_to_vec(mid_ch * channels * kernel_size);
-            let conv_b = reader.read_to_vec(mid_ch);
-            let mix_w = reader.read_to_vec(mid_ch * condition_size);
-            let l1x1_w = if has_layer1x1 { reader.read_to_vec(channels * channels) } else { Vec::new() };
-            let h1x1_w = if has_head1x1 { reader.read_to_vec(head1x1_out * channels) } else { Vec::new() };
+        for (i, &dil) in cfg.dilations.iter().enumerate() {
+            let kernel_size = cfg.kernel_sizes[i];
+            let activation = cfg.activations[i];
+            let conv_w = reader.read_to_vec(mid_ch * channels * kernel_size)?;
+            let conv_b = reader.read_to_vec(mid_ch)?;
+            let mix_w = reader.read_to_vec(mid_ch * condition_size)?;
+            // layer1x1 / head1x1 always carry a bias when active (both the
+            // legacy and current NeuralAmpModelerCore construct them with
+            // bias=true unconditionally).
+            let (l1x1_w, l1x1_b) = if has_layer1x1 {
+                (reader.read_to_vec(channels * bottleneck)?, reader.read_to_vec(channels)?)
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            let (h1x1_w, h1x1_b) = if has_head1x1 {
+                (reader.read_to_vec(head1x1_out * bottleneck)?, reader.read_to_vec(head1x1_out)?)
+            } else {
+                (Vec::new(), Vec::new())
+            };
 
             layers.push(WaveNetLayer {
-                channels, dilation: dil, kernel_size, gated, activation,
+                channels, dilation: dil, kernel_size, bottleneck, gated, activation,
                 conv_w, conv_b, mix_w,
-                has_layer1x1, l1x1_w,
-                has_head1x1, h1x1_w, head1x1_out,
+                has_layer1x1, l1x1_w, l1x1_b,
+                has_head1x1, h1x1_w, h1x1_b, head1x1_out,
                 mid_ch, condition_size,
             });
         }
 
-        let skip_ch = if has_head1x1 { head1x1_out } else { channels };
-        let head_rechannel_w = reader.read_to_vec(head_size * skip_ch);
-        let head_rechannel_b = if cfg.head_bias { reader.read_to_vec(head_size) } else { Vec::new() };
+        let skip_ch = if has_head1x1 { head1x1_out } else { bottleneck };
+        let head_rechannel_w = reader.read_to_vec(head_size * skip_ch * head_kernel)?;
+        let head_rechannel_b = if cfg.head.bias { reader.read_to_vec(head_size)? } else { Vec::new() };
 
-        Self {
+        Ok(Self {
             receptive_field, channels, rechannel_w, input_size,
-            layers, head_rechannel_w, head_rechannel_b, head_size, skip_ch,
-        }
+            layers, head_rechannel_w, head_rechannel_b, head_size, head_kernel, skip_ch,
+        })
     }
 }
 
@@ -313,29 +382,38 @@ pub struct WaveNet {
 }
 
 impl WaveNet {
-    fn from_config(cfg: &WaveNetConfig, reader: &mut WeightReader) -> Self {
+    fn from_config(cfg: &WaveNetConfig, reader: &mut WeightReader) -> Result<Self, String> {
         let mut layer_arrays = Vec::new();
         for la_cfg in &cfg.layers {
-            layer_arrays.push(WaveNetLayerArray::from_config(la_cfg, reader));
+            layer_arrays.push(WaveNetLayerArray::from_config(la_cfg, reader)?);
         }
 
         let mut head_layers = Vec::new();
         if let Some(ref head_cfg) = cfg.head {
-            let act = Activation::from_str(&head_cfg.activation);
+            let act = head_cfg.activation;
             let mut in_ch = head_cfg.in_channels;
             for i in 0..head_cfg.num_layers {
                 let out_ch = if i == head_cfg.num_layers - 1 { head_cfg.out_channels } else { head_cfg.channels };
-                let w = reader.read_to_vec(out_ch * in_ch);
-                let b = reader.read_to_vec(out_ch);
+                let w = reader.read_to_vec(out_ch * in_ch)?;
+                let b = reader.read_to_vec(out_ch)?;
                 head_layers.push((act, w, b, out_ch, in_ch));
                 in_ch = out_ch;
             }
         }
 
-        let head_scale = if reader.data.len() > reader.offset {
-            reader.read(1)[0]
-        } else {
-            cfg.head_scale
+        // Strict tail check: the trainer appends exactly one trailing weight
+        // (head_scale).  Anything else left over means the weight-read order
+        // diverged from the file — fail loudly rather than play garbage.
+        let head_scale = match reader.remaining() {
+            1 => reader.read(1)?[0],
+            0 => cfg.head_scale,
+            n => {
+                return Err(format!(
+                    "NAM WaveNet weight mismatch: {} unconsumed weights after loading all layers — \
+                     weight-order mismatch between file and parser",
+                    n
+                ));
+            }
         };
 
         let mut receptive_field = 1usize;
@@ -345,29 +423,39 @@ impl WaveNet {
 
         // Compute work pool size: 6 regions, each big enough for worst case
         let max_l = 4096 + receptive_field;
-        let max_ch = layer_arrays.iter().map(|la| la.channels).max().unwrap_or(16);
-        let max_mid = max_ch * 2; // gated doubles channels
-        let max_kernel = layer_arrays.iter()
-            .flat_map(|la| la.layers.iter().map(|l| l.kernel_size))
-            .max().unwrap_or(3);
+        let max_ch = layer_arrays.iter()
+            .map(|la| la.channels.max(la.input_size).max(la.head_size))
+            .max().unwrap_or(16);
+        // Widest intermediate: conv output (2×bottleneck when gated) per layer.
+        let max_mid = layer_arrays.iter()
+            .flat_map(|la| la.layers.iter().map(|l| l.mid_ch))
+            .max().unwrap_or(32)
+            .max(max_ch);
+        // im2col scratch: c_in × kernel rows for every conv — the dilated layer
+        // convs (channels × kernel) and each layer array's head conv
+        // (skip_ch × head_kernel).
+        let max_cik = layer_arrays.iter()
+            .flat_map(|la| la.layers.iter().map(|l| l.channels * l.kernel_size))
+            .max().unwrap_or(48)
+            .max(layer_arrays.iter().map(|la| la.skip_ch * la.head_kernel).max().unwrap_or(1));
         // condition_size governs scratch usage during condition mix gather (condition_size * max_l floats)
         let max_condition_size = layer_arrays.iter()
             .flat_map(|la| la.layers.iter().map(|l| l.condition_size))
             .max().unwrap_or(1);
         let region_size = (max_mid * max_l)
-            .max(max_ch * max_kernel * max_l)
+            .max(max_cik * max_l)
             .max(max_condition_size * max_l);
 
         // rechannel_temp needs to hold max_ch * max_l for same-region rechannel
         let rechannel_temp_size = max_ch * max_l;
 
-        WaveNet {
+        Ok(WaveNet {
             layer_arrays, head_layers, head_scale, receptive_field,
             history: Vec::new(),
             work: vec![0.0; region_size * 6],
             region_size,
             rechannel_temp: vec![0.0; rechannel_temp_size],
-        }
+        })
     }
 
     /// Process a mono buffer. Maintains per-channel state (history).
@@ -417,9 +505,13 @@ impl WaveNet {
         for la_idx in 0..self.layer_arrays.len() {
             let la_rf = self.layer_arrays[la_idx].receptive_field;
             let la_channels = self.layer_arrays[la_idx].channels;
+            let la_head_kernel = self.layer_arrays[la_idx].head_kernel;
             let _la_input_size = self.layer_arrays[la_idx].input_size;
             let out_length = x_len.saturating_sub(la_rf - 1);
             if out_length == 0 { break; }
+            // The per-layer head terms accumulate at the conv stack's output
+            // length; the head conv (kernel ≥ 1) then shrinks it to out_length.
+            let head_target = out_length + (la_head_kernel - 1);
 
             // Save previous rechanneled head data before this layer array
             // overwrites head_off with its own accumulation.
@@ -460,13 +552,13 @@ impl WaveNet {
                     // Skip the normal conv1x1 below
                     x_ch = la_channels; // update for layer processing
                     // Process layers in this array
-                    self._process_layer_array(la_idx, out_length, &mut x_len, &mut x_ch,
+                    self._process_layer_array(la_idx, head_target, &mut x_len, &mut x_ch,
                                               x_region, full_len, &mut la_head_acc_len, &mut la_head_ch);
                     // Broadcast-add previous rechanneled head, then rechannel current head
                     Self::_finalize_head(
                         &mut self.work, &self.rechannel_temp,
                         &self.layer_arrays[la_idx],
-                        head_off, 3 * rs,
+                        head_off, 3 * rs, 5 * rs,
                         had_prev_head, global_head_ch, global_head_acc_len,
                         &mut la_head_acc_len, &mut la_head_ch,
                     );
@@ -485,14 +577,14 @@ impl WaveNet {
 
             x_ch = la_channels;
 
-            self._process_layer_array(la_idx, out_length, &mut x_len, &mut x_ch,
+            self._process_layer_array(la_idx, head_target, &mut x_len, &mut x_ch,
                                       x_region, full_len, &mut la_head_acc_len, &mut la_head_ch);
 
             // Broadcast-add previous rechanneled head, then rechannel current head
             Self::_finalize_head(
                 &mut self.work, &self.rechannel_temp,
                 &self.layer_arrays[la_idx],
-                head_off, 3 * rs,
+                head_off, 3 * rs, 5 * rs,
                 had_prev_head, global_head_ch, global_head_acc_len,
                 &mut la_head_acc_len, &mut la_head_ch,
             );
@@ -546,6 +638,12 @@ impl WaveNet {
                         self.work[head_off + i] = reluf(self.work[head_off + i]);
                     }
                 }
+                Activation::LeakyRelu(slope) => {
+                    let slope = *slope;
+                    for i in 0..count {
+                        self.work[head_off + i] = leaky_reluf(self.work[head_off + i], slope);
+                    }
+                }
             }
             // conv1x1 from head region → temp region
             let (head_slice, temp_slice) = if head_off < temp_off {
@@ -573,10 +671,14 @@ impl WaveNet {
         hist.extend_from_slice(&self.work[full_len - hist_len..full_len]);
     }
 
+    /// Runs the dilated-conv layers of one layer array.  `head_target` is the
+    /// number of trailing samples each layer contributes to the head
+    /// accumulator — the conv stack's output length (the head conv in
+    /// `_finalize_head` then shrinks it to the array's final output length).
     fn _process_layer_array(
         &mut self,
         la_idx: usize,
-        out_length: usize,
+        head_target: usize,
         x_len: &mut usize,
         x_ch: &mut usize,
         x_region: usize,
@@ -597,6 +699,7 @@ impl WaveNet {
             let kernel_size = self.layer_arrays[la_idx].layers[l_idx].kernel_size;
             let mid_ch = self.layer_arrays[la_idx].layers[l_idx].mid_ch;
             let channels = self.layer_arrays[la_idx].layers[l_idx].channels;
+            let bottleneck = self.layer_arrays[la_idx].layers[l_idx].bottleneck;
             let gated = self.layer_arrays[la_idx].layers[l_idx].gated;
             let activation = self.layer_arrays[la_idx].layers[l_idx].activation;
             let condition_size = self.layer_arrays[la_idx].layers[l_idx].condition_size;
@@ -656,7 +759,7 @@ impl WaveNet {
 
             // Activation (in-place in conv region)
             if gated {
-                let half = channels * l_out;
+                let half = bottleneck * l_out;
                 // Use scratch region as temp for tanh/sigmoid results
                 let work_ptr = self.work.as_mut_ptr();
                 unsafe {
@@ -672,7 +775,7 @@ impl WaveNet {
                     accel::vec_mul(tanh_out, sig_out, result);
                 }
             } else {
-                let count = channels * l_out;
+                let count = bottleneck * l_out;
                 match activation {
                     Activation::Tanh => {
                         // Use scratch region as temp (same approach as gated path)
@@ -700,18 +803,24 @@ impl WaveNet {
                             self.work[conv_off + i] = reluf(self.work[conv_off + i]);
                         }
                     }
+                    Activation::LeakyRelu(slope) => {
+                        for i in 0..count {
+                            self.work[conv_off + i] = leaky_reluf(self.work[conv_off + i], slope);
+                        }
+                    }
                 }
             }
 
             // Residual: x[:, -l_out:] + layer_out → x[:, :l_out]
             if has_layer1x1 {
                 let l1x1_w = &self.layer_arrays[la_idx].layers[l_idx].l1x1_w;
+                let l1x1_b = &self.layer_arrays[la_idx].layers[l_idx].l1x1_b;
                 // l1x1 output goes to scratch region temporarily
                 let work_ptr = self.work.as_mut_ptr();
                 unsafe {
-                    let act_slice = core::slice::from_raw_parts(work_ptr.add(conv_off), channels * l_out);
+                    let act_slice = core::slice::from_raw_parts(work_ptr.add(conv_off), bottleneck * l_out);
                     let l1x1_out = core::slice::from_raw_parts_mut(work_ptr.add(scratch_off), channels * l_out);
-                    conv1x1(act_slice, channels, l_out, l1x1_w, channels, &[], l1x1_out);
+                    conv1x1(act_slice, bottleneck, l_out, l1x1_w, channels, l1x1_b, l1x1_out);
                     // residual = x[:, -l_out:] + l1x1_out → x[:, :l_out]
                     for c in 0..channels {
                         let x_offset = curr_x_len - l_out;
@@ -737,35 +846,36 @@ impl WaveNet {
             let h_data_off;
             if has_head1x1 {
                 let h1x1_w = &self.layer_arrays[la_idx].layers[l_idx].h1x1_w;
+                let h1x1_b = &self.layer_arrays[la_idx].layers[l_idx].h1x1_b;
                 h_data_ch = head1x1_out;
                 // h1x1 output → end of scratch
                 let h1x1_off = scratch_off + channels * l_out;
                 let work_ptr = self.work.as_mut_ptr();
                 unsafe {
-                    let act_slice = core::slice::from_raw_parts(work_ptr.add(conv_off), channels * l_out);
+                    let act_slice = core::slice::from_raw_parts(work_ptr.add(conv_off), bottleneck * l_out);
                     let h1x1_out = core::slice::from_raw_parts_mut(work_ptr.add(h1x1_off), head1x1_out * l_out);
-                    conv1x1(act_slice, channels, l_out, h1x1_w, head1x1_out, &[], h1x1_out);
+                    conv1x1(act_slice, bottleneck, l_out, h1x1_w, head1x1_out, h1x1_b, h1x1_out);
                 }
                 h_data_off = h1x1_off;
             } else {
-                h_data_ch = channels;
+                h_data_ch = bottleneck;
                 h_data_off = conv_off;
             }
 
             if *head_acc_len == 0 {
                 *head_ch = h_data_ch;
-                *head_acc_len = out_length;
+                *head_acc_len = head_target;
                 for c in 0..h_data_ch {
-                    for j in 0..out_length {
-                        let src_j = l_out - out_length + j;
-                        self.work[head_off + c * out_length + j] = self.work[h_data_off + c * l_out + src_j];
+                    for j in 0..head_target {
+                        let src_j = l_out - head_target + j;
+                        self.work[head_off + c * head_target + j] = self.work[h_data_off + c * l_out + src_j];
                     }
                 }
             } else {
                 for c in 0..h_data_ch {
-                    for j in 0..out_length {
-                        let src_j = l_out - out_length + j;
-                        self.work[head_off + c * out_length + j] += self.work[h_data_off + c * l_out + src_j];
+                    for j in 0..head_target {
+                        let src_j = l_out - head_target + j;
+                        self.work[head_off + c * head_target + j] += self.work[h_data_off + c * l_out + src_j];
                     }
                 }
             }
@@ -780,14 +890,18 @@ impl WaveNet {
     }
 
     /// Broadcast-add previous rechanneled head to current un-rechanneled head,
-    /// then apply head rechannel. Matches Python's behavior where the previous
-    /// rechanneled head is accumulated BEFORE the current array's rechannel.
+    /// then apply the head rechannel conv. Matches Python's behavior where the
+    /// previous rechanneled head is accumulated BEFORE the current array's
+    /// rechannel.  The rechannel is a Conv1D with kernel `la.head_kernel`
+    /// (dilation 1); legacy A1 files have kernel 1, which reduces to the old
+    /// conv1x1 exactly.  On exit `la_head_acc_len` shrinks by head_kernel − 1.
     fn _finalize_head(
         work: &mut [f32],
         prev_head_data: &[f32],
         la: &WaveNetLayerArray,
         head_off: usize,
         conv_off: usize,
+        scratch_off: usize,
         had_prev_head: bool,
         prev_head_ch: usize,
         prev_head_len: usize,
@@ -827,18 +941,25 @@ impl WaveNet {
             }
         }
 
-        // Head rechannel: conv1x1 on head_off [skip_ch × acc_len] → [head_size × acc_len]
+        // Head rechannel: Conv1D on head_off [skip_ch × acc_len] →
+        // [head_size × (acc_len − head_kernel + 1)]
         let la_head_size = la.head_size;
+        let head_kernel = la.head_kernel;
         let head_rechannel_w = &la.head_rechannel_w;
         let head_rechannel_b = &la.head_rechannel_b;
-        let tmp_size = la_head_size * acc_len;
+        let out_len = acc_len - (head_kernel - 1);
+        let tmp_size = la_head_size * out_len;
         let work_ptr = work.as_mut_ptr();
         unsafe {
             let head_src = core::slice::from_raw_parts(work_ptr.add(head_off), skip_ch * acc_len);
             let tmp = core::slice::from_raw_parts_mut(work_ptr.add(conv_off), tmp_size);
-            conv1x1(head_src, skip_ch, acc_len, head_rechannel_w, la_head_size, head_rechannel_b, tmp);
+            let scratch = core::slice::from_raw_parts_mut(
+                work_ptr.add(scratch_off), skip_ch * head_kernel * out_len);
+            conv1d(head_src, skip_ch, acc_len, head_rechannel_w, la_head_size, head_kernel,
+                   head_rechannel_b, 1, tmp, scratch);
             core::ptr::copy_nonoverlapping(work_ptr.add(conv_off), work_ptr.add(head_off), tmp_size);
         }
+        *la_head_acc_len = out_len;
         *la_head_ch = la_head_size;
     }
 
@@ -950,16 +1071,16 @@ fn process_lstm_cells(
 }
 
 impl Lstm {
-    fn from_config(cfg: &LstmConfig, reader: &mut WeightReader) -> Self {
+    fn from_config(cfg: &LstmConfig, reader: &mut WeightReader) -> Result<Self, String> {
         let h = cfg.hidden_size;
         let mut cells = Vec::new();
 
         for i in 0..cfg.num_layers {
             let in_sz = if i == 0 { cfg.input_size } else { h };
-            let w = reader.read_to_vec(4 * h * (in_sz + h));
-            let b = reader.read_to_vec(4 * h);
-            let initial_h = reader.read_to_vec(h);
-            let initial_c = reader.read_to_vec(h);
+            let w = reader.read_to_vec(4 * h * (in_sz + h))?;
+            let b = reader.read_to_vec(4 * h)?;
+            let initial_h = reader.read_to_vec(h)?;
+            let initial_c = reader.read_to_vec(h)?;
             cells.push(LstmCell {
                 hidden_size: h, w, b,
                 initial_h: initial_h.clone(), initial_c: initial_c.clone(),
@@ -969,15 +1090,22 @@ impl Lstm {
         }
 
         let out_ch = cfg.out_channels;
-        let head_w = reader.read_to_vec(out_ch * h);
-        let head_b = reader.read_to_vec(out_ch);
+        let head_w = reader.read_to_vec(out_ch * h)?;
+        let head_b = reader.read_to_vec(out_ch)?;
 
-        Lstm {
+        if reader.remaining() != 0 {
+            return Err(format!(
+                "NAM LSTM weight mismatch: {} unconsumed weights after loading all cells",
+                reader.remaining()
+            ));
+        }
+
+        Ok(Lstm {
             cells, head_w, head_b, hidden_size: h,
             channel_cells: Vec::new(),
             ifgo_scratch: vec![0.0; 4 * h],
             x_buf: vec![0.0; h.max(1)],
-        }
+        })
     }
 
     /// Process a mono buffer. Per-sample loop through stacked LSTM cells.
@@ -1014,19 +1142,31 @@ impl Lstm {
 // Config parsing (minimal JSON parser for known schema)
 // ---------------------------------------------------------------------------
 
+/// Per-layer-array head rechannel conv.  Legacy A1 files describe it as
+/// `head_size` + `head_bias` (implicit kernel 1); 0.6.0+ files use a nested
+/// `head` object with an explicit `kernel_size` (16 in shipping A2).
+struct HeadConvConfig {
+    out_channels: usize,
+    kernel_size: usize,
+    bias: bool,
+}
+
 struct WaveNetLayerArrayConfig {
     input_size: usize,
     condition_size: usize,
     channels: usize,
-    head_size: usize,
-    kernel_size: usize,
+    /// Conv output width; == channels when absent (A1).
+    bottleneck: usize,
+    /// Per-layer kernel sizes (a scalar `kernel_size` is replicated).
+    kernel_sizes: Vec<usize>,
     dilations: Vec<usize>,
-    activation: alloc::string::String,
+    /// Per-layer activations (a scalar `activation` is replicated).
+    activations: Vec<Activation>,
     gated: bool,
-    head_bias: bool,
     has_layer1x1: bool,
     has_head1x1: bool,
     head1x1_out: usize,
+    head: HeadConvConfig,
 }
 
 struct WaveNetHeadConfig {
@@ -1034,7 +1174,7 @@ struct WaveNetHeadConfig {
     channels: usize,
     out_channels: usize,
     num_layers: usize,
-    activation: alloc::string::String,
+    activation: Activation,
 }
 
 struct WaveNetConfig {
@@ -1050,6 +1190,39 @@ struct LstmConfig {
     out_channels: usize,
 }
 
+/// Scan a JSON string starting at its opening quote.  Handles backslash
+/// escapes (`\"`, `\\`, `\n`, …) — user-authored `.nam` metadata strings can
+/// contain them, and a naive `find('"')` would desync the whole parse.
+/// Returns the unescaped contents and total bytes consumed (both quotes).
+fn scan_json_string(s: &str) -> (String, usize) {
+    let mut out = String::new();
+    let mut iter = s.char_indices();
+    iter.next(); // opening quote
+    let mut escape = false;
+    for (i, ch) in iter {
+        if escape {
+            match ch {
+                '"' | '\\' | '/' => out.push(ch),
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                // \uXXXX and anything else: keep the escape verbatim — these
+                // only appear in metadata strings, which are never interpreted.
+                other => { out.push('\\'); out.push(other); }
+            }
+            escape = false;
+            continue;
+        }
+        match ch {
+            '\\' => escape = true,
+            '"' => return (out, i + 1),
+            _ => out.push(ch),
+        }
+    }
+    let len = s.len();
+    (out, len)
+}
+
 // Simple JSON value parser for the config object
 fn parse_json_value(s: &str) -> JsonValue {
     let s = s.trim();
@@ -1058,8 +1231,8 @@ fn parse_json_value(s: &str) -> JsonValue {
     } else if s.starts_with('[') {
         parse_json_array(s)
     } else if s.starts_with('"') {
-        let end = s[1..].find('"').unwrap_or(0) + 1;
-        JsonValue::Str(alloc::string::String::from(&s[1..end]))
+        let (val, _) = scan_json_string(s);
+        JsonValue::Str(val)
     } else if s == "true" {
         JsonValue::Bool(true)
     } else if s == "false" {
@@ -1245,9 +1418,8 @@ fn parse_json_value_with_len(s: &str) -> (JsonValue, usize) {
         let end = find_matching_brace(s_trimmed, '[', ']') + 1;
         (parse_json_array(&s_trimmed[..end]), skip + end)
     } else if s_trimmed.starts_with('"') {
-        let end = s_trimmed[1..].find('"').unwrap_or(0) + 2;
-        let val = alloc::string::String::from(&s_trimmed[1..end - 1]);
-        (JsonValue::Str(val), skip + end)
+        let (val, consumed) = scan_json_string(s_trimmed);
+        (JsonValue::Str(val), skip + consumed)
     } else if s_trimmed.starts_with("true") {
         (JsonValue::Bool(true), skip + 4)
     } else if s_trimmed.starts_with("false") {
@@ -1275,7 +1447,30 @@ fn parse_json_value_with_len(s: &str) -> (JsonValue, usize) {
     }
 }
 
-fn parse_wavenet_config(json: &JsonValue) -> WaveNetConfig {
+/// Groups other than 1 are grouped convolutions — unsupported.
+fn require_groups_of_one(la_val: &JsonValue, key: &str) -> Result<(), String> {
+    match la_val.get(key) {
+        JsonValue::Null => Ok(()),
+        v => {
+            let g = v.as_usize();
+            if g <= 1 {
+                Ok(())
+            } else {
+                Err(format!("Unsupported NAM feature: {} = {} (grouped convolutions)", key, g))
+            }
+        }
+    }
+}
+
+/// The eight per-layer-array FiLM conditioning blocks — unsupported when active.
+const FILM_KEYS: [&str; 8] = [
+    "conv_pre_film", "conv_post_film",
+    "input_mixin_pre_film", "input_mixin_post_film",
+    "activation_pre_film", "activation_post_film",
+    "layer1x1_post_film", "head1x1_post_film",
+];
+
+fn parse_wavenet_config(json: &JsonValue) -> Result<WaveNetConfig, String> {
     let mut layers = Vec::new();
     for la_val in json.get("layers").as_array() {
         let l1x1 = la_val.get("layer1x1");
@@ -1296,22 +1491,152 @@ fn parse_wavenet_config(json: &JsonValue) -> WaveNetConfig {
             _ => 1,
         };
 
+        // --- Reject unsupported 0.6.0+ features when active -----------------
+        if let JsonValue::Object(_) = l1x1 {
+            require_groups_of_one(l1x1, "groups")?;
+        }
+        if let JsonValue::Object(_) = h1x1 {
+            require_groups_of_one(h1x1, "groups")?;
+        }
+        require_groups_of_one(la_val, "groups_input")?;
+        require_groups_of_one(la_val, "groups_input_mixin")?;
+        for key in FILM_KEYS {
+            if let JsonValue::Object(_) = la_val.get(key) {
+                if la_val.get(key).get("active").as_bool() {
+                    return Err(format!("Unsupported NAM feature: {} is active (FiLM conditioning)", key));
+                }
+            }
+        }
+        if !matches!(la_val.get("slimmable"), JsonValue::Null) {
+            return Err(String::from("Unsupported NAM feature: slimmable (channel-sliced WaveNet)"));
+        }
+        match la_val.get("gating_mode") {
+            JsonValue::Null => {}
+            JsonValue::Str(s) if s == "none" => {}
+            JsonValue::Array(modes) => {
+                for m in modes {
+                    if m.as_str() != "none" {
+                        return Err(format!("Unsupported NAM feature: gating_mode \"{}\"", m.as_str()));
+                    }
+                }
+            }
+            v => return Err(format!("Unsupported NAM feature: gating_mode \"{}\"", v.as_str())),
+        }
+        if let JsonValue::Array(secondary) = la_val.get("secondary_activation") {
+            for s in secondary {
+                if !matches!(s, JsonValue::Null) {
+                    return Err(String::from("Unsupported NAM feature: secondary_activation"));
+                }
+            }
+        }
+
+        // --- Core dimensions -------------------------------------------------
+        let channels = la_val.get("channels").as_usize();
         let dilations: Vec<usize> = la_val.get("dilations").as_array().iter()
             .map(|v| v.as_usize())
             .collect();
+        if dilations.is_empty() {
+            return Err(String::from("NAM WaveNet layer array has no dilations"));
+        }
+
+        let bottleneck = match la_val.get("bottleneck") {
+            JsonValue::Null => channels,
+            v => {
+                let b = v.as_usize();
+                if b == 0 {
+                    return Err(String::from("NAM WaveNet bottleneck must be a positive integer"));
+                }
+                b
+            }
+        };
+        if !has_layer1x1 && bottleneck != channels {
+            return Err(format!(
+                "NAM WaveNet config invalid: bottleneck ({}) must equal channels ({}) when layer1x1 is inactive",
+                bottleneck, channels
+            ));
+        }
+
+        // Per-layer kernel sizes: new-format array, or legacy scalar replicated.
+        let kernel_sizes: Vec<usize> = match la_val.get("kernel_sizes") {
+            JsonValue::Array(ks) => {
+                let v: Vec<usize> = ks.iter().map(|k| k.as_usize()).collect();
+                if v.len() != dilations.len() {
+                    return Err(format!(
+                        "NAM WaveNet config invalid: kernel_sizes has {} entries but dilations has {}",
+                        v.len(), dilations.len()
+                    ));
+                }
+                if v.iter().any(|&k| k == 0) {
+                    return Err(String::from("NAM WaveNet kernel_sizes entries must be positive"));
+                }
+                v
+            }
+            JsonValue::Null => {
+                let k = la_val.get("kernel_size").as_usize();
+                vec![if k == 0 { 3 } else { k }; dilations.len()]
+            }
+            _ => {
+                let k = la_val.get("kernel_sizes").as_usize();
+                if k == 0 {
+                    return Err(String::from("NAM WaveNet kernel_sizes must be an array or integer"));
+                }
+                vec![k; dilations.len()]
+            }
+        };
+
+        // Per-layer activations: new-format array of strings/objects, or a
+        // single value replicated.
+        let activations: Vec<Activation> = match la_val.get("activation") {
+            JsonValue::Array(acts) => {
+                if acts.len() != dilations.len() {
+                    return Err(format!(
+                        "NAM WaveNet config invalid: activation has {} entries but dilations has {}",
+                        acts.len(), dilations.len()
+                    ));
+                }
+                let mut v = Vec::with_capacity(acts.len());
+                for a in acts {
+                    v.push(Activation::from_json(a, Activation::Tanh)?);
+                }
+                v
+            }
+            single => vec![Activation::from_json(single, Activation::Tanh)?; dilations.len()],
+        };
+
+        // Head rechannel conv: nested `head` object (0.6.0+) or legacy
+        // head_size/head_bias (implicit kernel 1).
+        let head = match la_val.get("head") {
+            JsonValue::Object(_) => {
+                let h = la_val.get("head");
+                let out_channels = { let v = h.get("out_channels").as_usize(); if v == 0 { 1 } else { v } };
+                let kernel_size = { let v = h.get("kernel_size").as_usize(); if v == 0 { 1 } else { v } };
+                HeadConvConfig { out_channels, kernel_size, bias: h.get("bias").as_bool() }
+            }
+            _ => HeadConvConfig {
+                out_channels: la_val.get("head_size").as_usize(),
+                kernel_size: 1,
+                bias: la_val.get("head_bias").as_bool(),
+            },
+        };
+        if head.out_channels == 0 {
+            return Err(String::from("NAM WaveNet layer array is missing its head (head object or head_size)"));
+        }
 
         layers.push(WaveNetLayerArrayConfig {
             input_size: la_val.get("input_size").as_usize(),
             condition_size: la_val.get("condition_size").as_usize(),
-            channels: la_val.get("channels").as_usize(),
-            head_size: la_val.get("head_size").as_usize(),
-            kernel_size: { let v = la_val.get("kernel_size").as_usize(); if v == 0 { 3 } else { v } },
+            channels,
+            bottleneck,
+            kernel_sizes,
             dilations,
-            activation: alloc::string::String::from(la_val.get("activation").as_str()),
+            activations,
             gated: la_val.get("gated").as_bool(),
-            head_bias: la_val.get("head_bias").as_bool(),
             has_layer1x1, has_head1x1, head1x1_out,
+            head,
         });
+    }
+    if layers.is_empty() {
+        return Err(String::from("NAM WaveNet config has no layer arrays"));
     }
 
     let head = {
@@ -1319,25 +1644,22 @@ fn parse_wavenet_config(json: &JsonValue) -> WaveNetConfig {
         match h {
             JsonValue::Object(_) => Some(WaveNetHeadConfig {
                 in_channels: { let v = h.get("in_channels").as_usize(); if v == 0 {
-                    layers.last().map(|l| l.head_size).unwrap_or(1)
+                    layers.last().map(|l| l.head.out_channels).unwrap_or(1)
                 } else { v } },
                 channels: h.get("channels").as_usize(),
                 out_channels: { let v = h.get("out_channels").as_usize(); if v == 0 { 1 } else { v } },
                 num_layers: h.get("num_layers").as_usize(),
-                activation: {
-                    let s = h.get("activation").as_str();
-                    alloc::string::String::from(if s.is_empty() { "ReLU" } else { s })
-                },
+                activation: Activation::from_json(h.get("activation"), Activation::Relu)?,
             }),
             _ => None,
         }
     };
 
-    WaveNetConfig {
+    Ok(WaveNetConfig {
         layers,
         head,
         head_scale: { let v = json.get("head_scale").as_f32(); if v == 0.0 { 1.0 } else { v } },
-    }
+    })
 }
 
 fn parse_lstm_config(json: &JsonValue) -> LstmConfig {
@@ -1360,56 +1682,81 @@ pub enum NamModel {
 }
 
 impl NamModel {
-    /// Deserialize from the binary protocol injected by the host.
+    /// Parse a complete `.nam` file (raw JSON text).
     ///
-    /// Binary format:
-    /// ```text
-    /// [4 bytes] architecture: u32 (0=WaveNet, 1=LSTM)
-    /// [4 bytes] sample_rate: f32
-    /// [4 bytes] config_json_len: u32
-    /// [N bytes] config JSON string
-    /// [4 bytes] weight_count: u32
-    /// [M×4 bytes] weights as f32 little-endian
-    /// ```
-    pub fn from_binary(data: &[u8]) -> Option<Self> {
-        if data.len() < 16 { return None; }
+    /// Dispatches on the top-level `"architecture"` string:
+    /// - `"WaveNet"` / `"LSTM"` — loaded directly
+    /// - `"SlimmableContainer"` (NAM A2) — loads the highest-quality submodel
+    ///   (largest `max_value`, i.e. A2-Full)
+    ///
+    /// Errors carry exact, user-facing text; unsupported-feature errors are
+    /// prefixed `Unsupported NAM feature:` / `Unsupported NAM architecture` so
+    /// callers can route them to analytics.
+    pub fn from_json(nam_file_text: &str) -> Result<Self, String> {
+        let root = parse_json_value(nam_file_text);
+        if !matches!(root, JsonValue::Object(_)) {
+            return Err(String::from("Failed to parse .nam file: not a JSON object"));
+        }
+        Self::from_model_value(&root, 0)
+    }
 
-        let arch = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-        let _sample_rate = f32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-        let config_len = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+    /// Build a model from a parsed .nam model object (the file root, or a
+    /// nested `submodels[].model` inside a SlimmableContainer).
+    fn from_model_value(v: &JsonValue, depth: usize) -> Result<Self, String> {
+        let arch = match v.get("architecture") {
+            JsonValue::Str(s) => s.as_str(),
+            _ => return Err(String::from(".nam file is missing an \"architecture\" string")),
+        };
 
-        if data.len() < 12 + config_len + 4 { return None; }
-
-        let config_json = core::str::from_utf8(&data[12..12 + config_len]).ok()?;
-        let config = parse_json_value(config_json);
-
-        let weight_offset = 12 + config_len;
-        let weight_count = u32::from_le_bytes([
-            data[weight_offset], data[weight_offset + 1],
-            data[weight_offset + 2], data[weight_offset + 3],
-        ]) as usize;
-
-        let weights_start = weight_offset + 4;
-        if data.len() < weights_start + weight_count * 4 { return None; }
-
-        let mut weights = vec![0.0f32; weight_count];
-        for i in 0..weight_count {
-            let off = weights_start + i * 4;
-            weights[i] = f32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+        if arch == "SlimmableContainer" {
+            if depth > 0 {
+                return Err(String::from("Unsupported NAM feature: nested SlimmableContainer"));
+            }
+            let submodels = v.get("config").get("submodels").as_array();
+            if submodels.is_empty() {
+                return Err(String::from("SlimmableContainer has no submodels"));
+            }
+            // Pick the highest-quality submodel (largest max_value → A2-Full).
+            let mut best: &JsonValue = &submodels[0];
+            let mut best_max = submodels[0].get("max_value").as_f32();
+            for sub in &submodels[1..] {
+                let mv = sub.get("max_value").as_f32();
+                if mv > best_max {
+                    best_max = mv;
+                    best = sub;
+                }
+            }
+            let model = best.get("model");
+            if !matches!(model, JsonValue::Object(_)) {
+                return Err(String::from("SlimmableContainer submodel is missing its \"model\" object"));
+            }
+            return Self::from_model_value(model, depth + 1);
         }
 
+        let config = v.get("config");
+        if !matches!(config, JsonValue::Object(_)) {
+            return Err(format!(".nam file is missing a \"config\" object for architecture \"{}\"", arch));
+        }
+        let weights_json = v.get("weights");
+        let weights: Vec<f32> = match weights_json {
+            JsonValue::Array(items) => items.iter().map(|w| w.as_f32()).collect(),
+            _ => return Err(String::from(".nam file is missing a \"weights\" array")),
+        };
         let mut reader = WeightReader::new(&weights);
 
         match arch {
-            0 => {
-                let cfg = parse_wavenet_config(&config);
-                Some(NamModel::WaveNet(WaveNet::from_config(&cfg, &mut reader)))
+            "WaveNet" => {
+                let cfg = parse_wavenet_config(config)?;
+                Ok(NamModel::WaveNet(WaveNet::from_config(&cfg, &mut reader)?))
             }
-            1 => {
-                let cfg = parse_lstm_config(&config);
-                Some(NamModel::Lstm(Lstm::from_config(&cfg, &mut reader)))
+            "LSTM" => {
+                let cfg = parse_lstm_config(config);
+                Ok(NamModel::Lstm(Lstm::from_config(&cfg, &mut reader)?))
             }
-            _ => None,
+            other => Err(format!(
+                "Unsupported NAM architecture \"{}\" — ConjureDSP supports WaveNet, LSTM, and SlimmableContainer (NAM A2)",
+                other
+            )),
         }
     }
 
@@ -1478,74 +1825,12 @@ mod tests {
         assert_eq!(output[31], 0.7);
     }
 
-    /// Helper: read a .nam JSON file and serialize to the binary protocol.
-    fn serialize_nam_file(path: &str) -> Vec<u8> {
-        let json_str = std::fs::read_to_string(path)
+    /// Helper: load a .nam fixture through the production JSON path.
+    fn load_nam(path: &str) -> NamModel {
+        let text = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("Failed to read {}: {}", path, e));
-        // Minimal JSON parsing for test — extract architecture, sample_rate, config, weights
-        let json_str = json_str.trim();
-
-        // Extract architecture
-        let arch_start = json_str.find("\"architecture\"").unwrap();
-        let arch_val_start = json_str[arch_start..].find(':').unwrap() + arch_start + 1;
-        let arch_str_start = json_str[arch_val_start..].find('"').unwrap() + arch_val_start + 1;
-        let arch_str_end = json_str[arch_str_start..].find('"').unwrap() + arch_str_start;
-        let architecture = &json_str[arch_str_start..arch_str_end];
-
-        // Extract sample_rate (optional — defaults to 48000)
-        let sample_rate: f32 = if let Some(sr_start) = json_str.find("\"sample_rate\"") {
-            let sr_val_start = json_str[sr_start..].find(':').unwrap() + sr_start + 1;
-            let sr_val_str = json_str[sr_val_start..].trim_start();
-            let sr_end = sr_val_str.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(sr_val_str.len());
-            sr_val_str[..sr_end].trim().parse().unwrap_or(48000.0)
-        } else {
-            48000.0
-        };
-
-        // Extract config object (find matching braces)
-        let config_key = json_str.find("\"config\"").unwrap();
-        let config_colon = json_str[config_key..].find(':').unwrap() + config_key + 1;
-        let config_start = json_str[config_colon..].find('{').unwrap() + config_colon;
-        let mut depth = 0;
-        let mut config_end = config_start;
-        for (i, c) in json_str[config_start..].chars().enumerate() {
-            match c {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        config_end = config_start + i + 1;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let config_json = &json_str[config_start..config_end];
-
-        // Extract weights array
-        let weights_key = json_str.find("\"weights\"").unwrap();
-        let weights_bracket = json_str[weights_key..].find('[').unwrap() + weights_key;
-        let weights_end = json_str[weights_bracket..].find(']').unwrap() + weights_bracket + 1;
-        let weights_str = &json_str[weights_bracket + 1..weights_end - 1];
-        let weights: Vec<f32> = weights_str.split(',')
-            .filter_map(|s| s.trim().parse::<f64>().ok())
-            .map(|v| v as f32)
-            .collect();
-
-        // Serialize to binary protocol
-        let arch: u32 = if architecture == "LSTM" { 1 } else { 0 };
-        let mut binary = Vec::new();
-        binary.extend_from_slice(&arch.to_le_bytes());
-        binary.extend_from_slice(&sample_rate.to_bits().to_le_bytes());
-        let config_bytes = config_json.as_bytes();
-        binary.extend_from_slice(&(config_bytes.len() as u32).to_le_bytes());
-        binary.extend_from_slice(config_bytes);
-        binary.extend_from_slice(&(weights.len() as u32).to_le_bytes());
-        for w in &weights {
-            binary.extend_from_slice(&w.to_bits().to_le_bytes());
-        }
-        binary
+        NamModel::from_json(&text)
+            .unwrap_or_else(|e| panic!("Failed to parse {}: {}", path, e))
     }
 
     #[test]
@@ -1557,9 +1842,7 @@ mod tests {
             return;
         }
 
-        let binary = serialize_nam_file(nam_path);
-        let mut model = NamModel::from_binary(&binary)
-            .expect("Failed to parse wavenet_tiny.nam");
+        let mut model = load_nam(nam_path);
 
         // Process silence
         let input = vec![0.0f32; 512];
@@ -1593,9 +1876,7 @@ mod tests {
             return;
         }
 
-        let binary = serialize_nam_file(nam_path);
-        let mut model = NamModel::from_binary(&binary)
-            .expect("Failed to parse lstm_tiny.nam");
+        let mut model = load_nam(nam_path);
 
         let input = vec![0.0f32; 512];
         let mut output = vec![0.0f32; 512];
@@ -1623,9 +1904,7 @@ mod tests {
             return;
         }
 
-        let binary = serialize_nam_file(nam_path);
-        let mut model = NamModel::from_binary(&binary)
-            .expect("Failed to parse wavenet_tiny.nam");
+        let mut model = load_nam(nam_path);
 
         let input = sine_wave(512, 48000.0);
         let mut output = vec![0.0f32; 512];
@@ -1663,9 +1942,7 @@ mod tests {
             return;
         }
 
-        let binary = serialize_nam_file(nam_path);
-        let mut model = NamModel::from_binary(&binary)
-            .expect("Failed to parse wavenet_standard.nam");
+        let mut model = load_nam(nam_path);
 
         let input = sine_wave(512, 48000.0);
         let mut output = vec![0.0f32; 512];
@@ -1704,9 +1981,7 @@ mod tests {
             return;
         }
 
-        let binary = serialize_nam_file(nam_path);
-        let mut model = NamModel::from_binary(&binary)
-            .expect("Failed to parse wavenet_standard.nam");
+        let mut model = load_nam(nam_path);
 
         let n = 471; // typical callback size
         let input = sine_wave(n, 44100.0);
@@ -1776,8 +2051,7 @@ mod tests {
         let py_out1 = extract_arr(&py_stdout, "output1");
         let py_out2 = extract_arr(&py_stdout, "output2");
 
-        let binary = serialize_nam_file(nam_path);
-        let mut model = NamModel::from_binary(&binary).expect("Failed to parse .nam file");
+        let mut model = load_nam(nam_path);
         let input = sine_wave(num_samples, sample_rate);
         let mut rust_out1 = vec![0.0f32; num_samples];
         let mut rust_out2 = vec![0.0f32; num_samples];
@@ -1851,9 +2125,7 @@ mod tests {
         }
 
         // Get Rust output
-        let binary = serialize_nam_file(nam_path);
-        let mut model = NamModel::from_binary(&binary)
-            .expect("Failed to parse .nam file");
+        let mut model = load_nam(nam_path);
 
         let input = sine_wave(num_samples, sample_rate);
         let mut rust_out1 = vec![0.0f32; num_samples];
@@ -1905,19 +2177,279 @@ mod tests {
     }
 
     #[test]
-    fn test_from_binary_rejects_too_small() {
-        let tiny = vec![0u8; 8]; // Less than minimum 16 bytes
-        assert!(NamModel::from_binary(&tiny).is_none());
+    fn test_from_json_rejects_non_json() {
+        let err = NamModel::from_json("this is not json").err().expect("expected parse error");
+        assert!(err.contains("not a JSON object"), "unexpected error: {}", err);
     }
 
     #[test]
-    fn test_from_binary_rejects_invalid_arch() {
-        let mut binary = Vec::new();
-        binary.extend_from_slice(&99u32.to_le_bytes()); // invalid arch
-        binary.extend_from_slice(&48000.0f32.to_bits().to_le_bytes());
-        binary.extend_from_slice(&2u32.to_le_bytes()); // config_len
-        binary.extend_from_slice(b"{}");
-        binary.extend_from_slice(&0u32.to_le_bytes()); // 0 weights
-        assert!(NamModel::from_binary(&binary).is_none());
+    fn test_from_json_rejects_unknown_architecture() {
+        let err = NamModel::from_json(
+            r#"{"architecture": "Transformer", "config": {}, "weights": []}"#,
+        ).err().expect("expected parse error");
+        assert!(err.contains("Unsupported NAM architecture"), "unexpected error: {}", err);
+        assert!(err.contains("Transformer"),
+            "error should name the offending architecture: {}", err);
+    }
+
+    #[test]
+    fn test_json_parser_handles_escaped_quotes_in_strings() {
+        // An escaped quote inside a string value must not desync the parse.
+        let v = parse_json_value(
+            r#"{"name": "tiny \"a2\" fixture", "after": 42, "nested": {"k": "a\\b"}}"#,
+        );
+        assert_eq!(v.get("name").as_str(), "tiny \"a2\" fixture");
+        assert_eq!(v.get("after").as_usize(), 42);
+        assert_eq!(v.get("nested").get("k").as_str(), "a\\b");
+    }
+
+    /// Baseline A2-shaped config JSON (mirrors a2_tiny.nam's Full submodel)
+    /// used by the unsupported-feature tests below.  `layer_overrides` is
+    /// spliced at the FRONT of the layer object — `JsonValue::get` returns the
+    /// first match, so overrides shadow the defaults that follow.
+    fn a2ish_model_json(layer_overrides: &str, weights: &str) -> std::string::String {
+        format!(
+            r#"{{
+  "version": "0.7.0",
+  "architecture": "WaveNet",
+  "config": {{
+    "layers": [{{
+      {}"input_size": 1, "condition_size": 1, "channels": 2, "bottleneck": 2,
+      "kernel_sizes": [3, 3], "dilations": [1, 3],
+      "activation": [{{"type": "LeakyReLU", "negative_slope": 0.01}}, {{"type": "LeakyReLU", "negative_slope": 0.01}}],
+      "gating_mode": ["none", "none"], "secondary_activation": [null, null],
+      "layer1x1": {{"active": true, "groups": 1}},
+      "head1x1": {{"active": false, "out_channels": 1, "groups": 1}},
+      "head": {{"out_channels": 1, "kernel_size": 2, "bias": true}},
+      "groups_input": 1, "groups_input_mixin": 1,
+      "conv_pre_film": {{"active": false, "shift": true, "groups": 1}},
+      "slimmable": null
+    }}],
+    "head": null,
+    "head_scale": 0.5
+  }},
+  "weights": [{}],
+  "sample_rate": 48000
+}}"#,
+            layer_overrides, weights
+        )
+    }
+
+    #[test]
+    fn test_a2_rejects_unsupported_features() {
+        let cases: &[(&str, &str)] = &[
+            (r#""gating_mode": ["blended", "none"], "#, "gating_mode"),
+            (r#""conv_pre_film": {"active": true, "shift": true, "groups": 1}, "#, "conv_pre_film"),
+            (r#""layer1x1": {"active": true, "groups": 2}, "#, "groups"),
+            (r#""groups_input": 4, "#, "groups_input"),
+            (r#""slimmable": {"method": "slice_channels_uniform"}, "#, "slimmable"),
+            (r#""activation": [{"type": "SiLU"}, {"type": "SiLU"}], "#, "SiLU"),
+            (r#""secondary_activation": [{"type": "Tanh"}, null], "#, "secondary_activation"),
+        ];
+        for (overrides, expect) in cases {
+            let json = a2ish_model_json(overrides, "0.0");
+            let err = NamModel::from_json(&json).err().expect("expected parse error");
+            assert!(
+                err.contains("Unsupported NAM feature"),
+                "case {:?}: expected unsupported-feature error, got: {}", expect, err
+            );
+            assert!(
+                err.contains(expect),
+                "case {:?}: error should name the feature, got: {}", expect, err
+            );
+        }
+    }
+
+    /// Weight count for the a2ish_model_json config: rechannel 2 +
+    /// 2 layers × (conv 3·2·2 + bias 2 + mixin 2 + l1x1 4 + l1x1_b 2) + head 2·2+1 + trailing 1.
+    const A2ISH_WEIGHTS: usize = 2 + 2 * (12 + 2 + 2 + 4 + 2) + 5 + 1;
+
+    #[test]
+    fn test_a2ish_exact_weight_consumption() {
+        let ws = |n: usize| {
+            let mut s = std::string::String::new();
+            for i in 0..n {
+                if i > 0 { s.push(','); }
+                s.push_str("0.01");
+            }
+            s
+        };
+        // Exact count parses.
+        assert!(NamModel::from_json(&a2ish_model_json("", &ws(A2ISH_WEIGHTS))).is_ok());
+        // Exact count minus the trailing head_scale also parses (config value used).
+        assert!(NamModel::from_json(&a2ish_model_json("", &ws(A2ISH_WEIGHTS - 1))).is_ok());
+        // One extra weight → hard error naming the mismatch.
+        let err = NamModel::from_json(&a2ish_model_json("", &ws(A2ISH_WEIGHTS + 1))).err().expect("expected parse error");
+        assert!(err.contains("unconsumed"), "unexpected error: {}", err);
+        // Truncated weights → hard error.
+        let err = NamModel::from_json(&a2ish_model_json("", &ws(A2ISH_WEIGHTS - 10))).err().expect("expected parse error");
+        assert!(err.contains("exhausted"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn test_a2_tiny_parses_and_selects_full_submodel() {
+        let nam_path = "../../tone3000_py_demo/a2_tiny.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+        let mut model = load_nam(nam_path);
+
+        // Silence in → bounded out.  (Random fixture weights have a DC
+        // response, so this only guards against explosion/NaN; exact
+        // correctness is pinned by the Python parity test.)
+        let input = vec![0.0f32; 512];
+        let mut output = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut output, 0);
+        let peak = output.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        assert!(peak.is_finite() && peak < 5.0, "a2_tiny silence output peak too high: {}", peak);
+
+        // Sine in → non-silent out.  The Lite submodel is all zeros, so any
+        // signal here proves the Full submodel (max_value 1.0) was selected.
+        model.reset();
+        let input = sine_wave(512, 48000.0);
+        let mut out1 = vec![0.0f32; 512];
+        let mut out2 = vec![0.0f32; 512];
+        model.process_buffer(&input, &mut out1, 0);
+        model.process_buffer(&input, &mut out2, 0);
+        for (label, out) in [("buf1", &out1), ("buf2", &out2)] {
+            let rms = (out.iter().map(|x| x * x).sum::<f32>() / out.len() as f32).sqrt();
+            let peak = out.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+            eprintln!("a2_tiny sine {}: rms={:.6} peak={:.6}", label, rms, peak);
+            assert!(rms > 1e-5, "{}: silent output — Lite (all-zero) submodel selected?", label);
+            assert!(peak < 50.0, "{}: unstable output peak {}", label, peak);
+            assert!(out.iter().all(|x| x.is_finite()), "{}: non-finite output", label);
+        }
+    }
+
+    #[test]
+    fn test_a2_real_file_parses_and_runs() {
+        let nam_path = "../../tone3000_py_demo/a2.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+        let mut model = load_nam(nam_path);
+
+        // Receptive field: 23-layer conv stack (6331 lookback) + head kernel 16.
+        if let NamModel::WaveNet(ref w) = model {
+            assert_eq!(w.receptive_field, 6347,
+                "A2 receptive field should be 6347, got {}", w.receptive_field);
+        } else {
+            panic!("A2 container should resolve to a WaveNet submodel");
+        }
+
+        let input = sine_wave(8192, 48000.0);
+        let mut out1 = vec![0.0f32; 8192];
+        let mut out2 = vec![0.0f32; 8192];
+        model.process_buffer(&input, &mut out1, 0);
+        model.process_buffer(&input, &mut out2, 0);
+        for (label, out) in [("buf1", &out1), ("buf2", &out2)] {
+            let rms = (out.iter().map(|x| x * x).sum::<f32>() / out.len() as f32).sqrt();
+            let peak = out.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+            eprintln!("a2 real sine {}: rms={:.6} peak={:.6}", label, rms, peak);
+            assert!(rms > 1e-4, "{}: A2 output near-silent (rms={})", label, rms);
+            assert!(peak < 10.0, "{}: A2 output unstable (peak={})", label, peak);
+            assert!(out.iter().all(|x| x.is_finite()), "{}: non-finite output", label);
+        }
+    }
+
+    #[test]
+    fn test_a2_tiny_python_parity() {
+        run_python_parity("../../tone3000_py_demo/a2_tiny.nam", 512, 48000.0);
+    }
+
+    #[test]
+    fn test_a2_real_python_parity() {
+        run_python_parity("../../tone3000_py_demo/a2.nam", 512, 48000.0);
+    }
+
+    /// Shared Rust↔Python parity harness (same protocol as the wavenet_standard
+    /// parity test, reused for the A2 fixtures).
+    fn run_python_parity(nam_path: &str, num_samples: usize, sample_rate: f32) {
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+        let python = "../../rust/python-dist/bin/python3";
+        if !std::path::Path::new(python).exists() {
+            eprintln!("Skipping: python3 not found");
+            return;
+        }
+
+        let parity_script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/nam_parity.py");
+        let py_output = std::process::Command::new(python)
+            .arg(&parity_script)
+            .arg(nam_path)
+            .arg(num_samples.to_string())
+            .arg(sample_rate.to_string())
+            .env("DYLD_LIBRARY_PATH", "../../rust/python-dist/lib")
+            .output()
+            .expect("Failed to run Python parity script");
+        assert!(py_output.status.success(), "Python failed: {}", String::from_utf8_lossy(&py_output.stderr));
+
+        let py_stdout = String::from_utf8_lossy(&py_output.stdout);
+        fn extract_arr(json: &str, key: &str) -> Vec<f32> {
+            let kp = format!("\"{}\":", key);
+            let s = json.find(&kp).unwrap();
+            let bs = json[s..].find('[').unwrap() + s + 1;
+            let be = json[bs..].find(']').unwrap() + bs;
+            json[bs..be].split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect()
+        }
+        let py_out1 = extract_arr(&py_stdout, "output1");
+        let py_out2 = extract_arr(&py_stdout, "output2");
+        assert!(!py_out1.is_empty() && !py_out2.is_empty(), "empty Python output");
+
+        let mut model = load_nam(nam_path);
+        let input = sine_wave(num_samples, sample_rate);
+        let mut rust_out1 = vec![0.0f32; num_samples];
+        let mut rust_out2 = vec![0.0f32; num_samples];
+        model.process_buffer(&input, &mut rust_out1, 0);
+        model.process_buffer(&input, &mut rust_out2, 0);
+
+        for (label, ro, po) in [("Buf1", &rust_out1, &py_out1), ("Buf2", &rust_out2, &py_out2)] {
+            let mut max_err = 0.0f32;
+            let mut worst_i = 0usize;
+            for i in 0..num_samples.min(po.len()) {
+                let err = (ro[i] - po[i]).abs();
+                if err > max_err { max_err = err; worst_i = i; }
+            }
+            eprintln!("{} {} max_err={:.6} at [{}] (Rust={:.6}, Py={:.6})",
+                nam_path, label, max_err, worst_i, ro[worst_i], po[worst_i]);
+            assert!(max_err < 1e-3, "{} {} parity FAILED: max_err={:.6}", nam_path, label, max_err);
+        }
+    }
+
+    /// Performance gate for A2-Full (8ch × 23 layers, kernels 6/15, head kernel 16).
+    /// Same protocol and threshold as the wavenet_standard perf test.
+    #[test]
+    fn test_a2_full_realtime_performance() {
+        let nam_path = "../../tone3000_py_demo/a2.nam";
+        if !std::path::Path::new(nam_path).exists() {
+            eprintln!("Skipping: {} not found", nam_path);
+            return;
+        }
+        let mut model = load_nam(nam_path);
+
+        let n = 471; // typical callback size
+        let input = sine_wave(n, 44100.0);
+        let mut output = vec![0.0f32; n];
+
+        // Warm up
+        model.process_buffer(&input, &mut output, 0);
+        model.process_buffer(&input, &mut output, 1);
+
+        let t0 = std::time::Instant::now();
+        let iterations = 5;
+        for _ in 0..iterations {
+            model.process_buffer(&input, &mut output, 0);
+            model.process_buffer(&input, &mut output, 1);
+        }
+        let avg_ms = t0.elapsed().as_secs_f64() * 1000.0 / iterations as f64;
+
+        eprintln!("A2-Full 471fr stereo: {:.1}ms (budget ~10.7ms)", avg_ms);
+        assert!(avg_ms < 20.0,
+            "A2 inference too slow ({:.1}ms for 471 stereo frames, budget ~10.7ms)", avg_ms);
     }
 }

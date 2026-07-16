@@ -22,6 +22,9 @@ private struct Tone: Codable, Identifiable {
     let platform: String?
     let createdAt: String?
     let updatedAt: String?
+    let a1ModelsCount: Int?
+    let a2ModelsCount: Int?
+    let customModelsCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case id, title, description, user, gear, images, sizes, makes, tags, url, platform
@@ -32,6 +35,9 @@ private struct Tone: Codable, Identifiable {
         case favoriteCount = "favorite_count"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case a1ModelsCount = "a1_models_count"
+        case a2ModelsCount = "a2_models_count"
+        case customModelsCount = "custom_models_count"
     }
 }
 
@@ -104,11 +110,13 @@ private struct ToneModel: Codable, Identifiable, Hashable {
     let size: String?
     let modelUrl: String?
     let toneId: IntOrString?
+    let architectureVersion: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, size
         case modelUrl = "model_url"
         case toneId = "tone_id"
+        case architectureVersion = "architecture_version"
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -278,6 +286,68 @@ struct Tone3000DecodingTests {
         #expect(result.items[0].size == "standard")
         #expect(result.items[0].modelUrl == "https://example.com/model.nam")
         #expect(result.items[0].id.stringValue == "45678")
+        // Pre-A2 responses have no architecture_version — decodes as nil.
+        #expect(result.items[0].architectureVersion == nil)
+    }
+
+    @Test("Decode A2 model with architecture_version")
+    func decodeA2Model() throws {
+        let json = """
+        {
+            "data": [
+                {
+                    "id": 900001,
+                    "name": "A2 Capture",
+                    "size": "standard",
+                    "model_url": "https://example.com/a2.nam",
+                    "tone_id": 28135,
+                    "architecture_version": "2"
+                },
+                {
+                    "id": 900002,
+                    "name": "Legacy Capture",
+                    "size": "lite",
+                    "model_url": "https://example.com/a1.nam",
+                    "tone_id": 28135,
+                    "architecture_version": "1"
+                },
+                {
+                    "id": 900003,
+                    "name": "Some IR",
+                    "size": null,
+                    "model_url": "https://example.com/x.wav",
+                    "tone_id": 28135,
+                    "architecture_version": null
+                }
+            ],
+            "page": 1, "page_size": 25, "total": 3, "total_pages": 1
+        }
+        """.data(using: .utf8)!
+
+        let result = try JSONDecoder().decode(ToneModelsResult.self, from: json)
+        #expect(result.items.count == 3)
+        #expect(result.items[0].architectureVersion == "2")
+        #expect(result.items[1].architectureVersion == "1")
+        #expect(result.items[2].architectureVersion == nil)
+    }
+
+    @Test("Decode tone with per-architecture model counts")
+    func decodeToneArchitectureCounts() throws {
+        let json = """
+        {
+            "id": 28135,
+            "title": "Test Amp",
+            "models_count": 4,
+            "a1_models_count": 2,
+            "a2_models_count": 2,
+            "custom_models_count": 0
+        }
+        """.data(using: .utf8)!
+
+        let tone = try JSONDecoder().decode(Tone.self, from: json)
+        #expect(tone.a1ModelsCount == 2)
+        #expect(tone.a2ModelsCount == 2)
+        #expect(tone.customModelsCount == 0)
     }
 
     @Test("Decode user response")
@@ -308,7 +378,8 @@ struct Tone3000DecodingTests {
 
         // Simulate fetch
         let models = [ToneModel(id: .int(45678), name: "Standard", size: "standard",
-                                modelUrl: "https://example.com/model.nam", toneId: .int(28135))]
+                                modelUrl: "https://example.com/model.nam", toneId: .int(28135),
+                                architectureVersion: "2")]
         toneModels[toneId] = models
 
         // Second "fetch" should be skipped due to cache hit

@@ -121,7 +121,7 @@ enum WasmSampleHashHarness {
             for (slot, data) in namSlots {
                 let ok = data.withUnsafeBytes { raw -> Bool in
                     guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return false }
-                    return dsp_kernel_inject_nam_slot(kernel, slot, base, UInt(data.count))
+                    return dsp_kernel_inject_nam_file(kernel, slot, base, UInt(data.count))
                 }
                 if !ok { throw Error.namInjectFailed(slot: slot) }
             }

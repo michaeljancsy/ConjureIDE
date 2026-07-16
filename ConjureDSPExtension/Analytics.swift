@@ -21,6 +21,7 @@ enum AnalyticsEvent: String {
     case githubRepoConnect = "GitHub Repo Connect"
     case namToneDownload = "NAM Tone Download"
     case namToneInsert = "NAM Tone Insert"
+    case namUnsupportedFeature = "NAM Unsupported Feature"
     case packageInstall = "Package Install"
     case crateInstall = "Crate Install"
     case mcpToolCall = "MCP Tool Call"

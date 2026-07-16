@@ -18,6 +18,7 @@ private struct ModelMetadata: Codable {
     let modelId: String
     let modelName: String
     let modelSize: String
+    let architectureVersion: String?
     let downloadDate: Date
 }
 
@@ -41,6 +42,7 @@ struct ToneModelStoreTests {
                     modelId: "82524",
                     modelName: "Standard",
                     modelSize: "standard",
+                    architectureVersion: "2",
                     downloadDate: Date(timeIntervalSince1970: 1700000000)
                 ),
             ]
@@ -57,6 +59,7 @@ struct ToneModelStoreTests {
         #expect(decoded.makes == ["Marshall", "JCM800"])
         #expect(decoded.models.count == 1)
         #expect(decoded.models[0].modelId == "82524")
+        #expect(decoded.models[0].architectureVersion == "2")
     }
 
     @Test("Metadata without tags/makes decodes with nil (backward compatibility)")
@@ -119,10 +122,13 @@ struct ToneModelStoreTests {
             makes: ["Mesa"],
             models: [
                 ModelMetadata(modelId: "233039", modelName: "Standard", modelSize: "standard",
+                              architectureVersion: "1",
                               downloadDate: Date(timeIntervalSince1970: 1700000000)),
                 ModelMetadata(modelId: "234539", modelName: "Lite", modelSize: "lite",
+                              architectureVersion: "2",
                               downloadDate: Date(timeIntervalSince1970: 1700000100)),
                 ModelMetadata(modelId: "234548", modelName: "Feather", modelSize: "feather",
+                              architectureVersion: nil,
                               downloadDate: Date(timeIntervalSince1970: 1700000200)),
             ]
         )
@@ -134,5 +140,32 @@ struct ToneModelStoreTests {
         #expect(decoded.models[0].modelName == "Standard")
         #expect(decoded.models[1].modelName == "Lite")
         #expect(decoded.models[2].modelName == "Feather")
+        #expect(decoded.models[0].architectureVersion == "1")
+        #expect(decoded.models[2].architectureVersion == nil)
+    }
+
+    @Test("Legacy metadata.json without architectureVersion still decodes")
+    func legacyMetadataDecodes() throws {
+        // Written by builds that predate architecture tracking.
+        let json = """
+        {
+            "toneId": "19",
+            "toneName": "Fender Super Reverb",
+            "gear": "amp",
+            "author": "someone",
+            "models": [
+                {
+                    "modelId": "51",
+                    "modelName": "Standard",
+                    "modelSize": "standard",
+                    "downloadDate": 700000000
+                }
+            ]
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(ToneMetadata.self, from: json)
+        #expect(decoded.models.count == 1)
+        #expect(decoded.models[0].architectureVersion == nil)
     }
 }

@@ -585,45 +585,6 @@ struct ExportDSPIntegrationTests {
         #expect(components[0]["name"] as? String == "ConjureDSP: \(longName)")
     }
 
-    // MARK: - NAM Serialization Helper
-
-    /// Serialize a .nam JSON file to the binary protocol used by `dsp_kernel_inject_nam_slot()`.
-    /// This replicates the serialization in `ExportAUAudioUnit.injectEmbeddedNamModel()` exactly.
-    private static func serializeNamFile(at url: URL) throws -> Data {
-        let namData = try Data(contentsOf: url)
-        let namJson = try JSONSerialization.jsonObject(with: namData) as! [String: Any]
-
-        let architecture = namJson["architecture"] as! String
-        let configObj = namJson["config"]!
-        let weightsArray = namJson["weights"] as! [Double]
-
-        let arch: UInt32 = architecture == "LSTM" ? 1 : 0
-        let sampleRate = Float(
-            (namJson["sample_rate"] as? Double)
-            ?? (namJson["sample_rate"] as? Int).map(Double.init)
-            ?? 48000.0
-        )
-
-        let configData = try JSONSerialization.data(withJSONObject: configObj)
-
-        var binary = Data()
-        var archLE = arch.littleEndian
-        binary.append(Data(bytes: &archLE, count: 4))
-        var srLE = sampleRate.bitPattern.littleEndian
-        binary.append(Data(bytes: &srLE, count: 4))
-        var configLen = UInt32(configData.count).littleEndian
-        binary.append(Data(bytes: &configLen, count: 4))
-        binary.append(configData)
-        var weightCount = UInt32(weightsArray.count).littleEndian
-        binary.append(Data(bytes: &weightCount, count: 4))
-        for w in weightsArray {
-            var f = Float(w).bitPattern.littleEndian
-            binary.append(Data(bytes: &f, count: 4))
-        }
-
-        return binary
-    }
-
     /// Helper to get the last kernel error as a Swift string.
     private static func kernelError(_ kernel: DSPKernelRef) -> String {
         if let ptr = dsp_kernel_last_error(kernel) {
@@ -655,14 +616,14 @@ struct ExportDSPIntegrationTests {
         // 3. Verify WASM declares a NAM path
         #expect(dsp_kernel_nam_path_count(kernel) >= 1, "NAM preset should report at least one NAM path")
 
-        // 4. Read and serialize .nam file (same as ExportAUAudioUnit does)
+        // 4. Read the raw .nam file (same as ExportAUAudioUnit does)
         let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/lstm_tiny.nam")
-        let binary = try Self.serializeNamFile(at: namURL)
+        let binary = try Data(contentsOf: namURL)
 
         // 5. Inject NAM model
         let injected = binary.withUnsafeBytes { rawBuffer -> Bool in
             guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return false }
-            return dsp_kernel_inject_nam_slot(kernel, 0, ptr, UInt(binary.count))
+            return dsp_kernel_inject_nam_file(kernel, 0, ptr, UInt(binary.count))
         }
         #expect(injected, "NAM injection should succeed. Error: \(Self.kernelError(kernel))")
 
@@ -719,14 +680,14 @@ struct ExportDSPIntegrationTests {
         // 3. Verify WASM declares a NAM path
         #expect(dsp_kernel_nam_path_count(kernel) >= 1, "NAM preset should report at least one NAM path")
 
-        // 4. Read and serialize .nam file (same as ExportAUAudioUnit does)
+        // 4. Read the raw .nam file (same as ExportAUAudioUnit does)
         let namURL = Self.repoRootURL.appendingPathComponent("tone3000_py_demo/wavenet_tiny.nam")
-        let binary = try Self.serializeNamFile(at: namURL)
+        let binary = try Data(contentsOf: namURL)
 
         // 5. Inject NAM model
         let injected = binary.withUnsafeBytes { rawBuffer -> Bool in
             guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return false }
-            return dsp_kernel_inject_nam_slot(kernel, 0, ptr, UInt(binary.count))
+            return dsp_kernel_inject_nam_file(kernel, 0, ptr, UInt(binary.count))
         }
         #expect(injected, "NAM injection should succeed. Error: \(Self.kernelError(kernel))")
 
@@ -895,11 +856,11 @@ struct ExportDSPIntegrationTests {
         }
         #expect(loaded, "Exported WASM should load successfully into kernel")
 
-        // Serialize and inject the exported model.nam (same binary protocol as ExportAUAudioUnit)
-        let binary = try Self.serializeNamFile(at: exportedNamURL)
+        // Inject the exported model.nam as raw bytes (same as ExportAUAudioUnit)
+        let binary = try Data(contentsOf: exportedNamURL)
         let injected = binary.withUnsafeBytes { rawBuffer -> Bool in
             guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return false }
-            return dsp_kernel_inject_nam_slot(kernel, 0, ptr, UInt(binary.count))
+            return dsp_kernel_inject_nam_file(kernel, 0, ptr, UInt(binary.count))
         }
         #expect(injected, "NAM injection from exported model.nam should succeed. Error: \(Self.kernelError(kernel))")
 

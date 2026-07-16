@@ -841,6 +841,15 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 		buildParameterTree()
 
+		// Set the tones directory as early as possible — BEFORE any script can
+		// load. `fullState` restore (DAW session recall) can trigger a script
+		// load with `load_model("tone3000://…")` before any view exists;
+		// without this, tone resolution fails and the preset silently renders
+		// passthrough until the plugin window is first opened. (The env var is
+		// process-wide set-once, so the later call in `loadPythonScript` is a
+		// harmless no-op.)
+		dsp_kernel_set_tones_dir(kernel, Self.appGroupContainerURL.appendingPathComponent("tones").path)
+
 		// Don't auto-load any script here. The host (Logic, Ableton, etc.)
 		// drives script selection via `currentPreset` or `fullState`. Until
 		// the host asserts something, the kernel renders passthrough — its
@@ -1523,8 +1532,8 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 
 	/// Resolve and inject NAM models after WASM load, one per slot declared via
 	/// `nam!()` or `nams!{}`. Reads each path from the WASM binary, resolves
-	/// `tone3000://` paths to the App Group tones directory, parses the .nam JSON,
-	/// serializes to binary protocol, and injects.
+	/// `tone3000://` paths to the App Group tones directory, and injects the
+	/// raw .nam file bytes (all parsing happens in Rust).
 	///
 	/// Returns the first error encountered (so the user sees at least one actionable
 	/// message) but continues injecting remaining slots so working ones still load.
@@ -1546,8 +1555,8 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 		return firstError
 	}
 
-	/// Resolve a single `tone3000://` (or filesystem) NAM path, parse the .nam JSON,
-	/// serialize to the binary protocol, and inject into the given slot.
+	/// Resolve a single `tone3000://` (or filesystem) NAM path and inject the
+	/// raw .nam file bytes into the given slot.
 	/// Returns nil on success or an error message on failure.
 	private func injectNamModel(slot: UInt32, namPath: String) -> String? {
 		// Resolve the path to a filesystem URL
@@ -1581,59 +1590,42 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			return msg
 		}
 
-		// Parse .nam JSON and serialize to binary protocol
-		guard let namJson = try? JSONSerialization.jsonObject(with: namData) as? [String: Any],
-			  let architecture = namJson["architecture"] as? String,
-			  let configObj = namJson["config"],
-			  let weightsArray = namJson["weights"] as? [Double] else {
-			let msg = "Failed to parse .nam file at \(namPath)"
-			pluginLog.error("\(msg, privacy: .public)")
-			SentryHelper.capture("Failed to parse .nam file", level: .error, category: "dsp.nam", extra: ["path": namPath, "slot": String(slot)])
-			return msg
-		}
-
-		let arch: UInt32 = architecture == "LSTM" ? 1 : 0
-		let sampleRate = Float((namJson["sample_rate"] as? Double) ?? (namJson["sample_rate"] as? Int).map(Double.init) ?? 48000.0)
-
-		guard let configData = try? JSONSerialization.data(withJSONObject: configObj) else {
-			let msg = "Failed to serialize NAM config for \(namPath)"
-			pluginLog.error("\(msg, privacy: .public)")
-			SentryHelper.capture("Failed to serialize NAM config", level: .error, category: "dsp.nam", extra: ["path": namPath, "slot": String(slot)])
-			return msg
-		}
-
-		// Build binary protocol: [arch:u32][sr:f32][config_len:u32][config_bytes][weight_count:u32][weights:f32...]
-		var binary = Data()
-		var archLE = arch.littleEndian
-		binary.append(Data(bytes: &archLE, count: 4))
-		var srLE = sampleRate.bitPattern.littleEndian
-		binary.append(Data(bytes: &srLE, count: 4))
-		var configLen = UInt32(configData.count).littleEndian
-		binary.append(Data(bytes: &configLen, count: 4))
-		binary.append(configData)
-		var weightCount = UInt32(weightsArray.count).littleEndian
-		binary.append(Data(bytes: &weightCount, count: 4))
-		for w in weightsArray {
-			var f = Float(w).bitPattern.littleEndian
-			binary.append(Data(bytes: &f, count: 4))
-		}
-
-		let injected = binary.withUnsafeBytes { rawBuffer -> Bool in
+		// Pass the raw .nam file bytes to the kernel — all parsing (including
+		// the SlimmableContainer wrapper used by NAM A2) happens in Rust, and
+		// parse failures surface exact error text via dsp_kernel_last_error.
+		let injected = namData.withUnsafeBytes { rawBuffer -> Bool in
 			guard let ptr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
 				return false
 			}
-			return dsp_kernel_inject_nam_slot(kernel, slot, ptr, UInt(binary.count))
+			return dsp_kernel_inject_nam_file(kernel, slot, ptr, UInt(namData.count))
 		}
 
 		if injected {
-			pluginLog.info("Injected NAM slot \(slot, privacy: .public) (\(binary.count) bytes, \(architecture))")
+			pluginLog.info("Injected NAM slot \(slot, privacy: .public) (\(namData.count) bytes)")
 			return nil
 		} else {
-			let msg = "Failed to inject NAM model data for \(namPath)"
+			let kernelError = dsp_kernel_last_error(kernel).map { String(cString: $0) }
+			let msg = kernelError ?? "Failed to inject NAM model data for \(namPath)"
 			pluginLog.error("\(msg, privacy: .public)")
-			SentryHelper.capture("Failed to inject NAM model data", level: .error, category: "dsp.nam", extra: ["path": namPath, "slot": String(slot), "architecture": architecture, "binarySize": binary.count])
+			Self.trackNamUnsupportedFeatureIfNeeded(errorMessage: msg, path: namPath)
+			SentryHelper.capture("Failed to inject NAM model", level: .error, category: "dsp.nam", extra: ["path": namPath, "slot": String(slot), "error": msg])
 			return msg
 		}
+	}
+
+	/// Marker substrings emitted by the Rust NAM parser for models that use
+	/// features outside the supported A2 subset (see nam.rs).  Tracked as an
+	/// analytics event so we learn whether the full 0.7.0 spec is ever needed.
+	private static let namUnsupportedMarkers = ["Unsupported NAM feature", "Unsupported NAM architecture"]
+
+	/// Track an analytics event when a NAM load error is an unsupported-feature
+	/// rejection (as opposed to a missing file or corrupt JSON).
+	static func trackNamUnsupportedFeatureIfNeeded(errorMessage: String, path: String) {
+		guard namUnsupportedMarkers.contains(where: { errorMessage.contains($0) }) else { return }
+		Analytics.track(.namUnsupportedFeature, properties: [
+			"error": errorMessage,
+			"path": path,
+		])
 	}
 
 	/// Compile source code (detecting language) and load into the DSP kernel.
@@ -1689,6 +1681,12 @@ public class ConjureDSPExtensionAudioUnit: AUAudioUnit, @unchecked Sendable
 			   let err = result.error,
 			   err.contains(Self.namNotDownloadedMarker) {
 				return (true, nil, Self.namNotDownloadedMessage, nil, nil)
+			}
+
+			// Python `load_model` rejections of unsupported NAM features
+			// surface as script errors — track them like the WASM inject path.
+			if !result.success, let err = result.error {
+				Self.trackNamUnsupportedFeatureIfNeeded(errorMessage: err, path: "python-script")
 			}
 
 			return (result.success, result.error, nil, result.processTimeMs, result.budgetMs)

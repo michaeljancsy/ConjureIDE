@@ -52,6 +52,7 @@ struct ToneBrowserView: View {
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>?
     @State private var selectedSort: ToneSort = .bestMatch
+    @State private var selectedArchitecture: ToneArchitecture = .a2
     @State private var expandedToneId: String?
     @State private var toneModels: [String: [ToneModel]] = [:]
     @State private var downloadingModelId: String?
@@ -146,6 +147,15 @@ struct ToneBrowserView: View {
                                     .foregroundStyle(.secondary)
                             }
                             .buttonStyle(.borderless)
+                        }
+                        Picker("", selection: $selectedArchitecture) {
+                            ForEach(ToneArchitecture.allCases, id: \.self) { arch in
+                                Text(arch.displayName).tag(arch)
+                            }
+                        }
+                        .frame(width: 80)
+                        .onChange(of: selectedArchitecture) { _, _ in
+                            Task { await performSearch(query: searchText) }
                         }
                         Picker("", selection: $selectedSort) {
                             ForEach(ToneSort.allCases, id: \.self) { sort in
@@ -343,6 +353,16 @@ struct ToneBrowserView: View {
                     .background(Color.secondary.opacity(0.15))
                     .cornerRadius(3)
             }
+            if let arch = model.architectureVersion,
+               let badge = ToneArchitecture(rawValue: arch) {
+                Text(badge.displayName)
+                    .font(.caption2.bold())
+                    .foregroundStyle(badge == .a2 ? Color.accentColor : Color.secondary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background((badge == .a2 ? Color.accentColor : Color.secondary).opacity(0.15))
+                    .cornerRadius(3)
+            }
             Spacer()
             if isDownloading {
                 ProgressView()
@@ -388,6 +408,15 @@ struct ToneBrowserView: View {
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 3)
                             .background(Color.secondary.opacity(0.15))
+                            .cornerRadius(2)
+                    }
+                    if let arch = model.architectureVersion,
+                       let badge = ToneArchitecture(rawValue: arch) {
+                        Text(badge.displayName)
+                            .font(.caption2.bold())
+                            .foregroundStyle(badge == .a2 ? Color.accentColor : Color.secondary)
+                            .padding(.horizontal, 3)
+                            .background((badge == .a2 ? Color.accentColor : Color.secondary).opacity(0.15))
                             .cornerRadius(2)
                     }
                 }
@@ -473,6 +502,7 @@ struct ToneBrowserView: View {
                 modelId: model.id.stringValue,
                 modelName: model.name ?? model.id.stringValue,
                 modelSize: model.size ?? "",
+                architectureVersion: model.architectureVersion,
                 modelURL: url,
                 accessToken: token
             )
@@ -500,7 +530,7 @@ struct ToneBrowserView: View {
         isSearching = true
         error = nil
         do {
-            let result = try await client.searchTones(query: query, sort: selectedSort)
+            let result = try await client.searchTones(query: query, sort: selectedSort, architecture: selectedArchitecture)
             searchResults = result.items
         } catch {
             self.error = error.localizedDescription

@@ -124,11 +124,44 @@ def _sigmoid_inplace(x, out):
     np.reciprocal(out, out=out)
 
 
-_ACTIVATIONS = {
-    "Tanh": np.tanh,
-    "ReLU": lambda x: np.maximum(0, x),
-    "Sigmoid": _sigmoid,
-}
+def _relu(x):
+    return np.maximum(0, x)
+
+
+def _make_leaky_relu(negative_slope):
+    # For 0 < slope < 1, leaky_relu(x) == max(x, slope * x).
+    def leaky_relu(x, _s=np.float32(negative_slope)):
+        return np.maximum(x, _s * x)
+    return leaky_relu
+
+
+def _resolve_activation(spec, default="Tanh"):
+    """Resolve a .nam activation spec — a string (``"Tanh"``) or an object
+    (``{"type": "LeakyReLU", "negative_slope": 0.01}``) — to a callable.
+    Unknown activations are a hard error so unsupported models fail loudly
+    instead of sounding wrong."""
+    slope = 0.01
+    if spec is None:
+        name = default
+    elif isinstance(spec, str):
+        name = spec
+    elif isinstance(spec, dict):
+        name = spec.get("type")
+        if not isinstance(name, str):
+            raise ValueError('Unsupported NAM feature: activation object without a "type" string')
+        slope = spec.get("negative_slope", 0.01)
+    else:
+        raise ValueError("Unsupported NAM feature: activation must be a string or object")
+
+    if name == "Tanh":
+        return np.tanh
+    if name == "ReLU":
+        return _relu
+    if name == "Sigmoid":
+        return _sigmoid
+    if name == "LeakyReLU":
+        return _make_leaky_relu(slope)
+    raise ValueError(f'Unsupported NAM feature: activation "{name}"')
 
 # ---------------------------------------------------------------------------
 # Convolution primitives
@@ -150,9 +183,15 @@ def _conv1d(x, weight, bias=None, dilation=1, scratch=None, conv_out=None):
     else:
         cols = np.zeros((C_in * K, L_out), dtype=np.float32)
 
+    # Row order MUST match the weight's inner layout: .nam serializes Conv1D
+    # weights as [out][in][tap], so im2col row (c * K + k) pairs with weight
+    # element [c][k].  (cols[k::K] selects rows k, K+k, 2K+k, … = c*K + k.)
+    # Tap orientation follows PyTorch Conv1d / NeuralAmpModelerCore: tap k
+    # multiplies x[t + k·d] within the window — the LAST tap sees the newest
+    # sample.
     for k in range(K):
-        offset = (K - 1 - k) * dilation
-        cols[k * C_in : (k + 1) * C_in, :] = x[:, offset : offset + L_out]
+        offset = k * dilation
+        cols[k::K, :] = x[:, offset : offset + L_out]
 
     W_flat = weight.reshape(C_out, C_in * K)
     # Reuse conv_out buffer if provided and large enough
@@ -234,6 +273,11 @@ class _LSTMModel:
         out_ch = config.get("out_channels", 1)
         self.head_w = reader.read(out_ch * H).reshape(out_ch, H)
         self.head_b = reader.read(out_ch)
+        if reader.remaining != 0:
+            raise ValueError(
+                f"NAM LSTM weight mismatch: {reader.remaining} unconsumed weights "
+                f"after loading all cells"
+            )
         self.receptive_field = 1
 
     def reset(self):
@@ -257,34 +301,40 @@ class _LSTMModel:
 
 class _WaveNetLayer:
     __slots__ = (
-        "channels", "dilation", "kernel_size", "gated", "activation_name",
+        "channels", "dilation", "kernel_size", "bottleneck", "gated", "activation_fn",
         "conv_w", "conv_b", "mix_w",
-        "has_layer1x1", "l1x1_w",
-        "has_head1x1", "h1x1_w",
+        "has_layer1x1", "l1x1_w", "l1x1_b",
+        "has_head1x1", "h1x1_w", "h1x1_b",
         "mid_ch", "head1x1_out",
     )
 
-    def __init__(self, channels, condition_size, kernel_size, dilation, activation,
-                 gated, reader, has_layer1x1=True, has_head1x1=False, head1x1_out=1):
+    def __init__(self, channels, condition_size, kernel_size, dilation, activation_fn,
+                 gated, reader, bottleneck=None, has_layer1x1=True, has_head1x1=False,
+                 head1x1_out=1):
         self.channels = channels
         self.dilation = dilation
         self.kernel_size = kernel_size
+        self.bottleneck = channels if bottleneck is None else bottleneck
         self.gated = gated
-        self.mid_ch = 2 * channels if gated else channels
-        self.activation_name = activation
+        self.mid_ch = 2 * self.bottleneck if gated else self.bottleneck
+        self.activation_fn = activation_fn
         self.head1x1_out = head1x1_out
         self.conv_w, self.conv_b = reader.read_conv1d(self.mid_ch, channels, kernel_size)
         self.mix_w, _ = reader.read_conv1x1(self.mid_ch, condition_size, has_bias=False)
+        # layer1x1 / head1x1 always carry a bias when active (both the legacy
+        # and current NeuralAmpModelerCore construct them with bias=true).
         self.has_layer1x1 = has_layer1x1
         if has_layer1x1:
-            self.l1x1_w, _ = reader.read_conv1x1(channels, channels, has_bias=False)
+            self.l1x1_w, self.l1x1_b = reader.read_conv1x1(channels, self.bottleneck, has_bias=True)
         else:
             self.l1x1_w = None
+            self.l1x1_b = None
         self.has_head1x1 = has_head1x1
         if has_head1x1:
-            self.h1x1_w, _ = reader.read_conv1x1(head1x1_out, channels, has_bias=False)
+            self.h1x1_w, self.h1x1_b = reader.read_conv1x1(head1x1_out, self.bottleneck, has_bias=True)
         else:
             self.h1x1_w = None
+            self.h1x1_b = None
 
     def forward(self, x, condition, out_length, scratch=None, bufs=None):
         conv_out_buf = bufs["conv_out"] if bufs else None
@@ -300,7 +350,7 @@ class _WaveNetLayer:
         z = z_conv[:, -L:]
 
         if self.gated:
-            half = self.channels
+            half = self.bottleneck
             # Gated activation: tanh(z[:half]) * sigmoid(z[half:]) — use buffers
             z_tanh = bufs["z_act"][:half, :L] if bufs else np.empty((half, L), dtype=np.float32)
             np.tanh(z[:half], out=z_tanh)
@@ -310,21 +360,21 @@ class _WaveNetLayer:
             np.multiply(z_tanh, z_sig, out=z_act_buf)
             z_act = z_act_buf
         else:
-            act = _ACTIVATIONS.get(self.activation_name, np.tanh)
+            act = self.activation_fn
             if act is np.tanh:
-                z_act = bufs["z_act"][:self.channels, :L] if bufs else np.empty_like(z)
+                z_act = bufs["z_act"][:self.bottleneck, :L] if bufs else np.empty_like(z)
                 np.tanh(z, out=z_act)
             else:
                 z_act = act(z)
 
         if self.has_layer1x1:
             lo_buf = bufs["layer_out"] if bufs else None
-            layer_out = _conv1x1(z_act, self.l1x1_w, out=lo_buf)
+            layer_out = _conv1x1(z_act, self.l1x1_w, self.l1x1_b, out=lo_buf)
         else:
             layer_out = z_act
         if self.has_head1x1:
             ho_buf = bufs["head_out"] if bufs else None
-            head_out = _conv1x1(z_act, self.h1x1_w, out=ho_buf)[:, -out_length:]
+            head_out = _conv1x1(z_act, self.h1x1_w, self.h1x1_b, out=ho_buf)[:, -out_length:]
         else:
             head_out = z_act[:, -out_length:]
 
@@ -339,49 +389,138 @@ class _WaveNetLayer:
         return residual, head_out
 
 
+def _check_unsupported_layer_features(config):
+    """Hard-error on active 0.6.0+ features outside the supported A2 subset."""
+    gating_mode = config.get("gating_mode")
+    if gating_mode is not None:
+        modes = gating_mode if isinstance(gating_mode, list) else [gating_mode]
+        for m in modes:
+            if m != "none":
+                raise ValueError(f'Unsupported NAM feature: gating_mode "{m}"')
+    secondary = config.get("secondary_activation")
+    if secondary is not None:
+        entries = secondary if isinstance(secondary, list) else [secondary]
+        for s in entries:
+            if s is not None:
+                raise ValueError("Unsupported NAM feature: secondary_activation")
+    for key in (
+        "conv_pre_film", "conv_post_film",
+        "input_mixin_pre_film", "input_mixin_post_film",
+        "activation_pre_film", "activation_post_film",
+        "layer1x1_post_film", "head1x1_post_film",
+    ):
+        film = config.get(key)
+        if isinstance(film, dict) and film.get("active", False):
+            raise ValueError(f"Unsupported NAM feature: {key} is active (FiLM conditioning)")
+    if config.get("slimmable") is not None:
+        raise ValueError("Unsupported NAM feature: slimmable (channel-sliced WaveNet)")
+    for key in ("groups_input", "groups_input_mixin"):
+        if config.get(key, 1) != 1:
+            raise ValueError(f"Unsupported NAM feature: {key} = {config[key]} (grouped convolutions)")
+    for key in ("layer1x1", "head1x1"):
+        sub = config.get(key)
+        if isinstance(sub, dict) and sub.get("groups", 1) != 1:
+            raise ValueError(f"Unsupported NAM feature: groups = {sub['groups']} (grouped convolutions)")
+
+
 class _WaveNetLayerArray:
     def __init__(self, config, reader):
+        _check_unsupported_layer_features(config)
+
         input_size = config["input_size"]
         condition_size = config["condition_size"]
         channels = config["channels"]
-        head_size = config["head_size"]
-        kernel_size = config.get("kernel_size", 3)
         dilations = config["dilations"]
-        activation = config.get("activation", "Tanh")
         gated = config.get("gated", False)
-        head_bias = config.get("head_bias", False)
+
+        bottleneck = config.get("bottleneck")
+        if bottleneck is None:
+            bottleneck = channels
         l1x1_cfg = config.get("layer1x1", None)
         h1x1_cfg = config.get("head1x1", None)
         has_layer1x1 = l1x1_cfg.get("active", True) if isinstance(l1x1_cfg, dict) else True
         has_head1x1 = h1x1_cfg.get("active", False) if isinstance(h1x1_cfg, dict) else False
         head1x1_out = h1x1_cfg.get("out_channels", 1) if isinstance(h1x1_cfg, dict) else 1
+        if not has_layer1x1 and bottleneck != channels:
+            raise ValueError(
+                f"NAM WaveNet config invalid: bottleneck ({bottleneck}) must equal "
+                f"channels ({channels}) when layer1x1 is inactive"
+            )
+
+        # Per-layer kernel sizes: new-format array, or legacy scalar replicated.
+        kernel_sizes = config.get("kernel_sizes")
+        if kernel_sizes is None:
+            kernel_sizes = [config.get("kernel_size", 3)] * len(dilations)
+        elif not isinstance(kernel_sizes, list):
+            kernel_sizes = [kernel_sizes] * len(dilations)
+        elif len(kernel_sizes) != len(dilations):
+            raise ValueError(
+                f"NAM WaveNet config invalid: kernel_sizes has {len(kernel_sizes)} "
+                f"entries but dilations has {len(dilations)}"
+            )
+
+        # Per-layer activations: new-format array of strings/objects, or a
+        # single value replicated.
+        activation = config.get("activation", "Tanh")
+        if isinstance(activation, list):
+            if len(activation) != len(dilations):
+                raise ValueError(
+                    f"NAM WaveNet config invalid: activation has {len(activation)} "
+                    f"entries but dilations has {len(dilations)}"
+                )
+            activation_fns = [_resolve_activation(a) for a in activation]
+        else:
+            activation_fns = [_resolve_activation(activation)] * len(dilations)
+
+        # Head rechannel conv: nested `head` object (0.6.0+, explicit kernel) or
+        # legacy head_size/head_bias (implicit kernel 1).
+        head_cfg = config.get("head")
+        if isinstance(head_cfg, dict):
+            head_size = head_cfg.get("out_channels", 1)
+            head_kernel = head_cfg.get("kernel_size", 1)
+            head_bias = head_cfg.get("bias", False)
+        else:
+            head_size = config["head_size"]
+            head_kernel = 1
+            head_bias = config.get("head_bias", False)
+
         self.channels = channels
         self.gated = gated
-        self.receptive_field = 1 + sum((kernel_size - 1) * d for d in dilations)
+        self.head_kernel = head_kernel
+        self.receptive_field = (
+            1
+            + sum((k - 1) * d for k, d in zip(kernel_sizes, dilations))
+            + (head_kernel - 1)
+        )
         self.rechannel_w, _ = reader.read_conv1x1(channels, input_size, has_bias=False)
         self.layers = []
-        for dil in dilations:
+        for i, dil in enumerate(dilations):
             layer = _WaveNetLayer(
                 channels=channels, condition_size=condition_size,
-                kernel_size=kernel_size, dilation=dil,
-                activation=activation, gated=gated, reader=reader,
+                kernel_size=kernel_sizes[i], dilation=dil,
+                activation_fn=activation_fns[i], gated=gated, reader=reader,
+                bottleneck=bottleneck,
                 has_layer1x1=has_layer1x1, has_head1x1=has_head1x1,
                 head1x1_out=head1x1_out,
             )
             self.layers.append(layer)
-        skip_ch = head1x1_out if has_head1x1 else channels
-        self.head_rechannel_w, self.head_rechannel_b = reader.read_conv1x1(
-            head_size, skip_ch, has_bias=head_bias
+        skip_ch = head1x1_out if has_head1x1 else bottleneck
+        # Conv1D with head_kernel taps; legacy kernel-1 files reduce to the old
+        # conv1x1 exactly.
+        self.head_rechannel_w, self.head_rechannel_b = reader.read_conv1d(
+            head_size, skip_ch, head_kernel, has_bias=head_bias
         )
-        # Pre-allocate scratch buffer for conv1d im2col (worst case across layers)
-        max_c_in_k = channels * kernel_size
-        mid_ch = (2 * channels if gated else channels) * kernel_size
-        self._scratch_rows = max(max_c_in_k, mid_ch)
+        self._skip_ch = skip_ch
+        # Pre-allocate scratch buffer for conv1d im2col (worst case across
+        # layers, plus the head conv)
+        max_k = max(kernel_sizes)
+        mid_ch = 2 * bottleneck if gated else bottleneck
+        self._scratch_rows = max(channels * max_k, mid_ch * max_k, skip_ch * head_kernel)
         self._scratch = None  # lazily allocated on first forward(), reused thereafter
         # Pre-allocated work buffers for layer forward passes (lazily sized)
         self._bufs = None
         self._bufs_cols = 0
-        self._mid_ch = 2 * channels if gated else channels
+        self._mid_ch = mid_ch
         self._head1x1_out = head1x1_out
 
     def _ensure_bufs(self, max_cols):
@@ -395,11 +534,11 @@ class _WaveNetLayerArray:
             "conv_out": np.empty((mid, max_cols), dtype=np.float32),
             "z_mix": np.empty((mid, max_cols), dtype=np.float32),
             "z_act": np.empty((mid, max_cols), dtype=np.float32),
-            "z_act2": np.empty((ch, max_cols), dtype=np.float32),
+            "z_act2": np.empty((max(ch, mid), max_cols), dtype=np.float32),
             "layer_out": np.empty((ch, max_cols), dtype=np.float32),
             "head_out": np.empty((ho, max_cols), dtype=np.float32),
             "residual": np.empty((ch, max_cols), dtype=np.float32),
-            "head_acc": np.empty((max(ho, ch), max_cols), dtype=np.float32),
+            "head_acc": np.empty((max(ho, ch, self._skip_ch), max_cols), dtype=np.float32),
         }
         self._bufs_cols = max_cols
 
@@ -407,6 +546,9 @@ class _WaveNetLayerArray:
         out_length = min(x.shape[1], condition.shape[1]) - (self.receptive_field - 1)
         if out_length <= 0:
             raise ValueError(f"Input too short: need > {self.receptive_field - 1} samples")
+        # The per-layer head terms accumulate at the conv stack's output length;
+        # the head conv (kernel ≥ 1) then shrinks it to out_length.
+        head_target = out_length + (self.head_kernel - 1)
         # Reuse scratch buffer across calls; only reallocate if buffer size grew
         scratch_cols = out_length + self.receptive_field
         if self._scratch is None or self._scratch.shape[1] < scratch_cols:
@@ -417,7 +559,7 @@ class _WaveNetLayerArray:
         bufs = self._bufs
         x = _conv1x1(x, self.rechannel_w)
         for layer in self.layers:
-            x, head_term = layer.forward(x, condition, out_length, scratch=scratch, bufs=bufs)
+            x, head_term = layer.forward(x, condition, head_target, scratch=scratch, bufs=bufs)
             ha = bufs["head_acc"]
             ht_cols = head_term.shape[1]
             ht_rows = head_term.shape[0]
@@ -430,7 +572,10 @@ class _WaveNetLayerArray:
                 # In-place accumulation into head_acc buffer
                 np.add(head_input[:, -ht_cols:], head_term, out=ha[:ht_rows, :ht_cols])
                 head_input = ha[:ht_rows, :ht_cols]
-        head_output = _conv1x1(head_input, self.head_rechannel_w, self.head_rechannel_b)
+        head_output = _conv1d(
+            head_input, self.head_rechannel_w, self.head_rechannel_b,
+            dilation=1, scratch=scratch,
+        )
         return head_output, x
 
 
@@ -450,20 +595,30 @@ class _WaveNetModel:
         head_cfg = config.get("head")
         if head_cfg is not None:
             self.head_layers = []
-            in_ch = head_cfg.get("in_channels", config["layers"][-1]["head_size"])
+            default_in = self.layer_arrays[-1].head_rechannel_w.shape[0]
+            in_ch = head_cfg.get("in_channels", default_in)
             ch = head_cfg["channels"]
             out_ch = head_cfg.get("out_channels", 1)
             n_layers = head_cfg["num_layers"]
-            act = _ACTIVATIONS.get(head_cfg.get("activation", "ReLU"), lambda x: np.maximum(0, x))
+            act = _resolve_activation(head_cfg.get("activation"), default="ReLU")
             for i in range(n_layers):
                 o = out_ch if i == n_layers - 1 else ch
                 c = in_ch if i == 0 else ch
                 w, b = reader.read_conv1x1(o, c, has_bias=True)
                 self.head_layers.append((act, w, b))
-        if reader.remaining >= 1:
+        # Strict tail check: the trainer appends exactly one trailing weight
+        # (head_scale).  Anything else left over means the weight-read order
+        # diverged from the file — fail loudly rather than play garbage.
+        remaining = reader.remaining
+        if remaining == 1:
             self.head_scale = reader.read(1)[0]
-        else:
+        elif remaining == 0:
             self.head_scale = config.get("head_scale", 1.0)
+        else:
+            raise ValueError(
+                f"NAM WaveNet weight mismatch: {remaining} unconsumed weights after "
+                f"loading all layers — weight-order mismatch between file and parser"
+            )
         self.receptive_field = 1
         for la in self.layer_arrays:
             self.receptive_field += la.receptive_field - 1
@@ -501,9 +656,12 @@ class NamModel:
     Use :func:`load_model` to create instances.
 
     Attributes:
-        architecture: ``"WaveNet"`` or ``"LSTM"``
+        architecture: ``"WaveNet"`` or ``"LSTM"`` after loading.  A2 tones
+            (``SlimmableContainer`` files) load their highest-quality packed
+            submodel (A2-Full) and report as ``"WaveNet"``.
         receptive_field: Number of samples the model needs as context.
-            For LSTM this is 1.  For WaveNet-standard it is typically 4093.
+            For LSTM this is 1.  For an A1 WaveNet-standard it is typically
+            4093; for A2 it is 6347.
         sample_rate: The sample rate the model was trained at (usually 48000).
     """
 
@@ -636,6 +794,17 @@ def load_model(path: str) -> NamModel:
         data = json.load(f)
 
     arch = data["architecture"]
+
+    if arch == "SlimmableContainer":
+        # NAM A2 packaging: submodels sorted by quality; load the
+        # highest-quality one (largest max_value → A2-Full).
+        submodels = data.get("config", {}).get("submodels", [])
+        if not submodels:
+            raise ValueError("SlimmableContainer has no submodels")
+        best = max(submodels, key=lambda s: s.get("max_value", 0.0))
+        data = best["model"]
+        arch = data["architecture"]
+
     config = data["config"]
     reader = _WeightReader(data["weights"])
     sample_rate = data.get("sample_rate", 48000)
@@ -645,6 +814,9 @@ def load_model(path: str) -> NamModel:
     elif arch == "WaveNet":
         model = _WaveNetModel(config, reader)
     else:
-        raise ValueError(f"Unknown NAM architecture: {arch}")
+        raise ValueError(
+            f'Unsupported NAM architecture "{arch}" — ConjureDSP supports '
+            f"WaveNet, LSTM, and SlimmableContainer (NAM A2)"
+        )
 
     return NamModel(model, arch, sample_rate)

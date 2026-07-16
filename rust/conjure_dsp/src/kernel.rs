@@ -446,7 +446,7 @@ impl DSPKernel {
     /// - Otherwise (first-load fast path, or the audio thread already
     ///   completed the swap so the old backend is parked in pending), the
     ///   newest backend lives in the live slot.
-    pub fn inject_nam_slot(&mut self, slot: u32, binary_data: &[u8]) -> Result<(), String> {
+    pub fn inject_nam_slot(&mut self, slot: u32, nam_file_bytes: &[u8]) -> Result<(), String> {
         // Lock-first ordering closes a TOCTOU race against the audio thread.
         //
         // The newest backend lives in `pending_backend` if either (a) we have
@@ -476,7 +476,7 @@ impl DSPKernel {
                     .as_any_mut()
                     .downcast_mut::<WasmBackend>()
                     .ok_or("Pending backend is not WasmBackend")?;
-                return wasm.inject_nam_model_slot(slot, binary_data);
+                return wasm.inject_nam_model_slot(slot, nam_file_bytes);
             }
         }
         drop(pending);
@@ -484,7 +484,7 @@ impl DSPKernel {
         if let Some(ref mut backend) = *guard {
             let wasm = backend.as_any_mut().downcast_mut::<WasmBackend>()
                 .ok_or("Backend is not WasmBackend")?;
-            wasm.inject_nam_model_slot(slot, binary_data)
+            wasm.inject_nam_model_slot(slot, nam_file_bytes)
         } else {
             Err("No backend loaded".to_string())
         }

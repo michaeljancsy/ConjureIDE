@@ -1652,6 +1652,7 @@ extension ConjureDSPExtensionAudioUnit: MCPToolProvider {
                 "model_size": model.modelSize,
                 "path": model.tone3000Path,
             ]
+            if let arch = model.architectureVersion { entry["architecture"] = arch }
             if !model.tags.isEmpty { entry["tags"] = model.tags }
             if !model.makes.isEmpty { entry["makes"] = model.makes }
             return entry
