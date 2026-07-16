@@ -37,6 +37,12 @@
             "command": "MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ \"$(pwd)\" != \"$MAIN_WT\" ] && [ ! -d \"uv-dist\" ]; then if [ -n \"$MAIN_WT\" ] && [ -d \"$MAIN_WT/uv-dist\" ]; then ln -s \"$MAIN_WT/uv-dist\" uv-dist && echo \"Symlinked uv-dist from main worktree\"; else ./scripts/setup-uv.sh; fi; fi",
             "timeout": 60,
             "statusMessage": "Setting up uv package manager..."
+          },
+          {
+            "type": "command",
+            "command": "MAIN_WT=$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/worktree //'); if [ \"$(pwd)\" != \"$MAIN_WT\" ] && [ ! -f \"Config/Local.xcconfig\" ] && [ -n \"$MAIN_WT\" ] && [ -f \"$MAIN_WT/Config/Local.xcconfig\" ]; then mkdir -p Config && ln -s \"$MAIN_WT/Config/Local.xcconfig\" Config/Local.xcconfig && echo \"Symlinked Local.xcconfig from main worktree\"; fi",
+            "timeout": 60,
+            "statusMessage": "Setting up signing config..."
           }
         ]
       }
