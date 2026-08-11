@@ -29,6 +29,14 @@ a bundled rustc and executed in wasmtime), live inside any DAW.
 - **Export presets as standalone AUv3 plugins** that run without ConjureDSP
   installed.
 
+## Installing
+
+1. Download the DMG from [conjuredsp.com](https://conjuredsp.com), open it,
+   and drag ConjureDSP to Applications.
+2. Open ConjureDSP once. macOS registers the AUv3 plugin at first launch;
+   until then it will not appear in any DAW.
+3. Restart your DAW and insert ConjureDSP from Audio Units > Effects.
+
 ## Building
 
 Prerequisites: macOS 15 (Sequoia)+, Xcode, a Rust toolchain (`rustup`,
