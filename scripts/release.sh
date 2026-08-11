@@ -127,9 +127,10 @@ a{{color:#0a64d8;text-decoration:none;font-weight:500}} a:hover{{text-decoration
 .date{{color:#888;font-size:.9em}}
 </style></head><body>
 <h1>ConjureDSP — Previous Versions</h1>
-<p>Download any previous version below. To install, open the DMG and drag
-ConjureDSP to your Applications folder, replacing the current copy. Your
-presets, license, and settings are preserved.</p>
+<p>Download any previous version below. To install, open the DMG, drag
+ConjureDSP to your Applications folder (replacing the current copy), then
+open ConjureDSP once so macOS re-registers the plugin. Your presets and
+settings are preserved.</p>
 <ul>
 {rows}
 </ul>

@@ -34,6 +34,20 @@ echo "=== Creating DMG: $DMG_NAME ==="
 cp -R "$APP_PATH" "$STAGING_DIR/"
 ln -s /Applications "$STAGING_DIR/Applications"
 
+# Install instructions. Step 2 is load-bearing: macOS (PluginKit) only
+# registers the AUv3 extension when the app is launched and Gatekeeper
+# approval is recorded, so a user who drags the app in and goes straight
+# to their DAW will not see the plugin.
+INSTRUCTIONS_NAME="Install Instructions.txt"
+cat > "$STAGING_DIR/$INSTRUCTIONS_NAME" <<'TXT'
+Installing ConjureDSP
+
+1. Drag ConjureDSP to Applications.
+2. Open ConjureDSP once. macOS registers the AUv3 plugin at first
+   launch; until then it will not appear in any DAW.
+3. Restart your DAW and insert ConjureDSP from Audio Units > Effects.
+TXT
+
 # Calculate size (app size + 10% headroom for HFS+ overhead, minimum 50MB)
 SIZE_KB=$(du -sk "$STAGING_DIR" | awk '{print $1}')
 HEADROOM=$((SIZE_KB / 10))
@@ -52,19 +66,27 @@ hdiutil create \
 # Set Finder window appearance
 MOUNT_DIR=$(hdiutil attach -readwrite -noverify "$TEMP_DMG" | grep "/Volumes/" | sed 's/.*\/Volumes/\/Volumes/')
 
+# Address the volume by its actual mount name, not $APP_NAME — if another
+# volume named "$APP_NAME" is already mounted (e.g. a release DMG), macOS
+# mounts ours as "$APP_NAME 2" and "tell disk" would hit the wrong disk.
+VOL_NAME=$(basename "$MOUNT_DIR")
+
 osascript <<EOF
 tell application "Finder"
-    tell disk "$APP_NAME"
+    tell disk "$VOL_NAME"
         open
         set current view of container window to icon view
         set toolbar visible of container window to false
         set statusbar visible of container window to false
-        set bounds of container window to {100, 100, 640, 400}
+        set bounds of container window to {100, 100, 640, 480}
         set theViewOptions to the icon view options of container window
         set arrangement of theViewOptions to not arranged
         set icon size of theViewOptions to 80
         set position of item "$APP_NAME.app" of container window to {140, 150}
         set position of item "Applications" of container window to {400, 150}
+        -- Match by prefix: Finder may hide the .txt extension, in which
+        -- case the item's AppleScript name drops it too.
+        set position of (first item of container window whose name begins with "Install Instructions") to {270, 300}
         close
     end tell
 end tell
