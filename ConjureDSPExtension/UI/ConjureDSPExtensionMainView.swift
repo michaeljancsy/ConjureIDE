@@ -644,6 +644,12 @@ struct ConjureDSPExtensionMainView: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
             } // HStack
+            // Leading-anchor the row: if a future child ever inflates the
+            // row's minimum past the window width again, the overflow
+            // falls off the trailing (editor/blank) edge instead of being
+            // split by center alignment — which halves off the LEFT edge
+            // and eats the terminal column (the #349 failure mode).
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .animation(.easeOut(duration: 0.15), value: showChat)
             .animation(.easeOut(duration: 0.15), value: showSpectrogram)
             } // ZStack
@@ -1045,24 +1051,32 @@ struct ConjureDSPExtensionMainView: View {
             if useCustom, let bundle = activeBundle {
                 // Pin to the manifest-declared width + height so the
                 // extension preview matches the exported AU (which
-                // honors manifest.ui dimensions). Centered with a
-                // Spacer pair so the surplus tab width letterboxes
-                // evenly on both sides instead of left-aligning.
+                // honors manifest.ui dimensions). Wrapped in a
+                // GeometryReader + ScrollView so the fixed size never
+                // propagates as the editor column's minimum width —
+                // this panel stays mounted (opacity 0) behind the
+                // Editor tab, and a wide manifest.ui.width would
+                // otherwise inflate the three-pane row past the window
+                // and push the terminal off the left edge (same bug
+                // class as #349). The inner minWidth centers the
+                // webview when the column is wider; when it's
+                // narrower, the preview scrolls instead of clipping.
                 let uiW = CGFloat(bundle.manifest.ui?.width ?? 520)
                 let uiH = CGFloat(bundle.manifest.ui?.height ?? 220)
-                HStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    CustomUIWebView(
-                        parameterState: parameterState,
-                        bundle: bundle,
-                        theme: colorScheme,
-                        captureManager: captureManager,
-                        transportManager: transportManager,
-                        stateManager: stateManager
-                    )
-                    .frame(width: uiW, height: uiH)
-                    .id(bundle.uiIndexURL)
-                    Spacer(minLength: 0)
+                GeometryReader { geo in
+                    ScrollView([.horizontal, .vertical]) {
+                        CustomUIWebView(
+                            parameterState: parameterState,
+                            bundle: bundle,
+                            theme: colorScheme,
+                            captureManager: captureManager,
+                            transportManager: transportManager,
+                            stateManager: stateManager
+                        )
+                        .frame(width: uiW, height: uiH)
+                        .id(bundle.uiIndexURL)
+                        .frame(minWidth: geo.size.width)
+                    }
                 }
             } else {
                 ParameterSlidersView(parameterState: parameterState)
