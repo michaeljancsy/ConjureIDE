@@ -1,0 +1,12 @@
+[package]
+name = "bedrock-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Platform-independent engine for the Bedrock multi-track spectrum analyzer: FFT analysis, wire protocol, TCP realm hub, and software renderer."
+
+[dependencies]
+realfft.workspace = true
+
+[dev-dependencies]

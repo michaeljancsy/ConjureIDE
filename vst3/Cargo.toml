@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["bedrock-core", "bedrock-vst3"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+rust-version = "1.75"
+
+[workspace.dependencies]
+bedrock-core = { path = "bedrock-core" }
+realfft = "3.5"
+vst3 = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
