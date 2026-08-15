@@ -12,10 +12,10 @@ use bedrock_core::render::Canvas;
 #[cfg(target_os = "linux")]
 mod x11;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", feature = "typecheck-all"))]
 mod macos;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", feature = "typecheck-all"))]
 mod win32;
 
 /// A child surface inside the host's window.

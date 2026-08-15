@@ -3,7 +3,8 @@
 //! `cargo run -p bedrock-core --example preview -- out/`
 //!
 //! The PNG writer here is deliberately dependency-free and uses stored (uncompressed) deflate
-//! blocks — this is a development preview, not something that ships.
+//! blocks — this is a development preview, not something that ships. Output is therefore large;
+//! run it through any PNG optimiser before committing an image.
 
 use std::env;
 use std::fs;
