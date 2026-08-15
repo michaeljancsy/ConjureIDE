@@ -26,6 +26,7 @@ pub mod render;
 pub use analyzer::{Analyzer, Spectrum, DB_FLOOR, FREQ_MAX, FREQ_MIN, NUM_BINS};
 pub use palette::{Palette, Rgb};
 pub use protocol::{Frame, TrackId};
+pub use registry::Registry;
 
 /// Product name, used in plugin names and the window title bar.
 pub const PRODUCT: &str = "Bedrock";

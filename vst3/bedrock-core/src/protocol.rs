@@ -73,11 +73,24 @@ pub struct Hello {
 }
 
 /// One analysis frame.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// `Copy` on purpose: the audio thread hands these to the sender thread through a lock-free
+/// queue that needs to move them by value without allocating.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
     pub bins: [u8; NUM_BINS],
     pub peak_db: f32,
     pub rms_db: f32,
+}
+
+impl Default for Frame {
+    fn default() -> Frame {
+        Frame {
+            bins: [0; NUM_BINS],
+            peak_db: DB_FLOOR,
+            rms_db: DB_FLOOR,
+        }
+    }
 }
 
 impl Frame {
