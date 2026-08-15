@@ -83,17 +83,17 @@ pub fn hsl(h: f32, s: f32, l: f32) -> Rgb {
 ///
 /// Every scheme except [`Palette::DawColors`] generates a colour purely from the track's
 /// position in the list, so the graph stays readable no matter what the host reports. `DawColors`
-/// uses the colour the host gave us via the channel-context API and falls back to `Aurora` for
-/// any track whose host didn't supply one.
+/// uses the colour the host gave us via the channel-context API and falls back to
+/// [`Palette::DEFAULT`] for any track whose host didn't supply one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Palette {
-    /// Cool blue → magenta sweep. The default.
+    /// Cyan → magenta sweep. Cool and calm, at the cost of some separation.
     Aurora,
     /// Warm red → yellow sweep.
     Ember,
     /// Desaturated blues, for when track colour shouldn't compete with the shapes.
     Ice,
-    /// Full hue wheel, maximum separation between neighbouring tracks.
+    /// Full hue wheel, maximum separation between neighbouring tracks. The default.
     Spectrum,
     /// Greyscale ramp.
     Mono,
@@ -102,14 +102,21 @@ pub enum Palette {
 }
 
 impl Palette {
+    /// Dropdown order in the host. `Spectrum` leads because it is the default: telling one
+    /// track from another is the whole job, and the full hue wheel separates a busy session
+    /// better than any of the narrower schemes.
     pub const ALL: [Palette; 6] = [
+        Palette::Spectrum,
         Palette::Aurora,
         Palette::Ember,
         Palette::Ice,
-        Palette::Spectrum,
         Palette::Mono,
         Palette::DawColors,
     ];
+
+    /// The scheme used when nothing has been chosen, and the fallback for a track whose host
+    /// reported no colour under [`Palette::DawColors`].
+    pub const DEFAULT: Palette = Palette::Spectrum;
 
     pub fn name(self) -> &'static str {
         match self {
@@ -144,7 +151,7 @@ impl Palette {
                     return c;
                 }
             }
-            return Palette::Aurora.color_for(i, None);
+            return Palette::DEFAULT.color_for(i, None);
         }
 
         // Low-discrepancy position in 0..1 from the golden ratio, then mapped across the
@@ -154,7 +161,7 @@ impl Palette {
         let t = ((i as f32) * 0.618_034) % 1.0;
 
         match self {
-            Palette::Aurora => hsl(200.0 + t * 140.0, 0.72, 0.58),
+            Palette::Aurora => hsl(170.0 + t * 170.0, 0.68, 0.60),
             Palette::Ember => hsl(-10.0 + t * 70.0, 0.78, 0.56),
             Palette::Ice => hsl(190.0 + t * 80.0, 0.38, 0.62),
             Palette::Spectrum => hsl(t * 360.0, 0.70, 0.58),
@@ -273,7 +280,7 @@ mod tests {
 
     #[test]
     fn daw_palette_falls_back_when_the_host_says_nothing_useful() {
-        let generated = Palette::Aurora.color_for(3, None);
+        let generated = Palette::DEFAULT.color_for(3, None);
         assert_eq!(Palette::DawColors.color_for(3, None), generated);
         // Pure black/white mean "no colour set" in practice, not a real track colour.
         assert_eq!(Palette::DawColors.color_for(3, Some(Rgb::BLACK)), generated);
