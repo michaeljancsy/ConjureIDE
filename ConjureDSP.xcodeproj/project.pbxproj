@@ -1131,7 +1131,7 @@
 		257911AB2F5013850036AAB6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CD_AU_NAME = "ConjureDSP: ConjureDSP(Debug)";
+				CD_AU_NAME = "ConjureDSP: ConjureIDE(Debug)";
 				CD_AU_SUBTYPE = DBG1;
 				CODE_SIGN_ENTITLEMENTS = ConjureDSPExtension/ConjureDSPExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -1143,7 +1143,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/rust/include";
 				INFOPLIST_FILE = ConjureDSPExtension/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = ConjureDSPExtension;
+				INFOPLIST_KEY_CFBundleDisplayName = ConjureIDE;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_PREFIX_HEADER = "$(DERIVED_FILE_DIR)/BuildID.h";
 				INFOPLIST_PREPROCESS = YES;
@@ -1190,7 +1190,7 @@
 		257911AC2F5013850036AAB6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CD_AU_NAME = "ConjureDSP: ConjureDSP";
+				CD_AU_NAME = "ConjureDSP: ConjureIDE";
 				CD_AU_SUBTYPE = 0001;
 				CODE_SIGN_ENTITLEMENTS = ConjureDSPExtension/ConjureDSPExtension.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
@@ -1203,7 +1203,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/rust/include";
 				INFOPLIST_FILE = ConjureDSPExtension/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = ConjureDSPExtension;
+				INFOPLIST_KEY_CFBundleDisplayName = ConjureIDE;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_PREFIX_HEADER = "$(DERIVED_FILE_DIR)/BuildID.h";
 				INFOPLIST_PREPROCESS = YES;
@@ -1382,7 +1382,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ConjureDSP/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = ConjureDSP;
+				INFOPLIST_KEY_CFBundleDisplayName = ConjureIDE;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -1437,7 +1437,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ConjureDSP/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = ConjureDSP;
+				INFOPLIST_KEY_CFBundleDisplayName = ConjureIDE;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

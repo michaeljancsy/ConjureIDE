@@ -1174,7 +1174,7 @@ struct ConjureDSPExtensionMainView: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(isAddingCustomUI)
-                .help("Drop a starter ui/index.html into this preset. You can edit it inside ConjureDSP or in any external editor.")
+                .help("Drop a starter ui/index.html into this preset. You can edit it inside ConjureIDE or in any external editor.")
                 .accessibilityIdentifier("addCustomUIButton")
             }
             // Factory bundle without a UI → label only, no CTA. Users branch

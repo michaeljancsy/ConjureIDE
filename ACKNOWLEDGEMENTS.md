@@ -1,6 +1,6 @@
 # Acknowledgements
 
-ConjureDSP is licensed under the GNU General Public License v3.0 (see
+ConjureIDE is licensed under the GNU General Public License v3.0 (see
 [LICENSE](LICENSE)). The exceptions and credits below apply to specific
 files and bundled third-party work.
 
@@ -20,7 +20,7 @@ Sample Code License, not the GPL:
 
 Portions copyright © Apple Inc. All rights reserved. Apple's sample code
 license permits use and redistribution in modified form provided the notice
-is retained; these files have been substantially modified for ConjureDSP.
+is retained; these files have been substantially modified for ConjureIDE.
 
 ## Neural Amp Modeler
 
@@ -34,8 +34,8 @@ NeuralAmpModelerCore's example models (MIT).
 
 ## TONE3000
 
-ConjureDSP can browse and download tone captures from
-[TONE3000](https://www.tone3000.com). ConjureDSP is an independent project —
+ConjureIDE can browse and download tone captures from
+[TONE3000](https://www.tone3000.com). ConjureIDE is an independent project —
 it is not affiliated with or endorsed by TONE3000. Tone captures downloaded
 through the integration carry their capturers' own licenses.
 

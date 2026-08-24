@@ -134,7 +134,7 @@ struct TerminalSettingsView: View {
 
             Divider()
 
-            Text("ConjureDSP MCP")
+            Text("ConjureIDE MCP")
                 .font(.subheadline)
 
             ForEach(supportedAgents, id: \.self) { agent in

@@ -5,7 +5,7 @@ struct EditorSettingsView: View {
 
     private static let themes: [(id: String, name: String)] = [
         ("auto", "Auto (System)"),
-        ("conjuredsp", "ConjureDSP"),
+        ("conjuredsp", "ConjureIDE"),
         ("vs", "Light"),
         ("vs-dark", "Dark"),
         ("monokai", "Monokai"),

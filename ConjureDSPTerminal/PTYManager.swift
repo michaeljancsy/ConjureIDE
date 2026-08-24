@@ -1075,11 +1075,11 @@ final class PTYManager {
         let esc = "\u{1b}"
         return [
             "",
-            "\(esc)[1;36m  ConjureDSP — AI Terminal\(esc)[0m",
+            "\(esc)[1;36m  ConjureIDE — AI Terminal\(esc)[0m",
             "  -----------------------------------------",
             "",
             "  No AI coding agent was found.",
-            "  This terminal connects an agent to ConjureDSP via MCP,",
+            "  This terminal connects an agent to ConjureIDE via MCP,",
             "  so it can compile scripts, adjust parameters, and test audio.",
             "",
             "  \(esc)[1mSupported agents:\(esc)[0m",
@@ -1100,7 +1100,7 @@ final class PTYManager {
         let esc = "\u{1b}"
         var lines = [
             "",
-            "\(esc)[1;36m  ConjureDSP — AI Terminal  \(esc)[2m[manual mode]\(esc)[0m",
+            "\(esc)[1;36m  ConjureIDE — AI Terminal  \(esc)[2m[manual mode]\(esc)[0m",
             "  -----------------------------------------",
             "",
             "  \(esc)[32mMCP server: \(mcpURL)\(esc)[0m",
@@ -1124,7 +1124,7 @@ final class PTYManager {
         let esc = "\u{1b}"
         var lines = [
             "",
-            "\(esc)[1;36m  ConjureDSP — AI Terminal\(esc)[0m",
+            "\(esc)[1;36m  ConjureIDE — AI Terminal\(esc)[0m",
             "  -----------------------------------------",
             "",
             "  Your startup command is `\(name)`, but `\(name)` isn't installed.",

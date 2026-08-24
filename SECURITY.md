@@ -9,7 +9,7 @@ week.
 
 ## Scope notes
 
-ConjureDSP intentionally executes user-supplied code: DSP scripts (Python and
+ConjureIDE intentionally executes user-supplied code: DSP scripts (Python and
 Rust/WASM), custom preset UIs (HTML/JS in a WKWebView), and an embedded
 terminal running the Claude Code CLI. Reports that "a preset can run code"
 are by-design behavior, not vulnerabilities.
