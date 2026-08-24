@@ -84,7 +84,7 @@ class TerminalAppServer {
 
     func start() {
         log.info("ConjureDSP Terminal starting")
-        status = "Waiting for ConjureDSP plugin..."
+        status = "Waiting for ConjureIDE plugin..."
 
         // Provision shared runtimes to the App Group container.
         DispatchQueue.global(qos: .utility).async { [self] in
@@ -220,7 +220,7 @@ class TerminalAppServer {
         // Update status
         activeSessionCount = sessions.count
         if sessions.isEmpty {
-            status = "Waiting for ConjureDSP plugin..."
+            status = "Waiting for ConjureIDE plugin..."
         } else if sessions.count == 1 {
             let s = sessions.values.first!
             status = "Ready (MCP: \(s.mcpPort), WS: \(s.wsPort ?? 0))"
@@ -379,7 +379,7 @@ class TerminalAppServer {
 
     private func updateStatus() {
         if sessions.isEmpty {
-            status = "Waiting for ConjureDSP plugin..."
+            status = "Waiting for ConjureIDE plugin..."
         } else if sessions.count == 1 {
             let s = sessions.values.first!
             status = "Ready (MCP: \(s.mcpPort), WS: \(s.wsPort ?? 0))"

@@ -1,0 +1,5 @@
+/* The build generates CFBundleName from PRODUCT_NAME (ConjureDSP, which also
+   names the .app and must not change); this localized override is what the
+   app menu displays. */
+"CFBundleName" = "ConjureIDE";
+"CFBundleDisplayName" = "ConjureIDE";

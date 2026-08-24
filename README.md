@@ -1,4 +1,4 @@
-# ConjureDSP
+# ConjureIDE
 
 An AUv3 audio effect plugin for macOS where the DSP is a script you can edit
 while audio runs. Write the processing in **Python** (bundled free-threaded
@@ -26,16 +26,16 @@ a bundled rustc and executed in wasmtime), live inside any DAW.
 - **Spectrogram view** — input, output, and difference modes.
 - **Git-backed preset library** — every save is a commit; optional push to
   your own GitHub repo.
-- **Export presets as standalone AUv3 plugins** that run without ConjureDSP
+- **Export presets as standalone AUv3 plugins** that run without ConjureIDE
   installed.
 
 ## Installing
 
 1. Download the DMG from [conjuredsp.com](https://conjuredsp.com), open it,
-   and drag ConjureDSP to Applications.
-2. Open ConjureDSP once. macOS registers the AUv3 plugin at first launch;
+   and drag ConjureIDE to Applications.
+2. Open ConjureIDE once. macOS registers the AUv3 plugin at first launch;
    until then it will not appear in any DAW.
-3. Restart your DAW and insert ConjureDSP from Audio Units > Effects.
+3. Restart your DAW and insert ConjureIDE from Audio Units > Effects.
 
 ## Building
 
@@ -61,7 +61,7 @@ xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP build
 # …or open ConjureDSP.xcodeproj in Xcode and run the ConjureDSP scheme
 ```
 
-Running the ConjureDSP host app registers the AU extension with macOS; after
+Running the ConjureIDE host app registers the AU extension with macOS; after
 that the plugin appears in any AUv3 host (Logic Pro, GarageBand, Reaper, …).
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide,
 including tests and signing details.
@@ -127,11 +127,11 @@ own feed and key (or remove them).
 
 ## License
 
-ConjureDSP is free software, licensed under the
+ConjureIDE is free software, licensed under the
 [GNU General Public License v3.0](LICENSE). Portions derive from Apple sample
 code and other projects — see [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
 
-ConjureDSP is not affiliated with or endorsed by TONE3000; tone captures
+ConjureIDE is not affiliated with or endorsed by TONE3000; tone captures
 downloaded through the integration carry their capturers' own licenses.
 
 To report a security issue, see [SECURITY.md](SECURITY.md).

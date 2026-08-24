@@ -40,12 +40,12 @@ ln -s /Applications "$STAGING_DIR/Applications"
 # to their DAW will not see the plugin.
 INSTRUCTIONS_NAME="Install Instructions.txt"
 cat > "$STAGING_DIR/$INSTRUCTIONS_NAME" <<'TXT'
-Installing ConjureDSP
+Installing ConjureIDE
 
-1. Drag ConjureDSP to Applications.
-2. Open ConjureDSP once. macOS registers the AUv3 plugin at first
+1. Drag ConjureIDE to Applications.
+2. Open ConjureIDE once. macOS registers the AUv3 plugin at first
    launch; until then it will not appear in any DAW.
-3. Restart your DAW and insert ConjureDSP from Audio Units > Effects.
+3. Restart your DAW and insert ConjureIDE from Audio Units > Effects.
 TXT
 
 # Calculate size (app size + 10% headroom for HFS+ overhead, minimum 50MB)

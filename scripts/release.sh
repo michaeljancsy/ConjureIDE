@@ -110,13 +110,13 @@ for item in tree.getroot().iter("item"):
 items.sort(key=lambda row: row[0], reverse=True)
 items = [(v, d, u) for _, v, d, u in items]
 rows = "\n".join(
-    f'<li><a href="{html.escape(u)}">ConjureDSP {html.escape(v)}</a>'
+    f'<li><a href="{html.escape(u)}">ConjureIDE {html.escape(v)}</a>'
     f'<span class="date">{html.escape(d)}</span></li>'
     for v, d, u in items
 )
 doc = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>ConjureDSP — Previous Versions</title>
+<title>ConjureIDE — Previous Versions</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 body{{font:15px -apple-system,BlinkMacSystemFont,sans-serif;max-width:620px;margin:3em auto;padding:0 1em;color:#222}}
@@ -126,10 +126,10 @@ li{{padding:.6em 0;border-bottom:1px solid #eee;display:flex;justify-content:spa
 a{{color:#0a64d8;text-decoration:none;font-weight:500}} a:hover{{text-decoration:underline}}
 .date{{color:#888;font-size:.9em}}
 </style></head><body>
-<h1>ConjureDSP — Previous Versions</h1>
+<h1>ConjureIDE — Previous Versions</h1>
 <p>Download any previous version below. To install, open the DMG, drag
-ConjureDSP to your Applications folder (replacing the current copy), then
-open ConjureDSP once so macOS re-registers the plugin. Your presets and
+ConjureIDE to your Applications folder (replacing the current copy), then
+open ConjureIDE once so macOS re-registers the plugin. Your presets and
 settings are preserved.</p>
 <ul>
 {rows}

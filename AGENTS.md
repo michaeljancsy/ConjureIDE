@@ -1,6 +1,6 @@
-# ConjureDSP
+# ConjureIDE
 
-AUv3 audio effect plugin for macOS with embedded Python DSP scripting. Built with Apple's Audio Unit Extension framework.
+AUv3 audio effect plugin for macOS with embedded Python DSP scripting. Built with Apple's Audio Unit Extension framework. The product name is **ConjureIDE**; **ConjureDSP** is the manufacturer/brand name and remains the name of internal identifiers (targets, directories, bundle IDs, the `conjuredsp` libraries, domains).
 
 ## Build
 
@@ -451,7 +451,7 @@ Debug and Release builds use different AU identities and bundle IDs so they can 
 | Host App Bundle ID | `com.MichaelJancsy.ConjureDSP.debug` | `com.MichaelJancsy.ConjureDSP` |
 | Extension Bundle ID | `com.MichaelJancsy.ConjureDSP.debug.ConjureDSPExtension` | `com.MichaelJancsy.ConjureDSP.ConjureDSPExtension` |
 | AU Subtype | `DBG1` | `0001` |
-| AU Name | `ConjureDSP: ConjureDSP(Debug)` | `ConjureDSP: ConjureDSP` |
+| AU Name | `ConjureDSP: ConjureIDE(Debug)` | `ConjureDSP: ConjureIDE` |
 
 These are configured via per-configuration build settings (`CD_AU_SUBTYPE`, `CD_AU_NAME`, `PRODUCT_BUNDLE_IDENTIFIER`) in the pbxproj, referenced in `ConjureDSPExtension/Info.plist` via `$(VARIABLE)` substitution. Both the host app and extension use separate bundle IDs per configuration so PluginKit registers them independently — this prevents a Release build installed at `/Applications/` from shadowing the Debug extension during development.
 

@@ -200,7 +200,7 @@ final class PackageInstallManager {
         pollStartTime = nil
         isInstalling = false
         installStatusMessage = nil
-        lastError = "Operation timed out. Is ConjureDSP app running?"
+        lastError = "Operation timed out. Is ConjureDSP Terminal running?"
         log.error("Package install/uninstall timed out after \(Self.pollTimeoutSeconds)s — companion app not responding")
         SentryHelper.capture("Package install timed out", level: .warning, category: "packages")
     }

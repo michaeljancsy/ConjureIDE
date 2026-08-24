@@ -20,23 +20,23 @@ struct PythonRuntimeErrorView: View {
                 .font(.headline)
 
             if let name = presetName {
-                Text("\"\(name)\" requires the ConjureDSP Python runtime to process audio.")
+                Text("\"\(name)\" requires the ConjureIDE Python runtime to process audio.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
 
-            Text("Install ConjureDSP and launch it once to set up the runtime, then reopen your DAW project.")
+            Text("Install ConjureIDE and launch it once to set up the runtime, then reopen your DAW project.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            Link("Download ConjureDSP", destination: URL(string: "https://conjuredsp.com")!)
+            Link("Download ConjureIDE", destination: URL(string: "https://conjuredsp.com")!)
                 .font(.caption)
 
             Spacer()
 
-            Text("Made with ConjureDSP")
+            Text("Made with ConjureIDE")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 8)

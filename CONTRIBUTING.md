@@ -1,4 +1,4 @@
-# Contributing to ConjureDSP
+# Contributing to ConjureIDE
 
 ## Development setup
 
@@ -29,7 +29,7 @@ Things to know about signing:
 - Debug and Release builds intentionally use different AU identities and
   bundle ids so they can coexist — see "Plugin Identity" in `AGENTS.md`.
 
-The plugin registers with macOS when the ConjureDSP host app runs. If the AU
+The plugin registers with macOS when the ConjureIDE host app runs. If the AU
 stops appearing in hosts, see "AU Registration Troubleshooting" in
 `AGENTS.md` (never use `pluginkit -r`).
 
