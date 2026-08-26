@@ -636,7 +636,7 @@ struct PresetToolbar: View {
             .fixedSize()
             .toolbarTooltip("Settings")
             .accessibilityIdentifier("settingsButton")
-            .popover(isPresented: $showingSettings) {
+            .popover(isPresented: $showingSettings, arrowEdge: .top) {
                 VStack(alignment: .leading, spacing: 12) {
                     Picker("", selection: $settingsTab) {
                         ForEach(SettingsTab.allCases) { tab in
