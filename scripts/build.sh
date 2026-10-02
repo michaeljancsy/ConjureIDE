@@ -34,6 +34,11 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PBXPROJ="$PROJECT_DIR/ConjureDSP.xcodeproj/project.pbxproj"
 OUTPUT_DIR="${1:-$PROJECT_DIR/build/release}"
 
+# Every build's dSYMs go to Sentry right after archiving. Check the
+# credentials now so a missing or bad token fails before the pbxproj is
+# touched or the archive starts.
+"$SCRIPT_DIR/upload-dsyms.sh" --check
+
 # Update version/build in pbxproj if requested (only main project, not ExportAUTemplate)
 if [ -n "$SET_VERSION" ]; then
     sed -i '' "s/MARKETING_VERSION = [^;]*/MARKETING_VERSION = $SET_VERSION/" "$PBXPROJ"
@@ -57,6 +62,12 @@ xcodebuild archive \
     -destination "generic/platform=macOS" \
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
     | tail -1
+
+echo "=== Uploading debug symbols to Sentry ==="
+
+# Re-signing below changes signatures, not Mach-O UUIDs, so the archive's
+# dSYMs match the shipped binaries.
+"$SCRIPT_DIR/upload-dsyms.sh" "$ARCHIVE_PATH"
 
 echo "=== Extracting app from archive ==="
 
@@ -297,6 +308,7 @@ echo "App:     $APP_PATH"
 echo "DMG:     $DMG_PATH"
 echo "Version: $VERSION (build $BUILD)"
 echo "Size:    $(du -h "$DMG_PATH" | awk '{print $1}')"
+echo "dSYMs:   uploaded and verified on Sentry (michael-jancsy/conjuredsp)"
 if $NOTARIZE; then
     echo "Status:  Notarized"
 else

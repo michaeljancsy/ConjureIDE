@@ -366,7 +366,6 @@
 				257911B02F5013850036AAB6 /* Embed Foundation Extensions */,
 				AA00EMBED0TERMINAL0COPY0 /* Embed Terminal App */,
 				AABB000F2F5013850036AAB6 /* Bust AU Cache */,
-				AABB00132F5013850036AAB6 /* Upload dSYMs to Sentry */,
 			);
 			buildRules = (
 			);
@@ -859,26 +858,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "\"${SRCROOT}/scripts/pre-build-clean.sh\"\n";
-		};
-		AABB00132F5013850036AAB6 /* Upload dSYMs to Sentry */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/scripts/upload-dsyms.sh",
-				"$(SRCROOT)/.sentryclirc",
-			);
-			name = "Upload dSYMs to Sentry";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "\"${SRCROOT}/scripts/upload-dsyms.sh\"\n";
 		};
 		AABB00152F5013850036AAB6 /* Generate Build ID Header */ = {
 			isa = PBXShellScriptBuildPhase;

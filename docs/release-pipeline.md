@@ -1,6 +1,6 @@
 # Release Pipeline
 
-Run `scripts/release.sh` to build, sign, notarize, and package a distributable DMG. The script orchestrates: `xcodebuild archive` → `xcodebuild -exportArchive` with Developer ID signing → notarize app → create DMG → notarize DMG → staple.
+Run `scripts/build-and-release.sh` (or the `build-release` skill) to build, sign, notarize, package, and publish. `scripts/build.sh` does `xcodebuild archive` → upload and verify dSYMs on Sentry → copy the app out of the archive, strip, re-sign → notarize app → create DMG → notarize DMG. `scripts/release.sh` then generates the Sparkle appcast and uploads the DMG to R2.
 
 ## Provisioning profiles
 
@@ -16,7 +16,17 @@ cp <profile>.provisionprofile ~/Library/Developer/Xcode/UserData/Provisioning\ P
 
 ## Re-signing after export
 
-`build-release.sh` modifies the exported app bundle (re-signs rustc-dist, export template) then re-signs the extension and host app. **Critical**: the re-sign must use `--preserve-metadata=entitlements`, NOT `--entitlements <file>`. The entitlements file only contains a subset; `xcodebuild -exportArchive` injects additional entitlements (`com.apple.application-identifier`, `com.apple.developer.team-identifier`, `com.apple.security.app-sandbox`, etc.) that pkd requires to discover the AU extension. If these are stripped, the extension silently fails to register — no errors in logs, just absent from `pluginkit -mv`.
+`build.sh` modifies the exported app bundle (re-signs rustc-dist, export template) then re-signs the extension and host app. **Critical**: the re-sign must use `--preserve-metadata=entitlements`, NOT `--entitlements <file>`. The entitlements file only contains a subset; `xcodebuild -exportArchive` injects additional entitlements (`com.apple.application-identifier`, `com.apple.developer.team-identifier`, `com.apple.security.app-sandbox`, etc.) that pkd requires to discover the AU extension. If these are stripped, the extension silently fails to register — no errors in logs, just absent from `pluginkit -mv`.
+
+## Debug symbols (Sentry)
+
+`build.sh` runs `scripts/upload-dsyms.sh` right after `xcodebuild archive`. It uploads the archive's `dSYMs/` folder plus the extension's `libpython3.14t.dylib` (python-build-standalone ships no dSYM for it), then asks the Sentry API for every Mach-O UUID and fails the build if any is missing. A credentials check runs before the archive starts, so a missing or invalid token fails in seconds rather than after the archive.
+
+- The destination is hard-coded: org `michael-jancsy`, project `conjuredsp`. `~/.sentryclirc`'s default project is conjurealign, so never run a bare `sentry-cli debug-files upload`.
+- Token: `SENTRY_AUTH_TOKEN`, else `token=` under `[auth]` in `~/.sentryclirc`. An org auth token with `org:ci` scope covers both the upload and the verification query.
+- To upload or re-check an earlier archive: `scripts/upload-dsyms.sh build/ConjureDSP.xcarchive`. Re-running is safe; Sentry skips files it already has.
+
+There is deliberately no Xcode build phase for this. The previous one sat on the host-app target and read a gitignored `${SRCROOT}/.sentryclirc`; no checkout had that file, so the phase printed a warning (hidden by `build.sh`'s `| tail -1`) and exited 0. That is how 3.1.0 (build 25) shipped with no symbols on Sentry. The phase also ran under Xcode's user-script sandbox with only the script and `.sentryclirc` declared as inputs, which blocks reading the dSYMs it was meant to upload.
 
 ## Entitlement pitfalls
 
