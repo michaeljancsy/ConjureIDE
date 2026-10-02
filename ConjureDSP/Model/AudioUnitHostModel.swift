@@ -13,6 +13,7 @@ import SwiftUI
 import CoreMIDI
 import AudioToolbox
 import AVFAudio
+import Sentry
 
 @MainActor
 @Observable
@@ -27,6 +28,14 @@ class AudioUnitHostModel {
     var audioSource: AudioSource = .builtIn(.a440Sine)
 
     var audioUnitCrashed = false
+
+    /// The error from the last failed attempt to start audio, as shown to the
+    /// user. Cleared by a successful start or a plugin reload.
+    var playbackError: String?
+
+    var playbackStatus: PlaybackStatus {
+        PlaybackStatus(pluginStopped: audioUnitCrashed, startError: playbackError)
+    }
 
     /// Audio Component Description
     let type: String
@@ -144,7 +153,7 @@ class AudioUnitHostModel {
                 #endif
 
                 if self.isFreeRunning {
-                    self.playEngine.startPlaying()
+                    self.startPlaying()
                 }
             } else {
                 #if DEBUG
@@ -170,7 +179,15 @@ class AudioUnitHostModel {
             guard let self = self else { return }
             if let _ = notification.object as? AUAudioUnit {
                 Task { @MainActor in
+                    // The plugin's process is gone. Stop the engine while the
+                    // dead unit is still wired in, and record it host-side: if
+                    // the process was killed rather than crashing, the plugin
+                    // can't report anything itself.
+                    self.playEngine.stopPlaying()
                     self.audioUnitCrashed = true
+                    SentrySDK.capture(message: "Plugin process stopped (AU instance invalidated)") { scope in
+                        scope.setLevel(.warning)
+                    }
                 }
             }
         }
@@ -204,11 +221,26 @@ class AudioUnitHostModel {
     }
 
     func startPlaying() {
-        playEngine.startPlaying()
+        do {
+            try playEngine.startPlaying()
+            playbackError = nil
+        } catch {
+            playbackError = String(describing: error)
+            SentrySDK.capture(error: error)
+        }
     }
 
     func stopPlaying() {
         playEngine.stopPlaying()
+    }
+
+    /// Loads a fresh instance of the plugin after its process stopped.
+    func reloadAudioUnit() {
+        playEngine.unloadAudioUnit()
+        audioUnitCrashed = false
+        playbackError = nil
+        viewModel = AudioUnitViewModel(message: "Loading plugin…")
+        loadAudioUnit()
     }
 
     // MARK: - Audio Source Selection
@@ -227,11 +259,11 @@ class AudioUnitHostModel {
             UserDefaults.standard.set(AudioSourcePersistence.encode(audioSource), forKey: Self.audioSourceKey)
         } catch {
             print("Failed to load built-in audio source \(source.rawValue): \(error)")
-            // setAudioFile stops playback before throwing; the previous file is
-            // still loaded, so resume on it rather than leave the user staring
-            // at an unchanged source name and silent output.
-            if wasPlaying { playEngine.startPlaying() }
         }
+        // setAudioFile stops playback. Resume on whichever file is now loaded
+        // (the previous one if the switch failed) rather than leave the user
+        // with silent output.
+        if wasPlaying { startPlaying() }
     }
 
     func selectExternalFile(_ url: URL) {
@@ -242,8 +274,8 @@ class AudioUnitHostModel {
             UserDefaults.standard.set(AudioSourcePersistence.encode(audioSource), forKey: Self.audioSourceKey)
         } catch {
             print("Failed to load audio file: \(error)")
-            if wasPlaying { playEngine.startPlaying() }
         }
+        if wasPlaying { startPlaying() }
     }
 
     private static func bundleURL(for source: BuiltInAudioSource) -> URL? {

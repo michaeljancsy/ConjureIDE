@@ -131,11 +131,11 @@ public class SimplePlayEngine {
         }
     }
     
-    /// Changes the audio file at runtime. Stops and restarts playback as needed,
-    /// and rewires through the AU if one is connected.
+    /// Changes the audio file at runtime and rewires through the AU if one is
+    /// connected. Stops playback if it's running; restarting is the caller's
+    /// job, so a failed restart reaches the caller as an error.
     public func setAudioFile(_ fileURL: URL) throws {
-        let wasPlaying = isPlaying
-        if wasPlaying {
+        if isPlaying {
             stopPlaying()
         }
 
@@ -152,9 +152,20 @@ public class SimplePlayEngine {
         } else {
             engine.connect(player, to: engine.mainMixerNode, format: newFile.processingFormat)
         }
+    }
 
-        if wasPlaying {
-            startPlaying()
+    /// Takes the current Audio Unit out of the graph and wires the player
+    /// straight to the mixer. Used before loading a fresh instance after the
+    /// plugin's process stopped: the dead unit can't be initialized, so it
+    /// must not stay in the output chain.
+    func unloadAudioUnit() {
+        stopPlaying()
+        guard let avAudioUnit else { return }
+        engine.detach(avAudioUnit)
+        self.avAudioUnit = nil
+        scheduleMIDIEventListBlock = nil
+        if let format = file?.processingFormat {
+            engine.connect(player, to: engine.mainMixerNode, format: format)
         }
     }
 
@@ -172,9 +183,9 @@ public class SimplePlayEngine {
     
     // MARK: Playback State
     
-    public func startPlaying() {
-        stateChangeQueue.sync {
-            if !self.isPlaying { self.startPlayingInternal() }
+    public func startPlaying() throws {
+        try stateChangeQueue.sync {
+            if !self.isPlaying { try self.startPlayingInternal() }
         }
     }
     
@@ -184,16 +195,7 @@ public class SimplePlayEngine {
         }
     }
     
-    public func togglePlay() -> Bool {
-        if isPlaying {
-            stopPlaying()
-        } else {
-            startPlaying()
-        }
-        return isPlaying
-    }
-    
-    private func startPlayingInternal() {
+    private func startPlayingInternal() throws {
         guard let avAudioUnit = self.avAudioUnit else {
             return
         }
@@ -215,12 +217,17 @@ public class SimplePlayEngine {
         // recommended companion call before start() when render-time matters.
         engine.prepare()
 
-        // Start the engine.
+        // Start the engine. This fails when the plugin's process has stopped
+        // (the graph can't initialize a dead Audio Unit), so undo the setup
+        // above and hand the error to the caller.
         do {
             try engine.start()
         } catch {
-            isPlaying = false
-            fatalError("Could not start engine. error: \(error).")
+            if avAudioUnit.wantsAudioInput {
+                player.stop()
+            }
+            setSessionActive(false)
+            throw error
         }
 
         if avAudioUnit.wantsAudioInput {
