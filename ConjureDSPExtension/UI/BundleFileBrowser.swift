@@ -155,7 +155,7 @@ struct BundleFileBrowser: View {
             }
         }
         .background(Color(nsColor: .controlBackgroundColor))
-        .popover(isPresented: $showingNewFilePopover) {
+        .editingSafePopover(isPresented: $showingNewFilePopover) {
             NewBundleEntryPopover(
                 isFolder: newFileIsFolder,
                 parent: newFileParent,
@@ -178,7 +178,7 @@ struct BundleFileBrowser: View {
                 }
             )
         }
-        .popover(isPresented: $showingRenamePopover) {
+        .editingSafePopover(isPresented: $showingRenamePopover) {
             if let node = renameNode {
                 RenameEntryPopover(
                     currentName: node.name,
