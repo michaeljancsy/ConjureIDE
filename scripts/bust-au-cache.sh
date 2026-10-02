@@ -6,13 +6,11 @@ set -euo pipefail
 # is always the one that gets loaded. This handles switching between
 # worktrees, Debug/Release configurations, and DerivedData rebuilds.
 #
-# Skipped during test actions to avoid interfering with the test runner.
-
-# Detect test actions: ACTION is set by xcodebuild (build, test, etc.)
-if [ "${ACTION:-build}" = "test" ] || [ "${ACTION:-build}" = "build-for-testing" ]; then
-    echo "note: Test action — skipping AU cache bust" >&2
-    exit 0
-fi
+# Also runs during `xcodebuild test` (Xcode passes ACTION=build to build-phase
+# scripts there, so test runs can't be told apart anyway). Tests depend on it:
+# ConjureDSPTests looks the AU up by component description, so the fresh
+# build must be the registered one, not another worktree's Debug build with
+# the same bundle ID.
 
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister
 APP_PATH="${BUILT_PRODUCTS_DIR:-}/ConjureDSP.app"
