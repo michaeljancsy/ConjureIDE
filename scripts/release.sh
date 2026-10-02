@@ -78,6 +78,11 @@ if [ -n "$SPARKLE_BIN" ]; then
     "$SPARKLE_BIN" --maximum-versions 0 "$APPCAST_DIR"
     echo "  Appcast: $APPCAST_DIR/appcast.xml"
 
+    # generate_appcast unpacks every DMG it reads into this cache (~850 MB each)
+    # and never prunes it (it had reached 25 GB, 32 DMGs). Nothing reads it
+    # between runs; the next run re-unpacks whatever DMGs are in APPCAST_DIR.
+    rm -rf "$HOME/Library/Caches/Sparkle_generate_appcast"
+
     # Generate versions.html from the appcast — linked from the app's
     # "Previous Versions…" menu item. Users can download any prior DMG
     # directly from this page to roll back.
