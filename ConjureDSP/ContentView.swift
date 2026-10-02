@@ -22,6 +22,7 @@ struct ContentView: View {
     }
     
     var body: some View {
+        let status = hostModel.playbackStatus
         VStack(spacing: 0) {
             if hostModel.audioUnitCrashed {
                 #if DEBUG
@@ -33,6 +34,10 @@ struct ContentView: View {
                 .padding(.top, margin)
                 ValidationView(hostModel: hostModel, isSheetPresented: $isSheetPresented)
                 #endif
+                if let notice = status.notice {
+                    PlaybackNoticeView(notice: notice, onReload: hostModel.reloadAudioUnit)
+                        .frame(minWidth: 600, maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
+                }
             } else {
                 #if DEBUG
                 HStack(spacing: 8) {
@@ -54,6 +59,9 @@ struct ContentView: View {
             }
 
             if hostModel.viewModel.showAudioControls {
+                if !hostModel.audioUnitCrashed, let notice = status.notice {
+                    PlaybackNoticeView(notice: notice, onReload: hostModel.reloadAudioUnit)
+                }
                 HStack(spacing: 8) {
                     Menu {
                         ForEach(BuiltInAudioSource.allCases) { source in
@@ -82,6 +90,7 @@ struct ContentView: View {
                         Text(hostModel.isPlaying ? "Stop" : "Play")
                     }
                 }
+                .disabled(!status.controlsEnabled)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .fileImporter(
@@ -99,6 +108,42 @@ struct ContentView: View {
                     .padding(.vertical, 4)
             }
         }
+    }
+}
+
+/// A message about the plugin or playback, with the full error text on
+/// request and, when the plugin has stopped, a button to load it again.
+private struct PlaybackNoticeView: View {
+    let notice: PlaybackStatus.Notice
+    let onReload: () -> Void
+    @State private var showingDetail = false
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+                Text(notice.message)
+                if notice.detail != nil {
+                    Button(showingDetail ? "Hide Details" : "More Info") {
+                        showingDetail.toggle()
+                    }
+                    .buttonStyle(.link)
+                }
+                if notice.offersReload {
+                    Button("Reload Plugin", action: onReload)
+                        .accessibilityIdentifier("reloadPluginButton")
+                }
+            }
+            if showingDetail, let detail = notice.detail {
+                Text(detail)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(8)
     }
 }
 
