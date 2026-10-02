@@ -308,7 +308,7 @@ scripts/                     Build and setup scripts
   setup-rustc.sh             Downloads standalone Rust compiler for WASM compilation
   setup-monaco.sh            Downloads Monaco Editor for code editing UI
   bust-au-cache.sh           Kills AudioComponentRegistrar for fresh AU registration
-  build.sh                   Archives Release, uploads dSYMs to Sentry, re-signs, builds DMG, optionally notarizes
+  build.sh                   Archives Release, keeps + uploads dSYMs (Sentry), re-signs, builds DMG, optionally notarizes
   release.sh                 Generates the Sparkle appcast and uploads the DMG to R2
   build-and-release.sh       build.sh --notarize, then release.sh
   create-dmg.sh              Creates distributable DMG from signed .app

@@ -76,7 +76,7 @@ Every path runs `build.sh`, which checks Sentry credentials before archiving and
 
 ## Step 6: Report results
 
-After the script completes, report whether it succeeded or failed, the version and build number, the DMG path and size, what steps completed, and the dSYM result (the `All N debug files are on Sentry` line from `upload-dsyms.sh`).
+After the script completes, report whether it succeeded or failed, the version and build number, the DMG path and size, what steps completed, and the dSYM result (the `All N debug files are on Sentry` line from `upload-dsyms.sh`, and the `Kept:` path of the saved symbol copy).
 
 If it failed, show the relevant error output and suggest fixes.
 

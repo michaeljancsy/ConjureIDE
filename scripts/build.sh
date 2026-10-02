@@ -63,6 +63,24 @@ xcodebuild archive \
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
     | tail -1
 
+echo "=== Keeping a copy of this build's debug symbols ==="
+
+# $ARCHIVE_PATH is overwritten by the next build and lives in this checkout's
+# build/ folder, so keep the debug files somewhere permanent. The full archive
+# is ~2.7 GB; this keeps only what Sentry needs (~75 MB): dSYMs/, the archive
+# Info.plist, and the extension's libpython (no dSYM) at the path
+# upload-dsyms.sh expects, so `upload-dsyms.sh <kept copy>` works on it.
+ARCHIVE_INFO="$ARCHIVE_PATH/Products/Applications/ConjureDSP.app/Contents/Info.plist"
+KEPT_NAME="ConjureDSP-$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$ARCHIVE_INFO")"
+KEPT_NAME="$KEPT_NAME-b$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$ARCHIVE_INFO")"
+KEPT_ARCHIVE="$HOME/Library/Developer/ConjureDSP/ReleaseSymbols/$KEPT_NAME-$(date +%Y%m%d-%H%M%S).xcarchive"
+LIBPYTHON_IN_ARCHIVE="Products/Applications/ConjureDSP.app/Contents/PlugIns/ConjureDSPExtension.appex/Contents/Frameworks/libpython3.14t.dylib"
+mkdir -p "$KEPT_ARCHIVE/$(dirname "$LIBPYTHON_IN_ARCHIVE")"
+ditto "$ARCHIVE_PATH/dSYMs" "$KEPT_ARCHIVE/dSYMs"
+cp "$ARCHIVE_PATH/Info.plist" "$KEPT_ARCHIVE/Info.plist"
+cp "$ARCHIVE_PATH/$LIBPYTHON_IN_ARCHIVE" "$KEPT_ARCHIVE/$LIBPYTHON_IN_ARCHIVE"
+echo "Kept: $KEPT_ARCHIVE"
+
 echo "=== Uploading debug symbols to Sentry ==="
 
 # Re-signing below changes signatures, not Mach-O UUIDs, so the archive's
@@ -309,6 +327,7 @@ echo "DMG:     $DMG_PATH"
 echo "Version: $VERSION (build $BUILD)"
 echo "Size:    $(du -h "$DMG_PATH" | awk '{print $1}')"
 echo "dSYMs:   uploaded and verified on Sentry (michael-jancsy/conjuredsp)"
+echo "         kept at $KEPT_ARCHIVE"
 if $NOTARIZE; then
     echo "Status:  Notarized"
 else

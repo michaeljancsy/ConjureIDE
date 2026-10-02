@@ -24,7 +24,9 @@ cp <profile>.provisionprofile ~/Library/Developer/Xcode/UserData/Provisioning\ P
 
 - The destination is hard-coded: org `michael-jancsy`, project `conjuredsp`. `~/.sentryclirc`'s default project is conjurealign, so never run a bare `sentry-cli debug-files upload`.
 - Token: `SENTRY_AUTH_TOKEN`, else `token=` under `[auth]` in `~/.sentryclirc`. An org auth token with `org:ci` scope covers both the upload and the verification query.
-- To upload or re-check an earlier archive: `scripts/upload-dsyms.sh build/ConjureDSP.xcarchive`. Re-running is safe; Sentry skips files it already has.
+- `build/ConjureDSP.xcarchive` is overwritten by the next build, so right after archiving `build.sh` also keeps a slim copy (~75 MB of the ~2.7 GB archive: `dSYMs/`, `Info.plist`, and libpython) at `~/Library/Developer/ConjureDSP/ReleaseSymbols/ConjureDSP-<version>-b<build>-<timestamp>.xcarchive`. It lives outside the checkout so worktree builds keep theirs too.
+- To upload or re-check any archive, full or kept: `scripts/upload-dsyms.sh <path>.xcarchive`. Re-running is safe; Sentry skips files it already has.
+- Releases before 3.1.0 have no surviving dSYMs. Their shipped (stripped) executables were uploaded from the R2 DMGs on 2026-10-02. That gives Sentry stack unwinding plus the function names the release build kept (~32k symbols in the 3.0.2 extension), but not file/line info.
 
 There is deliberately no Xcode build phase for this. The previous one sat on the host-app target and read a gitignored `${SRCROOT}/.sentryclirc`; no checkout had that file, so the phase printed a warning (hidden by `build.sh`'s `| tail -1`) and exited 0. That is how 3.1.0 (build 25) shipped with no symbols on Sentry. The phase also ran under Xcode's user-script sandbox with only the script and `.sentryclirc` declared as inputs, which blocks reading the dSYMs it was meant to upload.
 
