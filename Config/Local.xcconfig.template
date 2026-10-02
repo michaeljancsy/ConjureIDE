@@ -8,7 +8,8 @@
 DEVELOPMENT_TEAM =
 
 // OPTIONAL — telemetry for builds you distribute yourself. Leave empty to
-// keep analytics and crash reporting disabled. "//" starts a comment in
+// keep analytics and crash reporting disabled. Only Release builds use these;
+// Debug builds never send analytics or crash reports. "//" starts a comment in
 // xcconfig files, so escape DSN slashes with $() like this:
 // CONJURE_SENTRY_DSN = https:/$()/publickey@o0.ingest.sentry.io/0
 CONJURE_MIXPANEL_TOKEN =

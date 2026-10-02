@@ -61,7 +61,7 @@ The only legitimate exception is subjective correctness (UI layout, "does this s
 - Monaco Editor (one-time setup): `./scripts/setup-monaco.sh`
 - xterm.js terminal (one-time setup): `./scripts/setup-xterm.sh`
 - Bundled uv package manager (one-time setup): `./scripts/setup-uv.sh`
-- Signing config (one-time setup): `cp Config/Local.xcconfig.template Config/Local.xcconfig`, then set `DEVELOPMENT_TEAM` to your Apple team id. The same gitignored file optionally sets `CONJURE_MIXPANEL_TOKEN` / `CONJURE_SENTRY_DSN`; when they're empty (the default), builds have no telemetry.
+- Signing config (one-time setup): `cp Config/Local.xcconfig.template Config/Local.xcconfig`, then set `DEVELOPMENT_TEAM` to your Apple team id. The same gitignored file optionally sets `CONJURE_MIXPANEL_TOKEN` / `CONJURE_SENTRY_DSN`; when they're empty (the default), builds have no telemetry. Only Release builds use them — Debug builds (including every `xcodebuild test` run) never send analytics or crash reports, so to exercise Sentry locally, build Release.
 
 Deployment targets: macOS 15 (Sequoia)+.
 

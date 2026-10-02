@@ -7,9 +7,15 @@ private final class SentryBundleToken {}
 
 /// Populated from the ConjureSentryDSN Info.plist key, which mirrors the
 /// CONJURE_SENTRY_DSN build setting (Config/Local.xcconfig). Empty or missing
-/// means crash reporting stays disabled.
+/// means crash reporting stays disabled. DEBUG builds never report regardless:
+/// they carry the shipped version and build numbers, have no dSYMs to
+/// symbolicate against, and run constantly under the debugger and test suites.
+#if DEBUG
+let sentryDSN = ""
+#else
 let sentryDSN = Bundle(for: SentryBundleToken.self)
     .object(forInfoDictionaryKey: "ConjureSentryDSN") as? String ?? ""
+#endif
 
 enum SentrySetup {
     static func start() {
@@ -27,12 +33,7 @@ enum SentrySetup {
             options.enableAutoSessionTracking = true
             options.attachStacktrace = true
             options.maxBreadcrumbs = 50
-            #if DEBUG
-            options.environment = "debug-terminal"
-            options.debug = true
-            #else
             options.environment = "release-terminal"
-            #endif
             if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
                 options.releaseName = "com.MichaelJancsy.ConjureDSP.Terminal@\(version)"
             }
