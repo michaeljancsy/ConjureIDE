@@ -2,10 +2,11 @@ use crate::backend::{Backend, SidechainInput, StateSnapshot};
 use crate::kernel::TransportState;
 use crate::params::{ParamMetadata, TelemetryMetadata, PARAM_COUNT, TELEMETRY_LEN};
 use numpy::{PyArray1, PyArray2, PyArrayMethods};
+use pyo3::ffi;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PySlice};
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{c_char, CStr, CString};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
@@ -14,10 +15,101 @@ use std::sync::OnceLock;
 /// when multiple AU instances load different scripts in the same DAW process.
 static INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Ensures PYTHONHOME and PYTHONDONTWRITEBYTECODE are set exactly once,
-/// avoiding the POSIX setenv() thread-safety issue when multiple AU instances
-/// initialize concurrently (e.g., DAW track duplication).
-static PYTHON_ENV_INIT: OnceLock<()> = OnceLock::new();
+/// Outcome of the one interpreter start this process gets. CPython can't
+/// reliably start again after a failed start, so an `Err` here is permanent:
+/// every later Python load returns the same message.
+static PYTHON_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+
+/// Start the embedded interpreter on the first call; later calls return the
+/// first call's outcome. `python_home` only matters on the first call.
+///
+/// pyo3's `auto-initialize` is deliberately off: it calls `Py_InitializeEx`,
+/// which on failure prints "Fatal Python error" and ends the process —
+/// inside the AU that blanks the plugin with no crash report.
+fn ensure_python_started(python_home: &str) -> Result<(), String> {
+    let home_c = CString::new(python_home).map_err(|e| e.to_string())?;
+    PYTHON_INIT
+        .get_or_init(|| {
+            // SAFETY: get_or_init runs this at most once per process, so no
+            // other thread is starting Python concurrently.
+            unsafe { start_interpreter(&home_c) }.map_err(|detail| {
+                let msg = format!(
+                    "Python failed to start ({detail}). Python home: {python_home}. \
+                     Python can't be restarted inside a running plugin; quit and \
+                     reopen the host app to try again."
+                );
+                eprintln!("ConjureDSP-Rust: {msg}");
+                msg
+            })
+        })
+        .clone()
+}
+
+/// Initialize CPython with an explicit config so failures come back as a
+/// `PyStatus` instead of ending the process. Settings match the
+/// `Py_InitializeEx(0)` that pyo3's auto-initialize used, plus the
+/// `PYTHONHOME` / `PYTHONDONTWRITEBYTECODE` this code used to set as env vars.
+unsafe fn start_interpreter(home: &CStr) -> Result<(), String> {
+    unsafe {
+        if ffi::Py_IsInitialized() != 0 {
+            return Ok(());
+        }
+
+        let mut preconfig = std::mem::MaybeUninit::<ffi::PyPreConfig>::uninit();
+        ffi::PyPreConfig_InitPythonConfig(preconfig.as_mut_ptr());
+        let mut preconfig = preconfig.assume_init();
+        preconfig.parse_argv = 0;
+        // As in Py_InitializeEx: no automatic UTF-8 mode, and no C-locale
+        // coercion (it would rewrite LC_CTYPE for the whole host process).
+        preconfig.coerce_c_locale = 0;
+        preconfig.coerce_c_locale_warn = 0;
+        preconfig.utf8_mode = 0;
+        status_result(ffi::Py_PreInitialize(&preconfig))?;
+
+        let mut config = std::mem::MaybeUninit::<ffi::PyConfig>::uninit();
+        ffi::PyConfig_InitPythonConfig(config.as_mut_ptr());
+        let mut config = config.assume_init();
+        let cfg: *mut ffi::PyConfig = &mut config;
+        (*cfg).parse_argv = 0;
+        // Leave the host's signal handlers and stdio alone.
+        (*cfg).install_signal_handlers = 0;
+        (*cfg).configure_c_stdio = 0;
+        (*cfg).write_bytecode = 0;
+        let mut result =
+            status_result(ffi::PyConfig_SetBytesString(cfg, &raw mut (*cfg).home, home.as_ptr()));
+        if result.is_ok() {
+            result = status_result(ffi::Py_InitializeFromConfig(cfg));
+        }
+        ffi::PyConfig_Clear(cfg);
+        result?;
+
+        // Detach this thread so pyo3 can attach from any thread (the same
+        // step pyo3's own initializer takes).
+        ffi::PyEval_SaveThread();
+        Ok(())
+    }
+}
+
+/// `Err("func: message")` when `status` reports an error or an exit request.
+unsafe fn status_result(status: ffi::PyStatus) -> Result<(), String> {
+    unsafe {
+        if ffi::PyStatus_Exception(status) == 0 {
+            return Ok(());
+        }
+        if ffi::PyStatus_IsExit(status) != 0 {
+            return Err(format!("Python requested exit with code {}", status.exitcode));
+        }
+        let text = |p: *const c_char| {
+            (!p.is_null()).then(|| CStr::from_ptr(p).to_string_lossy().into_owned())
+        };
+        Err(match (text(status.func), text(status.err_msg)) {
+            (Some(func), Some(msg)) => format!("{func}: {msg}"),
+            (None, Some(msg)) => msg,
+            (Some(func), None) => func,
+            (None, None) => "unknown error".to_string(),
+        })
+    }
+}
 
 /// Python DSP backend using pyo3 and numpy.
 ///
@@ -143,7 +235,13 @@ impl Drop for PythonBackend {
 
 impl PythonBackend {
     /// Prepend a directory to Python's `sys.path` so packages in it are importable.
+    /// Requires an earlier `load` to have started Python.
     pub fn inject_site_packages(path: &str) -> Result<(), String> {
+        match PYTHON_INIT.get() {
+            Some(Ok(())) => {}
+            Some(Err(msg)) => return Err(msg.clone()),
+            None => return Err("Python isn't running yet; load a Python script first".to_string()),
+        }
         Python::with_gil(|py| -> Result<(), PyErr> {
             let sys = py.import("sys")?;
             let path_list = sys.getattr("path")?;
@@ -165,17 +263,7 @@ impl PythonBackend {
             python_home, script_path
         );
 
-        let python_home_owned = python_home.to_string();
-        PYTHON_ENV_INIT.get_or_init(|| {
-            // SAFETY: edition 2024 makes set_var unsafe because mutating
-            // the process env across threads is racy. PYTHON_ENV_INIT
-            // ensures this block runs exactly once, before any pyo3
-            // interpreter init that might spawn helper threads.
-            unsafe {
-                std::env::set_var("PYTHONHOME", &python_home_owned);
-                std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
-            }
-        });
+        ensure_python_started(python_home)?;
 
         struct LoadResult {
             process_fn: Py<PyAny>,

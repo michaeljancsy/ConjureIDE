@@ -569,7 +569,8 @@ impl DSPKernel {
     }
 
     /// Load a Python script containing a `process()` function.
-    /// `python_home` sets PYTHONHOME before interpreter init.
+    /// `python_home` is the interpreter's home; only the first Python load
+    /// in the process uses it.
     /// Returns true on success.
     ///
     /// On the first load (no live backend yet) the new backend is installed
@@ -3400,6 +3401,96 @@ mod tests {
 
         std::fs::remove_file(healthy).ok();
         std::fs::remove_file(rejected).ok();
+    }
+
+    /// Set in the child process spawned by
+    /// `test_python_init_failure_returns_error_instead_of_exiting`.
+    const PY_INIT_FAILURE_CHILD_ENV: &str = "CONJURE_TEST_PY_INIT_FAILURE_CHILD";
+    /// Printed by the child as its last step, so the parent can tell "every
+    /// assertion ran" apart from "the name filter matched no test".
+    const PY_INIT_FAILURE_CHILD_DONE: &str = "PY_INIT_FAILURE_CHILD_DONE";
+
+    /// A failed interpreter start (here: an empty stdlib folder) must come
+    /// back as a load error, not end the process. CPython's own
+    /// `Py_InitializeEx` prints "Fatal Python error" and terminates, which
+    /// inside the AU extension blanks the plugin with no crash report.
+    ///
+    /// Interpreter startup is process-wide and can't be undone, so the
+    /// scenario runs in a child process: this test re-runs the test binary
+    /// filtered to itself with `PY_INIT_FAILURE_CHILD_ENV` set.
+    #[test]
+    fn test_python_init_failure_returns_error_instead_of_exiting() {
+        if std::env::var_os(PY_INIT_FAILURE_CHILD_ENV).is_some() {
+            python_init_failure_child();
+            return;
+        }
+
+        // Test names omit the crate prefix that module_path! includes.
+        let full_name = concat!(
+            module_path!(),
+            "::test_python_init_failure_returns_error_instead_of_exiting"
+        );
+        let test_name = full_name.split_once("::").unwrap().1;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([test_name, "--exact", "--nocapture", "--test-threads=1"])
+            .env(PY_INIT_FAILURE_CHILD_ENV, "1")
+            .output()
+            .expect("failed to spawn the test binary");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success() && stdout.contains(PY_INIT_FAILURE_CHILD_DONE),
+            "child process did not finish cleanly ({}).\n\
+             --- child stdout ---\n{stdout}\n--- child stderr ---\n{stderr}",
+            output.status
+        );
+    }
+
+    fn python_init_failure_child() {
+        let empty_home = std::env::temp_dir().join(format!(
+            "conjure_empty_python_home_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(empty_home.join("lib/python3.14t")).unwrap();
+        let empty_home = empty_home.to_str().unwrap().to_string();
+        let script = write_temp_script("def process(ctx):\n    pass\n");
+        let script = script.to_str().unwrap().to_string();
+
+        let mut kernel = DSPKernel::new();
+        kernel.initialize(1, 1, 48000.0);
+        assert!(
+            !kernel.load_script(&empty_home, &script),
+            "load should fail with an empty stdlib folder"
+        );
+        let err = kernel.last_error().expect("last_error should be set");
+        println!("init failure error: {err}");
+        assert!(err.contains(&empty_home), "error should name the Python home, got: {err}");
+        assert!(err.contains("reopen"), "error should say how to recover, got: {err}");
+
+        // Same passthrough fallback as every other failed load.
+        let input: [f32; 4] = [0.1, -0.2, 0.7, -0.9];
+        let mut output: [f32; 4] = [0.0; 4];
+        let input_ptr: *const f32 = input.as_ptr();
+        let output_ptr: *mut f32 = output.as_mut_ptr();
+        unsafe {
+            kernel.process(&input_ptr, &output_ptr, 1, 4);
+        }
+        assert_eq!(output, input, "failed init must leave the kernel in passthrough");
+
+        // Later loads in this process report the same error without trying
+        // to start Python again — even when handed a working Python home.
+        let retry_home = test_python_paths().map(|(home, _)| home).unwrap_or(empty_home.clone());
+        let mut kernel2 = DSPKernel::new();
+        assert!(!kernel2.load_script(&retry_home, &script));
+        assert_eq!(kernel2.last_error().as_deref(), Some(err.as_str()));
+
+        // The other Python entry point must refuse rather than touch the
+        // half-started interpreter.
+        assert!(kernel.set_extra_site_packages(&empty_home).is_err());
+
+        std::fs::remove_file(&script).ok();
+        std::fs::remove_dir_all(&empty_home).ok();
+        println!("{PY_INIT_FAILURE_CHILD_DONE}");
     }
 
     /// Single-arg `def process(ctx):` is the only accepted shape.
