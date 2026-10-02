@@ -108,20 +108,23 @@ sentry-cli debug-files upload \
 # for UUID that provides FEATURE ("debug" = DWARF from a dSYM, "symtab" = the
 # symbol table of a plain binary).
 has_debug_file() {
-    local body
-    # `|| exit`: errexit is off inside a function called from an `if`, and an
-    # API failure must stop the script rather than read as "missing".
+    local body found
+    # `|| exit`/`|| die`: errexit is off inside a function called from an `if`,
+    # and an API or parse failure must stop the script rather than read as
+    # "missing". The answer comes back as text so that "not found" is never
+    # confused with Python's own exit status 1 on an exception.
     body=$(sentry_get "${DSYMS_ENDPOINT}?query=$1") || exit 1
-    /usr/bin/python3 -c '
+    found=$(/usr/bin/python3 -c '
 import json, sys
 uuid, feature = sys.argv[1], sys.argv[2]
 files = json.loads(sys.stdin.read())
-sys.exit(0 if any(
+print("yes" if any(
     f.get("uuid") == uuid
     and f.get("symbolType") == "macho"
     and feature in ((f.get("data") or {}).get("features") or [])
-    for f in files) else 1)
-' "$1" "$2" <<<"$body"
+    for f in files) else "no")
+' "$1" "$2" <<<"$body") || die "could not read Sentry's debug-file list for $1: $body"
+    [ "$found" = "yes" ]
 }
 
 # dwarfdump prints one line per Mach-O slice: "UUID: 6BF204F9-... (arm64) /path/to/binary".
