@@ -83,6 +83,7 @@ struct ContentView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
+                    .accessibilityIdentifier("audioSourceMenu")
                     Spacer()
                     Button {
                         hostModel.isPlaying ? hostModel.stopPlaying() : hostModel.startPlaying()
