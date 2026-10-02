@@ -314,6 +314,7 @@ scripts/                     Build and setup scripts
   create-dmg.sh              Creates distributable DMG from signed .app
   notarize.sh                Submits to Apple notarization service
   upload-dsyms.sh            Uploads an archive's dSYMs to Sentry (michael-jancsy/conjuredsp) and verifies them; called by build.sh
+  check-app-groups.sh        Fails if a bundle claims an App Group its embedded profile doesn't authorize; called by build.sh
   pre-build-clean.sh         Kills AudioComponentRegistrar and clears the AU cache before every build;
                              local Release builds also move /Applications/ConjureDSP.app to .dev-backup
                              (same bundle ID would shadow the fresh build). Debug builds, including every
