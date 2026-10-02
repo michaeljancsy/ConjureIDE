@@ -157,7 +157,7 @@ struct PresetToolbar: View {
             .buttonStyle(.borderless)
             .frame(minWidth: 100, maxWidth: 200)
             .accessibilityIdentifier("presetMenu")
-            .popover(isPresented: $showingPresetBrowser) {
+            .editingSafePopover(isPresented: $showingPresetBrowser) {
                 PresetBrowserView(
                     presets: presetManager.presets,
                     currentPreset: presetManager.currentPreset,
@@ -269,7 +269,7 @@ struct PresetToolbar: View {
             .fixedSize()
             .toolbarTooltip("New (\u{2318}N)")
             .accessibilityIdentifier("newScriptButton")
-            .popover(isPresented: $showNewScriptDialog) {
+            .editingSafePopover(isPresented: $showNewScriptDialog) {
                 NewPresetPopover(
                     existingNames: Set(presetManager.presets.filter { !$0.isFactory }.map(\.name)),
                     onCreate: { name, language, includeCustomUI in
@@ -314,7 +314,7 @@ struct PresetToolbar: View {
                 .disabled(!presetManager.hasPendingChanges)
                 .toolbarTooltip("Save (\u{2318}S)")
                 .accessibilityIdentifier("savePresetButton")
-                .popover(isPresented: $showingSaveMessage) {
+                .editingSafePopover(isPresented: $showingSaveMessage) {
                     let name = presetManager.currentPreset?.name ?? ""
                     SaveMessagePopover(
                         defaultMessage: "Update \(name)",
@@ -349,7 +349,7 @@ struct PresetToolbar: View {
             .fixedSize()
             .toolbarTooltip("Save As\u{2026}")
             .accessibilityIdentifier("saveAsButton")
-            .popover(isPresented: $showingSaveAs) {
+            .editingSafePopover(isPresented: $showingSaveAs) {
                 SaveAsPopover(
                     name: $saveAsName,
                     existingNames: Set(presetManager.presets.filter { !$0.isFactory }.map(\.name)),
@@ -385,7 +385,7 @@ struct PresetToolbar: View {
                 .fixedSize()
                 .toolbarTooltip("Rename preset")
                 .accessibilityIdentifier("renamePresetButton")
-                .popover(isPresented: $showingRename) {
+                .editingSafePopover(isPresented: $showingRename) {
                     RenamePopover(
                         name: $renameName,
                         currentName: presetManager.currentPreset?.name ?? "",
@@ -487,7 +487,7 @@ struct PresetToolbar: View {
             .disabled(isExporting || isCompiling)
             .toolbarTooltip("Export as standalone AU")
             .accessibilityIdentifier("exportButton")
-            .popover(isPresented: $showingExport) {
+            .editingSafePopover(isPresented: $showingExport) {
                 ExportPopover(
                     exportName: $exportName,
                     language: selectedLanguage,
@@ -519,7 +519,7 @@ struct PresetToolbar: View {
             .fixedSize()
             .toolbarTooltip("Packages")
             .accessibilityIdentifier("packagesButton")
-            .popover(isPresented: $showingPackages) {
+            .editingSafePopover(isPresented: $showingPackages) {
                 PackageManagerView(
                     installManager: packageInstallManager,
                     crateInstallManager: crateInstallManager,
@@ -543,7 +543,7 @@ struct PresetToolbar: View {
             .fixedSize()
             .toolbarTooltip("Browse amp/pedal tones")
             .accessibilityIdentifier("tonesButton")
-            .popover(isPresented: $showingTones) {
+            .editingSafePopover(isPresented: $showingTones) {
                 ToneBrowserView(
                     client: toneClient,
                     modelStore: toneModelStore,
@@ -636,7 +636,7 @@ struct PresetToolbar: View {
             .fixedSize()
             .toolbarTooltip("Settings")
             .accessibilityIdentifier("settingsButton")
-            .popover(isPresented: $showingSettings, arrowEdge: .top) {
+            .editingSafePopover(isPresented: $showingSettings, arrowEdge: .top) {
                 VStack(alignment: .leading, spacing: 12) {
                     Picker("", selection: $settingsTab) {
                         ForEach(SettingsTab.allCases) { tab in
@@ -675,7 +675,7 @@ struct PresetToolbar: View {
         .font(.system(size: 14))
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .popover(isPresented: $showingImportURL) {
+        .editingSafePopover(isPresented: $showingImportURL) {
             ImportURLPopover(
                 presetManager: presetManager,
                 resolver: GitHubURLResolver(),

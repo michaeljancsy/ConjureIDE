@@ -1657,7 +1657,7 @@ private struct StatusBarView: View {
                     .buttonStyle(.borderless)
                     .help("Show full error detail")
                     .accessibilityIdentifier("errorMoreInfoButton")
-                    .popover(isPresented: $showingErrorDetails, arrowEdge: .top) {
+                    .editingSafePopover(isPresented: $showingErrorDetails, arrowEdge: .top) {
                         errorDetailsPopover(summary: err, details: details)
                     }
                 }
