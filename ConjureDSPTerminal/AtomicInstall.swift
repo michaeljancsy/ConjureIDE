@@ -32,12 +32,17 @@ enum AtomicInstall {
         copy: (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }
     ) throws {
         let fm = FileManager.default
-        let staging = stagingURL(for: destination)
+        let parent = destination.deletingLastPathComponent()
+        let prefix = stagingPrefix(for: destination)
 
-        // Clear a copy left by an install that was interrupted (Terminal quit
-        // mid-copy). Usually nothing is there, so the error is ignored; if
-        // something is there and can't be removed, the copy below fails.
-        try? fm.removeItem(at: staging)
+        // Clear copies left by installs that were interrupted (Terminal quit
+        // mid-copy). Best effort: each attempt stages under a fresh name, so
+        // a leftover that can't be removed never blocks a later install.
+        for name in (try? fm.contentsOfDirectory(atPath: parent.path)) ?? [] where name.hasPrefix(prefix) {
+            try? fm.removeItem(at: parent.appendingPathComponent(name))
+        }
+
+        let staging = parent.appendingPathComponent("\(prefix)-\(UUID().uuidString)")
         do {
             try copy(source, staging)
         } catch {
@@ -64,9 +69,9 @@ enum AtomicInstall {
         ])
     }
 
-    /// Hidden sibling the new copy is written to before it's moved into place.
-    nonisolated static func stagingURL(for destination: URL) -> URL {
-        destination.deletingLastPathComponent()
-            .appendingPathComponent(".\(destination.lastPathComponent).staging")
+    /// Name prefix of the hidden siblings new copies are written to before
+    /// they're moved into place.
+    nonisolated static func stagingPrefix(for destination: URL) -> String {
+        ".\(destination.lastPathComponent).staging"
     }
 }

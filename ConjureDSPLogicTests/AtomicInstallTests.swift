@@ -139,11 +139,33 @@ struct AtomicInstallTests {
         try makeTree(at: source, files: ["a.py"])
         let parent = root.appendingPathComponent("lib")
         let destination = parent.appendingPathComponent("python3.14t")
-        try makeTree(at: AtomicInstall.stagingURL(for: destination), files: ["half.py"])
+        try makeTree(at: parent.appendingPathComponent(AtomicInstall.stagingPrefix(for: destination) + "-interrupted"), files: ["half.py"])
 
         try AtomicInstall.replaceItem(at: destination, withCopyOf: source)
 
         #expect(entries(of: parent) == ["python3.14t"])
+        #expect(entries(of: destination) == ["a.py"])
+    }
+
+    @Test("A leftover staging copy that can't be removed doesn't block the install")
+    func undeletableLeftoverDoesNotBlock() throws {
+        let root = try makeScratch()
+        let source = root.appendingPathComponent("source")
+        try makeTree(at: source, files: ["a.py"])
+        let parent = root.appendingPathComponent("lib")
+        let destination = parent.appendingPathComponent("python3.14t")
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        // A read-only folder can't have its contents deleted, so neither can it.
+        let leftover = parent.appendingPathComponent(AtomicInstall.stagingPrefix(for: destination) + "-interrupted")
+        try makeTree(at: leftover, files: ["half.py"])
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: leftover.path)
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: leftover.path)
+            try? fm.removeItem(at: root)
+        }
+
+        try AtomicInstall.replaceItem(at: destination, withCopyOf: source)
+
         #expect(entries(of: destination) == ["a.py"])
     }
 
