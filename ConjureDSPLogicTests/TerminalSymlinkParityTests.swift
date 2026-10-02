@@ -86,4 +86,8 @@ struct TerminalSymlinkParityTests {
     @Test func launchQueueIsSymlinkedToTerminalSource() throws {
         try Self.expectSymlink(filename: "LaunchQueue.swift")
     }
+
+    @Test func atomicInstallIsSymlinkedToTerminalSource() throws {
+        try Self.expectSymlink(filename: "AtomicInstall.swift")
+    }
 }
