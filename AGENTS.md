@@ -313,7 +313,10 @@ scripts/                     Build and setup scripts
   create-dmg.sh              Creates distributable DMG from signed .app
   notarize.sh                Submits to Apple notarization service
   upload-dsyms.sh            Uploads debug symbols to Sentry
-  pre-build-clean.sh         Moves /Applications install out of DerivedData's way
+  pre-build-clean.sh         Kills AudioComponentRegistrar and clears the AU cache before every build;
+                             local Release builds also move /Applications/ConjureDSP.app to .dev-backup
+                             (same bundle ID would shadow the fresh build). Debug builds, including every
+                             `xcodebuild test` run, leave the installed app alone
   rebuild-and-copy-export-template.sh  Builds export AU template and copies into main app
   setup-xterm.sh             Downloads xterm.js for terminal UI
 assets/                      App icons (app-icon.png, export-icon.png)

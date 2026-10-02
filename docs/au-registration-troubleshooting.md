@@ -82,7 +82,7 @@ This resets ALL LaunchServices registrations system-wide. Apps will re-register 
 ## Prevention
 
 - **Never use `pluginkit -r` or `pluginkit -e ignore` in build scripts.** The post-build `bust-au-cache.sh` uses only `killall AudioComponentRegistrar` + `lsregister`, which are safe.
-- **Move `/Applications/ConjureDSP.app` during development** if a production install exists — it shadows DerivedData builds via PluginKit. The pre-build script handles this automatically.
+- **A production install in `/Applications/` shadows local Release builds only.** A Release build in DerivedData has the same bundle ID as the installed app, and at equal versions PluginKit picks the `/Applications` copy even after `lsregister -f` and a `pkd` restart. For local Release builds, `pre-build-clean.sh` moves the installed app to `/Applications/ConjureDSP.app.dev-backup` (rename it back to restore). Debug builds, including every `xcodebuild test` run, use a separate bundle ID and AU subtype, so they coexist with the installed app and leave it alone.
 - **Periodically clean old DerivedData** — stale entries accumulate in LaunchServices and can cause registration conflicts: `ls ~/Library/Developer/Xcode/DerivedData/ConjureDSP-*`
 
 ## Useful diagnostic commands
