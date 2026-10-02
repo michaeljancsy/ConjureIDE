@@ -37,6 +37,11 @@ struct AtomicInstallTests {
         (try? fm.contentsOfDirectory(atPath: url.path))?.sorted()
     }
 
+    /// Staging copies for `destination` still sitting in `parent`.
+    private func stagingLeftovers(in parent: URL, for destination: URL) -> [String] {
+        (entries(of: parent) ?? []).filter { $0.hasPrefix(AtomicInstall.stagingPrefix(for: destination)) }
+    }
+
     /// Copies a directory one file at a time, calling `afterFirstFile` once
     /// the first file has landed, i.e. while the copy is still in progress.
     private func copyOneFileAtATime(afterFirstFile: @escaping () -> Void) -> (URL, URL) throws -> Void {
@@ -89,7 +94,7 @@ struct AtomicInstallTests {
         #expect(entries(of: destination) == ["a.py", "b.py", "c.py"])
     }
 
-    @Test("A failed copy leaves the existing install untouched and nothing else behind")
+    @Test("A failed copy leaves the existing install untouched and no staging copy behind")
     func failedCopyKeepsExistingInstall() throws {
         struct CopyFailed: Error {}
         let root = try makeScratch()
@@ -110,10 +115,10 @@ struct AtomicInstallTests {
         }
 
         #expect(entries(of: destination) == ["old1.py"])
-        #expect(entries(of: parent) == ["python3.14t"])
+        #expect(stagingLeftovers(in: parent, for: destination).isEmpty)
     }
 
-    @Test("Leaves only the installed item in the parent folder, on first install and on reinstall")
+    @Test("Leaves no staging copy behind, on first install and on reinstall")
     func noStagingLeftovers() throws {
         let root = try makeScratch()
         defer { try? fm.removeItem(at: root) }
@@ -124,10 +129,10 @@ struct AtomicInstallTests {
         try fm.createDirectory(at: parent, withIntermediateDirectories: true)
 
         try AtomicInstall.replaceItem(at: destination, withCopyOf: source)
-        #expect(entries(of: parent) == ["conjuredsp"])
+        #expect(stagingLeftovers(in: parent, for: destination).isEmpty)
 
         try AtomicInstall.replaceItem(at: destination, withCopyOf: source)
-        #expect(entries(of: parent) == ["conjuredsp"])
+        #expect(stagingLeftovers(in: parent, for: destination).isEmpty)
         #expect(entries(of: destination) == ["a.py"])
     }
 
@@ -143,7 +148,7 @@ struct AtomicInstallTests {
 
         try AtomicInstall.replaceItem(at: destination, withCopyOf: source)
 
-        #expect(entries(of: parent) == ["python3.14t"])
+        #expect(stagingLeftovers(in: parent, for: destination).isEmpty)
         #expect(entries(of: destination) == ["a.py"])
     }
 
@@ -167,6 +172,36 @@ struct AtomicInstallTests {
         try AtomicInstall.replaceItem(at: destination, withCopyOf: source)
 
         #expect(entries(of: destination) == ["a.py"])
+    }
+
+    @Test("Two installers at once: neither clears the other's in-progress copy")
+    func concurrentInstallsDoNotInterfere() throws {
+        final class Outcome: @unchecked Sendable { var error: Error? }
+        let root = try makeScratch()
+        defer { try? fm.removeItem(at: root) }
+        let source = root.appendingPathComponent("source")
+        try makeTree(at: source, files: ["a.py", "b.py", "c.py"])
+        let destination = root.appendingPathComponent("python3.14t")
+
+        // A second installer starts while the first is mid-copy, the way a
+        // Debug and a Release Terminal launched together would.
+        let second = Outcome()
+        let group = DispatchGroup()
+        try AtomicInstall.replaceItem(
+            at: destination,
+            withCopyOf: source,
+            copy: copyOneFileAtATime {
+                DispatchQueue.global().async(group: group) {
+                    do { try AtomicInstall.replaceItem(at: destination, withCopyOf: source) }
+                    catch { second.error = error }
+                }
+                Thread.sleep(forTimeInterval: 0.3)  // time for the second installer's cleanup to run
+            }
+        )
+
+        #expect(group.wait(timeout: .now() + 10) == .success)
+        #expect(second.error == nil)
+        #expect(entries(of: destination) == ["a.py", "b.py", "c.py"])
     }
 
     @Test("Replaces a single file (libpython, the python3 launcher)")

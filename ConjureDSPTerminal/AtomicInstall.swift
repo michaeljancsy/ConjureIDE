@@ -35,6 +35,22 @@ enum AtomicInstall {
         let parent = destination.deletingLastPathComponent()
         let prefix = stagingPrefix(for: destination)
 
+        // More than one Terminal can be installing at once (a Debug and a
+        // Release build share this container). Hold an exclusive lock for the
+        // whole install so one never clears another's in-progress copy. The
+        // lock file is never deleted: that would let a waiting installer and
+        // a new one each lock a different file. The OS drops the lock if the
+        // process dies.
+        let lockPath = parent.appendingPathComponent(".\(destination.lastPathComponent).lock").path
+        let lockFD = open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
+        guard lockFD >= 0 else {
+            throw posixError(errno, "Couldn't open \(lockPath)")
+        }
+        defer { close(lockFD) }
+        while flock(lockFD, LOCK_EX) != 0 {
+            guard errno == EINTR else { throw posixError(errno, "Couldn't lock \(lockPath)") }
+        }
+
         // Clear copies left by installs that were interrupted (Terminal quit
         // mid-copy). Best effort: each attempt stages under a fresh name, so
         // a leftover that can't be removed never blocks a later install.
@@ -64,8 +80,12 @@ enum AtomicInstall {
             code = errno
         }
         try? fm.removeItem(at: staging)
-        throw NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [
-            NSLocalizedDescriptionKey: "Couldn't move \(staging.path) into place at \(destination.path): \(String(cString: strerror(code)))"
+        throw posixError(code, "Couldn't move \(staging.path) into place at \(destination.path)")
+    }
+
+    private nonisolated static func posixError(_ code: Int32, _ message: String) -> NSError {
+        NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [
+            NSLocalizedDescriptionKey: "\(message): \(String(cString: strerror(code)))"
         ])
     }
 
