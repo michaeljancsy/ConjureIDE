@@ -34,6 +34,7 @@ There is deliberately no Xcode build phase for this. The previous one sat on the
 
 - **Never add `inter-app-audio`** — it's deprecated and not covered by Developer ID provisioning profiles. macOS will SIGKILL the app on launch with `zsh: killed` (no useful error message).
 - Hardened runtime exceptions (`allow-jit`, `allow-unsigned-executable-memory`) and sandbox entitlements (`network.client`, `files.user-selected.read-only`) are unrestricted for Developer ID and don't need profile coverage.
+- **App Groups do need profile coverage.** The app, extension, and Terminal all claim `group.com.MichaelJancsy.ConjureDSP`. Each bundle's own Developer ID profile must list that group, or macOS 15+ shows "would like to access data from other apps" on first access and blocks the file call until the user answers. 3.1.0's extension profile listed only `A4R63LAVLS.*` (issue #370; Sentry CONJUREDSP-6Q is a user's plugin hanging behind that prompt). Debug builds use team profiles that include the group, so development never shows it. `build.sh` runs `scripts/check-app-groups.sh` on the signed app before notarizing and fails if any claim is unauthorized. The fix is in the Apple Developer portal: enable the group on that App ID, then regenerate and install the profile.
 
 ## Verifying a release build
 

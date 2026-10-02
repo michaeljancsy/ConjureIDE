@@ -297,6 +297,14 @@ codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
     --preserve-metadata=entitlements "$APP_PATH"
 echo "Re-signed extension and app"
 
+echo "=== Checking App Group authorization ==="
+
+# A claimed App Group that the bundle's embedded profile doesn't authorize
+# makes macOS 15+ prompt every user to "access data from other apps", and the
+# first container access blocks until they answer. 3.1.0 shipped that way
+# (issue #370). Fail here, before notarizing, not after release.
+"$SCRIPT_DIR/check-app-groups.sh" "$APP_PATH"
+
 # Read version from the built app
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
