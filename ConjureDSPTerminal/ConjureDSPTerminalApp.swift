@@ -502,27 +502,18 @@ class TerminalAppServer {
                 let srcBin = bundledPythonDist.appendingPathComponent("bin/python3")
                 let dstBin = runtimeURL.appendingPathComponent("bin")
                 try fm.createDirectory(at: dstBin, withIntermediateDirectories: true)
-                let dstPython = dstBin.appendingPathComponent("python3")
-                if fm.fileExists(atPath: dstPython.path) {
-                    try fm.removeItem(at: dstPython)
-                }
-                try fm.copyItem(at: srcBin, to: dstPython)
+                try AtomicInstall.replaceItem(at: dstBin.appendingPathComponent("python3"), withCopyOf: srcBin)
 
                 let srcDylib = bundledPythonDist.appendingPathComponent("lib/libpython3.14t.dylib")
                 let dstLib = runtimeURL.appendingPathComponent("lib")
                 try fm.createDirectory(at: dstLib, withIntermediateDirectories: true)
-                let dstDylib = dstLib.appendingPathComponent("libpython3.14t.dylib")
-                if fm.fileExists(atPath: dstDylib.path) {
-                    try fm.removeItem(at: dstDylib)
-                }
-                try fm.copyItem(at: srcDylib, to: dstDylib)
+                try AtomicInstall.replaceItem(at: dstLib.appendingPathComponent("libpython3.14t.dylib"), withCopyOf: srcDylib)
 
+                // The plugin starts Python as soon as this folder exists, so it
+                // must never be visible partly deleted or partly copied.
                 let srcStdlib = bundledPythonDist.appendingPathComponent("lib/python3.14t")
                 let dstStdlib = dstLib.appendingPathComponent("python3.14t")
-                if fm.fileExists(atPath: dstStdlib.path) {
-                    try fm.removeItem(at: dstStdlib)
-                }
-                try fm.copyItem(at: srcStdlib, to: dstStdlib)
+                try AtomicInstall.replaceItem(at: dstStdlib, withCopyOf: srcStdlib)
 
                 writeVersionMarker(at: runtimeURL)
                 log.info("Shared Python runtime installed at \(runtimeURL.path, privacy: .public)")
@@ -549,10 +540,7 @@ class TerminalAppServer {
         let dstConjuredsp = runtimeURL
             .appendingPathComponent("lib/python3.14t/site-packages/conjuredsp")
         do {
-            if fm.fileExists(atPath: dstConjuredsp.path) {
-                try fm.removeItem(at: dstConjuredsp)
-            }
-            try fm.copyItem(at: srcConjuredsp, to: dstConjuredsp)
+            try AtomicInstall.replaceItem(at: dstConjuredsp, withCopyOf: srcConjuredsp)
             log.info("Updated conjuredsp package in site-packages")
         } catch {
             log.error("Failed to update conjuredsp package: \(error.localizedDescription, privacy: .public)")
@@ -628,11 +616,7 @@ class TerminalAppServer {
         }
 
         do {
-            let fm = FileManager.default
-            if fm.fileExists(atPath: dstRustcDist.path) {
-                try fm.removeItem(at: dstRustcDist)
-            }
-            try fm.copyItem(at: rustcDistSource, to: dstRustcDist)
+            try AtomicInstall.replaceItem(at: dstRustcDist, withCopyOf: rustcDistSource)
             writeVersionMarker(at: dstRustcDist)
             log.info("Rust toolchain provisioned to App Group at \(dstRustcDist.path, privacy: .public)")
         } catch {
@@ -659,11 +643,7 @@ class TerminalAppServer {
         }
 
         do {
-            let fm = FileManager.default
-            if fm.fileExists(atPath: dstUV.path) {
-                try fm.removeItem(at: dstUV)
-            }
-            try fm.copyItem(at: bundledUV, to: dstUV)
+            try AtomicInstall.replaceItem(at: dstUV, withCopyOf: bundledUV)
             try appBuildVersion.write(to: versionFile, atomically: true, encoding: .utf8)
             log.info("uv provisioned to App Group at \(dstUV.path, privacy: .public)")
         } catch {

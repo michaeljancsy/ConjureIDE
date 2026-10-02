@@ -1171,6 +1171,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.MichaelJancsy.ConjureDSP.debug.ConjureDSPExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

@@ -84,7 +84,7 @@ Note: `--test-threads=1` is required because Python tests share a single interpr
 3. **Run Script — Copy Rust Compiler**: copies bundled `rustc`, `librustc_driver`, `rust-lld`, and wasm32-wasip1 sysroot into Resources/rustc-dist/, code-signs all executables and dylibs
 
 ### Xcode build phases (ConjureDSP host app target)
-4. **Bust AU Cache**: calls `scripts/bust-au-cache.sh` — kills `AudioComponentRegistrar` so macOS re-discovers AU registrations after every build. Skipped during test actions to avoid interfering with the test runner.
+4. **Bust AU Cache**: calls `scripts/bust-au-cache.sh` after every build, including `xcodebuild test` runs — force-registers the fresh build with LaunchServices (`lsregister -f -R -trusted`), unregisters other DerivedData ConjureDSP builds (other worktrees, old DerivedData folders), and kills `AudioComponentRegistrar` and `pkd` so macOS re-discovers the just-built extension. Tests depend on this: `ConjureDSPTests` looks the AU up by component description, so the fresh build has to be the registered one.
 
 ## Architecture
 
@@ -101,7 +101,7 @@ Scripts can be written in Python (instant load) or Rust (compiled to WASM). `Scr
 
 ### Python DSP pipeline
 1. On AU init, Swift calls `dsp_kernel_load_script()` with the default preset path and Python home (resolved from the App Group container, provisioned by ConjureDSPTerminal)
-2. Rust sets `PYTHONHOME`, initializes the free-threaded Python 3.14 interpreter via pyo3, and caches the script's `process()` function
+2. Rust starts the free-threaded Python 3.14 interpreter with an explicit `PyConfig` (`home` = that Python home) via `Py_InitializeFromConfig`, then caches the script's `process()` function. pyo3's `auto-initialize` is off on purpose: a failed start (e.g. missing stdlib) comes back as a load error through `dsp_kernel_last_error()` with passthrough audio, instead of CPython ending the plugin process. CPython can't start twice in one process, so after a failure every later Python load returns the same error until the host app is reopened.
 3. On `allocateRenderResources()`, Rust pre-allocates one 2D `numpy.ndarray[float32]` per role (inputs, outputs, sidechain) of shape `(channel_count, maximumFramesToRender)`. Rows are C-contiguous.
 4. Each render callback: Rust copies input audio into the rows of the 2D input array, rebinds `ctx.inputs` / `ctx.outputs` / `ctx.sidechain` to pre-built `[:, :frame_count]` slice views, calls `process(ctx)`, then copies the output rows back. The `ctx` object exposes `inputs`, `outputs`, `frame_count`, `sample_rate`, `params` (a `ParamsView` supporting `ctx.params["name"]` and `ctx.params.name` when `PARAMS` metadata exists), `transport`, `telemetry`, `sidechain`, and `state` (read-only mapping over the bundle-private STATE channel). Out-of-bounds writes past `frame_count` raise `IndexError` (scalar index, `ctx.outputs[ch][N] = v`) or `ValueError` (shape-mismatched slice assignment, `ctx.outputs[ch][:N] = arr`) on the sliced view, surfacing bugs that would have silently corrupted the next block under the unsliced shape.
 5. If Python fails to load or errors at runtime, Rust falls back to passthrough (copies input to output)
@@ -307,13 +307,16 @@ rust/                        Rust DSP crate
 scripts/                     Build and setup scripts
   setup-rustc.sh             Downloads standalone Rust compiler for WASM compilation
   setup-monaco.sh            Downloads Monaco Editor for code editing UI
-  bust-au-cache.sh           Kills AudioComponentRegistrar for fresh AU registration
+  bust-au-cache.sh           Re-registers the fresh build with LaunchServices, restarts pkd + AudioComponentRegistrar
   release.sh                 End-to-end release: archive, notarize, DMG
   build-release.sh           Archives Release configuration with Developer ID signing
   create-dmg.sh              Creates distributable DMG from signed .app
   notarize.sh                Submits to Apple notarization service
   upload-dsyms.sh            Uploads debug symbols to Sentry
-  pre-build-clean.sh         Moves /Applications install out of DerivedData's way
+  pre-build-clean.sh         Kills AudioComponentRegistrar and clears the AU cache before every build;
+                             local Release builds also move /Applications/ConjureDSP.app to .dev-backup
+                             (same bundle ID would shadow the fresh build). Debug builds, including every
+                             `xcodebuild test` run, leave the installed app alone
   rebuild-and-copy-export-template.sh  Builds export AU template and copies into main app
   setup-xterm.sh             Downloads xterm.js for terminal UI
 assets/                      App icons (app-icon.png, export-icon.png)

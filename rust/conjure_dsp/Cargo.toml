@@ -7,7 +7,9 @@ edition = "2024"
 crate-type = ["staticlib"]
 
 [dependencies]
-pyo3 = { version = "0.27", features = ["auto-initialize"] }
+# No "auto-initialize": python_backend.rs starts the interpreter itself so a
+# failed start is a load error instead of a process exit.
+pyo3 = "0.27"
 numpy = "0.27"
 wasmtime = "42"
 conjuredsp = { path = "../conjuredsp-rs" }
