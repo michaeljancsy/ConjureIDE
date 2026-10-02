@@ -84,7 +84,7 @@ Note: `--test-threads=1` is required because Python tests share a single interpr
 3. **Run Script — Copy Rust Compiler**: copies bundled `rustc`, `librustc_driver`, `rust-lld`, and wasm32-wasip1 sysroot into Resources/rustc-dist/, code-signs all executables and dylibs
 
 ### Xcode build phases (ConjureDSP host app target)
-4. **Bust AU Cache**: calls `scripts/bust-au-cache.sh` — kills `AudioComponentRegistrar` so macOS re-discovers AU registrations after every build. Skipped during test actions to avoid interfering with the test runner.
+4. **Bust AU Cache**: calls `scripts/bust-au-cache.sh` after every build, including `xcodebuild test` runs — force-registers the fresh build with LaunchServices (`lsregister -f -R -trusted`), unregisters other DerivedData ConjureDSP builds (other worktrees, old DerivedData folders), and kills `AudioComponentRegistrar` and `pkd` so macOS re-discovers the just-built extension. Tests depend on this: `ConjureDSPTests` looks the AU up by component description, so the fresh build has to be the registered one.
 
 ## Architecture
 
@@ -307,7 +307,7 @@ rust/                        Rust DSP crate
 scripts/                     Build and setup scripts
   setup-rustc.sh             Downloads standalone Rust compiler for WASM compilation
   setup-monaco.sh            Downloads Monaco Editor for code editing UI
-  bust-au-cache.sh           Kills AudioComponentRegistrar for fresh AU registration
+  bust-au-cache.sh           Re-registers the fresh build with LaunchServices, restarts pkd + AudioComponentRegistrar
   release.sh                 End-to-end release: archive, notarize, DMG
   build-release.sh           Archives Release configuration with Developer ID signing
   create-dmg.sh              Creates distributable DMG from signed .app

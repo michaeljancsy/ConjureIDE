@@ -57,7 +57,7 @@ Report the configuration (Debug/Release), the full `$APP_PATH`, and confirmation
 
 ## Notes
 
-- **AU cache:** The `ConjureDSP` host app target has a `Bust AU Cache` build phase that kills `AudioComponentRegistrar` after every build, so AU re-discovery happens automatically. No manual cache busting is needed.
+- **AU cache:** The `ConjureDSP` host app target has a `Bust AU Cache` build phase that re-registers the fresh build with LaunchServices and restarts `pkd` and `AudioComponentRegistrar` after every build, so AU re-discovery happens automatically. No manual cache busting is needed.
 - **Release bundle ID conflicts:** Release builds use the production bundle ID (`com.MichaelJancsy.ConjureDSP`). If a real installed version exists at `/Applications/ConjureDSP.app`, the `pre-build-clean.sh` build phase moves it to `/Applications/ConjureDSP.app.dev-backup` automatically (Release builds only; Debug builds leave it in place).
 - **Worktrees:** This skill works from any git worktree — the Monaco, Python, and Rust toolchain symlinks are set up by session-start hooks.
 - **Not for distribution:** This skill does not notarize, sign with Developer ID, or upload anything. Use `/build-release` for the distribution pipeline.
