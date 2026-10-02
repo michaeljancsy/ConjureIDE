@@ -308,11 +308,12 @@ scripts/                     Build and setup scripts
   setup-rustc.sh             Downloads standalone Rust compiler for WASM compilation
   setup-monaco.sh            Downloads Monaco Editor for code editing UI
   bust-au-cache.sh           Re-registers the fresh build with LaunchServices, restarts pkd + AudioComponentRegistrar
-  release.sh                 End-to-end release: archive, notarize, DMG
-  build-release.sh           Archives Release configuration with Developer ID signing
+  build.sh                   Archives Release, keeps + uploads dSYMs (Sentry), re-signs, builds DMG, optionally notarizes
+  release.sh                 Generates the Sparkle appcast and uploads the DMG to R2
+  build-and-release.sh       build.sh --notarize, then release.sh
   create-dmg.sh              Creates distributable DMG from signed .app
   notarize.sh                Submits to Apple notarization service
-  upload-dsyms.sh            Uploads debug symbols to Sentry
+  upload-dsyms.sh            Uploads an archive's dSYMs to Sentry (michael-jancsy/conjuredsp) and verifies them; called by build.sh
   pre-build-clean.sh         Kills AudioComponentRegistrar and clears the AU cache before every build;
                              local Release builds also move /Applications/ConjureDSP.app to .dev-backup
                              (same bundle ID would shadow the fresh build). Debug builds, including every
@@ -428,11 +429,12 @@ Bundled runtimes require proper code signing for the hardened runtime:
 
 ## Release Pipeline
 
-Run `scripts/release.sh` to build, sign, notarize, and package a distributable DMG. The script orchestrates: `xcodebuild archive` → `xcodebuild -exportArchive` with Developer ID signing → notarize app → create DMG → notarize DMG → staple. For provisioning profile setup, re-signing details, and verification steps, see `docs/release-pipeline.md`.
+Run `scripts/build-and-release.sh` (or the `build-release` skill) to build, sign, notarize, package, and publish. `scripts/build.sh` does `xcodebuild archive` → upload and verify dSYMs on Sentry → copy the app out of the archive, strip, re-sign → notarize app → create DMG → notarize DMG; `scripts/release.sh` then generates the Sparkle appcast and uploads to R2. For provisioning profile setup, re-signing details, Sentry debug symbols, and verification steps, see `docs/release-pipeline.md`.
 
-Two things to never get wrong:
+Three things to never get wrong:
 - **Re-sign with `--preserve-metadata=entitlements`, not `--entitlements <file>`** — `xcodebuild -exportArchive` injects entitlements that pkd needs to discover the extension. Stripping them causes silent registration failure.
 - **Never add `inter-app-audio`** — it's deprecated and not covered by Developer ID provisioning profiles. macOS will SIGKILL the app on launch with no useful error.
+- **Always pass `--org michael-jancsy --project conjuredsp` to `sentry-cli`** (or use `scripts/upload-dsyms.sh`) — `~/.sentryclirc` on the release Mac defaults to the conjurealign project, so a bare `sentry-cli debug-files upload` sends ConjureIDE symbols to the wrong place.
 
 ## Dependencies
 

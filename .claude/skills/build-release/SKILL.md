@@ -72,9 +72,11 @@ Then run the appropriate script. Pass version/build flags directly — the scrip
 
 Use a long timeout (600000ms / 10 minutes) since builds and notarization take a while.
 
+Every path runs `build.sh`, which checks Sentry credentials before archiving and uploads + verifies the archive's dSYMs right after (`scripts/upload-dsyms.sh`). If either step fails, the build stops. Do not work around it with a bare `sentry-cli debug-files upload`: `~/.sentryclirc` defaults to the conjurealign project. Fix the token (`SENTRY_AUTH_TOKEN`, or `token=` under `[auth]` in `~/.sentryclirc`) and re-run.
+
 ## Step 6: Report results
 
-After the script completes, report whether it succeeded or failed, the version and build number, the DMG path and size, and what steps completed.
+After the script completes, report whether it succeeded or failed, the version and build number, the DMG path and size, what steps completed, and the dSYM result (the `All N debug files are on Sentry` line from `upload-dsyms.sh`, and the `Kept:` path of the saved symbol copy).
 
 If it failed, show the relevant error output and suggest fixes.
 
