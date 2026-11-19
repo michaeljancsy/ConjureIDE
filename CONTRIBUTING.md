@@ -27,11 +27,11 @@ Things to know about signing:
   If your setup refuses it, replace the group id in the `.entitlements` files
   and the `AppGroupContainer.id` constants with your own.
 - Debug and Release builds intentionally use different AU identities and
-  bundle ids so they can coexist — see "Plugin Identity" in `AGENTS.md`.
+  bundle ids so they can coexist — see "Plugin Identity" in `docs/architecture-reference.md`.
 
 The plugin registers with macOS when the ConjureIDE host app runs. If the AU
 stops appearing in hosts, see "AU Registration Troubleshooting" in
-`AGENTS.md` (never use `pluginkit -r`).
+`docs/architecture-reference.md` (never use `pluginkit -r`).
 
 ## Tests
 
@@ -47,7 +47,7 @@ xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP test -only-testing:C
 ```
 
 For standalone Rust kernel tests (`cargo test`), use the exact invocation in
-`AGENTS.md` → "Rust build" — it needs environment variables that track the
+`docs/architecture-reference.md` → "Rust build" — it needs environment variables that track the
 Python embedding, and that file is the canonical copy.
 
 UI tests (`ConjureDSPUITests`) are slow; run only the specific class or
@@ -61,9 +61,9 @@ the failing test first, then the smallest change that makes it pass.
 - Branch from `main`, keep PRs focused, and make sure
   `ConjureDSPLogicTests` passes (plus `ConjureDSPTests` when you touch AU,
   preset, or export behavior).
-- `AGENTS.md` is the in-repo architecture reference (also consumed by coding
-  agents). If your change alters architecture, build phases, or conventions
-  documented there, update it in the same PR.
+- `docs/architecture-reference.md` is the in-repo architecture reference. If
+  your change alters architecture, build phases, or conventions documented
+  there, update it in the same PR.
 
 ## Reporting issues
 

@@ -109,7 +109,7 @@ full API (the agent reaches the same docs through the `get_docs` MCP tool).
 wasmtime behind a common backend trait, bridged to Swift over C FFI. The
 **ConjureDSPTerminal** companion app runs the Claude Code CLI and other
 helpers that the sandboxed AU extension cannot spawn itself, communicating
-through an App Group container. `AGENTS.md` documents the full architecture.
+through an App Group container. `docs/architecture-reference.md` documents the full architecture.
 
 ## Telemetry
 
