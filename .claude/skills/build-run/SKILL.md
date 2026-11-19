@@ -33,7 +33,7 @@ xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP -configuration Debug
 xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP -configuration Release build
 ```
 
-Use a long timeout (600000ms / 10 minutes) since the Rust build phase can be slow on a clean build. Pipe through `tail -60` so the output stays readable but errors are still visible. If the build fails, extract the error with `grep -E "error:"` and surface it to the user instead of launching.
+Run the build in the background (a clean build can take 10 minutes because of the Rust step). If it fails, pull out the `error:` lines with `grep -E "error:"` and show them instead of launching.
 
 ## Step 3: Locate and launch the built app
 
@@ -43,6 +43,8 @@ After a successful build, resolve the build-products directory from the same xco
 BUILT_PRODUCTS_DIR=$(xcodebuild -project ConjureDSP.xcodeproj -scheme ConjureDSP -configuration <CONFIG> -showBuildSettings 2>/dev/null | awk '/ BUILT_PRODUCTS_DIR / {print $3; exit}')
 APP_PATH="$BUILT_PRODUCTS_DIR/ConjureDSP.app"
 ```
+
+Launching opens windows, so claim a screen turn first (`screen-turn status`, then `screen-turn claim --who "<your session title>" --minutes 30 --what "ConjureIDE build-run"`). When the user is done testing, quit the app and `screen-turn release --who "<same title>"`.
 
 Verify `$APP_PATH` exists, then launch:
 ```bash
@@ -59,5 +61,5 @@ Report the configuration (Debug/Release), the full `$APP_PATH`, and confirmation
 
 - **AU cache:** The `ConjureDSP` host app target has a `Bust AU Cache` build phase that re-registers the fresh build with LaunchServices and restarts `pkd` and `AudioComponentRegistrar` after every build, so AU re-discovery happens automatically. No manual cache busting is needed.
 - **Release bundle ID conflicts:** Release builds use the production bundle ID (`com.MichaelJancsy.ConjureDSP`). If a real installed version exists at `/Applications/ConjureDSP.app`, the `pre-build-clean.sh` build phase moves it to `/Applications/ConjureDSP.app.dev-backup` automatically (Release builds only; Debug builds leave it in place).
-- **Worktrees:** This skill works from any git worktree — the Monaco, Python, and Rust toolchain symlinks are set up by session-start hooks.
+- **Worktrees:** Works from any git worktree once its missing assets are in place; see "Worktrees" in CLAUDE.md.
 - **Not for distribution:** This skill does not notarize, sign with Developer ID, or upload anything. Use `/build-release` for the distribution pipeline.

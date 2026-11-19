@@ -1,85 +1,70 @@
 ---
 name: reset-state
-description: Reset ConjureDSP persisted state — terminal/agent prefs, MCP entries, UserDefaults, or everything. Use before re-testing first-run flows.
+description: Reset ConjureIDE's saved state (terminal and agent settings, MCP entries, preferences, or all ConjureIDE data) so it behaves like a fresh install. Use before re-testing first-run flows.
 user_invocable: true
 ---
 
-# Reset ConjureDSP State
+# Reset ConjureIDE state
 
-Use this when the user wants to clear persisted state so ConjureDSP behaves like a fresh install (or a specific subset of fresh).
+`~/Library/Application Support/ConjureDSP/` is shared with other Conjure products (ConjureAlign, ConjureGroove, ConjureWidth keep their settings there). Never delete that whole folder. Delete only the ConjureIDE items named below.
 
 ## Step 1: Ask which scope
 
-Use AskUserQuestion with these options — **do not recommend or pre-select**:
+Ask with AskUserQuestion. Don't recommend one.
 
-- **Terminal only** — agent picker choice, generated workspace files, MCP instance files. Leaves presets, license, UserDefaults alone. Common choice when re-testing the picker / install-prompt / multi-agent flow.
-- **Terminal + per-agent MCP entries** — above, plus remove `conjuredsp` from claude/gemini/codex config. Use when verifying the MCP auto-wire-up.
-- **Terminal + UserDefaults** — above (without MCP removal), plus host-app/extension preferences (includes license token cache, settings). Use when debugging first-launch UI.
-- **Everything (nuclear)** — wipes App Group container AND `~/Library/Application Support/ConjureDSP`. Deletes presets, git history, subscription token, bundled Python runtime. Requires re-running `rust/setup-python.sh` afterward.
+- **Terminal only**: agent choice, startup command, generated agent workspace, MCP instance files. Leaves presets and preferences.
+- **Terminal + MCP entries**: the above, plus removes `conjuredsp` from the claude, gemini and codex MCP configs.
+- **Terminal + preferences**: Terminal only, plus the app's and extension's UserDefaults.
+- **All ConjureIDE data**: everything in the App Group container (presets and their git history, Python runtime, compiled WASM cache, export registry) plus ConjureIDE's items in Application Support. Cannot be undone.
 
-Wait for the answer before continuing.
+## Step 2: Make sure the apps are closed
 
-## Step 2: Confirm apps are quit
-
-Before deleting anything, tell the user to quit both `ConjureDSP.app` and `ConjureDSPTerminal.app`. If they're running, the daemon will rewrite files as you delete them. Ask the user to confirm they've quit before proceeding.
-
-Check with:
 ```bash
 pgrep -lf "ConjureDSP\.app|ConjureDSPTerminal" || echo "not running"
 ```
+If anything is running, ask the user to quit `ConjureDSP.app` and `ConjureDSPTerminal.app`, and wait. Otherwise the companion rewrites files as you delete them.
 
-If anything shows, stop and ask the user to quit.
+## Step 3: Delete
 
-## Step 3: Run the reset
-
-Use the exact commands below for the chosen scope. Do not improvise paths.
-
-### Terminal only
-
-Terminal/agent state is split between two locations:
-- **App Group container** (`~/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP/`) — `startup-command` and `agent-mode`. Lives here because the sandboxed extension's Settings pane needs to read/write them, and the App Group container is the only path both the daemon and the sandboxed extension can touch.
-- **Application Support** (`~/Library/Application Support/ConjureDSP/`) — `agent-workspace/` (CLAUDE.md/GEMINI.md/AGENTS.md), `mcp-instances/`, `mcp-url.txt`. Daemon-only and agent-shell-only; the extension doesn't read them.
-
-The legacy locations of `startup-command`/`agent-mode` in Application Support are cleared too, in case you're resetting after a build that predates the sandbox fix.
+Before each `rm`, `ls` the path and note whether it existed.
 
 ```bash
 APP_GROUP="$HOME/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP"
 APP_SUPPORT="$HOME/Library/Application Support/ConjureDSP"
-rm -f  "$APP_GROUP/startup-command"   "$APP_GROUP/agent-mode"
-rm -f  "$APP_SUPPORT/startup-command" "$APP_SUPPORT/agent-mode"
-rm -rf "$APP_SUPPORT/mcp-instances"   "$APP_SUPPORT/agent-workspace"
-rm -f  "$APP_SUPPORT/mcp-url.txt"
 ```
 
-### Terminal + per-agent MCP entries
-Run the Terminal-only block above, then:
+**Terminal only**
+```bash
+rm -f  "$APP_GROUP/startup-command" "$APP_GROUP/agent-mode"
+rm -r  "$APP_GROUP/mcp-instances"
+rm -f  "$APP_SUPPORT/startup-command" "$APP_SUPPORT/agent-mode" "$APP_SUPPORT/mcp-url.txt"
+rm -r  "$APP_SUPPORT/mcp-instances" "$APP_SUPPORT/agent-workspace"
+```
+(The Application Support copies of `startup-command`, `agent-mode` and `mcp-instances` are from older builds.)
+
+**Terminal + MCP entries**: Terminal only, then
 ```bash
 claude mcp remove conjuredsp 2>/dev/null || true
 gemini mcp remove conjuredsp 2>/dev/null || true
 codex mcp remove conjuredsp 2>/dev/null || true
 ```
 
-### Terminal + UserDefaults
-Run the Terminal-only block above, then:
+**Terminal + preferences**: Terminal only, then
 ```bash
-for bid in \
-  com.MichaelJancsy.ConjureDSP \
-  com.MichaelJancsy.ConjureDSP.debug \
-  com.MichaelJancsy.ConjureDSP.ConjureDSPExtension \
-  com.MichaelJancsy.ConjureDSP.debug.ConjureDSPExtension; do
+for bid in com.MichaelJancsy.ConjureDSP com.MichaelJancsy.ConjureDSP.debug \
+  com.MichaelJancsy.ConjureDSP.ConjureDSPExtension com.MichaelJancsy.ConjureDSP.debug.ConjureDSPExtension; do
   defaults delete "$bid" 2>/dev/null || true
 done
 ```
 
-### Everything (nuclear)
+**All ConjureIDE data**: confirm once more with the user (presets and their history are lost), then
 ```bash
-rm -rf "$HOME/Library/Group Containers/group.com.MichaelJancsy.ConjureDSP"
-rm -rf "$HOME/Library/Application Support/ConjureDSP"
+rm -r "$APP_GROUP"
+cd "$APP_SUPPORT" && rm -r agent-workspace mcp-instances Exports PythonRuntime PythonRuntime-3.14 rustc-dist uv \
+  claude-context.md mcp-url.txt pty-diag.txt terminal-server-port 2>/dev/null
 ```
-After this, remind the user they'll need to re-run `rust/setup-python.sh` before the next build (bundled Python lives under Application Support). This also wipes presets, git history, export registry, subscription token.
+Leave `ConjureAlign/`, `ConjureGroove/`, `ConjureWidth/` and any other product folder alone. The Terminal companion reinstalls the Python runtime on its next launch.
 
-## Step 4: Report what was cleared
+## Step 4: Report
 
-List the paths that actually existed and were removed (check with `ls` before running each `rm` and note which ones were present). Do not claim to have cleared things that weren't there.
-
-Tell the user they can now relaunch to exercise the fresh-install path.
+List the paths that existed and were removed. Don't claim to have cleared anything that wasn't there. Tell the user they can relaunch to test the fresh-install path.

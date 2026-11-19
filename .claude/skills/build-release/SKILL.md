@@ -1,115 +1,62 @@
 ---
 name: build-release
-description: Build and release ConjureDSP — bump version, build, sign, notarize, package DMG, and upload to R2.
+description: Build and release ConjureIDE — bump the version, build, sign, notarize, make the DMG, upload to R2, then commit, tag and open a PR.
 user_invocable: true
 ---
 
-# Build & Release ConjureDSP
+# Build and release ConjureIDE
 
-Follow these steps in order. Ask each question separately — wait for the user's answer before moving to the next question. Do not make recommendations or pre-select options.
+A release (and any R2 upload) needs Michael's own typed yes in this session. If you are a worker or PM and he isn't here, send the request to "MAIN Conjure Director of Product" with a link to this session, and wait.
 
-## Step 1: Show current version and determine next build number
+Before each release, tell "MAIN ConjureDSP.com PM" whether it changes anything on the /ide pages, docs or privacy policy.
 
-**IMPORTANT**: Always read the version from the **main worktree** pbxproj, not the current worktree — worktrees can be branched from stale commits. Find the main worktree path first:
+Ask each question separately with AskUserQuestion and wait for the answer. Don't recommend or pre-select an option.
+
+## Step 1: Current version and next build number
+
+Read the version from the main checkout, not a worktree (a worktree may be on an old commit):
 ```bash
-git worktree list --porcelain | awk '/^worktree/{path=$2} /^branch refs\/heads\/main$/{print path; exit}'
+MAIN=$(git worktree list --porcelain | awk '/^worktree/{path=$2} /^branch refs\/heads\/main$/{print path; exit}')
+grep -m1 'MARKETING_VERSION' "$MAIN/ConjureDSP.xcodeproj/project.pbxproj"
+grep -m1 'CURRENT_PROJECT_VERSION' "$MAIN/ConjureDSP.xcodeproj/project.pbxproj"
+mkdir -p "$MAIN/build/release/appcast" && /opt/homebrew/bin/rclone copy r2:conjuredsp-updates "$MAIN/build/release/appcast" --include "appcast.xml"
+grep 'sparkle:version' "$MAIN/build/release/appcast/appcast.xml" | sed 's/[^0-9]//g' | sort -n | tail -1
 ```
-Then read from that path (substitute `MAIN` with the result):
-```bash
-grep -m1 'MARKETING_VERSION' MAIN/ConjureDSP.xcodeproj/project.pbxproj
-grep -m1 'CURRENT_PROJECT_VERSION' MAIN/ConjureDSP.xcodeproj/project.pbxproj
-```
+Report the version, the build number, and the highest build number in the appcast. The new build number must be higher than every appcast entry (Sparkle ignores lower or equal ones). Never reset it to 1. If main's version is behind the newest appcast entry, say so.
 
-Also check the highest build number in the existing appcast (Sparkle requires monotonically increasing build numbers across ALL versions). Sync from R2 first to ensure the local appcast is current:
-```bash
-mkdir -p MAIN/build/release/appcast && /opt/homebrew/bin/rclone copy r2:conjuredsp-updates MAIN/build/release/appcast --include "appcast.xml" 2>/dev/null
-grep 'sparkle:version' MAIN/build/release/appcast/appcast.xml 2>/dev/null | sed 's/[^0-9]//g' | sort -n | tail -1
-```
+Also check free disk (`df -h /`). A release needs about 25 GB; stop and say so if there is less.
 
-Report the current version (from main), build number, and the highest appcast build number to the user. If the pbxproj version is lower than the latest appcast entry, note the drift and use the appcast version + 1 as the baseline.
+## Step 2–4: Ask
 
-## Step 2: Ask about version bump
-
-Use AskUserQuestion with these options:
-
-- **Patch bump** (e.g., 1.0.5 -> 1.0.6)
-- **Minor bump** (e.g., 1.0.5 -> 1.1.0)
-- **Major bump** (e.g., 1.0.5 -> 2.0.0)
-- **Build number only** (e.g., build 1 -> build 2, version stays the same)
-
-Wait for the answer before continuing.
-
-## Step 3: Ask about notarization
-
-Use AskUserQuestion with these options:
-
-- **Notarize**
-- **Skip notarization**
-
-Wait for the answer before continuing.
-
-## Step 4: Ask about R2 upload
-
-Use AskUserQuestion with these options:
-
-- **Upload to R2**
-- **Skip upload**
-
-Wait for the answer before continuing.
+1. Version bump: patch, minor, major, or build number only.
+2. Notarize, or skip.
+3. Upload to R2, or skip.
 
 ## Step 5: Confirm and run
 
-Summarize the plan (version, build number, notarize yes/no, upload yes/no) and ask the user to confirm before running.
+Summarize (version, build, notarize, upload) and get the yes. Then run in the background (it takes 10+ minutes):
 
-Then run the appropriate script. Pass version/build flags directly — the scripts handle updating the pbxproj.
+- Build + notarize + upload: `./scripts/build-and-release.sh --version X.Y.Z --build N`
+- Build + notarize: `./scripts/build.sh --notarize --version X.Y.Z --build N`
+- Build + upload: `./scripts/build.sh --version X.Y.Z --build N`, then `./scripts/release.sh`
+- Build only: `./scripts/build.sh --version X.Y.Z --build N`
 
-- **Build + notarize + upload**: `./scripts/build-and-release.sh --version X.Y.Z --build N`
-- **Build + notarize, no upload**: `./scripts/build.sh --notarize --version X.Y.Z --build N`
-- **Build + upload, no notarize**: `./scripts/build.sh --version X.Y.Z --build N` then `./scripts/release.sh`
-- **Build only**: `./scripts/build.sh --version X.Y.Z --build N`
+`build.sh` checks the Sentry token first and uploads and verifies the dSYMs after archiving. If that fails, fix the token (`SENTRY_AUTH_TOKEN`, or `token=` under `[auth]` in `~/.sentryclirc`) and re-run. Never work around it with a bare `sentry-cli debug-files upload`.
 
-**CRITICAL: Build number must be strictly greater than the highest build number in the appcast.** Sparkle uses the build number (not the marketing version) to determine update ordering. If the build number is lower than or equal to an existing appcast entry, Sparkle will silently ignore the new version. For version bumps, do NOT reset build to 1 — use (highest appcast build + 1). For build-only bumps, also use (highest appcast build + 1).
+## Step 6: Report
 
-Use a long timeout (600000ms / 10 minutes) since builds and notarization take a while.
+Say whether it worked, the version and build, the DMG path and size, which steps ran, and the dSYM result (the `All N debug files are on Sentry` line and the `Kept:` path). On failure, show the error and suggest a fix.
 
-Every path runs `build.sh`, which checks Sentry credentials before archiving and uploads + verifies the archive's dSYMs right after (`scripts/upload-dsyms.sh`). If either step fails, the build stops. Do not work around it with a bare `sentry-cli debug-files upload`: `~/.sentryclirc` defaults to the conjurealign project. Fix the token (`SENTRY_AUTH_TOKEN`, or `token=` under `[auth]` in `~/.sentryclirc`) and re-run.
+## Step 7: Commit, tag and PR (only after success)
 
-## Step 6: Report results
-
-After the script completes, report whether it succeeded or failed, the version and build number, the DMG path and size, what steps completed, and the dSYM result (the `All N debug files are on Sentry` line from `upload-dsyms.sh`, and the `Kept:` path of the saved symbol copy).
-
-If it failed, show the relevant error output and suggest fixes.
-
-## Step 7: Commit version bump, tag, and open PR (only on success)
-
-After a successful build, commit the pbxproj changes in the main worktree so the version never drifts again.
-
-All git commands run from the main worktree directory (`cd MAIN` first).
-
+From the main checkout, and only if it has no uncommitted changes besides the pbxproj (otherwise do this in a new worktree):
 ```bash
-# 1. Create a release branch
+cd "$MAIN"
 git checkout -b release/vX.Y.Z-bN
-
-# 2. Stage only the pbxproj (build artifacts are gitignored)
 git add ConjureDSP.xcodeproj/project.pbxproj
-
-# 3. Commit
 git commit -m "Release X.Y.Z (build N)"
-
-# 4. Tag the commit
 git tag vX.Y.Z-bN
-
-# 5. Push branch and tag
-git push origin release/vX.Y.Z-bN
-git push origin vX.Y.Z-bN
-
-# 6. Open a PR to main
-gh pr create --title "Release X.Y.Z (build N)" --body "$(cat <<'EOF'
-Bump version to X.Y.Z, build N.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-EOF
-)"
+git push origin release/vX.Y.Z-bN vX.Y.Z-bN
+gh pr create --title "Release X.Y.Z (build N)" --body "Bump version to X.Y.Z, build N."
 ```
-
-Report the PR URL and tag name. If this step fails (e.g. nothing staged because pbxproj was already at the right version), note it and skip gracefully.
+Report the PR link and tag. If nothing was staged (version already right), say so and skip.
