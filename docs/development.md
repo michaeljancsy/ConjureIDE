@@ -37,20 +37,27 @@ of `docs/architecture-reference.md`.)
 ## Releases
 
 - Check free disk first: a release needs about 25 GB.
-- For each release, capture example reports from that release for the privacy page at
-  conjuredsp.com/privacy. Capture one crash report, App Open, and the usage event with the most
+- For each release, capture three example reports from that release for the privacy page at
+  conjuredsp.com/privacy: a crash report, the App Open event, and the usage event with the most
   fields, each exactly as the release sends it.
-  - The capture program is `harness/run.sh` in the latest ConjureIDE folder of the
-    conjure-test-results repository on GitHub. For 3.1.1 that is
+  - The capture program is `harness/run.sh` in the latest `conjureide/` folder of the private
+    `michaeljancsy/conjure-test-results` repository. For 3.1.1 that folder is
     `conjureide/2026-11-22-v3.1.1-example-reports/`.
   - It builds the release tag's own reporting code (`Analytics.swift`, `SentrySetup.swift`,
-    `SentryHelper.swift`) with the tag's Mixpanel and Sentry versions. It sends to a stand-in
-    server on this computer, so nothing reaches Mixpanel or Sentry. No window opens.
-  - Before running it, check its `main.swift` call sites against the new tag. If the release
-    changes what is reported (events, fields, error reports, library versions or options), update
-    `main.swift` and `notes.md` to match.
-  - Save the run as a new folder, `conjureide/<date>-v<version>-example-reports/`. Get the
-    website's privacy section updated from it before the release is published.
+    `SentryHelper.swift`) with the tag's Mixpanel and Sentry versions. It sends only to a stand-in
+    server on the computer that runs it (port 47811), so nothing reaches Mixpanel or Sentry. No
+    window opens.
+  - Copy the latest folder to `conjureide/<date>-v<version>-example-reports/`. In the copy, check
+    `harness/main.swift`'s call sites against the new tag. If the release changes what is
+    reported (events, fields, error reports, library versions or options), update `main.swift`
+    and `notes.md` to match.
+  - Run the copy's program into the copy:
+    `harness/run.sh <ConjureIDE checkout> <release tag> <the new folder>`. The tag must exist in
+    the checkout, and port 47811 must be free.
+  - Before committing, check that the output holds no local paths or account name:
+    `grep -l "$USER" <the new folder>/*.json` should print nothing.
+  - Update ConjureIDE's section of the privacy page (in the website's repository) from the new
+    files before the release is published.
 
 ## Logic
 
