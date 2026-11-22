@@ -37,6 +37,20 @@ of `docs/architecture-reference.md`.)
 ## Releases
 
 - Check free disk first: a release needs about 25 GB.
+- For each release, capture example reports from that release for the privacy page at
+  conjuredsp.com/privacy. Capture one crash report, App Open, and the usage event with the most
+  fields, each exactly as the release sends it.
+  - The capture program is `harness/run.sh` in the latest ConjureIDE folder of the
+    conjure-test-results repository on GitHub. For 3.1.1 that is
+    `conjureide/2026-11-22-v3.1.1-example-reports/`.
+  - It builds the release tag's own reporting code (`Analytics.swift`, `SentrySetup.swift`,
+    `SentryHelper.swift`) with the tag's Mixpanel and Sentry versions. It sends to a stand-in
+    server on this computer, so nothing reaches Mixpanel or Sentry. No window opens.
+  - Before running it, check its `main.swift` call sites against the new tag. If the release
+    changes what is reported (events, fields, error reports, library versions or options), update
+    `main.swift` and `notes.md` to match.
+  - Save the run as a new folder, `conjureide/<date>-v<version>-example-reports/`. Get the
+    website's privacy section updated from it before the release is published.
 
 ## Logic
 
